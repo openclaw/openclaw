@@ -472,14 +472,20 @@ export function resolveExecApprovalsFromFile(params: {
   const fallbackAsk = params.overrides?.ask ?? DEFAULT_ASK;
   const fallbackAskFallback = params.overrides?.askFallback ?? DEFAULT_EXEC_APPROVAL_ASK_FALLBACK;
   const fallbackAutoAllowSkills = params.overrides?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS;
+  // When explicit overrides are provided (from tools.exec in openclaw.json), they represent the
+  // user's configured intent and must take precedence over exec-approvals.json file defaults.
+  // Previously, overrides were only used as fallbacks when exec-approvals.json had no value,
+  // which meant stale or auto-generated file defaults could silently override the user's config.
   const resolvedDefaults: Required<ExecApprovalsDefaults> = {
-    security: normalizeSecurity(defaults.security, fallbackSecurity),
-    ask: normalizeAsk(defaults.ask, fallbackAsk),
+    security: normalizeSecurity(params.overrides?.security ?? defaults.security, fallbackSecurity),
+    ask: normalizeAsk(params.overrides?.ask ?? defaults.ask, fallbackAsk),
     askFallback: normalizeSecurity(
-      defaults.askFallback ?? fallbackAskFallback,
+      params.overrides?.askFallback ?? defaults.askFallback ?? fallbackAskFallback,
       fallbackAskFallback,
     ),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? fallbackAutoAllowSkills),
+    autoAllowSkills: Boolean(
+      params.overrides?.autoAllowSkills ?? defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
+    ),
   };
   const resolvedAgent: Required<ExecApprovalsDefaults> = {
     security: normalizeSecurity(

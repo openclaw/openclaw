@@ -203,10 +203,17 @@ export function resolveExecHostApprovalContext(params: {
     security: params.security,
     ask: params.ask,
   });
+  // When tools.exec.security is explicitly configured (params.security), it represents
+  // the user's intent. The host-side approval (exec-approvals.json) should refine but
+  // not silently override explicit user config. Use the resolved agent security which
+  // already incorporates the override via resolveExecApprovalsFromFile.
   const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  // An explicit ask=off policy in exec-approvals.json must be able to suppress
-  // prompts even when tool/runtime defaults are stricter (for example on-miss).
-  const hostAsk = approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask);
+  // An explicit ask=off policy from either config source must suppress prompts.
+  // Check both the resolved agent ask AND the incoming config ask.
+  const hostAsk =
+    params.ask === "off" || approvals.agent.ask === "off"
+      ? "off"
+      : maxAsk(params.ask, approvals.agent.ask);
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error(`exec denied: host=${params.host} security=deny`);
