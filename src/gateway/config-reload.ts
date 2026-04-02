@@ -283,6 +283,9 @@ export function startGatewayConfigReloader(opts: {
       const snapshot = await opts.readSnapshot();
       if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
         if (snapshot.hash === lastAppliedWriteHash) {
+          // Config unchanged, but still sync $include paths on first run so
+          // that startup-seeded writes don't leave includes unwatched.
+          await syncIncludeWatchPaths(snapshot.path, snapshot.parsed);
           return;
         }
         lastAppliedWriteHash = null;
