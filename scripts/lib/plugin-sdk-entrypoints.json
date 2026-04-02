@@ -70,6 +70,7 @@
   "bluebubbles-policy",
   "browser",
   "browser-runtime",
+  "browser-config-support",
   "browser-support",
   "boolean-param",
   "dangerous-name-runtime",
