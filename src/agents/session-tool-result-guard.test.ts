@@ -655,8 +655,8 @@ describe("installSessionToolResultGuard", () => {
     // The stale result should have a normal sequential parentId (the assistant entry),
     // but it should NOT have been explicitly branched — it just follows sequentially.
     // Key point: branch() was NOT called for it, so it chains from the previous entry.
-    const assistantId = entries[0].id;
-    // If branch was called, parentId would be assistantId. If not, it chains from the previous.
+    const _assistantId = entries[0].id;
+    // If branch was called, parentId would be _assistantId. If not, it chains from the previous.
     // Since call_unknown is not pending, branch should NOT be called.
     // The stale result's parent should be the assistant (sequential), which happens to be the same.
     // But the known result should also be there as pending.
