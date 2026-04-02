@@ -724,7 +724,9 @@ jobs:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks_windows == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-32vcpu-windows-2025
-    timeout-minutes: 60
+    # Some Windows shards occasionally exceed the default 60 minute cap even when
+    # the underlying test run is still making progress.
+    timeout-minutes: 90
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.
