@@ -326,7 +326,6 @@ export function loadSkills(params: {
   limits: ResolvedSkillsLimits;
 }): Skill[] {
   return loadSkillsFromCache(params);
-  //return loadSkillsFromFile(params);
 }
 
 
@@ -399,12 +398,14 @@ export function loadSkillsFromCache(params: {
         source: params.source,
         maxBytes: params.limits.maxSkillFileBytes,
       });
+
       const skills = filterLoadedSkillsInsideRoot({
         skills: unwrapLoadedSkills(loaded),
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
       });
+
       skillCache.set(skillKey, {
         skillDir: baseDir,
         source: params.source,
@@ -415,9 +416,7 @@ export function loadSkillsFromCache(params: {
       });
 
       pruneStaleSkillCache(params.source, baseDir, seenKeys);
-
       return skills;
-
     } catch {
       return [];
     }
@@ -460,10 +459,12 @@ export function loadSkillsFromCache(params: {
     if (!skillDirRealPath) {
       continue;
     }
+
     const skillMd = path.join(skillDir, "SKILL.md");
     if (!fs.existsSync(skillMd)) {
       continue;
     }
+
     const skillMdRealPath = resolveContainedSkillPath({
       source: params.source,
       rootDir,
@@ -473,6 +474,7 @@ export function loadSkillsFromCache(params: {
     if (!skillMdRealPath) {
       continue;
     }
+
     try {
       const size = fs.statSync(skillMdRealPath).size;
       if (size > params.limits.maxSkillFileBytes) {
@@ -488,18 +490,28 @@ export function loadSkillsFromCache(params: {
       const stat = fs.statSync(skillMd);
       const skillKey = getSkillKey(skillDir, params.source);
       seenKeys.add(skillKey);
+
       const cached = skillCache.get(skillKey);
 
       if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
         loadedSkills.push(...cached.skills);
-      } else {
 
+        if (loadedSkills.length >= params.limits.maxSkillsLoadedPerSource) {
+          break;
+        }
+      } else {
         const loaded = loadSkillsFromDirSafe({
           dir: skillDir,
           source: params.source,
           maxBytes: params.limits.maxSkillFileBytes,
         });
-        const skills = unwrapLoadedSkills(loaded);
+
+        const filteredSkills = filterLoadedSkillsInsideRoot({
+          skills: unwrapLoadedSkills(loaded),
+          source: params.source,
+          rootDir,
+          rootRealPath: baseDirRealPath,
+        });
 
         skillCache.set(skillKey, {
           skillDir,
@@ -507,16 +519,11 @@ export function loadSkillsFromCache(params: {
           skillMdPath: skillMd,
           mtimeMs: stat.mtimeMs,
           size: stat.size,
-          skills,
+          skills: filteredSkills,
         });
-        loadedSkills.push(
-          ...filterLoadedSkillsInsideRoot({
-            skills: skills,
-            source: params.source,
-            rootDir,
-            rootRealPath: baseDirRealPath,
-          }),
-        );
+
+        loadedSkills.push(...filteredSkills);
+
         if (loadedSkills.length >= params.limits.maxSkillsLoadedPerSource) {
           break;
         }
@@ -526,6 +533,8 @@ export function loadSkillsFromCache(params: {
     }
   }
 
+  pruneStaleSkillCache(params.source, baseDir, seenKeys);
+
   if (loadedSkills.length > params.limits.maxSkillsLoadedPerSource) {
     return loadedSkills
       .slice()
@@ -533,7 +542,6 @@ export function loadSkillsFromCache(params: {
       .slice(0, params.limits.maxSkillsLoadedPerSource);
   }
 
-  pruneStaleSkillCache(params.source, baseDir, seenKeys);
   return loadedSkills;
 }
 
