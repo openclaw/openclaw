@@ -14,6 +14,7 @@ export function createGatewayCloseHandler(params: {
   releasePluginRouteRegistry?: (() => void) | null;
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServicesReady: Promise<PluginServicesHandle | null>;
+  sidecarAbort?: AbortController;
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
   updateCheckStop?: (() => void) | null;
@@ -42,6 +43,9 @@ export function createGatewayCloseHandler(params: {
         typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
           ? Math.max(0, Math.floor(opts.restartExpectedMs))
           : null;
+      // Signal background sidecar tasks (channels, plugin services) to stop
+      // before we begin tearing down individual resources.
+      params.sidecarAbort?.abort();
       if (params.bonjourStop) {
         try {
           await params.bonjourStop();

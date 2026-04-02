@@ -793,8 +793,10 @@ export async function startGatewayServer(
   let skillsChangeUnsub = () => {};
   let channelHealthMonitor: ReturnType<typeof startChannelHealthMonitor> | null = null;
   let stopModelPricingRefresh = () => {};
+  const sidecarAbort = new AbortController();
   let configReloader: { stop: () => Promise<void> } = { stop: async () => {} };
   const closeOnStartupFailure = async () => {
+    sidecarAbort.abort();
     if (diagnosticsEnabled) {
       stopDiagnosticHeartbeat();
     }
@@ -816,6 +818,7 @@ export async function startGatewayServer(
       releasePluginRouteRegistry,
       stopChannel,
       pluginServicesReady,
+      sidecarAbort,
       cron,
       heartbeatRunner,
       updateCheckStop: stopGatewayUpdateCheck,
@@ -1382,6 +1385,7 @@ export async function startGatewayServer(
         log,
         logHooks,
         logChannels,
+        signal: sidecarAbort.signal,
       }));
     }
 
@@ -1490,6 +1494,7 @@ export async function startGatewayServer(
     releasePluginRouteRegistry,
     stopChannel,
     pluginServicesReady,
+    sidecarAbort,
     cron,
     heartbeatRunner,
     updateCheckStop: stopGatewayUpdateCheck,
