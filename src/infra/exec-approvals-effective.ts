@@ -171,9 +171,13 @@ export function collectExecPolicyScopeSnapshots(params: {
     }),
   ];
   const globalExecConfig = params.cfg.tools?.exec;
-  const configAgentIds = new Set((params.cfg.agents?.list ?? []).map((agent) => agent.id));
+  const configAgentIds = new Set(
+    (params.cfg.agents?.list ?? [])
+      .filter((agent) => agent.id !== DEFAULT_AGENT_ID || agent.tools?.exec !== undefined)
+      .map((agent) => agent.id),
+  );
   const approvalAgentIds = Object.keys(params.approvals.agents ?? {}).filter(
-    (agentId) => agentId !== "*" && agentId !== "default",
+    (agentId) => agentId !== "*" && agentId !== "default" && agentId !== DEFAULT_AGENT_ID,
   );
   const agentIds = Array.from(new Set([...configAgentIds, ...approvalAgentIds])).toSorted();
   for (const agentId of agentIds) {

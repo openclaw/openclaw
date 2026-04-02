@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   collectExecPolicyScopeSnapshots,
   resolveExecPolicyScopeSummary,
@@ -388,6 +389,72 @@ describe("exec approvals policy helpers", () => {
       requestedSource: "tools.exec.security",
       host: "allowlist",
       effective: "allowlist",
+    });
+  });
+
+  it("avoids a duplicate default-agent scope when main only appears in approvals", () => {
+    const snapshots = collectExecPolicyScopeSnapshots({
+      cfg: {
+        tools: {
+          exec: {
+            security: "full",
+            ask: "off",
+          },
+        },
+      } satisfies OpenClawConfig,
+      approvals: {
+        version: 1,
+        agents: {
+          [DEFAULT_AGENT_ID]: {
+            security: "allowlist",
+            ask: "always",
+          },
+        },
+      },
+    });
+
+    expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec"]);
+    expect(snapshots[0]?.security).toMatchObject({
+      host: "allowlist",
+      hostSource: "~/.openclaw/exec-approvals.json agents.main.security",
+    });
+    expect(snapshots[0]?.ask).toMatchObject({
+      host: "always",
+      hostSource: "~/.openclaw/exec-approvals.json agents.main.ask",
+    });
+  });
+
+  it("keeps the default agent scope when main has an explicit exec override", () => {
+    const snapshots = collectExecPolicyScopeSnapshots({
+      cfg: {
+        tools: {
+          exec: {
+            security: "full",
+            ask: "off",
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: DEFAULT_AGENT_ID,
+              tools: {
+                exec: {
+                  ask: "always",
+                },
+              },
+            },
+          ],
+        },
+      } satisfies OpenClawConfig,
+      approvals: {
+        version: 1,
+      },
+    });
+
+    expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec", "agent:main"]);
+    expect(snapshots[1]?.ask).toMatchObject({
+      requested: "always",
+      requestedSource: "agents.list.main.tools.exec.ask",
     });
   });
 });
