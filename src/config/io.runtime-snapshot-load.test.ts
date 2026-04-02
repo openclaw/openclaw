@@ -3,9 +3,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import {
+  collectResolvedConfigSourceStatFingerprintSync,
+  getConfigStatFingerprintAtLastLoad,
   getRuntimeConfigSourceSnapshot,
   loadConfig,
   resetConfigRuntimeState,
+  resetConfigStatFingerprintAtLastLoadForTest,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
   writeConfigFile,
@@ -15,6 +18,7 @@ import type { OpenClawConfig } from "./types.js";
 function resetRuntimeConfigState(): void {
   setRuntimeConfigSnapshotRefreshHandler(null);
   resetConfigRuntimeState();
+  resetConfigStatFingerprintAtLastLoadForTest();
 }
 
 async function writeConfig(home: string, config: OpenClawConfig): Promise<string> {
@@ -81,6 +85,29 @@ describe("loadConfig runtime snapshot pinning", () => {
 
         await writeConfig(home, { gateway: { port: 19999 } });
         expect(loadConfig().gateway?.port).toBe(19002);
+      } finally {
+        resetRuntimeConfigState();
+      }
+    });
+  });
+
+  it("refreshes configStatFingerprintAtLastLoad when replacing the runtime snapshot", async () => {
+    await withTempHome("openclaw-config-runtime-load-fingerprint-", async (home) => {
+      await writeConfig(home, { gateway: { port: 18789 } });
+      try {
+        resetRuntimeConfigState();
+        expect(loadConfig().gateway?.port).toBe(18789);
+        const fingerprintBefore = getConfigStatFingerprintAtLastLoad();
+        expect(typeof fingerprintBefore).toBe("string");
+        expect(fingerprintBefore).toBe(collectResolvedConfigSourceStatFingerprintSync());
+
+        await writeConfig(home, { gateway: { port: 19007 }, session: { mainKey: "main" } });
+        const fingerprintAfterWrite = collectResolvedConfigSourceStatFingerprintSync();
+        expect(fingerprintAfterWrite).not.toBe(fingerprintBefore);
+
+        setRuntimeConfigSnapshot({ gateway: { port: 42424 } });
+        expect(loadConfig().gateway?.port).toBe(42424);
+        expect(getConfigStatFingerprintAtLastLoad()).toBe(fingerprintAfterWrite);
       } finally {
         resetRuntimeConfigState();
       }

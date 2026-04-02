@@ -2654,12 +2654,15 @@ export function setRuntimeConfigSnapshot(
   sourceConfig?: OpenClawConfig,
 ): void {
   configCache = null;
+  // Keep TOCTOU-sensitive `cfga` sessions-list cache keys aligned when swapping runtime snapshots.
+  configStatFingerprintAtLastLoad = collectResolvedConfigSourceStatFingerprintSync();
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
 }
 
 export function resetConfigRuntimeState(): void {
   configCache = null;
+  configStatFingerprintAtLastLoad = null;
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
 }
