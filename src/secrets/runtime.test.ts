@@ -1146,11 +1146,10 @@ describe("secrets runtime snapshot", () => {
       provider: "default",
       id: "DISABLED_TELEGRAM_BASE_TOKEN",
     });
-    expect(
-      snapshot.warnings.filter(
-        (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-      ),
-    ).toHaveLength(6);
+    const ignoredInactiveWarnings = snapshot.warnings.filter(
+      (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+    );
+    expect(ignoredInactiveWarnings).toHaveLength(10);
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
         "agents.defaults.memorySearch.remote.apiKey",
@@ -1159,6 +1158,10 @@ describe("secrets runtime snapshot", () => {
         "channels.telegram.accounts.disabled.botToken",
         "plugins.entries.brave.config.webSearch.apiKey",
         "plugins.entries.google.config.webSearch.apiKey",
+        "plugins.entries.xai.config.webSearch.apiKey",
+        "plugins.entries.moonshot.config.webSearch.apiKey",
+        "plugins.entries.perplexity.config.webSearch.apiKey",
+        "plugins.entries.firecrawl.config.webSearch.apiKey",
       ]),
     );
   });
