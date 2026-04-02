@@ -337,7 +337,8 @@ export function resolveProviderRequestPolicy(
   let attributionProvider: string | undefined;
   if (
     provider === "openai" &&
-    (api === "openai-completions" || api === "openai-responses" || input.capability === "audio") &&
+    ((api === "openai-completions" || api === "openai-responses") ||
+      input.capability === "audio") &&
     usesOpenAIPublicAttributionHost
   ) {
     attributionProvider = "openai";
