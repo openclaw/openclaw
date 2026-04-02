@@ -17,6 +17,16 @@ function resolveModel(model: string | undefined, fallback: string): string {
   return trimmed || fallback;
 }
 
+function resolveUploadFileName(fileName: string | undefined): string {
+  const trimmed = fileName?.trim();
+  if (!trimmed) {
+    return "audio";
+  }
+  // Keep only the terminal segment so multipart uploads never expose host paths.
+  const baseName = path.win32.basename(path.posix.basename(trimmed));
+  return baseName || "audio";
+}
+
 export async function transcribeOpenAiCompatibleAudio(
   params: OpenAiCompatibleAudioParams,
 ): Promise<AudioTranscriptionResult> {
@@ -27,7 +37,7 @@ export async function transcribeOpenAiCompatibleAudio(
 
   const model = resolveModel(params.model, params.defaultModel);
   const form = new FormData();
-  const fileName = params.fileName?.trim() || path.basename(params.fileName) || "audio";
+  const fileName = resolveUploadFileName(params.fileName);
   const bytes = new Uint8Array(params.buffer);
   const blob = new Blob([bytes], {
     type: params.mime ?? "application/octet-stream",
