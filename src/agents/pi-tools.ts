@@ -517,6 +517,13 @@ export function createOpenClawCodingTools(options?: {
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
         });
+  const applyPatchToolWrapped =
+    applyPatchTool && shouldWrapFsTools
+      ? wrapToolWorkspaceRootGuardWithOptions(applyPatchTool as unknown as AnyAgentTool, sandboxRoot ?? workspaceRoot, {
+          containerWorkdir: sandbox?.containerWorkdir,
+          policy: fsPolicy,
+        })
+      : applyPatchTool;
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
@@ -545,7 +552,7 @@ export function createOpenClawCodingTools(options?: {
           ]
         : []
       : []),
-    ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
+    ...(applyPatchToolWrapped ? [applyPatchToolWrapped as unknown as AnyAgentTool] : []),
     execTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
     // Channel docking: include channel-defined agent tools (login, etc.).

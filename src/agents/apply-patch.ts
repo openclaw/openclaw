@@ -14,6 +14,7 @@ import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
@@ -77,6 +78,8 @@ type ApplyPatchOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
+  /** Optional filesystem policy for patch target paths (PathGuard). */
+  fsPolicy?: ToolFsPolicy;
   signal?: AbortSignal;
 };
 
