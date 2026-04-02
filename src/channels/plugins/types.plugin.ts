@@ -1,4 +1,5 @@
 import type { ChannelSetupWizard } from "./setup-wizard.js";
+import type { ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
 import type {
   ChannelApprovalAdapter,
   ChannelApprovalCapability,
@@ -86,6 +87,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   };
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
   setupWizard?: ChannelSetupWizard;
+  setupWizardAdapter?: ChannelSetupWizardAdapter;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
   setup?: ChannelSetupAdapter;

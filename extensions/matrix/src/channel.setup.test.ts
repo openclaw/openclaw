@@ -13,6 +13,7 @@ import { matrixPlugin } from "./channel.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
+import { resolveChannelSetupWizardAdapterForPlugin } from "../../../src/commands/channel-setup/registry.js";
 
 let runMatrixSetupBootstrapAfterConfigWrite: typeof import("./setup-bootstrap.js").runMatrixSetupBootstrapAfterConfigWrite;
 
@@ -135,9 +136,10 @@ describe("matrix setup post-write bootstrap", () => {
     installMatrixTestRuntime();
   });
 
-  it("exposes the Matrix guided setup wizard on the channel plugin", () => {
-    expect(matrixPlugin.setupWizard?.channel).toBe("matrix");
-    expect(matrixPlugin.setupWizard?.configureInteractive).toBeTypeOf("function");
+  it("registers the Matrix guided setup adapter for channel setup flows", () => {
+    const adapter = resolveChannelSetupWizardAdapterForPlugin(matrixPlugin);
+    expect(adapter?.channel).toBe("matrix");
+    expect(adapter?.configureInteractive).toBeTypeOf("function");
   });
 
   it("bootstraps verification for newly added encrypted accounts", async () => {

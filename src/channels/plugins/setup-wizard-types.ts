@@ -6,7 +6,7 @@ import type { ChannelId, ChannelPlugin } from "./types.js";
 
 export type ChannelSetupPlugin = Pick<
   ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "setup" | "setupWizard"
+  "id" | "meta" | "capabilities" | "config" | "setup" | "setupWizard" | "setupWizardAdapter"
 >;
 
 export type SetupChannelsOptions = {

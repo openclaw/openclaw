@@ -1,14 +1,17 @@
 import { listChannelSetupPlugins } from "../../channels/plugins/setup-registry.js";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../channels/plugins/setup-wizard.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import type { ChannelSetupWizardAdapter } from "./types.js";
 
 const setupWizardAdapters = new WeakMap<object, ChannelSetupWizardAdapter>();
 
 export function resolveChannelSetupWizardAdapterForPlugin(
-  plugin?: ChannelPlugin,
+  plugin?: ChannelSetupPlugin,
 ): ChannelSetupWizardAdapter | undefined {
+  if (plugin?.setupWizardAdapter) {
+    return plugin.setupWizardAdapter;
+  }
   if (plugin?.setupWizard) {
     const cached = setupWizardAdapters.get(plugin);
     if (cached) {

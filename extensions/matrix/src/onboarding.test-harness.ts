@@ -2,6 +2,7 @@ import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { afterEach, vi } from "vitest";
 import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
 import type { CoreConfig } from "./types.js";
+import type { SetupChannelsOptions } from "../../../src/channels/plugins/setup-wizard-types.js";
 
 const MATRIX_ENV_KEYS = [
   "MATRIX_HOMESERVER",
@@ -88,7 +89,7 @@ export function createMatrixWizardPrompter(params: {
 export async function runMatrixInteractiveConfigure(params: {
   cfg: CoreConfig;
   prompter: WizardPrompter;
-  options?: unknown;
+  options?: SetupChannelsOptions;
   accountOverrides?: Record<string, string>;
   shouldPromptAccountIds?: boolean;
   forceAllowFrom?: boolean;
