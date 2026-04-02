@@ -228,12 +228,6 @@ export function buildPluginDiagnosticsReport(params?: PluginReportParams): Plugi
   return buildPluginReport(params, true);
 }
 
-// Compatibility alias for existing hot/reporting callers while the repo finishes
-// migrating to explicit snapshot vs diagnostics builders.
-export function buildPluginStatusReport(params?: PluginReportParams): PluginStatusReport {
-  return buildPluginDiagnosticsReport(params);
-}
-
 function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
   return [
     { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
