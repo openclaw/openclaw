@@ -202,6 +202,12 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
+    model:
+      typeof metadataObj.model === "string" ? metadataObj.model.trim() || undefined : undefined,
+    modelProfile:
+      typeof metadataObj.modelProfile === "string"
+        ? metadataObj.modelProfile.trim() || undefined
+        : undefined,
   };
 }
 

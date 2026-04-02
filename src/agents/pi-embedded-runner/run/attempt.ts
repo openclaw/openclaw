@@ -90,6 +90,12 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import {
+  buildSkillModelMap,
+  createActiveSkillModelContext,
+  wrapReadToolWithSkillModelDetect,
+  wrapStreamFnSkillModelRouter,
+} from "../../skills/model-router.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
@@ -361,6 +367,11 @@ export async function runEmbeddedAttempt(
           config: params.config,
         });
 
+    // Build skill→model map for model routing. Created once per attempt; the
+    // read-tool interceptor and StreamFn ModelRouter wrapper share the context.
+    const skillModelMap = buildSkillModelMap(skillEntries ?? [], params.modelRegistry);
+    const activeSkillModelCtx = createActiveSkillModelContext();
+
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
@@ -491,8 +502,17 @@ export async function runEmbeddedAttempt(
           return allTools;
         })();
     const toolsEnabled = supportsModelTools(params.model);
+    // Wrap the read tool to detect SKILL.md loads and set the active skill model.
+    const toolsForRun =
+      skillModelMap.size > 0
+        ? toolsRaw.map((t) =>
+            t.name === "read"
+              ? wrapReadToolWithSkillModelDetect(t, skillModelMap, activeSkillModelCtx)
+              : t,
+          )
+        : toolsRaw;
     const tools = sanitizeToolsForGoogle({
-      tools: toolsEnabled ? toolsRaw : [],
+      tools: toolsEnabled ? toolsForRun : [],
       provider: params.provider,
       config: params.config,
       workspaceDir: effectiveWorkspace,
@@ -949,6 +969,15 @@ export async function runEmbeddedAttempt(
         signal: runAbortController.signal,
         model: params.model,
       });
+
+      // Route LLM calls to the skill-declared model when a SKILL.md with a
+      // model override has been read during this run attempt.
+      if (skillModelMap.size > 0) {
+        activeSession.agent.streamFn = wrapStreamFnSkillModelRouter(
+          activeSession.agent.streamFn,
+          activeSkillModelCtx,
+        );
+      }
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
         activeSession.agent,
