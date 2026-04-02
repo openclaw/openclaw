@@ -201,13 +201,24 @@ export function buildGeminiSpeechProvider(): SpeechProviderPlugin {
       const audioBuffer = Buffer.from(audioBase64, "base64");
       const mimeType =
         data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.mimeType || "audio/mp3";
-      const fileExtension = mimeType.includes("webm") ? ".webm" : ".mp3";
+      
+      // Map Gemini MIME types to correct file extensions
+      let fileExtension = ".mp3";
+      if (mimeType.includes("webm")) {
+        fileExtension = ".webm";
+      } else if (mimeType.includes("wav") || mimeType.includes("pcm") || mimeType.includes("l16")) {
+        fileExtension = ".wav";
+      } else if (mimeType.includes("ogg")) {
+        fileExtension = ".ogg";
+      } else if (mimeType.includes("flac")) {
+        fileExtension = ".flac";
+      }
 
       return {
         audioBuffer,
         outputFormat: mimeType,
         fileExtension,
-        voiceCompatible: mimeType.includes("mp3"),
+        voiceCompatible: mimeType.includes("mp3") || mimeType.includes("wav"),
       };
     },
   };

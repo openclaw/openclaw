@@ -47,7 +47,8 @@
   "contracts": {
     "mediaUnderstandingProviders": ["google"],
     "imageGenerationProviders": ["google"],
-    "webSearchProviders": ["gemini"]
+    "webSearchProviders": ["gemini"],
+    "speechProviders": ["gemini"]
   },
   "configSchema": {
     "type": "object",
