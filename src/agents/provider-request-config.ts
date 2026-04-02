@@ -111,6 +111,8 @@ export function resolveProviderRequestHeaders(params: {
     requestConfig.headers,
     requestConfig.policy.attributionHeaders,
   );
+  // When precedence is omitted, defaults-win is the conservative choice:
+  // attribution/default headers cannot be silently overridden by callers.
   return params.precedence === "caller-wins"
     ? mergeProviderRequestHeaders(mergedDefaults, params.callerHeaders)
     : mergeProviderRequestHeaders(params.callerHeaders, mergedDefaults);
