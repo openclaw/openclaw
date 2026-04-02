@@ -143,7 +143,7 @@ function stripPreflightEnvPrefix(argv: string[]): string[] {
 
 function extractScriptTargetFromCommand(
   command: string,
-): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null {
+): { kind: "python"; relOrAbsPaths: string[] } | { kind: "node"; relOrAbsPaths: string[] } | null {
   const raw = command.trim();
   const splitShellArgsPreservingBackslashes = (value: string): string[] | null => {
     const tokens: string[] = [];
@@ -232,21 +232,21 @@ function extractScriptTargetFromCommand(
     }
     return null;
   };
-  const findFirstNodeScriptArg = (tokens: string[]): string | null => {
+  const findNodeScriptArgs = (tokens: string[]): string[] => {
     const optionsWithSeparateValue = new Set(["-r", "--require", "--import"]);
-    let preloadScript: string | null = null;
+    const preloadScripts: string[] = [];
+    let entryScript: string | null = null;
     let hasInlineEvalOrPrint = false;
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
       if (token === "--") {
-        if (hasInlineEvalOrPrint) {
-          return preloadScript;
+        if (!hasInlineEvalOrPrint && !entryScript) {
+          const next = tokens[i + 1];
+          if (next?.toLowerCase().endsWith(".js")) {
+            entryScript = next;
+          }
         }
-        const next = tokens[i + 1];
-        if (next?.toLowerCase().endsWith(".js")) {
-          return next;
-        }
-        return preloadScript;
+        break;
       }
       if (
         token === "-e" ||
@@ -265,8 +265,8 @@ function extractScriptTargetFromCommand(
       }
       if (optionsWithSeparateValue.has(token)) {
         const next = tokens[i + 1];
-        if (!preloadScript && next?.toLowerCase().endsWith(".js")) {
-          preloadScript = next;
+        if (next?.toLowerCase().endsWith(".js")) {
+          preloadScripts.push(next);
         }
         i += 1;
         continue;
@@ -279,24 +279,31 @@ function extractScriptTargetFromCommand(
         const inlineValue = token.startsWith("-r")
           ? token.slice(2)
           : token.slice(token.indexOf("=") + 1);
-        if (!preloadScript && inlineValue.toLowerCase().endsWith(".js")) {
-          preloadScript = inlineValue;
+        if (inlineValue.toLowerCase().endsWith(".js")) {
+          preloadScripts.push(inlineValue);
         }
         continue;
       }
       if (token.startsWith("-")) {
         continue;
       }
-      if (hasInlineEvalOrPrint) {
-        return preloadScript;
+      if (!hasInlineEvalOrPrint && !entryScript && token.toLowerCase().endsWith(".js")) {
+        entryScript = token;
       }
-      return token.toLowerCase().endsWith(".js") ? token : preloadScript;
+      break;
     }
-    return preloadScript;
+    const targets = [...preloadScripts];
+    if (entryScript) {
+      targets.push(entryScript);
+    }
+    return targets;
   };
   const extractTargetFromArgv = (
     argv: string[] | null,
-  ): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null => {
+  ):
+    | { kind: "python"; relOrAbsPaths: string[] }
+    | { kind: "node"; relOrAbsPaths: string[] }
+    | null => {
     if (!argv || argv.length === 0) {
       return null;
     }
@@ -312,14 +319,14 @@ function extractScriptTargetFromCommand(
     if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
       const script = findFirstPythonScriptArg(args);
       if (script) {
-        return { kind: "python", relOrAbsPath: script };
+        return { kind: "python", relOrAbsPaths: [script] };
       }
       return null;
     }
     if (executable === "node") {
-      const script = findFirstNodeScriptArg(args);
-      if (script) {
-        return { kind: "node", relOrAbsPath: script };
+      const scripts = findNodeScriptArgs(args);
+      if (scripts.length > 0) {
+        return { kind: "node", relOrAbsPaths: scripts };
       }
       return null;
     }
@@ -602,64 +609,66 @@ async function validateScriptFileForShellBleed(params: {
     return;
   }
 
-  const absPath = path.isAbsolute(target.relOrAbsPath)
-    ? path.resolve(target.relOrAbsPath)
-    : path.resolve(params.workdir, target.relOrAbsPath);
+  for (const relOrAbsPath of target.relOrAbsPaths) {
+    const absPath = path.isAbsolute(relOrAbsPath)
+      ? path.resolve(relOrAbsPath)
+      : path.resolve(params.workdir, relOrAbsPath);
 
-  // Best-effort: only validate if file exists and is reasonably small.
-  let stat: { isFile(): boolean; size: number };
-  try {
-    await assertSandboxPath({
-      filePath: absPath,
-      cwd: params.workdir,
-      root: params.workdir,
-    });
-    stat = await fs.stat(absPath);
-  } catch {
-    return;
-  }
-  if (!stat.isFile()) {
-    return;
-  }
-  if (stat.size > 512 * 1024) {
-    return;
-  }
+    // Best-effort: only validate if file exists and is reasonably small.
+    let stat: { isFile(): boolean; size: number };
+    try {
+      await assertSandboxPath({
+        filePath: absPath,
+        cwd: params.workdir,
+        root: params.workdir,
+      });
+      stat = await fs.stat(absPath);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) {
+      continue;
+    }
+    if (stat.size > 512 * 1024) {
+      continue;
+    }
 
-  const content = await fs.readFile(absPath, "utf-8");
+    const content = await fs.readFile(absPath, "utf-8");
 
-  // Common failure mode: shell env var syntax leaking into Python/JS.
-  // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.
-  const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}/g;
-  const first = envVarRegex.exec(content);
-  if (first) {
-    const idx = first.index;
-    const before = content.slice(0, idx);
-    const line = before.split("\n").length;
-    const token = first[0];
-    throw new Error(
-      [
-        `exec preflight: detected likely shell variable injection (${token}) in ${target.kind} script: ${path.basename(
-          absPath,
-        )}:${line}.`,
-        target.kind === "python"
-          ? `In Python, use os.environ.get(${JSON.stringify(token.slice(1))}) instead of raw ${token}.`
-          : `In Node.js, use process.env[${JSON.stringify(token.slice(1))}] instead of raw ${token}.`,
-        "(If this is inside a string literal on purpose, escape it or restructure the code.)",
-      ].join("\n"),
-    );
-  }
-
-  // Another recurring pattern from the issue: shell commands accidentally emitted as JS.
-  if (target.kind === "node") {
-    const firstNonEmpty = content
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .find((l) => l.length > 0);
-    if (firstNonEmpty && /^NODE\b/.test(firstNonEmpty)) {
+    // Common failure mode: shell env var syntax leaking into Python/JS.
+    // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.
+    const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}/g;
+    const first = envVarRegex.exec(content);
+    if (first) {
+      const idx = first.index;
+      const before = content.slice(0, idx);
+      const line = before.split("\n").length;
+      const token = first[0];
       throw new Error(
-        `exec preflight: JS file starts with shell syntax (${firstNonEmpty}). ` +
-          `This looks like a shell command, not JavaScript.`,
+        [
+          `exec preflight: detected likely shell variable injection (${token}) in ${target.kind} script: ${path.basename(
+            absPath,
+          )}:${line}.`,
+          target.kind === "python"
+            ? `In Python, use os.environ.get(${JSON.stringify(token.slice(1))}) instead of raw ${token}.`
+            : `In Node.js, use process.env[${JSON.stringify(token.slice(1))}] instead of raw ${token}.`,
+          "(If this is inside a string literal on purpose, escape it or restructure the code.)",
+        ].join("\n"),
       );
+    }
+
+    // Another recurring pattern from the issue: shell commands accidentally emitted as JS.
+    if (target.kind === "node") {
+      const firstNonEmpty = content
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => l.length > 0);
+      if (firstNonEmpty && /^NODE\b/.test(firstNonEmpty)) {
+        throw new Error(
+          `exec preflight: JS file starts with shell syntax (${firstNonEmpty}). ` +
+            `This looks like a shell command, not JavaScript.`,
+        );
+      }
     }
   }
 }

@@ -164,6 +164,21 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("validates node --require preload modules before a benign entry script", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(path.join(tmp, "bad-preload.js"), "const value = $DM_JSON;", "utf-8");
+      await fs.writeFile(path.join(tmp, "app.js"), "console.log('ok')", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-node-preload-before-entry", {
+          command: "node --require bad-preload.js app.js",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
   it("validates node --require preload modules when no entry script is provided", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
