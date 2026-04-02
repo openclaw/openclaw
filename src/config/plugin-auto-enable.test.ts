@@ -44,6 +44,7 @@ function makeRegistry(
     id: string;
     channels: string[];
     autoEnableWhenConfiguredProviders?: string[];
+    contracts?: { webFetchProviders?: string[] };
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
   }>,
 ): PluginManifestRegistry {
@@ -52,6 +53,7 @@ function makeRegistry(
       id: p.id,
       channels: p.channels,
       autoEnableWhenConfiguredProviders: p.autoEnableWhenConfiguredProviders,
+      contracts: p.contracts,
       channelConfigs: p.channelConfigs,
       providers: [],
       cliBackends: [],
@@ -125,6 +127,9 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.slack).toBeUndefined();
     expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.autoEnabledReasons).toEqual({
+      slack: ["slack configured"],
+    });
     expect(result.changes.join("\n")).toContain("Slack configured, enabled automatically.");
   });
 
@@ -133,6 +138,12 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toBeUndefined();
+  });
+
+  it("stores auto-enable reasons in a null-prototype dictionary", () => {
+    const result = applyWithSlackConfig();
+
+    expect(Object.getPrototypeOf(result.autoEnabledReasons)).toBeNull();
   });
 
   it("auto-enables browser when browser config exists under a restrictive plugins.allow", () => {
@@ -150,6 +161,9 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.plugins?.allow).toEqual(["telegram", "browser"]);
     expect(result.config.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.autoEnabledReasons).toEqual({
+      browser: ["browser configured"],
+    });
     expect(result.changes).toContain("browser configured, enabled automatically.");
   });
 
@@ -184,6 +198,59 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.allow).toEqual(["telegram"]);
     expect(result.config.plugins?.entries?.browser).toBeUndefined();
     expect(result.changes).toEqual([]);
+  });
+
+  it("does not auto-enable or allowlist non-bundled web fetch providers from config", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "evilfetch",
+            },
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+      manifestRegistry: makeRegistry([
+        {
+          id: "evil-plugin",
+          channels: [],
+          contracts: { webFetchProviders: ["evilfetch"] },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["evil-plugin"]).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.changes).toEqual([]);
+  });
+
+  it("auto-enables bundled firecrawl when plugin-owned webFetch config exists", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: "firecrawl-key",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "firecrawl"]);
+    expect(result.changes).toContain("firecrawl web fetch configured, enabled automatically.");
   });
 
   it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {

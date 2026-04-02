@@ -11,6 +11,7 @@ import {
 } from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import {
   createTaskRecord,
   findLatestTaskForOwnerKey,
@@ -18,8 +19,10 @@ import {
   findTaskByRunId,
   getTaskById,
   getTaskRegistrySummary,
+  isParentFlowLinkError,
   listTasksForOwnerKey,
   listTaskRecords,
+  linkTaskToFlowById,
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
   markTaskRunningByRunId,
@@ -190,6 +193,7 @@ describe("task-registry", () => {
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
     resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
@@ -290,6 +294,148 @@ describe("task-registry", () => {
           cron: 1,
         },
       });
+    });
+  });
+
+  it("rejects cross-owner parent flow links during task creation", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetTaskFlowRegistryForTests();
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-registry",
+        goal: "Owner main flow",
+      });
+
+      expect(() =>
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:other",
+          scopeKind: "session",
+          parentFlowId: flow.flowId,
+          runId: "cross-owner-run",
+          task: "Attempt hijack",
+        }),
+      ).toThrow("Task ownerKey must match parent flow ownerKey.");
+    });
+  });
+
+  it("rejects system-scoped parent flow links during task creation", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetTaskFlowRegistryForTests();
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-registry",
+        goal: "Owner main flow",
+      });
+
+      expect(() =>
+        createTaskRecord({
+          runtime: "cron",
+          ownerKey: "agent:main:main",
+          scopeKind: "system",
+          parentFlowId: flow.flowId,
+          runId: "system-link-run",
+          task: "System task",
+          deliveryStatus: "not_applicable",
+        }),
+      ).toThrow("Only session-scoped tasks can link to flows.");
+    });
+  });
+
+  it("rejects cross-owner flow links for existing tasks", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetTaskFlowRegistryForTests();
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "owner-main-task",
+        task: "Safe task",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:other",
+        controllerId: "tests/task-registry",
+        goal: "Other owner flow",
+      });
+
+      expect(() =>
+        linkTaskToFlowById({
+          taskId: task.taskId,
+          flowId: flow.flowId,
+        }),
+      ).toThrow("Task ownerKey must match parent flow ownerKey.");
+      expect(getTaskById(task.taskId)).toMatchObject({
+        taskId: task.taskId,
+        parentFlowId: undefined,
+      });
+    });
+  });
+
+  it("rejects parent flow links once cancellation has been requested", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetTaskFlowRegistryForTests();
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-registry",
+        goal: "Cancelling flow",
+        cancelRequestedAt: 42,
+      });
+
+      try {
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          parentFlowId: flow.flowId,
+          runId: "cancel-requested-link",
+          task: "Should be denied",
+        });
+        throw new Error("Expected createTaskRecord to throw.");
+      } catch (error) {
+        expect(isParentFlowLinkError(error)).toBe(true);
+        expect(error).toMatchObject({
+          code: "cancel_requested",
+          message: "Parent flow cancellation has already been requested.",
+        });
+      }
+    });
+  });
+
+  it("rejects parent flow links for terminal flows", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetTaskFlowRegistryForTests();
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-registry",
+        goal: "Completed flow",
+        status: "cancelled",
+      });
+
+      expect(() =>
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          parentFlowId: flow.flowId,
+          runId: "terminal-flow-link",
+          task: "Should be denied",
+        }),
+      ).toThrow("Parent flow is already cancelled.");
     });
   });
 

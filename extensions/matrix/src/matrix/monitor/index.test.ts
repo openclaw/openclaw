@@ -177,7 +177,7 @@ vi.mock("../../runtime.js", () => ({
     config: {
       loadConfig: () => ({
         channels: {
-          matrix: {},
+          matrix: hoisted.accountConfig,
         },
       }),
       writeConfigFile: vi.fn(),

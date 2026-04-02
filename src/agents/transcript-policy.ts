@@ -1,3 +1,6 @@
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveProviderReplayPolicyWithPlugin } from "../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
 import {
@@ -61,6 +64,10 @@ export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
   modelId?: string | null;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  model?: ProviderRuntimeModel;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
   const modelId = params.modelId ?? "";
@@ -111,7 +118,7 @@ export function resolveTranscriptPolicy(params: {
       ? { allowBase64Only: true, includeCamelCase: true }
       : undefined;
 
-  return {
+  const basePolicy: TranscriptPolicy = {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
     sanitizeToolCallIds:
       (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
@@ -125,5 +132,53 @@ export function resolveTranscriptPolicy(params: {
     validateGeminiTurns: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
     validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
+  };
+
+  const pluginPolicy = provider
+    ? resolveProviderReplayPolicyWithPlugin({
+        provider,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        context: {
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          provider,
+          modelId,
+          modelApi: params.modelApi,
+          model: params.model,
+        },
+      })
+    : undefined;
+  if (!pluginPolicy) {
+    return basePolicy;
+  }
+
+  return {
+    ...basePolicy,
+    ...(pluginPolicy.sanitizeMode != null ? { sanitizeMode: pluginPolicy.sanitizeMode } : {}),
+    ...(typeof pluginPolicy.sanitizeToolCallIds === "boolean"
+      ? { sanitizeToolCallIds: pluginPolicy.sanitizeToolCallIds }
+      : {}),
+    ...(pluginPolicy.toolCallIdMode ? { toolCallIdMode: pluginPolicy.toolCallIdMode } : {}),
+    ...(typeof pluginPolicy.repairToolUseResultPairing === "boolean"
+      ? { repairToolUseResultPairing: pluginPolicy.repairToolUseResultPairing }
+      : {}),
+    ...(typeof pluginPolicy.preserveSignatures === "boolean"
+      ? { preserveSignatures: pluginPolicy.preserveSignatures }
+      : {}),
+    ...(pluginPolicy.sanitizeThoughtSignatures
+      ? { sanitizeThoughtSignatures: pluginPolicy.sanitizeThoughtSignatures }
+      : {}),
+    ...(typeof pluginPolicy.dropThinkingBlocks === "boolean"
+      ? { dropThinkingBlocks: pluginPolicy.dropThinkingBlocks }
+      : {}),
+    ...(typeof pluginPolicy.applyAssistantFirstOrderingFix === "boolean"
+      ? { applyGoogleTurnOrdering: pluginPolicy.applyAssistantFirstOrderingFix }
+      : {}),
+    ...(typeof pluginPolicy.allowSyntheticToolResults === "boolean"
+      ? { allowSyntheticToolResults: pluginPolicy.allowSyntheticToolResults }
+      : {}),
   };
 }
