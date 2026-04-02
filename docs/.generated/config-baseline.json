@@ -49615,6 +49615,20 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.diffs.config.viewerBaseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Viewer Base URL",
+      "help": "Persistent gateway base URL used for returned viewer links when a tool call does not pass baseUrl.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.diffs.enabled",
       "kind": "plugin",
       "type": "boolean",
