@@ -62,6 +62,7 @@ import {
 import { getMatrixRuntime } from "./runtime.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import { matrixSetupAdapter } from "./setup-core.js";
+import { matrixSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
@@ -289,6 +290,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
     base: {
       id: "matrix",
       meta,
+      setupWizard: matrixSetupWizard,
       capabilities: {
         chatTypes: ["direct", "group", "thread"],
         polls: true,
