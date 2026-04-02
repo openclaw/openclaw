@@ -190,8 +190,16 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
-      name: "exposes runtime.tasks.flow as the canonical TaskFlow runtime and keeps runtime.taskFlow as an alias",
+      name: "exposes canonical runtime.tasks.runs and runtime.tasks.flows while keeping legacy TaskFlow aliases",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expectFunctionKeys(runtime.tasks.runs as Record<string, unknown>, [
+          "bindSession",
+          "fromToolContext",
+        ]);
+        expectFunctionKeys(runtime.tasks.flows as Record<string, unknown>, [
+          "bindSession",
+          "fromToolContext",
+        ]);
         expectFunctionKeys(runtime.tasks.flow as Record<string, unknown>, [
           "bindSession",
           "fromToolContext",
