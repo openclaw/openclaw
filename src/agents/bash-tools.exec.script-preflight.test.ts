@@ -192,6 +192,34 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("validates node --require preload modules even when -e is present", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-node-require-with-eval", {
+          command: 'node --require bad.js -e "console.log(123)"',
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
+  it("validates node --import preload modules even when -e is present", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-node-import-with-eval", {
+          command: 'node --import bad.js -e "console.log(123)"',
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
   it("skips preflight file reads for script paths outside the workdir", async () => {
     await withTempDir("openclaw-exec-preflight-parent-", async (parent) => {
       const outsidePath = path.join(parent, "outside.js");

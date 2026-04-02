@@ -235,9 +235,13 @@ function extractScriptTargetFromCommand(
   const findFirstNodeScriptArg = (tokens: string[]): string | null => {
     const optionsWithSeparateValue = new Set(["-r", "--require", "--import"]);
     let preloadScript: string | null = null;
+    let hasInlineEvalOrPrint = false;
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
       if (token === "--") {
+        if (hasInlineEvalOrPrint) {
+          return preloadScript;
+        }
         const next = tokens[i + 1];
         if (next?.toLowerCase().endsWith(".js")) {
           return next;
@@ -253,7 +257,11 @@ function extractScriptTargetFromCommand(
         token.startsWith("--print=") ||
         ((token.startsWith("-e") || token.startsWith("-p")) && token.length > 2)
       ) {
-        return null;
+        hasInlineEvalOrPrint = true;
+        if (token === "-e" || token === "-p" || token === "--eval" || token === "--print") {
+          i += 1;
+        }
+        continue;
       }
       if (optionsWithSeparateValue.has(token)) {
         const next = tokens[i + 1];
@@ -278,6 +286,9 @@ function extractScriptTargetFromCommand(
       }
       if (token.startsWith("-")) {
         continue;
+      }
+      if (hasInlineEvalOrPrint) {
+        return preloadScript;
       }
       return token.toLowerCase().endsWith(".js") ? token : preloadScript;
     }
