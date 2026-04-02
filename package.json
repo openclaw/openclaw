@@ -1311,6 +1311,7 @@
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
     "overrides": {
+      "@anthropic-ai/sdk": "0.81.0",
       "hono": "4.12.9",
       "@hono/node-server": "1.19.10",
       "axios": "1.13.6",
