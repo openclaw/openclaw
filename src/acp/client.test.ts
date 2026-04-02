@@ -400,6 +400,51 @@ describe("resolvePermissionRequest", () => {
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
   });
 
+  it.each([
+    {
+      toolName: "cron",
+      title: "cron: status",
+      rawInput: {
+        name: "cron",
+        action: "status",
+      },
+    },
+    {
+      toolName: "nodes",
+      title: "nodes: list",
+      rawInput: {
+        name: "nodes",
+        action: "list",
+      },
+    },
+    {
+      toolName: "whatsapp_login",
+      title: "whatsapp_login: start",
+      rawInput: {
+        name: "whatsapp_login",
+      },
+    },
+  ] as const)(
+    "prompts for shared owner-only backstop tools: $toolName",
+    async ({ toolName, title, rawInput }) => {
+      const prompt = vi.fn(async () => true);
+      const res = await resolvePermissionRequest(
+        makePermissionRequest({
+          toolCall: {
+            toolCallId: `tool-${toolName}`,
+            title,
+            status: "pending",
+            rawInput,
+          },
+        }),
+        { prompt, log: () => {} },
+      );
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(prompt).toHaveBeenCalledWith(toolName, title);
+      expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+    },
+  );
+
   it("auto-approves search without prompting", async () => {
     const prompt = vi.fn(async () => true);
     const res = await resolvePermissionRequest(
