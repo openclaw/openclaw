@@ -97,8 +97,11 @@ describe("installScheduledTask", () => {
       expect(parsed?.environment).not.toHaveProperty("OC_EMPTY");
 
       expect(schtasksCalls[0]).toEqual(["/Query"]);
-      expect(schtasksCalls[1]?.[0]).toBe("/Create");
-      expect(schtasksCalls[2]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      // When the task already exists (mock returns code 0), activateScheduledTask
+      // uses /Change to preserve user-configured settings instead of /Create /F.
+      expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls[2]?.[0]).toBe("/Change");
+      expect(schtasksCalls[3]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });
 

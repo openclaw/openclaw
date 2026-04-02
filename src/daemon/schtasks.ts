@@ -591,6 +591,28 @@ async function activateScheduledTask(params: {
 
   const taskName = resolveTaskName(params.env);
   const quotedScript = quoteSchtasksArg(params.scriptPath);
+
+  // When the task already exists, update only the command (/TR) so that
+  // user-configured settings (run level, logon type, etc.) are preserved.
+  // Fall back to /Create only for new installations.
+  const taskExists = await isRegisteredScheduledTask(params.env);
+  if (taskExists) {
+    const change = await execSchtasks(["/Change", "/TN", taskName, "/TR", quotedScript]);
+    if (change.code === 0) {
+      await execSchtasks(["/Run", "/TN", taskName]);
+      writeFormattedLines(
+        params.stdout,
+        [
+          { label: "Updated Scheduled Task", value: taskName },
+          { label: "Task script", value: params.scriptPath },
+        ],
+        { leadingBlankLine: true },
+      );
+      return;
+    }
+    // /Change failed — fall through to /Create as a recovery path.
+  }
+
   const baseArgs = [
     "/Create",
     "/F",

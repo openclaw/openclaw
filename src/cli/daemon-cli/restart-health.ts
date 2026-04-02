@@ -219,12 +219,28 @@ export async function waitForGatewayHealthyRestart(params: {
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
   });
 
+  // Track consecutive iterations where the task has clearly failed (stopped
+  // runtime + free port) so we can bail out early instead of waiting the full
+  // health timeout, which on Windows can appear to hang indefinitely.
+  let consecutiveStoppedFreeCount = 0;
+  const EARLY_EXIT_STOPPED_FREE_THRESHOLD = 6; // ~3 seconds at 500ms delay
+
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (snapshot.healthy) {
       return snapshot;
     }
     if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
       return snapshot;
+    }
+    // Early exit: if the task is clearly stopped and the port is free for
+    // several consecutive checks, the gateway failed to start — stop waiting.
+    if (snapshot.runtime.status === "stopped" && snapshot.portUsage.status === "free") {
+      consecutiveStoppedFreeCount += 1;
+      if (consecutiveStoppedFreeCount >= EARLY_EXIT_STOPPED_FREE_THRESHOLD) {
+        return snapshot;
+      }
+    } else {
+      consecutiveStoppedFreeCount = 0;
     }
     await sleep(delayMs);
     snapshot = await inspectGatewayRestart({
