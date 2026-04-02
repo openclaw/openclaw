@@ -49,6 +49,17 @@ describe("chat-model-ref helpers", () => {
     expect(formatChatModelDisplay("alias-only")).toBe("alias-only");
   });
 
+  it("uses providerOverride when provided instead of extracting from qualified ID", () => {
+    // When modelProvider is a routing provider (e.g. openrouter) different from
+    // the underlying provider embedded in the model string (e.g. anthropic)
+    expect(formatChatModelDisplay("anthropic/claude-sonnet-4.6", "openrouter")).toBe(
+      "claude-sonnet-4.6 · openrouter",
+    );
+    expect(formatChatModelDisplay("openai/gpt-5-mini", "openrouter")).toBe(
+      "gpt-5-mini · openrouter",
+    );
+  });
+
   it("resolves server session data to qualified option values", () => {
     expect(resolveServerChatModelValue("gpt-5-mini", "openai")).toBe("openai/gpt-5-mini");
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");

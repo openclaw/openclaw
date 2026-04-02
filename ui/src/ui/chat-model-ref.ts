@@ -128,7 +128,7 @@ export function resolvePreferredServerChatModelValue(
   return resolvePreferredServerChatModel(model, provider, catalog).value;
 }
 
-export function formatChatModelDisplay(value: string): string {
+export function formatChatModelDisplay(value: string, providerOverride?: string | null): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
@@ -137,7 +137,9 @@ export function formatChatModelDisplay(value: string): string {
   if (separator <= 0) {
     return trimmed;
   }
-  return `${trimmed.slice(separator + 1)} · ${trimmed.slice(0, separator)}`;
+  const model = trimmed.slice(separator + 1);
+  const provider = providerOverride?.trim() || trimmed.slice(0, separator);
+  return `${model} · ${provider}`;
 }
 
 export function buildChatModelOption(entry: ModelCatalogEntry): { value: string; label: string } {

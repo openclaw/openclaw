@@ -93,7 +93,10 @@ export function resolveChatModelSelectState(
 ): ChatModelSelectState {
   const currentOverride = resolveChatModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
-  const defaultDisplay = formatChatModelDisplay(defaultModel);
+  const defaultDisplay = formatChatModelDisplay(
+    defaultModel,
+    state.sessionsResult?.defaults?.modelProvider,
+  );
 
   return {
     currentOverride,
