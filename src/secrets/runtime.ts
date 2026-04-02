@@ -169,10 +169,10 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
-  const sourceConfig = structuredClone(migrateLegacyXSearchConfig(params.config).config);
-  const resolvedConfig = structuredClone(
-    migrateLegacyXSearchConfig(migrateLegacyConfig(params.config).config ?? params.config).config,
-  );
+  const migrated = migrateLegacyConfig(params.config);
+  const migratedConfig = migrated.config ?? migrateLegacyXSearchConfig(params.config).config;
+  const sourceConfig = structuredClone(migratedConfig);
+  const resolvedConfig = structuredClone(migratedConfig);
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
     resolveLoadablePluginOrigins({ config: sourceConfig, env: runtimeEnv });

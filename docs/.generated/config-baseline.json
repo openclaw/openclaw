@@ -67339,68 +67339,13 @@
       "hasChildren": true
     },
     {
-      "path": "tools.web.x_search.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "security",
-        "tools"
-      ],
-      "label": "xAI API Key",
-      "help": "xAI API key for X search (fallback: XAI_API_KEY env var).",
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.x_search.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.x_search.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.x_search.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "tools.web.x_search.cacheTtlMinutes",
       "kind": "core",
       "type": "number",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "performance",
-        "storage",
-        "tools"
-      ],
-      "label": "X Search Cache TTL (min)",
-      "help": "Cache TTL in minutes for x_search results.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -67410,11 +67355,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Enable X Search Tool",
-      "help": "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -67424,11 +67365,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "X Search Inline Citations",
-      "help": "Keep inline citations from xAI in x_search responses when available (default: false).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -67438,12 +67375,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "X Search Max Turns",
-      "help": "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -67453,12 +67385,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "models",
-        "tools"
-      ],
-      "label": "X Search Model",
-      "help": "Model to use for X search (default: \"grok-4-1-fast-non-reasoning\").",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -67468,12 +67395,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "X Search Timeout (sec)",
-      "help": "Timeout in seconds for x_search requests.",
+      "tags": [],
       "hasChildren": false
     },
     {
