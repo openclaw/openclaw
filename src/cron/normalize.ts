@@ -310,6 +310,14 @@ function unwrapJob(raw: UnknownRecord) {
   return raw;
 }
 
+export function normalizeCronCustomSessionId(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function normalizeSessionTarget(raw: unknown) {
   if (typeof raw !== "string") {
     return undefined;
@@ -321,7 +329,7 @@ function normalizeSessionTarget(raw: unknown) {
   }
   // Support custom session IDs with "session:" prefix
   if (lower.startsWith("session:")) {
-    const sessionId = trimmed.slice(8).trim();
+    const sessionId = normalizeCronCustomSessionId(trimmed.slice(8));
     if (sessionId) {
       return `session:${sessionId}`;
     }

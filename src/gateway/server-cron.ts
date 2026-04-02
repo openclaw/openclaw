@@ -11,6 +11,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
+import { normalizeCronCustomSessionId } from "../cron/normalize.js";
 import {
   appendCronRunLog,
   resolveCronRunLogPath,
@@ -286,7 +287,7 @@ export function buildGatewayCronService(params: {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       let sessionKey = `cron:${job.id}`;
       if (job.sessionTarget.startsWith("session:")) {
-        const customSessionId = job.sessionTarget.slice(8).trim();
+        const customSessionId = normalizeCronCustomSessionId(job.sessionTarget.slice(8));
         if (customSessionId) {
           sessionKey = customSessionId;
         }

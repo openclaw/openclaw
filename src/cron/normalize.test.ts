@@ -593,6 +593,17 @@ describe("normalizeCronJobCreate", () => {
 
     expect(normalized.sessionTarget).toBe("session:MySessionID");
   });
+
+  it("rejects custom session ids with path separators", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "custom-session-invalid",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "session:../../escape",
+      payload: { kind: "agentTurn", message: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+  });
 });
 
 describe("normalizeCronJobPatch", () => {
