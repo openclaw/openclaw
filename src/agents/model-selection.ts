@@ -6,8 +6,7 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
-import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
+import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -16,6 +15,7 @@ import {
 } from "./agent-scope.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { normalizeXaiModelId } from "./xai-model-id.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
