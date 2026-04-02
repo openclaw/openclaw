@@ -7,8 +7,8 @@ import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-detection";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { recordSessionMetaFromInbound } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildHistoryContextFromEntries,
@@ -33,6 +33,12 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "../../accounts.js";
+import {
+  buildWhatsAppErrorScopeKey,
+  isSilentErrorPolicy,
+  resolveWhatsAppErrorPolicy,
+  shouldSuppressWhatsAppError,
+} from "../../error-policy.js";
 import {
   getPrimaryIdentityId,
   getReplyContext,
@@ -419,6 +425,34 @@ export async function processMessage(params: {
           // web UI only; sending them here leaks chain-of-thought to end users.
           return;
         }
+        // Suppress error payloads based on errorPolicy config.
+        if (payload.isError === true) {
+          const whatsAppAccount = resolveWhatsAppAccount({
+            cfg: params.cfg,
+            accountId: params.msg.accountId,
+          });
+          const errorPolicy = resolveWhatsAppErrorPolicy({
+            accountConfig: whatsAppAccount,
+          });
+          if (isSilentErrorPolicy(errorPolicy.policy)) {
+            logVerbose("Suppressed error reply (errorPolicy: silent)");
+            return;
+          }
+          if (
+            errorPolicy.policy === "once" &&
+            shouldSuppressWhatsAppError({
+              scopeKey: buildWhatsAppErrorScopeKey({
+                accountId: params.route.accountId,
+                chatId: conversationId ?? params.msg.from,
+              }),
+              cooldownMs: errorPolicy.cooldownMs,
+              errorMessage: payload.text,
+            })
+          ) {
+            logVerbose("Suppressed error reply (errorPolicy: once, within cooldown)");
+            return;
+          }
+        }
         await deliverWebReply({
           replyResult: payload,
           msg: params.msg,
@@ -449,6 +483,29 @@ export async function processMessage(params: {
         }
       },
       onError: (err, info) => {
+        const whatsAppAccount = resolveWhatsAppAccount({
+          cfg: params.cfg,
+          accountId: params.msg.accountId,
+        });
+        const errorPolicy = resolveWhatsAppErrorPolicy({
+          accountConfig: whatsAppAccount,
+        });
+        if (isSilentErrorPolicy(errorPolicy.policy)) {
+          return;
+        }
+        if (
+          errorPolicy.policy === "once" &&
+          shouldSuppressWhatsAppError({
+            scopeKey: buildWhatsAppErrorScopeKey({
+              accountId: params.route.accountId,
+              chatId: conversationId ?? params.msg.from,
+            }),
+            cooldownMs: errorPolicy.cooldownMs,
+            errorMessage: String(err),
+          })
+        ) {
+          return;
+        }
         const label =
           info.kind === "tool"
             ? "tool update"

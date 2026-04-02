@@ -59,6 +59,8 @@ const WhatsAppSharedSchema = z.object({
   ackReaction: WhatsAppAckReactionSchema,
   reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
   debounceMs: z.number().int().nonnegative().optional().default(0),
+  errorPolicy: z.enum(["always", "once", "silent"]).optional(),
+  errorCooldownMs: z.number().int().nonnegative().optional(),
   heartbeat: ChannelHeartbeatVisibilitySchema,
   healthMonitor: ChannelHealthMonitorSchema,
 });

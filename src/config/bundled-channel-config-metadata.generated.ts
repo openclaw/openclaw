@@ -14354,6 +14354,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           minimum: 0,
           maximum: 9007199254740991,
         },
+        errorPolicy: {
+          type: "string",
+          enum: ["always", "once", "silent"],
+        },
+        errorCooldownMs: {
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
         heartbeat: {
           type: "object",
           properties: {
@@ -14599,6 +14608,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               debounceMs: {
                 default: 0,
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              errorPolicy: {
+                type: "string",
+                enum: ["always", "once", "silent"],
+              },
+              errorCooldownMs: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
