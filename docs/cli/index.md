@@ -45,6 +45,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`tui`](/cli/tui)
 - [`browser`](/cli/browser)
 - [`cron`](/cli/cron)
+- [`tasks`](/cli/index#tasks)
 - [`dns`](/cli/dns)
 - [`docs`](/cli/docs)
 - [`hooks`](/cli/hooks)
@@ -905,12 +906,14 @@ Subcommands:
 
 Common RPCs:
 
+- `config.set` (validate + write full config; use `baseHash` for optimistic concurrency)
 - `config.apply` (validate + write config + restart + wake)
 - `config.patch` (merge a partial update + restart + wake)
 - `update.run` (run update + restart + wake)
 
 Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `baseHash` from
 `config.get` if a config already exists.
+Tip: these config write RPCs preflight active SecretRef resolution for refs in the submitted config payload and reject writes when an effectively active submitted ref is unresolved.
 
 ## Models
 

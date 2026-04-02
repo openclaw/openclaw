@@ -1,7 +1,6 @@
 import {
   AllowFromListSchema,
   buildNestedDmConfigSchema,
-  DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ToolPolicySchema,
@@ -33,6 +32,7 @@ const matrixThreadBindingsSchema = z
 
 const matrixRoomSchema = z
   .object({
+    account: z.string().optional(),
     enabled: z.boolean().optional(),
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
@@ -65,6 +65,7 @@ export const MatrixConfigSchema = z.object({
   allowlistOnly: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   groupPolicy: GroupPolicySchema.optional(),
+  blockStreaming: z.boolean().optional(),
   streaming: z.union([z.enum(["partial", "off"]), z.boolean()]).optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
@@ -84,7 +85,9 @@ export const MatrixConfigSchema = z.object({
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: AllowFromListSchema,
   groupAllowFrom: AllowFromListSchema,
-  dm: buildNestedDmConfigSchema(),
+  dm: buildNestedDmConfigSchema({
+    threadReplies: z.enum(["off", "inbound", "always"]).optional(),
+  }),
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { ButtonInteraction, ComponentData } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +14,8 @@ const { STORE_PATH, mockSessionStoreEntries } = vi.hoisted(() => ({
 
 const writeStore = (store: Record<string, unknown>) => {
   mockSessionStoreEntries.value = JSON.parse(JSON.stringify(store)) as Record<string, unknown>;
+  fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  clearSessionStoreCacheForTest();
 };
 
 beforeEach(() => {
@@ -174,12 +177,16 @@ type ExecApprovalButtonContext = import("./exec-approvals.js").ExecApprovalButto
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function createHandler(config: DiscordExecApprovalConfig, accountId = "default") {
+function createHandler(
+  config: DiscordExecApprovalConfig,
+  accountId = "default",
+  cfgOverrides: Record<string, unknown> = {},
+) {
   return new DiscordExecApprovalHandler({
     token: "test-token",
     accountId,
     config,
-    cfg: { session: { store: STORE_PATH } },
+    cfg: { session: { store: STORE_PATH }, ...cfgOverrides },
   });
 }
 
@@ -444,6 +451,18 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
     expect(handler.shouldHandle(createRequest())).toBe(false);
   });
 
+  it("does not treat channel allowFrom as approval authority", () => {
+    const handler = createHandler({ enabled: true }, "default", {
+      channels: {
+        discord: {
+          token: "discord-token",
+          allowFrom: ["123"],
+        },
+      },
+    });
+    expect(handler.shouldHandle(createRequest())).toBe(false);
+  });
+
   it("returns true with minimal config", () => {
     const handler = createHandler({ enabled: true, approvers: ["123"] });
     expect(handler.shouldHandle(createRequest())).toBe(true);
@@ -524,6 +543,42 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
     expect(matching.shouldHandle(createRequest())).toBe(true);
   });
 
+  it("filters by discord account from explicit turn-source bindings when the session store misses", () => {
+    const handler = createHandler({ enabled: true, approvers: ["123"] }, "default");
+    const matching = createHandler({ enabled: true, approvers: ["123"] }, "secondary");
+
+    expect(
+      handler.shouldHandle(
+        createRequest({
+          sessionKey: "agent:test-agent:missing",
+          turnSourceChannel: "discord",
+          turnSourceAccountId: "secondary",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      matching.shouldHandle(
+        createRequest({
+          sessionKey: "agent:test-agent:missing",
+          turnSourceChannel: "discord",
+          turnSourceAccountId: "secondary",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects requests bound to another channel before account-specific handling", () => {
+    const handler = createHandler({ enabled: true, approvers: ["123"] }, "default");
+    expect(
+      handler.shouldHandle(
+        createRequest({
+          turnSourceChannel: "slack",
+          turnSourceAccountId: "default",
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("combines agent and session filters", () => {
     const handler = createHandler({
       enabled: true,
@@ -578,10 +633,37 @@ describe("DiscordExecApprovalHandler.getApprovers", () => {
         config: { enabled: true } as DiscordExecApprovalConfig,
         expected: [],
       },
+      {
+        name: "allowFrom does not grant approver rights",
+        config: { enabled: true } as DiscordExecApprovalConfig,
+        cfgOverrides: {
+          channels: {
+            discord: {
+              token: "discord-token",
+              allowFrom: ["123"],
+            },
+          },
+        },
+        expected: [],
+      },
+      {
+        name: "ownerAllowFrom still grants exec approver rights",
+        config: { enabled: true } as DiscordExecApprovalConfig,
+        cfgOverrides: {
+          commands: {
+            ownerAllowFrom: ["discord:123"],
+          },
+        },
+        expected: ["123"],
+      },
     ] as const;
 
     for (const testCase of cases) {
-      const handler = createHandler(testCase.config);
+      const handler = createHandler(
+        testCase.config,
+        "default",
+        "cfgOverrides" in testCase ? (testCase.cfgOverrides as Record<string, unknown>) : {},
+      );
       expect(handler.getApprovers(), testCase.name).toEqual(testCase.expected);
     }
   });

@@ -30,7 +30,9 @@ type MatrixHandlerTestHarnessOptions = {
   groupPolicy?: "open" | "allowlist" | "disabled";
   replyToMode?: ReplyToMode;
   threadReplies?: "off" | "inbound" | "always";
+  dmThreadReplies?: "off" | "inbound" | "always";
   streaming?: "partial" | "off";
+  blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   textLimit?: number;
@@ -211,7 +213,9 @@ export function createMatrixHandlerTestHarness(
     groupPolicy: options.groupPolicy ?? "open",
     replyToMode: options.replyToMode ?? "off",
     threadReplies: options.threadReplies ?? "inbound",
+    dmThreadReplies: options.dmThreadReplies,
     streaming: options.streaming ?? "off",
+    blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,
     dmPolicy: options.dmPolicy ?? "open",
     textLimit: options.textLimit ?? 8_000,

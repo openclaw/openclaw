@@ -245,7 +245,8 @@ export function resetToolStream(host: ToolStreamHost) {
 }
 
 export type CompactionStatus = {
-  active: boolean;
+  phase: "active" | "retrying" | "complete";
+  runId: string | null;
   startedAt: number | null;
   completedAt: number | null;
 };
@@ -270,34 +271,87 @@ type CompactionHost = ToolStreamHost & {
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
-export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
-  const data = payload.data ?? {};
-  const phase = typeof data.phase === "string" ? data.phase : "";
-
-  // Clear any existing timer
+function clearCompactionTimer(host: CompactionHost) {
   if (host.compactionClearTimer != null) {
     window.clearTimeout(host.compactionClearTimer);
     host.compactionClearTimer = null;
   }
+}
+
+function scheduleCompactionClear(host: CompactionHost) {
+  host.compactionClearTimer = window.setTimeout(() => {
+    host.compactionStatus = null;
+    host.compactionClearTimer = null;
+  }, COMPACTION_TOAST_DURATION_MS);
+}
+
+function setCompactionComplete(host: CompactionHost, runId: string) {
+  host.compactionStatus = {
+    phase: "complete",
+    runId,
+    startedAt: host.compactionStatus?.startedAt ?? null,
+    completedAt: Date.now(),
+  };
+  scheduleCompactionClear(host);
+}
+
+export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
+  const data = payload.data ?? {};
+  const phase = typeof data.phase === "string" ? data.phase : "";
+  const completed = data.completed === true;
+
+  clearCompactionTimer(host);
 
   if (phase === "start") {
     host.compactionStatus = {
-      active: true,
+      phase: "active",
+      runId: payload.runId,
       startedAt: Date.now(),
       completedAt: null,
     };
-  } else if (phase === "end") {
-    host.compactionStatus = {
-      active: false,
-      startedAt: host.compactionStatus?.startedAt ?? null,
-      completedAt: Date.now(),
-    };
-    // Auto-clear the toast after duration
-    host.compactionClearTimer = window.setTimeout(() => {
-      host.compactionStatus = null;
-      host.compactionClearTimer = null;
-    }, COMPACTION_TOAST_DURATION_MS);
+    return;
   }
+  if (phase === "end") {
+    if (data.willRetry === true && completed) {
+      // Compaction already succeeded, but the run is still retrying.
+      // Keep that distinct state until the matching lifecycle end arrives.
+      host.compactionStatus = {
+        phase: "retrying",
+        runId: payload.runId,
+        startedAt: host.compactionStatus?.startedAt ?? Date.now(),
+        completedAt: null,
+      };
+      return;
+    }
+    if (completed) {
+      setCompactionComplete(host, payload.runId);
+      return;
+    }
+    host.compactionStatus = null;
+  }
+}
+
+function handleLifecycleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
+  const data = payload.data ?? {};
+  const phase = toTrimmedString(data.phase);
+  if (phase !== "end" && phase !== "error") {
+    return;
+  }
+
+  // We scope lifecycle cleanup to the visible chat session first, then
+  // use runId only to match the specific compaction retry we started tracking.
+  const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
+  if (!accepted.accepted) {
+    return;
+  }
+  if (host.compactionStatus?.phase !== "retrying") {
+    return;
+  }
+  if (host.compactionStatus.runId && host.compactionStatus.runId !== payload.runId) {
+    return;
+  }
+
+  setCompactionComplete(host, payload.runId);
 }
 
 function resolveAcceptedSession(
@@ -400,7 +454,13 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
-  if (payload.stream === "lifecycle" || payload.stream === "fallback") {
+  if (payload.stream === "lifecycle") {
+    handleLifecycleCompactionEvent(host as CompactionHost, payload);
+    handleLifecycleFallbackEvent(host as CompactionHost, payload);
+    return;
+  }
+
+  if (payload.stream === "fallback") {
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
     return;
   }
