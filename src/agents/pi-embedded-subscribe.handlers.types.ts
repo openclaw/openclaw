@@ -100,8 +100,8 @@ export type EmbeddedPiSubscribeContext = {
     text: string,
     state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
   ) => string;
-  emitBlockChunk: (text: string) => void;
-  flushBlockReplyBuffer: () => void;
+  emitBlockChunk: (text: string, options?: { assistantMessageIndex?: number }) => void;
+  flushBlockReplyBuffer: (options?: { assistantMessageIndex?: number }) => void | Promise<void>;
   emitReasoningStream: (text: string) => void;
   consumeReplyDirectives: (
     text: string,
@@ -170,7 +170,7 @@ export type ToolHandlerContext = {
   state: ToolHandlerState;
   log: EmbeddedSubscribeLogger;
   hookRunner?: HookRunner;
-  flushBlockReplyBuffer: () => void;
+  flushBlockReplyBuffer: () => void | Promise<void>;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   emitToolSummary: (toolName?: string, meta?: string) => void;
