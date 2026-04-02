@@ -2075,6 +2075,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
   ): Promise<{ persistedHash: string }> {
+    // Drop parse cache only; full clearConfigCache() also resets runtime snapshots (breaks mid-write readers).
     clearConfigCacheEntry();
     let persistCandidate: unknown = cfg;
     const { snapshot } = await readConfigFileSnapshotInternal();

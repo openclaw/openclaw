@@ -3,6 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import {
+  clearConfigCache,
+  getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   loadConfig,
   projectConfigOntoRuntimeSourceSnapshot,
@@ -115,6 +117,34 @@ describe("runtime config snapshot writes", () => {
 
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     resetRuntimeConfigState();
+    expect(getRuntimeConfigSourceSnapshot()).toBeNull();
+  });
+
+  it("keeps runtime snapshots after writeConfigFile clears parse cache (before first await)", async () => {
+    await withTempHome("openclaw-config-runtime-write-parse-cache-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const sourceConfig = createSourceConfig();
+      const runtimeConfig = createRuntimeConfig();
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf8");
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        const writePromise = writeConfigFile(loadConfig());
+        expect(getRuntimeConfigSnapshot()).not.toBeNull();
+        expect(getRuntimeConfigSourceSnapshot()).not.toBeNull();
+        await writePromise;
+      } finally {
+        resetRuntimeConfigState();
+      }
+    });
+  });
+
+  it("clearConfigCache still clears runtime snapshots (explicit invalidation)", () => {
+    setRuntimeConfigSnapshot(createRuntimeConfig(), createSourceConfig());
+    clearConfigCache();
+    expect(getRuntimeConfigSnapshot()).toBeNull();
     expect(getRuntimeConfigSourceSnapshot()).toBeNull();
   });
 
