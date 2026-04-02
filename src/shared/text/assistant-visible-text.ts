@@ -520,6 +520,37 @@ function stripRelevantMemoriesTags(text: string): string {
   return result;
 }
 
+const LEADING_MEMORY_OPEN_TAG_RE = /^<\s*relevant[-_]memories\b[^<>]*>/i;
+const MEMORY_CLOSE_TAG_RE = /<\s*\/\s*relevant[-_]memories\s*>/gi;
+
+export function stripInjectedRelevantMemoriesPrefix(text: string): string {
+  let cursor = 0;
+  let stripped = false;
+
+  for (;;) {
+    const remaining = text.slice(cursor);
+    const openMatch = LEADING_MEMORY_OPEN_TAG_RE.exec(remaining);
+    if (!openMatch) {
+      break;
+    }
+
+    const contentStart = cursor + openMatch[0].length;
+    MEMORY_CLOSE_TAG_RE.lastIndex = contentStart;
+    const closeMatch = MEMORY_CLOSE_TAG_RE.exec(text);
+    if (!closeMatch) {
+      return text;
+    }
+
+    cursor = closeMatch.index + closeMatch[0].length;
+    stripped = true;
+    while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
+      cursor += 1;
+    }
+  }
+
+  return stripped ? text.slice(cursor) : text;
+}
+
 export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "internal-scaffolding";
 
 type AssistantVisibleTextPipelineOptions = {
