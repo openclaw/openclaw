@@ -90,6 +90,7 @@ const mockResolveAgentRoute = vi.fn(() => ({
   accountId: "default",
   sessionKey: "agent:main:bluebubbles:dm:+15551234567",
   mainSessionKey: "agent:main:main",
+  lastRoutePolicy: "main" as const,
   matchedBy: "default",
 }));
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
@@ -105,7 +106,10 @@ const mockMatchesMentionWithExplicit = vi.fn(
   },
 );
 const mockResolveRequireMention = vi.fn(() => false);
-const mockResolveGroupPolicy = vi.fn(() => "open" as const);
+const mockResolveGroupPolicy = vi.fn(() => ({
+  allowlistEnabled: false,
+  allowed: true,
+}));
 const mockDispatchReplyWithBufferedBlockDispatcher = vi.fn(
   async (_params: DispatchReplyParams) => EMPTY_DISPATCH_RESULT,
 );
