@@ -12,7 +12,10 @@ import {
   resetTaskRegistryForTests,
 } from "./task-registry.js";
 import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
-import { configureTaskRegistryRuntime, type TaskRegistryHookEvent } from "./task-registry.store.js";
+import {
+  configureTaskRegistryRuntime,
+  type TaskRegistryObserverEvent,
+} from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 function createStoredTask(): TaskRecord {
@@ -80,8 +83,8 @@ describe("task-registry store runtime", () => {
     expect(latestSnapshot.tasks.get("task-restored")?.task).toBe("Restored task");
   });
 
-  it("emits incremental hook events for restore, mutation, and delete", () => {
-    const events: TaskRegistryHookEvent[] = [];
+  it("emits incremental observer events for restore, mutation, and delete", () => {
+    const events: TaskRegistryObserverEvent[] = [];
     configureTaskRegistryRuntime({
       store: {
         loadSnapshot: () => ({
@@ -90,7 +93,7 @@ describe("task-registry store runtime", () => {
         }),
         saveSnapshot: () => {},
       },
-      hooks: {
+      observers: {
         onEvent: (event) => {
           events.push(event);
         },
