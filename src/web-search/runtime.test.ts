@@ -282,11 +282,8 @@ describe("web search runtime", () => {
           diagnostics: [],
         },
         fetch: {
-          firecrawl: {
-            active: false,
-            apiKeySource: "missing",
-            diagnostics: [],
-          },
+          providerSource: "none",
+          diagnostics: [],
         },
         diagnostics: [],
       },

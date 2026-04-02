@@ -8,5 +8,23 @@ export {
   normalizeBaseUrl,
   postJsonRequest,
   postTranscriptionRequest,
+  resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "../media-understanding/shared.js";
+export type {
+  ProviderAttributionPolicy,
+  ProviderRequestCapabilities,
+  ProviderRequestCapabilitiesInput,
+  ProviderRequestCompatibilityFamily,
+  ProviderEndpointClass,
+  ProviderEndpointResolution,
+  ProviderRequestCapability,
+  ProviderRequestPolicyInput,
+  ProviderRequestPolicyResolution,
+  ProviderRequestTransport,
+} from "../agents/provider-attribution.js";
+export {
+  resolveProviderEndpoint,
+  resolveProviderRequestCapabilities,
+  resolveProviderRequestPolicy,
+} from "../agents/provider-attribution.js";

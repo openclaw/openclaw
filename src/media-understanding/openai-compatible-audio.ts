@@ -1,9 +1,8 @@
 import path from "node:path";
 import {
-  applyProviderRequestHeaders,
   assertOkOrThrowHttpError,
-  normalizeBaseUrl,
   postTranscriptionRequest,
+  resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "./shared.js";
 import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "./types.js";
@@ -23,8 +22,18 @@ export async function transcribeOpenAiCompatibleAudio(
   params: OpenAiCompatibleAudioParams,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const baseUrl = normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl);
-  const allowPrivate = Boolean(params.baseUrl?.trim());
+  const { baseUrl, allowPrivateNetwork, headers } = resolveProviderHttpRequestConfig({
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: params.defaultBaseUrl,
+    headers: params.headers,
+    defaultHeaders: {
+      authorization: `Bearer ${params.apiKey}`,
+    },
+    provider: params.provider,
+    api: "openai-audio-transcriptions",
+    capability: "audio",
+    transport: "media-understanding",
+  });
   const url = `${baseUrl}/audio/transcriptions`;
 
   const model = resolveModel(params.model, params.defaultModel);
@@ -43,25 +52,13 @@ export async function transcribeOpenAiCompatibleAudio(
     form.append("prompt", params.prompt.trim());
   }
 
-  const headers = applyProviderRequestHeaders({
-    headers: params.headers,
-    provider: params.provider,
-    api: "openai-audio-transcriptions",
-    baseUrl,
-    capability: "audio",
-    transport: "media-understanding",
-  });
-  if (!headers.has("authorization")) {
-    headers.set("authorization", `Bearer ${params.apiKey}`);
-  }
-
   const { response: res, release } = await postTranscriptionRequest({
     url,
     headers,
     body: form,
     timeoutMs: params.timeoutMs,
     fetchFn,
-    allowPrivateNetwork: allowPrivate,
+    allowPrivateNetwork,
   });
 
   try {
