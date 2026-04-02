@@ -178,6 +178,31 @@ describe("web fetch runtime", () => {
     expect(resolved?.provider.id).toBe("firecrawl");
   });
 
+  it("falls back to auto-detect when the configured provider is invalid", () => {
+    const provider = createProvider({
+      pluginId: "firecrawl",
+      id: "firecrawl",
+      credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
+      autoDetectOrder: 1,
+      getConfiguredCredentialValue: () => "firecrawl-key",
+    });
+    resolveBundledPluginWebFetchProvidersMock.mockReturnValue([provider]);
+
+    const resolved = resolveWebFetchDefinition({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "does-not-exist",
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(resolved?.provider.id).toBe("firecrawl");
+  });
+
   it("keeps sandboxed web fetch on bundled providers even when runtime providers are preferred", () => {
     const bundled = createProvider({
       pluginId: "firecrawl",

@@ -834,6 +834,38 @@ describe("runtime web tools resolution", () => {
     );
   });
 
+  it("resolves plugin-owned web fetch SecretRefs without tools.web.fetch", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        FIRECRAWL_API_KEY: "firecrawl-runtime-key",
+      },
+    });
+
+    expect(metadata.fetch.providerSource).toBe("auto-detect");
+    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
+    expect(metadata.fetch.selectedProviderKeySource).toBe("secretRef");
+    expect(
+      (
+        resolvedConfig.plugins?.entries?.firecrawl?.config as
+          | { webFetch?: { apiKey?: unknown } }
+          | undefined
+      )?.webFetch?.apiKey,
+    ).toBe("firecrawl-runtime-key");
+  });
+
   it("fails fast when active web fetch provider SecretRef is unresolved with no fallback", async () => {
     const sourceConfig = asConfig({
       plugins: {

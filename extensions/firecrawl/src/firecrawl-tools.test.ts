@@ -199,6 +199,34 @@ describe("firecrawl tools", () => {
     });
   });
 
+  it("passes proxy and storeInCache through the fetch provider tool", async () => {
+    const { createFirecrawlWebFetchProvider } = await import("./firecrawl-fetch-provider.js");
+    const provider = createFirecrawlWebFetchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({
+      url: "https://docs.openclaw.ai",
+      extractMode: "markdown",
+      maxChars: 1500,
+      proxy: "stealth",
+      storeInCache: false,
+    });
+
+    expect(runFirecrawlScrape).toHaveBeenCalledWith({
+      cfg: { test: true },
+      url: "https://docs.openclaw.ai",
+      extractMode: "markdown",
+      maxChars: 1500,
+      proxy: "stealth",
+      storeInCache: false,
+    });
+  });
+
   it("normalizes optional search parameters before invoking Firecrawl", async () => {
     runFirecrawlSearch.mockImplementationOnce(async (params: Record<string, unknown>) => ({
       ok: true,

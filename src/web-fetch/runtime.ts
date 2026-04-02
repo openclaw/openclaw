@@ -125,22 +125,20 @@ export function resolveWebFetchProviderId(params: {
     }
   }
 
-  if (!raw) {
-    for (const provider of providers) {
-      if (!providerRequiresCredential(provider)) {
-        logVerbose(
-          `web_fetch: no provider configured, auto-detected keyless provider "${provider.id}"`,
-        );
-        return provider.id;
-      }
-      if (!hasEntryCredential(provider, params.config, params.fetch)) {
-        continue;
-      }
+  for (const provider of providers) {
+    if (!providerRequiresCredential(provider)) {
       logVerbose(
-        `web_fetch: no provider configured, auto-detected "${provider.id}" from available API keys`,
+        `web_fetch: ${raw ? `invalid configured provider "${raw}", ` : ""}auto-detected keyless provider "${provider.id}"`,
       );
       return provider.id;
     }
+    if (!hasEntryCredential(provider, params.config, params.fetch)) {
+      continue;
+    }
+    logVerbose(
+      `web_fetch: ${raw ? `invalid configured provider "${raw}", ` : ""}auto-detected "${provider.id}" from available API keys`,
+    );
+    return provider.id;
   }
 
   return "";

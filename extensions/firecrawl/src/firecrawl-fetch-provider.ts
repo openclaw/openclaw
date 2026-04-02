@@ -74,11 +74,18 @@ export function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin {
           typeof args.maxChars === "number" && Number.isFinite(args.maxChars)
             ? Math.floor(args.maxChars)
             : undefined;
+        const proxy =
+          args.proxy === "basic" || args.proxy === "stealth" || args.proxy === "auto"
+            ? args.proxy
+            : undefined;
+        const storeInCache = typeof args.storeInCache === "boolean" ? args.storeInCache : undefined;
         return await runFirecrawlScrape({
           cfg: config,
           url,
           extractMode,
           maxChars,
+          ...(proxy ? { proxy } : {}),
+          ...(storeInCache !== undefined ? { storeInCache } : {}),
         });
       },
     }),

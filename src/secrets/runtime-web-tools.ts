@@ -763,24 +763,31 @@ export async function resolveRuntimeWebTools(params: {
     providerSource: "none",
     diagnostics: [],
   };
-  const fetchConfigured = Boolean(fetch);
-  const fetchEnabled = fetchConfigured && fetch?.enabled !== false;
   const fetchProviders = sortWebFetchProvidersForAutoDetect(
-    fetchConfigured
-      ? configuredBundledFetchPluginId
-        ? resolveBundledPluginWebFetchProviders({
-            config: params.sourceConfig,
-            env: { ...process.env, ...params.context.env },
-            bundledAllowlistCompat: true,
-            onlyPluginIds: [configuredBundledFetchPluginId],
-          })
-        : resolveBundledPluginWebFetchProviders({
-            config: params.sourceConfig,
-            env: { ...process.env, ...params.context.env },
-            bundledAllowlistCompat: true,
-          })
-      : [],
+    configuredBundledFetchPluginId
+      ? resolveBundledPluginWebFetchProviders({
+          config: params.sourceConfig,
+          env: { ...process.env, ...params.context.env },
+          bundledAllowlistCompat: true,
+          onlyPluginIds: [configuredBundledFetchPluginId],
+        })
+      : resolveBundledPluginWebFetchProviders({
+          config: params.sourceConfig,
+          env: { ...process.env, ...params.context.env },
+          bundledAllowlistCompat: true,
+        }),
   );
+  const hasConfiguredFetchSurface =
+    Boolean(fetch) ||
+    fetchProviders.some((provider) => {
+      const value = readConfiguredFetchProviderCredential({
+        provider,
+        config: params.sourceConfig,
+        fetch,
+      });
+      return value !== undefined;
+    });
+  const fetchEnabled = hasConfiguredFetchSurface && fetch?.enabled !== false;
   const configuredFetchProvider = normalizeFetchProvider(rawFetchProvider, fetchProviders);
 
   if (rawFetchProvider && !configuredFetchProvider) {
