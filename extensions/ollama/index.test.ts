@@ -446,6 +446,7 @@ describe("ollama plugin", () => {
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.think).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("wraps native Ollama payloads with top-level think=true when thinking is enabled", () => {
     const provider = registerProvider();
     let payloadSeen: Record<string, unknown> | undefined;
@@ -551,5 +552,73 @@ describe("ollama plugin", () => {
     );
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect(payloadSeen?.think).toBeUndefined();
+=======
+  describe("resolveSyntheticAuth", () => {
+    it("returns synthetic auth for localhost", () => {
+      const provider = registerProvider();
+      const result = provider.resolveSyntheticAuth?.({
+        providerConfig: { baseUrl: "http://localhost:11434", api: "ollama", models: [] },
+      });
+      expect(result).toEqual(expect.objectContaining({ apiKey: "ollama-local", mode: "api-key" }));
+    });
+
+    it("returns synthetic auth for LAN IPs", () => {
+      const provider = registerProvider();
+      for (const baseUrl of [
+        "http://192.168.4.50:11434",
+        "http://10.0.0.5:11434",
+        "http://172.16.0.1:11434",
+      ]) {
+        const result = provider.resolveSyntheticAuth?.({
+          providerConfig: { baseUrl, api: "ollama", models: [] },
+        });
+        expect(result).toEqual(expect.objectContaining({ apiKey: "ollama-local" }));
+      }
+    });
+
+    it("returns synthetic auth for .local mDNS hosts", () => {
+      const provider = registerProvider();
+      const result = provider.resolveSyntheticAuth?.({
+        providerConfig: { baseUrl: "http://myhost.local:11434", api: "ollama", models: [] },
+      });
+      expect(result).toEqual(expect.objectContaining({ apiKey: "ollama-local" }));
+    });
+
+    it("returns undefined for Ollama Cloud URLs", () => {
+      const provider = registerProvider();
+      const result = provider.resolveSyntheticAuth?.({
+        providerConfig: { baseUrl: "https://ollama.com", api: "ollama", models: [] },
+      });
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined for remote URLs", () => {
+      const provider = registerProvider();
+      const result = provider.resolveSyntheticAuth?.({
+        providerConfig: {
+          baseUrl: "https://my-ollama.example.com:11434",
+          api: "ollama",
+          models: [],
+        },
+      });
+      expect(result).toBeUndefined();
+    });
+
+    it("returns synthetic auth when no baseUrl is configured", () => {
+      const provider = registerProvider();
+      const result = provider.resolveSyntheticAuth?.({
+        providerConfig: { api: "ollama", models: [{ id: "test" }] },
+      });
+      expect(result).toEqual(expect.objectContaining({ apiKey: "ollama-local" }));
+    });
+
+    it("returns undefined when no provider config is present", () => {
+      const provider = registerProvider();
+      const result = provider.resolveSyntheticAuth?.({
+        providerConfig: undefined,
+      });
+      expect(result).toBeUndefined();
+    });
+>>>>>>> 87e6554f5 (Ollama: fix Cloud auth by distinguishing remote from local providers)
   });
 });

@@ -236,12 +236,34 @@ export default definePluginEntry({
         }
         await ensureOllamaModelPulled({ config, model, prompter });
       },
+<<<<<<< HEAD
       createStreamFn: ({ config, model, provider }) => {
         return createConfiguredOllamaStreamFn({
+=======
+      createStreamFn: ({ config, model }) => {
+        const innerStreamFn = createConfiguredOllamaStreamFn({
+>>>>>>> 87e6554f5 (Ollama: fix Cloud auth by distinguishing remote from local providers)
           model,
           providerBaseUrl: resolveConfiguredOllamaProviderConfig({ config, providerId: provider })
             ?.baseUrl,
         });
+        // Resolve the provider API key so the Ollama stream function receives
+        // it via options.apiKey. The pi-ai runtime does not inject apiKey for
+        // custom API stream functions, so the plugin must do it here.
+        const rawApiKey = config?.models?.providers?.ollama?.apiKey;
+        const configApiKey = typeof rawApiKey === "string" ? rawApiKey : undefined;
+        let resolvedKey: string | undefined;
+        if (configApiKey && configApiKey !== DEFAULT_API_KEY && configApiKey !== "custom-local") {
+          // configApiKey may be an env-var marker (e.g. "OLLAMA_API_KEY") or an
+          // inline key. Env-var names are short; inline keys are long (>30 chars).
+          resolvedKey =
+            process.env[configApiKey] || (configApiKey.length > 30 ? configApiKey : undefined);
+        }
+        if (!resolvedKey) {
+          return innerStreamFn;
+        }
+        return (m, ctx, opts) =>
+          innerStreamFn(m, ctx, { ...opts, apiKey: opts?.apiKey || resolvedKey });
       },
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
       resolveReasoningOutputMode: () => "native",
@@ -263,6 +285,27 @@ export default definePluginEntry({
       resolveSyntheticAuth: ({ providerConfig }) => {
         if (!hasMeaningfulExplicitOllamaConfig(providerConfig)) {
           return undefined;
+        }
+        // Only provide synthetic "ollama-local" auth for local/LAN instances.
+        // Remote URLs (e.g. Ollama Cloud) require real credentials; returning
+        // undefined forces the auth pipeline to resolve a real key.
+        const baseUrl = providerConfig?.baseUrl?.trim();
+        if (baseUrl) {
+          try {
+            const host = new URL(baseUrl).hostname.toLowerCase();
+            const isLocal =
+              host === "localhost" ||
+              host === "127.0.0.1" ||
+              host === "0.0.0.0" ||
+              host === "[::1]" ||
+              host.endsWith(".local") ||
+              /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(host);
+            if (!isLocal) {
+              return undefined;
+            }
+          } catch {
+            // invalid URL — fall through to synthetic auth
+          }
         }
         return {
           apiKey: DEFAULT_API_KEY,
