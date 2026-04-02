@@ -3,12 +3,17 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveRunModelFallbacksOverrideMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock };
+  const getChannelPluginMock = vi.fn();
+  return { resolveRunModelFallbacksOverrideMock, getChannelPluginMock };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveRunModelFallbacksOverride: (...args: unknown[]) =>
     hoisted.resolveRunModelFallbacksOverrideMock(...args),
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (...args: unknown[]) => hoisted.getChannelPluginMock(...args),
 }));
 
 const {
@@ -46,6 +51,7 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
+    hoisted.getChannelPluginMock.mockReset();
   });
 
   it("resolves model fallback options from run context", () => {
@@ -121,6 +127,26 @@ describe("agent-runner-utils", () => {
     });
   });
 
+  it("does not force final-tag enforcement for minimax providers", () => {
+    const run = makeRun({ workspaceDir: process.cwd() });
+    const authProfile = resolveProviderScopedAuthProfile({
+      provider: "minimax",
+      primaryProvider: "minimax",
+      authProfileId: "profile-minimax",
+      authProfileIdSource: "user",
+    });
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "minimax",
+      model: "MiniMax-M2.7",
+      runId: "run-1",
+      authProfile,
+    });
+
+    expect(resolved.enforceFinalTag).toBe(false);
+  });
+
   it("builds embedded contexts and scopes auth profile by provider", () => {
     const run = makeRun({
       authProfileId: "profile-openai",
@@ -175,7 +201,24 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
 
-  it("uses OriginatingTo for telegram native command tool context without implicit thread state", () => {
+  it("uses telegram plugin threading context for native commands", () => {
+    hoisted.getChannelPluginMock.mockReturnValue({
+      threading: {
+        buildToolContext: ({
+          context,
+          hasRepliedRef,
+        }: {
+          context: { To?: string; MessageThreadId?: string | number };
+          hasRepliedRef?: { value: boolean };
+        }) => ({
+          currentChannelId: context.To?.trim() || undefined,
+          currentThreadTs:
+            context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+          hasRepliedRef,
+        }),
+      },
+    });
+
     const context = buildThreadingToolContext({
       sessionCtx: {
         Provider: "telegram",
@@ -191,9 +234,9 @@ describe("agent-runner-utils", () => {
 
     expect(context).toMatchObject({
       currentChannelId: "telegram:-1003841603622",
+      currentThreadTs: "928",
       currentMessageId: "2284",
     });
-    expect(context.currentThreadTs).toBeUndefined();
   });
 
   it("uses OriginatingTo for threading tool context on discord native commands", () => {

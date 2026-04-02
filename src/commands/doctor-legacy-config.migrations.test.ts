@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 
 describe("normalizeCompatibilityConfigValues", () => {
@@ -122,6 +123,42 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved channels.slack.dm.policy → channels.slack.dmPolicy.",
       "Moved channels.slack.dm.allowFrom → channels.slack.allowFrom.",
     ]);
+  });
+
+  it("migrates legacy x_search config into xai plugin-owned config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          x_search: {
+            apiKey: "xai-legacy-key",
+            enabled: true,
+            model: "grok-4-1-fast",
+          },
+        } as Record<string, unknown>,
+      },
+    });
+
+    expect(
+      (res.config.tools?.web as Record<string, unknown> | undefined)?.x_search,
+    ).toBeUndefined();
+    expect(res.config.plugins?.entries?.xai).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "xai-legacy-key",
+        },
+        xSearch: {
+          enabled: true,
+          model: "grok-4-1-fast",
+        },
+      },
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
+        "Moved tools.web.x_search → plugins.entries.xai.config.xSearch.",
+      ]),
+    );
   });
 
   it("migrates Discord account dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
@@ -504,6 +541,87 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.changes).toEqual([
       "Merged tools.web.search.gemini → plugins.entries.google.config.webSearch (filled missing fields from legacy; kept explicit plugin config values).",
+    ]);
+  });
+
+  it("migrates legacy web fetch provider config to plugin-owned config paths", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          fetch: {
+            provider: "firecrawl",
+            timeoutSeconds: 15,
+            firecrawl: {
+              apiKey: "firecrawl-key",
+              baseUrl: "https://api.firecrawl.dev",
+              onlyMainContent: false,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(res.config.tools?.web?.fetch).toEqual({
+      provider: "firecrawl",
+      timeoutSeconds: 15,
+    });
+    expect(res.config.plugins?.entries?.firecrawl).toEqual({
+      enabled: true,
+      config: {
+        webFetch: {
+          apiKey: "firecrawl-key",
+          baseUrl: "https://api.firecrawl.dev",
+          onlyMainContent: false,
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.web.fetch.firecrawl → plugins.entries.firecrawl.config.webFetch.",
+    ]);
+  });
+
+  it("keeps explicit plugin-owned web fetch config while filling missing legacy fields", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          fetch: {
+            provider: "firecrawl",
+            firecrawl: {
+              apiKey: "legacy-firecrawl-key",
+              baseUrl: "https://api.firecrawl.dev",
+              onlyMainContent: false,
+            },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          firecrawl: {
+            enabled: true,
+            config: {
+              webFetch: {
+                apiKey: "explicit-firecrawl-key",
+                timeoutSeconds: 30,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(res.config.plugins?.entries?.firecrawl).toEqual({
+      enabled: true,
+      config: {
+        webFetch: {
+          apiKey: "explicit-firecrawl-key",
+          timeoutSeconds: 30,
+          baseUrl: "https://api.firecrawl.dev",
+          onlyMainContent: false,
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Merged tools.web.fetch.firecrawl → plugins.entries.firecrawl.config.webFetch (filled missing fields from legacy; kept explicit plugin config values).",
     ]);
   });
 

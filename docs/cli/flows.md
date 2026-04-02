@@ -1,54 +1,43 @@
 ---
-summary: "CLI reference for `openclaw flows` (list, inspect, cancel)"
+summary: "CLI reference for `openclaw flows` commands"
 read_when:
-  - You want to inspect or cancel a flow
-  - You want to see how background tasks roll up into a higher-level job
+  - You want to list, inspect, or cancel TaskFlow flows from the CLI
+  - You encounter openclaw flows in release notes or docs
 title: "flows"
 ---
 
 # `openclaw flows`
 
-Inspect and manage [ClawFlow](/automation/clawflow) jobs.
-
-```bash
-openclaw flows list
-openclaw flows show <lookup>
-openclaw flows cancel <lookup>
-```
+Inspect and manage [TaskFlow](/automation/taskflow) flows from the command line.
 
 ## Commands
 
 ### `flows list`
 
-List tracked flows and their task counts.
-
 ```bash
-openclaw flows list
-openclaw flows list --status blocked
-openclaw flows list --json
+openclaw flows list [--json]
 ```
+
+List active and recent flows with status and sync mode.
 
 ### `flows show`
 
-Show one flow by flow id or owner session key.
-
 ```bash
 openclaw flows show <lookup>
-openclaw flows show <lookup> --json
 ```
 
-The output includes the flow status, current step, wait target, blocked summary when present, stored output keys, and linked tasks.
+Show details for a specific flow by flow id or lookup key, including state, revision history, and associated tasks.
 
 ### `flows cancel`
-
-Cancel a flow and any active child tasks.
 
 ```bash
 openclaw flows cancel <lookup>
 ```
 
+Cancel a running flow and its active tasks.
+
 ## Related
 
-- [ClawFlow](/automation/clawflow) — job-level orchestration above tasks
-- [Background Tasks](/automation/tasks) — detached work ledger
+- [TaskFlow](/automation/taskflow) — flow orchestration overview
+- [Background Tasks](/automation/tasks) — the detached work ledger
 - [CLI reference](/cli/index) — full command tree

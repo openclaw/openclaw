@@ -1,7 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveCopilotApiToken } from "./github-copilot-token.js";
+import {
+  deriveCopilotApiBaseUrlFromToken,
+  resolveCopilotApiToken,
+} from "./github-copilot-token.js";
 
 describe("resolveCopilotApiToken", () => {
+  it("derives native Copilot base URLs from Copilot proxy hints", () => {
+    expect(
+      deriveCopilotApiBaseUrlFromToken(
+        "copilot-token;proxy-ep=https://proxy.individual.githubcopilot.com;",
+      ),
+    ).toBe("https://api.individual.githubcopilot.com");
+    expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=proxy.example.com;")).toBe(
+      "https://api.example.com",
+    );
+    expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=proxy.example.com:8443;")).toBe(
+      "https://api.example.com",
+    );
+  });
+
+  it("rejects malformed or non-http proxy hints", () => {
+    expect(
+      deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=javascript:alert(1);"),
+    ).toBeNull();
+    expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=://bad;")).toBeNull();
+  });
+
   it("treats 11-digit expires_at values as seconds epochs", async () => {
     const fetchImpl = vi.fn(async () => ({
       ok: true,

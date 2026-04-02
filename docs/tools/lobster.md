@@ -10,7 +10,7 @@ read_when:
 
 Lobster is a workflow shell that lets OpenClaw run multi-step tool sequences as a single, deterministic operation with explicit approval checkpoints.
 
-Lobster is one authoring layer above [ClawFlow](/automation/clawflow). Lobster can decide the step logic, but ClawFlow still owns the job identity, owner context, and how detached work returns to the original conversation.
+Lobster is one authoring layer above detached background work. For flow orchestration above individual tasks, see [TaskFlow](/automation/taskflow) (`openclaw flows`). For the task activity ledger, see [`openclaw tasks`](/automation/tasks).
 
 ## Hook
 

@@ -1,6 +1,14 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createAnthropicBetaHeadersWrapper,
+  createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
+  resolveAnthropicBetas,
+  resolveAnthropicFastMode,
+  resolveAnthropicServiceTier,
+} from "../../extensions/anthropic/api.js";
 import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
@@ -94,6 +102,25 @@ beforeEach(() => {
           params.context.streamFn,
           params.context.extraParams?.fastMode === true,
         );
+      }
+      if (params.provider === "anthropic") {
+        let streamFn = params.context.streamFn;
+        const anthropicBetas = resolveAnthropicBetas(
+          params.context.extraParams,
+          params.context.modelId,
+        );
+        if (anthropicBetas?.length) {
+          streamFn = createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas);
+        }
+        const serviceTier = resolveAnthropicServiceTier(params.context.extraParams);
+        if (serviceTier) {
+          streamFn = createAnthropicServiceTierWrapper(streamFn, serviceTier);
+        }
+        const fastMode = resolveAnthropicFastMode(params.context.extraParams);
+        if (fastMode !== undefined) {
+          streamFn = createAnthropicFastModeWrapper(streamFn, fastMode);
+        }
+        return streamFn;
       }
       if (params.provider !== "openrouter") {
         return params.context.streamFn;
@@ -1063,7 +1090,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("does not rewrite tool schema for Kimi (native Anthropic format)", () => {
+  it("rewrites tool schema for Kimi to the OpenAI function shape", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1100,16 +1127,22 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.tools).toEqual([
       {
-        name: "read",
-        description: "Read file",
-        input_schema: {
-          type: "object",
-          properties: { path: { type: "string" } },
-          required: ["path"],
+        type: "function",
+        function: {
+          name: "read",
+          description: "Read file",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
         },
       },
     ]);
-    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
+    expect(payloads[0]?.tool_choice).toEqual({
+      type: "function",
+      function: { name: "read" },
+    });
   });
 
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
@@ -1258,6 +1291,63 @@ describe("applyExtraParamsToAgent", () => {
         workspaceDir: "/tmp/workspace-capabilities",
       }),
     );
+  });
+
+  it("normalizes kimi-coding anthropic tool payloads to OpenAI function shape", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        tools: [
+          {
+            name: "exec",
+            description: "Execute a shell command",
+            input_schema: {
+              type: "object",
+              properties: {
+                command: { type: "string" },
+              },
+              required: ["command"],
+            },
+          },
+        ],
+        tool_choice: { type: "any" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "kimi-coding", "k2p5", undefined, "low");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "kimi-coding",
+      id: "k2p5",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "exec",
+            description: "Execute a shell command",
+            parameters: {
+              type: "object",
+              properties: {
+                command: { type: "string" },
+              },
+              required: ["command"],
+            },
+          },
+        },
+      ],
+      tool_choice: "auto",
+    });
   });
 
   it("sanitizes invalid Atproxy Gemini negative thinking budgets", () => {
@@ -2748,6 +2838,24 @@ describe("applyExtraParamsToAgent", () => {
         provider: "anthropic",
         id: "claude-sonnet-4-5",
         baseUrl: "https://proxy.example.com/anthropic",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload).not.toHaveProperty("service_tier");
+  });
+
+  it("does not inject Anthropic service_tier for spoofed Anthropic-looking hosts", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: {
+        serviceTier: "standard_only",
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com.attacker.example/v1",
       } as unknown as Model<"anthropic-messages">,
       payload: {},
     });
