@@ -1,7 +1,4 @@
-import type { GatewayWsClient } from "./ws-types.js";
-
 const DEFAULT_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY = 8;
-const UNKNOWN_AUTHENTICATED_IDENTITY_BUDGET_KEY = "__openclaw_authenticated_identity__";
 
 export function getMaxAuthenticatedConnectionsPerIdentityFromEnv(
   env: NodeJS.ProcessEnv = process.env,
@@ -19,21 +16,9 @@ export function getMaxAuthenticatedConnectionsPerIdentityFromEnv(
   return Math.max(1, Math.floor(parsed));
 }
 
-function resolveAuthenticatedConnectionBudgetKey(client: GatewayWsClient): string {
-  const deviceId = client.connect.device?.id?.trim();
-  if (deviceId) {
-    return `device:${deviceId}`;
-  }
-  const clientIp = client.clientIp?.trim();
-  if (clientIp) {
-    return `client-ip:${clientIp}`;
-  }
-  return `${UNKNOWN_AUTHENTICATED_IDENTITY_BUDGET_KEY}:${client.connect.role}`;
-}
-
 export type AuthenticatedConnectionBudget = {
-  acquire(client: GatewayWsClient): string | null;
-  release(key: string | null | undefined): void;
+  acquire(deviceId: string): boolean;
+  release(deviceId: string | null): void;
 };
 
 export function createAuthenticatedConnectionBudget(
@@ -42,28 +27,27 @@ export function createAuthenticatedConnectionBudget(
   const counts = new Map<string, number>();
 
   return {
-    acquire(client) {
-      const key = resolveAuthenticatedConnectionBudgetKey(client);
-      const next = (counts.get(key) ?? 0) + 1;
+    acquire(deviceId) {
+      const next = (counts.get(deviceId) ?? 0) + 1;
       if (next > limit) {
-        return null;
+        return false;
       }
-      counts.set(key, next);
-      return key;
+      counts.set(deviceId, next);
+      return true;
     },
-    release(key) {
-      if (!key) {
+    release(deviceId) {
+      if (!deviceId) {
         return;
       }
-      const current = counts.get(key);
+      const current = counts.get(deviceId);
       if (current === undefined) {
         return;
       }
       if (current <= 1) {
-        counts.delete(key);
+        counts.delete(deviceId);
         return;
       }
-      counts.set(key, current - 1);
+      counts.set(deviceId, current - 1);
     },
   };
 }

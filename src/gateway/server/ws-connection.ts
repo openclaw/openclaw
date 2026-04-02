@@ -332,19 +332,22 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       clearHandshakeTimer: () => clearTimeout(handshakeTimer),
       getClient: () => client,
       setClient: (next) => {
-        const budgetKey = authenticatedConnectionBudget.acquire(next);
-        if (!budgetKey) {
-          handshakeState = "failed";
-          setCloseCause("authenticated-connection-limit", {
-            role: next.connect.role,
-            deviceId: next.connect.device?.id,
-            clientIp: next.clientIp,
-          });
-          close(1008, "too many authenticated connections");
-          return false;
+        const deviceId = next.connect.device?.id?.trim() || null;
+        if (deviceId) {
+          if (!authenticatedConnectionBudget.acquire(deviceId)) {
+            handshakeState = "failed";
+            setCloseCause("authenticated-connection-limit", {
+              role: next.connect.role,
+              deviceId,
+            });
+            close(1008, "too many authenticated connections");
+            return false;
+          }
+          authenticatedBudgetKey = deviceId;
+          releasePreauthBudget();
         }
-        authenticatedBudgetKey = budgetKey;
-        releasePreauthBudget();
+        // Device-less authenticated sessions stay in the pre-auth IP budget so
+        // shared-auth clients cannot bypass connection caps by omitting device identity.
         client = next;
         clients.add(next);
         return true;
