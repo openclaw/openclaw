@@ -418,6 +418,68 @@ PY
   host_timeout_exec "$timeout_s" prlctl exec "$VM_NAME" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
 }
 
+launch_guest_helper() {
+  local label="$1"
+  local script="$2"
+  local attempt rc
+
+  for (( attempt = 1; attempt <= 2; attempt++ )); do
+    say "$label launch attempt $attempt/2"
+    set +e
+    guest_powershell "$script"
+    rc=$?
+    set -e
+    if [[ $rc -eq 0 ]]; then
+      return 0
+    fi
+    warn "$label launch failed (rc=$rc)"
+    wait_for_guest_ready >/dev/null 2>&1 || true
+    sleep 2
+  done
+
+  return 1
+}
+
+drain_guest_log_incremental() {
+  local log_name="$1"
+  local count_var="$2"
+  local current_count="${!count_var:-0}"
+  local count_output count_line count_rc new_output new_rc
+
+  set +e
+  count_output="$(
+    guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { (Get-Content \$log).Count } else { 0 }"
+  )"
+  count_rc=$?
+  set -e
+  if [[ $count_rc -ne 0 ]]; then
+    return "$count_rc"
+  fi
+
+  count_output="${count_output//$'\r'/}"
+  count_line="${count_output##*$'\n'}"
+  [[ "$count_line" =~ ^[0-9]+$ ]] || return 0
+  if (( count_line <= current_count )); then
+    return 0
+  fi
+
+  set +e
+  new_output="$(
+    guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log | Select-Object -Skip $current_count }"
+  )"
+  new_rc=$?
+  set -e
+  if [[ $new_rc -ne 0 ]]; then
+    return "$new_rc"
+  fi
+
+  new_output="${new_output//$'\r'/}"
+  if [[ -n "$new_output" ]]; then
+    printf '%s\n' "$new_output"
+  fi
+  printf -v "$count_var" '%s' "$count_line"
+}
+
 guest_run_openclaw() {
   local env_name="${1:-}"
   local env_value="${2:-}"
@@ -882,8 +944,14 @@ param(
 \$PSNativeCommandUseErrorActionPreference = \$false
 
 try {
+  function Write-Phase {
+    param([Parameter(Mandatory = \$true)][string]\$Message)
+    ('==> ' + \$Message) | Tee-Object -FilePath \$LogPath -Append | Out-Null
+  }
+
   \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --accept-risk --json > "{1}" 2>&1' -f \$openclaw, \$LogPath)
+  Write-Phase 'windows onboard.start'
+  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --accept-risk --json >> "{1}" 2>&1' -f \$openclaw, \$LogPath)
   & cmd.exe /d /s /c \$cmdLine
   Set-Content -Path \$DonePath -Value ([string]\$LASTEXITCODE)
 } catch {
@@ -900,7 +968,7 @@ EOF
 run_ref_onboard() {
   local api_key_env_q api_key_value_q script_url
   local runner_name log_name done_name done_status launcher_state
-  local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
+  local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked log_line_count
   api_key_env_q="$(ps_single_quote "$API_KEY_ENV")"
   api_key_value_q="$(ps_single_quote "$API_KEY_VALUE")"
   write_onboard_runner_script
@@ -911,8 +979,9 @@ run_ref_onboard() {
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + TIMEOUT_ONBOARD_S + 60))
   startup_checked=0
+  log_line_count=0
 
-  guest_powershell "$(cat <<EOF
+  launch_guest_helper "windows onboard helper" "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
 \$log = Join-Path \$env:TEMP '$log_name'
 \$done = Join-Path \$env:TEMP '$done_name'
@@ -921,9 +990,17 @@ Set-Item -Path ('Env:' + '${api_key_env_q}') -Value '${api_key_value_q}'
 curl.exe -fsSL '$script_url' -o \$runner
 Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', \$runner, '-LogPath', \$log, '-DonePath', \$done) -WindowStyle Hidden | Out-Null
 EOF
-)"
+)" || return 1
 
   while :; do
+    set +e
+    drain_guest_log_incremental "$log_name" log_line_count
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]]; then
+      warn "windows onboard helper live log poll failed; retrying"
+    fi
+
     set +e
     done_status="$(
       guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
@@ -942,7 +1019,7 @@ EOF
     fi
     if [[ -n "$done_status" ]]; then
       set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      drain_guest_log_incremental "$log_name" log_line_count
       log_rc=$?
       set -e
       if [[ $log_rc -ne 0 ]]; then
@@ -967,7 +1044,7 @@ EOF
     fi
     if (( SECONDS >= poll_deadline )); then
       set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      drain_guest_log_incremental "$log_name" log_line_count
       log_rc=$?
       set -e
       if [[ $log_rc -ne 0 ]]; then
@@ -987,15 +1064,16 @@ verify_gateway() {
 run_gateway_daemon_action() {
   local action="$1"
   local runner_name log_name done_name done_status launcher_state
-  local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
+  local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked log_line_count
   runner_name="openclaw-gateway-$action-$RANDOM-$RANDOM.ps1"
   log_name="openclaw-gateway-$action-$RANDOM-$RANDOM.log"
   done_name="openclaw-gateway-$action-$RANDOM-$RANDOM.done"
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + TIMEOUT_GATEWAY_S + 60))
   startup_checked=0
+  log_line_count=0
 
-  guest_powershell "$(cat <<EOF
+  launch_guest_helper "windows gateway $action helper" "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
 \$log = Join-Path \$env:TEMP '$log_name'
 \$done = Join-Path \$env:TEMP '$done_name'
@@ -1005,8 +1083,13 @@ Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
 \$PSNativeCommandUseErrorActionPreference = \$false
 \$log = Join-Path \$env:TEMP '$log_name'
 \$done = Join-Path \$env:TEMP '$done_name'
+function Write-Phase {
+  param([Parameter(Mandatory = \$true)][string]\$Message)
+  ('==> ' + \$Message) | Tee-Object -FilePath \$log -Append | Out-Null
+}
 try {
   \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
+  Write-Phase 'windows gateway $action'
   & \$openclaw gateway $action *>&1 | Tee-Object -FilePath \$log -Append | Out-Null
   Set-Content -Path \$done -Value ([string]\$LASTEXITCODE)
 } catch {
@@ -1020,9 +1103,17 @@ try {
 '@ | Set-Content -Path \$runner
 Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', \$runner) -WindowStyle Hidden | Out-Null
 EOF
-)"
+)" || return 1
 
   while :; do
+    set +e
+    drain_guest_log_incremental "$log_name" log_line_count
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]]; then
+      warn "windows gateway $action helper live log poll failed; retrying"
+    fi
+
     set +e
     done_status="$(
       guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
@@ -1041,7 +1132,7 @@ EOF
     fi
     if [[ -n "$done_status" ]]; then
       set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      drain_guest_log_incremental "$log_name" log_line_count
       log_rc=$?
       set -e
       if [[ $log_rc -ne 0 ]]; then
@@ -1066,7 +1157,7 @@ EOF
     fi
     if (( SECONDS >= poll_deadline )); then
       set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      drain_guest_log_incremental "$log_name" log_line_count
       log_rc=$?
       set -e
       if [[ $log_rc -ne 0 ]]; then
