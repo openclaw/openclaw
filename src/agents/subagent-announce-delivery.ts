@@ -331,7 +331,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     method: "agent",
     params: {
       sessionKey: item.sessionKey,
-      message: item.prompt,
+      message: item.execution.agentPrompt,
       channel: requesterIsSubagent ? undefined : origin?.channel,
       accountId: requesterIsSubagent ? undefined : origin?.accountId,
       to: requesterIsSubagent ? undefined : origin?.to,
@@ -447,8 +447,17 @@ async function maybeQueueSubagentAnnounce(params: {
       key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {
         announceId: params.announceId,
-        prompt: params.triggerMessage,
-        summaryLine: params.summaryLine,
+        execution: { visibility: "internal", agentPrompt: params.triggerMessage },
+        display: params.summaryLine?.trim()
+          ? {
+              visibility: "user-visible",
+              text: params.summaryLine,
+              summaryLine: params.summaryLine,
+            }
+          : {
+              visibility: "user-visible",
+              text: params.triggerMessage,
+            },
         internalEvents: params.internalEvents,
         enqueuedAt: Date.now(),
         sessionKey: canonicalKey,
@@ -646,6 +655,9 @@ export async function deliverSubagentAnnouncement(params: {
 }
 
 export const __testing = {
+  async sendAnnounceForTest(item: AnnounceQueueItem) {
+    await sendAnnounce(item);
+  },
   setDepsForTest(overrides?: Partial<SubagentAnnounceDeliveryDeps>) {
     subagentAnnounceDeliveryDeps = overrides
       ? {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveAnnounceOrigin } from "./subagent-announce-delivery.js";
+import { resolveAnnounceOrigin, __testing } from "./subagent-announce-delivery.js";
 
 describe("resolveAnnounceOrigin telegram forum topics", () => {
   it("preserves stored forum topic thread ids when requester origin omits one for the same chat", () => {
@@ -59,5 +59,35 @@ describe("resolveAnnounceOrigin telegram forum topics", () => {
       channel: "telegram",
       to: "telegram:-1001234567890",
     });
+  });
+});
+
+describe("queued announce delivery execution boundary", () => {
+  it("sends queued announce items from execution.agentPrompt, not display text", async () => {
+    const calls: Array<{ method?: string; params?: { message?: string } }> = [];
+    __testing.setDepsForTest({
+      loadConfig: () => ({ agents: { subagentAnnounceTimeoutMs: 1000 } }) as never,
+      callGateway: async (req) => {
+        calls.push(req as { method?: string; params?: { message?: string } });
+        return { ok: true } as never;
+      },
+    });
+
+    try {
+      await __testing.sendAnnounceForTest({
+        announceId: "ann-1",
+        execution: { visibility: "internal", agentPrompt: "internal trigger payload" },
+        display: { visibility: "user-visible", text: "safe display payload" },
+        enqueuedAt: 1,
+        sessionKey: "agent:main:main",
+        origin: { channel: "telegram", to: "telegram:123" },
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.params?.message).toBe("internal trigger payload");
+      expect(calls[0]?.params?.message).not.toBe("safe display payload");
+    } finally {
+      __testing.setDepsForTest();
+    }
   });
 });

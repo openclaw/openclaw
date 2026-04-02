@@ -1,5 +1,10 @@
 import { type QueueDropPolicy, type QueueMode } from "../auto-reply/reply/queue.js";
 import { defaultRuntime } from "../runtime.js";
+import { renderDeferredBatch } from "../utils/deferred-render.js";
+import {
+  type DeferredDisplayPayload,
+  type DeferredExecutionPayload,
+} from "../utils/deferred-visibility.js";
 import {
   type DeliveryContext,
   deliveryContextKey,
@@ -9,7 +14,6 @@ import {
   applyQueueRuntimeSettings,
   applyQueueDropPolicy,
   beginQueueDrain,
-  buildCollectPrompt,
   clearQueueSummaryState,
   drainCollectQueueStep,
   drainNextQueueItem,
@@ -23,8 +27,8 @@ export type AnnounceQueueItem = {
   // Stable announce identity shared by direct + queued delivery paths.
   // Optional for backward compatibility with previously queued items.
   announceId?: string;
-  prompt: string;
-  summaryLine?: string;
+  execution: DeferredExecutionPayload;
+  display: DeferredDisplayPayload;
   internalEvents?: AgentInternalEvent[];
   enqueuedAt: number;
   sessionKey: string;
@@ -146,11 +150,10 @@ function scheduleAnnounceDrain(key: string) {
           }
           const items = queue.items.slice();
           const summary = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
-          const prompt = buildCollectPrompt({
+          const prompt = renderDeferredBatch({
             title: "[Queued announce messages while agent was busy]",
-            items,
+            items: items.map((item) => item.display),
             summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
           const internalEvents = items.flatMap((item) => item.internalEvents ?? []);
           const last = items.at(-1);
@@ -159,7 +162,8 @@ function scheduleAnnounceDrain(key: string) {
           }
           await queue.send({
             ...last,
-            prompt,
+            execution: { visibility: "internal", agentPrompt: prompt },
+            display: { visibility: "user-visible", text: prompt },
             internalEvents: internalEvents.length > 0 ? internalEvents : last.internalEvents,
           });
           queue.items.splice(0, items.length);
@@ -174,7 +178,12 @@ function scheduleAnnounceDrain(key: string) {
           if (
             !(await drainNextQueueItem(
               queue.items,
-              async (item) => await queue.send({ ...item, prompt: summaryPrompt }),
+              async (item) =>
+                await queue.send({
+                  ...item,
+                  execution: { visibility: "internal", agentPrompt: summaryPrompt },
+                  display: { visibility: "user-visible", text: summaryPrompt },
+                }),
             ))
           ) {
             break;
@@ -221,7 +230,15 @@ export function enqueueAnnounce(params: {
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
-    summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
+    summarize: (item) => {
+      const display = item.display;
+      if (display.visibility === "summary-only") {
+        return display.summaryLine.trim();
+      }
+      return (
+        display.summaryLine?.trim() || display.text?.trim() || item.execution.agentPrompt.trim()
+      );
+    },
   });
   if (!shouldEnqueue) {
     if (queue.dropPolicy === "new") {

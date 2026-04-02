@@ -10,17 +10,22 @@ function createRetryingSend() {
     resolveSecondAttempt = resolve;
   });
 
-  const send = vi.fn(async (item: { prompt: string }) => {
-    attempts += 1;
-    prompts.push(item.prompt);
-    if (attempts >= 2 && !resolved) {
-      resolved = true;
-      resolveSecondAttempt();
-    }
-    if (attempts === 1) {
-      throw new Error("gateway timeout after 60000ms");
-    }
-  });
+  const send = vi.fn(
+    async (item: {
+      execution: { agentPrompt: string };
+      display: { text?: string; summaryLine?: string };
+    }) => {
+      attempts += 1;
+      prompts.push(item.display.text ?? item.display.summaryLine ?? item.execution.agentPrompt);
+      if (attempts >= 2 && !resolved) {
+        resolved = true;
+        resolveSecondAttempt();
+      }
+      if (attempts === 1) {
+        throw new Error("gateway timeout after 60000ms");
+      }
+    },
+  );
 
   return { send, prompts, waitForSecondAttempt };
 }
@@ -37,7 +42,8 @@ describe("subagent-announce-queue", () => {
     enqueueAnnounce({
       key: "announce:test:retry",
       item: {
-        prompt: "subagent completed",
+        execution: { visibility: "internal", agentPrompt: "subagent completed" },
+        display: { visibility: "user-visible", text: "subagent completed" },
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
@@ -56,8 +62,8 @@ describe("subagent-announce-queue", () => {
     enqueueAnnounce({
       key: "announce:test:summary-retry",
       item: {
-        prompt: "first result",
-        summaryLine: "first result",
+        execution: { visibility: "internal", agentPrompt: "first result" },
+        display: { visibility: "user-visible", text: "first result", summaryLine: "first result" },
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
@@ -67,8 +73,12 @@ describe("subagent-announce-queue", () => {
     enqueueAnnounce({
       key: "announce:test:summary-retry",
       item: {
-        prompt: "second result",
-        summaryLine: "second result",
+        execution: { visibility: "internal", agentPrompt: "second result" },
+        display: {
+          visibility: "user-visible",
+          text: "second result",
+          summaryLine: "second result",
+        },
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
@@ -88,7 +98,8 @@ describe("subagent-announce-queue", () => {
     enqueueAnnounce({
       key: "announce:test:collect-retry",
       item: {
-        prompt: "queued item one",
+        execution: { visibility: "internal", agentPrompt: "worker trigger one" },
+        display: { visibility: "user-visible", text: "queued item one" },
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
@@ -98,7 +109,8 @@ describe("subagent-announce-queue", () => {
     enqueueAnnounce({
       key: "announce:test:collect-retry",
       item: {
-        prompt: "queued item two",
+        execution: { visibility: "internal", agentPrompt: "worker trigger two" },
+        display: { visibility: "user-visible", text: "queued item two" },
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
@@ -116,6 +128,51 @@ describe("subagent-announce-queue", () => {
     expect(sender.prompts[1]).toContain("queued item one");
     expect(sender.prompts[1]).toContain("Queued #2");
     expect(sender.prompts[1]).toContain("queued item two");
+    expect(sender.prompts[0]).not.toContain("worker trigger one");
+    expect(sender.prompts[0]).not.toContain("worker trigger two");
+  });
+
+  it("renders summary-only announce batches from summaryLine only", async () => {
+    const sender = createRetryingSend();
+
+    enqueueAnnounce({
+      key: "announce:test:collect-summary-only",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "internal trigger one" },
+        display: {
+          visibility: "summary-only",
+          text: "hidden text one",
+          summaryLine: "safe summary one",
+        },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "collect", debounceMs: 0 },
+      send: sender.send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:collect-summary-only",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "internal trigger two" },
+        display: {
+          visibility: "summary-only",
+          text: "hidden text two",
+          summaryLine: "safe summary two",
+        },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "collect", debounceMs: 0 },
+      send: sender.send,
+    });
+
+    await sender.waitForSecondAttempt;
+    expect(sender.prompts[0]).toContain("safe summary one");
+    expect(sender.prompts[0]).toContain("safe summary two");
+    expect(sender.prompts[0]).not.toContain("hidden text one");
+    expect(sender.prompts[0]).not.toContain("hidden text two");
+    expect(sender.prompts[0]).not.toContain("internal trigger one");
+    expect(sender.prompts[0]).not.toContain("internal trigger two");
   });
 
   it("uses debounce floor for retries when debounce exceeds backoff", async () => {
@@ -136,7 +193,8 @@ describe("subagent-announce-queue", () => {
       enqueueAnnounce({
         key: "announce:test:retry-debounce-floor",
         item: {
-          prompt: "subagent completed",
+          execution: { visibility: "internal", agentPrompt: "subagent completed" },
+          display: { visibility: "user-visible", text: "subagent completed" },
           enqueuedAt: Date.now(),
           sessionKey: "agent:main:telegram:dm:u1",
         },
