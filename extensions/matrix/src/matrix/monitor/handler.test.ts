@@ -1729,6 +1729,50 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("keeps delayed same-message block boundaries at the emitted block length", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Alpha" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    opts.onPartialReply?.({ text: "AlphaBeta" });
+    await vi.waitFor(() => {
+      expect(editMessageMatrixMock).toHaveBeenCalledWith(
+        "!room:example.org",
+        "$draft1",
+        "AlphaBeta",
+        expect.anything(),
+      );
+    });
+
+    await opts.onBlockReplyQueued?.({ text: "Alpha" });
+
+    sendSingleTextMessageMatrixMock.mockClear();
+    editMessageMatrixMock.mockClear();
+    sendSingleTextMessageMatrixMock.mockResolvedValueOnce({
+      messageId: "$draft2",
+      roomId: "!room",
+    });
+    await deliver({ text: "Alpha" }, { kind: "block" });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("Beta");
+    expect(editMessageMatrixMock).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$draft1",
+      "Alpha",
+      expect.anything(),
+    );
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
   it("falls back to deliverMatrixReplies when final edit fails", async () => {
     const { dispatch } = createStreamingHarness();
     const { deliver, opts, finish } = await dispatch();
