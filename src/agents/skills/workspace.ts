@@ -197,6 +197,8 @@ function resolveContainedSkillPath(params: {
   rootDir: string;
   rootRealPath: string;
   candidatePath: string;
+  /** Additional root real paths that are considered safe symlink targets. */
+  allowedSymlinkTargetRoots?: string[];
 }): string | null {
   const candidateRealPath = tryRealpath(params.candidatePath);
   if (!candidateRealPath) {
@@ -204,6 +206,20 @@ function resolveContainedSkillPath(params: {
   }
   if (isPathInside(params.rootRealPath, candidateRealPath)) {
     return candidateRealPath;
+  }
+  // When a skill is a symlink pointing outside its root, check if the resolved
+  // path falls inside another known skill scan directory.  The `skills` CLI
+  // (https://github.com/nicepkg/skills) installs canonical copies under
+  // `~/.agents/skills/` and creates symlinks in agent-specific directories
+  // (e.g. `~/.openclaw/skills/X` → `~/.agents/skills/X`).  Without this
+  // allowlist the managed-skills scan emits a noisy warning for every such
+  // symlink even though the target is a legitimate skill root.
+  if (params.allowedSymlinkTargetRoots?.length) {
+    for (const allowedRoot of params.allowedSymlinkTargetRoots) {
+      if (isPathInside(allowedRoot, candidateRealPath)) {
+        return candidateRealPath;
+      }
+    }
   }
   warnEscapedSkillPath({
     source: params.source,
@@ -219,6 +235,7 @@ function filterLoadedSkillsInsideRoot(params: {
   source: string;
   rootDir: string;
   rootRealPath: string;
+  allowedSymlinkTargetRoots?: string[];
 }): Skill[] {
   return params.skills.filter((skill) => {
     const baseDirRealPath = resolveContainedSkillPath({
@@ -226,6 +243,7 @@ function filterLoadedSkillsInsideRoot(params: {
       rootDir: params.rootDir,
       rootRealPath: params.rootRealPath,
       candidatePath: skill.baseDir,
+      allowedSymlinkTargetRoots: params.allowedSymlinkTargetRoots,
     });
     if (!baseDirRealPath) {
       return false;
@@ -235,6 +253,7 @@ function filterLoadedSkillsInsideRoot(params: {
       rootDir: params.rootDir,
       rootRealPath: params.rootRealPath,
       candidatePath: skill.filePath,
+      allowedSymlinkTargetRoots: params.allowedSymlinkTargetRoots,
     });
     return Boolean(skillFileRealPath);
   });
@@ -293,7 +312,12 @@ function loadSkillEntries(
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config);
 
-  const loadSkills = (params: { dir: string; source: string }): Skill[] => {
+  const loadSkills = (params: {
+    dir: string;
+    source: string;
+    /** Additional root real paths that are considered safe symlink targets. */
+    allowedSymlinkTargetRoots?: string[];
+  }): Skill[] => {
     const rootDir = path.resolve(params.dir);
     const rootRealPath = tryRealpath(rootDir) ?? rootDir;
     const resolved = resolveNestedSkillsRoot(params.dir, {
@@ -305,6 +329,7 @@ function loadSkillEntries(
       rootDir,
       rootRealPath,
       candidatePath: baseDir,
+      allowedSymlinkTargetRoots: params.allowedSymlinkTargetRoots,
     });
     if (!baseDirRealPath) {
       return [];
@@ -318,6 +343,7 @@ function loadSkillEntries(
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: rootSkillMd,
+        allowedSymlinkTargetRoots: params.allowedSymlinkTargetRoots,
       });
       if (!rootSkillRealPath) {
         return [];
@@ -347,6 +373,7 @@ function loadSkillEntries(
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
+        allowedSymlinkTargetRoots: params.allowedSymlinkTargetRoots,
       });
     }
 
@@ -383,6 +410,7 @@ function loadSkillEntries(
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: skillDir,
+        allowedSymlinkTargetRoots: params.allowedSymlinkTargetRoots,
       });
       if (!skillDirRealPath) {
         continue;
@@ -396,6 +424,7 @@ function loadSkillEntries(
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: skillMd,
+        allowedSymlinkTargetRoots: params.allowedSymlinkTargetRoots,
       });
       if (!skillMdRealPath) {
         continue;
@@ -426,6 +455,7 @@ function loadSkillEntries(
           source: params.source,
           rootDir,
           rootRealPath: baseDirRealPath,
+          allowedSymlinkTargetRoots: params.allowedSymlinkTargetRoots,
         }),
       );
 
@@ -470,16 +500,34 @@ function loadSkillEntries(
       source: "openclaw-extra",
     });
   });
+  const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
+  const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
+
+  // The `skills` CLI (https://github.com/nicepkg/skills) installs skill files
+  // into a canonical directory (`~/.agents/skills/`) and creates symlinks in
+  // each agent's skill directory.  For OpenClaw this means
+  // `~/.openclaw/skills/X` → `~/.agents/skills/X`.  Without an allowlist the
+  // symlink-escape check rejects every such skill with a noisy warning.
+  // Build a list of other known skill scan roots so that managed-skill symlinks
+  // pointing into them are accepted instead of rejected.
+  const allowedSymlinkTargetRoots = [
+    personalAgentsSkillsDir,
+    projectAgentsSkillsDir,
+    workspaceSkillsDir,
+    ...mergedExtraDirs.map((d) => path.resolve(resolveUserPath(d))),
+  ]
+    .map((d) => tryRealpath(d) ?? d)
+    .filter(Boolean);
+
   const managedSkills = loadSkills({
     dir: managedSkillsDir,
     source: "openclaw-managed",
+    allowedSymlinkTargetRoots,
   });
-  const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
   const personalAgentsSkills = loadSkills({
     dir: personalAgentsSkillsDir,
     source: "agents-skills-personal",
   });
-  const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
   const projectAgentsSkills = loadSkills({
     dir: projectAgentsSkillsDir,
     source: "agents-skills-project",
