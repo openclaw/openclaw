@@ -305,7 +305,7 @@ describe("diffs plugin schema surfaces", () => {
         issues: [
           {
             path: ["viewerBaseUrl"],
-            message: "baseUrl must use http or https: javascript:alert(1)",
+            message: "viewerBaseUrl must use http or https: javascript:alert(1)",
           },
         ],
       },
@@ -380,6 +380,12 @@ describe("diffs viewer URL helpers", () => {
     );
     expect(() => normalizeViewerBaseUrl("https://example.com#frag")).toThrow(
       "baseUrl must not include query/hash",
+    );
+  });
+
+  it("uses the configured field name in viewerBaseUrl validation errors", () => {
+    expect(() => normalizeViewerBaseUrl("https://example.com?a=1", "viewerBaseUrl")).toThrow(
+      "viewerBaseUrl must not include query/hash",
     );
   });
 });

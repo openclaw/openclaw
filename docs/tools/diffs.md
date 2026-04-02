@@ -237,6 +237,23 @@ Persistent viewer URL config:
   - Plugin-owned fallback for returned viewer links when a tool call does not pass `baseUrl`.
   - Must be `http` or `https`, no query/hash.
 
+Example:
+
+```json5
+{
+  plugins: {
+    entries: {
+      diffs: {
+        enabled: true,
+        config: {
+          viewerBaseUrl: "https://gateway.example.com/openclaw",
+        },
+      },
+    },
+  },
+}
+```
+
 ## Security config
 
 - `security.allowRemoteViewer` (`boolean`, default `false`)

@@ -112,6 +112,23 @@ Security options:
 - `security.allowRemoteViewer` (default `false`): allows non-loopback access to `/plugins/diffs/view/...` token URLs
 - `viewerBaseUrl` (optional): persistent viewer-link origin/path fallback for shareable URLs
 
+Example:
+
+```json5
+{
+  plugins: {
+    entries: {
+      diffs: {
+        enabled: true,
+        config: {
+          viewerBaseUrl: "https://gateway.example.com/openclaw",
+        },
+      },
+    },
+  },
+}
+```
+
 ## Example Agent Prompts
 
 Open in canvas:

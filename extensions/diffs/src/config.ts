@@ -100,7 +100,7 @@ const DiffsPluginJsonSchemaSource = z.strictObject({
     .string()
     .superRefine((value, ctx) => {
       try {
-        normalizeViewerBaseUrl(value);
+        normalizeViewerBaseUrl(value, "viewerBaseUrl");
       } catch (error) {
         ctx.addIssue({
           code: "custom",
