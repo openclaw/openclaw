@@ -185,12 +185,11 @@ describe("Matrix IndexedDB persistence", () => {
       records: [{ key: "room-1", value: { session: "abc123" } }],
     });
 
-    const results = await Promise.allSettled([
+    await Promise.all([
       persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" }),
       persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" }),
     ]);
 
-    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
     expect(fs.existsSync(snapshotPath)).toBe(true);
 
     const data = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
@@ -207,10 +206,10 @@ describe("Matrix IndexedDB persistence", () => {
     });
 
     await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
-    await drainFileLockStateForTest();
 
     const lockPath = `${snapshotPath}.lock`;
     expect(fs.existsSync(lockPath)).toBe(false);
+    await drainFileLockStateForTest();
   });
 
   it("releases lock after restore completes", async () => {
@@ -226,9 +225,9 @@ describe("Matrix IndexedDB persistence", () => {
     await drainFileLockStateForTest();
 
     await restoreIdbFromDisk(snapshotPath);
-    await drainFileLockStateForTest();
 
     const lockPath = `${snapshotPath}.lock`;
     expect(fs.existsSync(lockPath)).toBe(false);
+    await drainFileLockStateForTest();
   });
 });
