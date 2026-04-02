@@ -2,13 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-import { telegramPlugin, setTelegramRuntime } from "../../extensions/telegram/index.js";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { heartbeatRunnerTelegramPlugin } from "./heartbeat-runner.test-channel-plugins.js";
 
 export type HeartbeatSessionSeed = {
   sessionId?: string;
@@ -97,9 +96,9 @@ export async function withTempTelegramHeartbeatSandbox<T>(
 }
 
 export function setupTelegramHeartbeatPluginRuntimeForTests() {
-  const runtime = createPluginRuntime();
-  setTelegramRuntime(runtime);
   setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+    createTestRegistry([
+      { pluginId: "telegram", plugin: heartbeatRunnerTelegramPlugin, source: "test" },
+    ]),
   );
 }

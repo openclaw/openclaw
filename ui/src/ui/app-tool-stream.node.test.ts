@@ -139,4 +139,174 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.fallbackStatus?.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
     vi.useRealTimers();
   });
+
+  it("keeps compaction in retry-pending state until the matching lifecycle end", () => {
+    vi.useFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "compaction",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "start" },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "active",
+      runId: "run-1",
+      startedAt: expect.any(Number),
+      completedAt: null,
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "compaction",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "end", willRetry: true, completed: true },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "retrying",
+      runId: "run-1",
+      startedAt: expect.any(Number),
+      completedAt: null,
+    });
+    expect(host.compactionClearTimer).toBeNull();
+
+    handleAgentEvent(host, {
+      runId: "run-2",
+      seq: 3,
+      stream: "lifecycle",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "end" },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "retrying",
+      runId: "run-1",
+      startedAt: expect.any(Number),
+      completedAt: null,
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 4,
+      stream: "lifecycle",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "end" },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "complete",
+      runId: "run-1",
+      startedAt: expect.any(Number),
+      completedAt: expect.any(Number),
+    });
+    expect(host.compactionClearTimer).not.toBeNull();
+
+    vi.advanceTimersByTime(5_000);
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("treats lifecycle error as terminal for retry-pending compaction", () => {
+    vi.useFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "compaction",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "start" },
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "compaction",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "end", willRetry: true, completed: true },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "retrying",
+      runId: "run-1",
+      startedAt: expect.any(Number),
+      completedAt: null,
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 3,
+      stream: "lifecycle",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "error", error: "boom" },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "complete",
+      runId: "run-1",
+      startedAt: expect.any(Number),
+      completedAt: expect.any(Number),
+    });
+    expect(host.compactionClearTimer).not.toBeNull();
+
+    vi.advanceTimersByTime(5_000);
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("does not surface retrying or complete when retry compaction failed", () => {
+    vi.useFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "compaction",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "start" },
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "compaction",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "end", willRetry: true, completed: false },
+    });
+
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 3,
+      stream: "lifecycle",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "error", error: "boom" },
+    });
+
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
 });

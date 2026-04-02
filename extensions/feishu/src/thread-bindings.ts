@@ -10,7 +10,6 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 
 type FeishuBindingTargetKind = "subagent" | "acp";
 
@@ -52,15 +51,19 @@ type FeishuThreadBindingsState = {
 };
 
 const FEISHU_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.feishuThreadBindingsState");
-const state = resolveGlobalSingleton<FeishuThreadBindingsState>(
-  FEISHU_THREAD_BINDINGS_STATE_KEY,
-  () => ({
-    managersByAccountId: new Map(),
-    bindingsByAccountConversation: new Map(),
-  }),
-);
+let state: FeishuThreadBindingsState | undefined;
 
 function getState(): FeishuThreadBindingsState {
+  if (!state) {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    state = (globalStore[FEISHU_THREAD_BINDINGS_STATE_KEY] as
+      | FeishuThreadBindingsState
+      | undefined) ?? {
+      managersByAccountId: new Map(),
+      bindingsByAccountConversation: new Map(),
+    };
+    globalStore[FEISHU_THREAD_BINDINGS_STATE_KEY] = state;
+  }
   return state;
 }
 

@@ -18,6 +18,7 @@ export interface PendingUpload {
 }
 
 const pendingUploads = new Map<string, PendingUpload>();
+const pendingTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** TTL for pending uploads: 5 minutes */
 const PENDING_UPLOAD_TTL_MS = 5 * 60 * 1000;
@@ -42,9 +43,11 @@ export function storePendingUpload(upload: Omit<PendingUpload, "id" | "createdAt
   pendingUploads.set(id, entry);
 
   // Auto-cleanup after TTL
-  setTimeout(() => {
+  const timeout = setTimeout(() => {
     pendingUploads.delete(id);
+    pendingTimeouts.delete(id);
   }, PENDING_UPLOAD_TTL_MS);
+  pendingTimeouts.set(id, timeout);
 
   return id;
 }
@@ -76,6 +79,11 @@ export function getPendingUpload(id?: string): PendingUpload | undefined {
  */
 export function removePendingUpload(id?: string): void {
   if (id) {
+    const timeout = pendingTimeouts.get(id);
+    if (timeout) {
+      clearTimeout(timeout);
+      pendingTimeouts.delete(id);
+    }
     pendingUploads.delete(id);
   }
 }
@@ -91,5 +99,9 @@ export function getPendingUploadCount(): number {
  * Clear all pending uploads (for testing).
  */
 export function clearPendingUploads(): void {
+  for (const timeout of pendingTimeouts.values()) {
+    clearTimeout(timeout);
+  }
+  pendingTimeouts.clear();
   pendingUploads.clear();
 }

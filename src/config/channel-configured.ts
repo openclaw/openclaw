@@ -1,5 +1,5 @@
-import { hasAnyWhatsAppAuth } from "../../extensions/whatsapp/auth-presence.js";
 import { hasMeaningfulChannelConfig } from "../channels/config-presence.js";
+import { hasAnyWhatsAppAuth } from "../plugin-sdk/whatsapp-auth-presence.js";
 import { isRecord } from "../utils.js";
 import type { OpenClawConfig } from "./config.js";
 
@@ -127,8 +127,8 @@ function isStructuredChannelConfigured(
   return hasMeaningfulChannelConfig(entry);
 }
 
-function isWhatsAppConfigured(cfg: OpenClawConfig): boolean {
-  if (hasAnyWhatsAppAuth(cfg)) {
+function isWhatsAppConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (hasAnyWhatsAppAuth(cfg, env)) {
     return true;
   }
   const entry = resolveChannelConfig(cfg, "whatsapp");
@@ -149,7 +149,7 @@ export function isChannelConfigured(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (channelId === "whatsapp") {
-    return isWhatsAppConfigured(cfg);
+    return isWhatsAppConfigured(cfg, env);
   }
   const spec = STRUCTURED_CHANNEL_CONFIG_SPECS[channelId];
   if (spec) {

@@ -39,7 +39,6 @@ const DEFAULT_MODEL = "claude-opus-4-5";
 type AgentTurnPayload = {
   kind: "agentTurn";
   message: string;
-  deliver?: boolean;
   model?: string;
 };
 
@@ -105,7 +104,6 @@ function defaultPayload(): AgentTurnPayload {
   return {
     kind: "agentTurn",
     message: DEFAULT_MESSAGE,
-    deliver: false,
   };
 }
 
@@ -273,7 +271,6 @@ describe("cron model formatting and precedence edge cases", () => {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "anthropic/claude-sonnet-4-5",
-            deliver: false,
           },
           sessionEntry: {
             providerOverride: "openai",
@@ -318,7 +315,6 @@ describe("cron model formatting and precedence edge cases", () => {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "anthropic/claude-opus-4-5",
-            deliver: false,
           },
           sessionEntry: {
             providerOverride: "openai",

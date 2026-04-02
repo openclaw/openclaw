@@ -24,9 +24,23 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 
 - use `Authorization: Bearer <token>` with the normal Gateway auth config
 - treat the endpoint as full operator access for the gateway instance
-- select agents with `model: "openclaw:<agentId>"`, `model: "agent:<agentId>"`, or `x-openclaw-agent-id`
+- for shared-secret auth modes (`token` and `password`), ignore narrower bearer-declared `x-openclaw-scopes` values and restore the normal full operator defaults
+- for trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"`), still honor the declared operator scopes on the request
+- select agents with `model: "openclaw"`, `model: "openclaw/default"`, `model: "openclaw/<agentId>"`, or `x-openclaw-agent-id`
+- use `x-openclaw-model` when you want to override the selected agent's backend model
 - use `x-openclaw-session-key` for explicit session routing
 - use `x-openclaw-message-channel` when you want a non-default synthetic ingress channel context
+
+Auth matrix:
+
+- `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
+  - proves possession of the shared gateway operator secret
+  - ignores narrower `x-openclaw-scopes`
+  - restores the full default operator scope set
+  - treats chat turns on this endpoint as owner-sender turns
+- trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
+  - honor the declared `x-openclaw-scopes` header
+  - only get owner semantics when `operator.admin` is actually present in those declared scopes
 
 Enable or disable this endpoint with `gateway.http.endpoints.responses.enabled`.
 
@@ -37,7 +51,7 @@ The same compatibility surface also includes:
 - `POST /v1/embeddings`
 - `POST /v1/chat/completions`
 
-For the canonical explanation of how model listing, agent routing, and sub-agent model selection fit together, see [OpenAI Chat Completions](/gateway/openai-http-api#model-list-and-agent-routing).
+For the canonical explanation of how agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides fit together, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract) and [Model list and agent routing](/gateway/openai-http-api#model-list-and-agent-routing).
 
 ## Session behavior
 

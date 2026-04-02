@@ -1,4 +1,4 @@
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
@@ -91,6 +91,7 @@ export async function runPluginUpdateCommand(params: {
   id?: string;
   opts: { all?: boolean; dryRun?: boolean };
 }) {
+  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const cfg = loadConfig();
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
@@ -184,7 +185,10 @@ export async function runPluginUpdateCommand(params: {
   }
 
   if (!params.opts.dryRun && (pluginResult.changed || hookResult.changed)) {
-    await writeConfigFile(hookResult.config);
+    await replaceConfigFile({
+      nextConfig: hookResult.config,
+      baseHash: (await sourceSnapshotPromise)?.hash,
+    });
     defaultRuntime.log("Restart the gateway to load plugins and hooks.");
   }
 }

@@ -2,7 +2,7 @@ import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import type { SandboxBackendCommandParams, SandboxBackendCommandResult } from "./backend.js";
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
-import { resolveWritableRenameTargetsForBridge } from "./fs-bridge-rename-targets.js";
+import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.js";
 import {
   isPathInsideContainerRoot,
@@ -36,18 +36,15 @@ export function createRemoteShellSandboxFsBridge(params: {
 }
 
 class RemoteShellSandboxFsBridge implements SandboxFsBridge {
+  private readonly resolveRenameTargets = createWritableRenameTargetResolver(
+    (target) => this.resolveTarget(target),
+    (target, action) => this.ensureWritable(target, action),
+  );
+
   constructor(
     private readonly sandbox: SandboxContext,
     private readonly runtime: RemoteShellSandboxHandle,
   ) {}
-
-  private resolveRenameTargets(params: { from: string; to: string; cwd?: string }) {
-    return resolveWritableRenameTargetsForBridge(
-      params,
-      (target) => this.resolveTarget(target),
-      (target, action) => this.ensureWritable(target, action),
-    );
-  }
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
     const target = this.resolveTarget(params);
@@ -63,19 +60,22 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<Buffer> {
     const target = this.resolveTarget(params);
-    const canonical = await this.resolveCanonicalPath({
-      containerPath: target.containerPath,
-      action: "read files",
-      signal: params.signal,
-    });
-    await this.assertNoHardlinkedFile({
-      containerPath: canonical,
-      action: "read files",
-      signal: params.signal,
-    });
-    const result = await this.runRemoteScript({
-      script: 'set -eu\ncat -- "$1"',
-      args: [canonical],
+    const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
+    if (
+      relativePath === "" ||
+      relativePath === "." ||
+      relativePath.startsWith("..") ||
+      path.posix.isAbsolute(relativePath)
+    ) {
+      throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
+    }
+    const result = await this.runMutation({
+      args: [
+        "read",
+        target.mountRootPath,
+        path.posix.dirname(relativePath) === "." ? "" : path.posix.dirname(relativePath),
+        path.posix.basename(relativePath),
+      ],
       signal: params.signal,
     });
     return result.stdout;
@@ -474,8 +474,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     stdin?: Buffer | string;
     signal?: AbortSignal;
     allowFailure?: boolean;
-  }) {
-    await this.runRemoteScript({
+  }): Promise<SandboxBackendCommandResult> {
+    return await this.runRemoteScript({
       script: [
         "set -eu",
         "python3 /dev/fd/3 \"$@\" 3<<'PY'",

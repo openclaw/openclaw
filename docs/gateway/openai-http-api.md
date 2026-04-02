@@ -43,31 +43,44 @@ Treat this endpoint as a **full operator-access** surface for the gateway instan
 - A valid Gateway token/password for this endpoint should be treated like an owner/operator credential.
 - Requests run through the same control-plane agent path as trusted operator actions.
 - There is no separate non-owner/per-user tool boundary on this endpoint; once a caller passes Gateway auth here, OpenClaw treats that caller as a trusted operator for this gateway.
+- For shared-secret auth modes (`token` and `password`), the endpoint restores the normal full operator defaults even if the caller sends a narrower `x-openclaw-scopes` header.
+- Trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"`) still honor the declared operator scopes on the request.
 - If the target agent policy allows sensitive tools, this endpoint can use them.
 - Keep this endpoint on loopback/tailnet/private ingress only; do not expose it directly to the public internet.
 
+Auth matrix:
+
+- `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
+  - proves possession of the shared gateway operator secret
+  - ignores narrower `x-openclaw-scopes`
+  - restores the full default operator scope set
+  - treats chat turns on this endpoint as owner-sender turns
+- trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
+  - authenticate some outer trusted identity or deployment boundary
+  - honor the declared `x-openclaw-scopes` header
+  - only get owner semantics when `operator.admin` is actually present in those declared scopes
+
 See [Security](/gateway/security) and [Remote access](/gateway/remote).
 
-## Choosing an agent
+## Agent-first model contract
 
-No custom headers required: encode the agent id in the OpenAI `model` field:
+OpenClaw treats the OpenAI `model` field as an **agent target**, not a raw provider model id.
 
-- `model: "openclaw:<agentId>"` (example: `"openclaw:main"`, `"openclaw:beta"`)
-- `model: "agent:<agentId>"` (alias)
+- `model: "openclaw"` routes to the configured default agent.
+- `model: "openclaw/default"` also routes to the configured default agent.
+- `model: "openclaw/<agentId>"` routes to a specific agent.
 
-Or target a specific OpenClaw agent by header:
+Optional request headers:
 
-- `x-openclaw-agent-id: <agentId>` (default: `main`)
+- `x-openclaw-model: <provider/model-or-bare-id>` overrides the backend model for the selected agent.
+- `x-openclaw-agent-id: <agentId>` remains supported as a compatibility override.
+- `x-openclaw-session-key: <sessionKey>` fully controls session routing.
+- `x-openclaw-message-channel: <channel>` sets the synthetic ingress channel context for channel-aware prompts and policies.
 
-Advanced:
+Compatibility aliases still accepted:
 
-- `x-openclaw-session-key: <sessionKey>` to fully control session routing.
-- `x-openclaw-message-channel: <channel>` to set the synthetic ingress channel context for channel-aware prompts and policies.
-
-For `/v1/models` and `/v1/embeddings`, `x-openclaw-agent-id` is still useful:
-
-- `/v1/models` uses it for agent-scoped model filtering where relevant.
-- `/v1/embeddings` uses it to resolve agent-specific memory-search embedding config.
+- `model: "openclaw:<agentId>"`
+- `model: "agent:<agentId>"`
 
 ## Enabling the endpoint
 
@@ -120,34 +133,40 @@ This is the highest-leverage compatibility set for self-hosted frontends and too
 
 <AccordionGroup>
   <Accordion title="What does `/v1/models` return?">
-    A flat OpenAI-style model list.
+    An OpenClaw agent-target list.
 
-    The returned ids are canonical `provider/model` values such as `openai/gpt-5.4`.
-    These ids are meant to be passed back directly as the OpenAI `model` field.
+    The returned ids are `openclaw`, `openclaw/default`, and `openclaw/<agentId>` entries.
+    Use them directly as OpenAI `model` values.
 
   </Accordion>
   <Accordion title="Does `/v1/models` list agents or sub-agents?">
-    No.
+    It lists top-level agent targets, not backend provider models and not sub-agents.
 
-    `/v1/models` lists model choices, not execution topology. Agents and sub-agents are OpenClaw routing concerns, so they are selected separately with `x-openclaw-agent-id` or the `openclaw:<agentId>` / `agent:<agentId>` model aliases on chat and responses requests.
-
-  </Accordion>
-  <Accordion title="How does agent-scoped filtering work?">
-    Send `x-openclaw-agent-id: <agentId>` when you want the model list for a specific agent.
-
-    OpenClaw filters the model list against that agent's allowed models and fallbacks when configured. If no allowlist is configured, the endpoint returns the full catalog.
+    Sub-agents remain internal execution topology. They do not appear as pseudo-models.
 
   </Accordion>
-  <Accordion title="How do sub-agents pick a model?">
-    Sub-agent model choice is resolved at spawn time from OpenClaw agent config.
+  <Accordion title="Why is `openclaw/default` included?">
+    `openclaw/default` is the stable alias for the configured default agent.
 
-    That means sub-agent model selection does not create extra `/v1/models` entries. Keep the compatibility list flat, and treat agent and sub-agent selection as separate OpenClaw-native routing behavior.
+    That means clients can keep using one predictable id even if the real default agent id changes between environments.
 
   </Accordion>
-  <Accordion title="What should clients do in practice?">
-    Use `/v1/models` to populate the normal model picker.
+  <Accordion title="How do I override the backend model?">
+    Use `x-openclaw-model`.
 
-    If your client or integration also knows which OpenClaw agent it wants, set `x-openclaw-agent-id` when listing models and when sending chat, responses, or embeddings requests. That keeps the picker aligned with the target agent's allowed model set.
+    Examples:
+    `x-openclaw-model: openai/gpt-5.4`
+    `x-openclaw-model: gpt-5.4`
+
+    If you omit it, the selected agent runs with its normal configured model choice.
+
+  </Accordion>
+  <Accordion title="How do embeddings fit this contract?">
+    `/v1/embeddings` uses the same agent-target `model` ids.
+
+    Use `model: "openclaw/default"` or `model: "openclaw/<agentId>"`.
+    When you need a specific embedding model, send it in `x-openclaw-model`.
+    Without that header, the request passes through to the selected agent's normal embedding setup.
 
   </Accordion>
 </AccordionGroup>
@@ -160,6 +179,30 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - Each event line is `data: <json>`
 - Stream ends with `data: [DONE]`
 
+## Open WebUI quick setup
+
+For a basic Open WebUI connection:
+
+- Base URL: `http://127.0.0.1:18789/v1`
+- Docker on macOS base URL: `http://host.docker.internal:18789/v1`
+- API key: your Gateway bearer token
+- Model: `openclaw/default`
+
+Expected behavior:
+
+- `GET /v1/models` should list `openclaw/default`
+- Open WebUI should use `openclaw/default` as the chat model id
+- If you want a specific backend provider/model for that agent, set the agent's normal default model or send `x-openclaw-model`
+
+Quick smoke:
+
+```bash
+curl -sS http://127.0.0.1:18789/v1/models \
+  -H 'Authorization: Bearer YOUR_TOKEN'
+```
+
+If that returns `openclaw/default`, most Open WebUI setups can connect with the same base URL and token.
+
 ## Examples
 
 Non-streaming:
@@ -168,9 +211,8 @@ Non-streaming:
 curl -sS http://127.0.0.1:18789/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
-  -H 'x-openclaw-agent-id: main' \
   -d '{
-    "model": "openclaw",
+    "model": "openclaw/default",
     "messages": [{"role":"user","content":"hi"}]
   }'
 ```
@@ -181,9 +223,9 @@ Streaming:
 curl -N http://127.0.0.1:18789/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
-  -H 'x-openclaw-agent-id: main' \
+  -H 'x-openclaw-model: openai/gpt-5.4' \
   -d '{
-    "model": "openclaw",
+    "model": "openclaw/research",
     "stream": true,
     "messages": [{"role":"user","content":"hi"}]
   }'
@@ -199,7 +241,7 @@ curl -sS http://127.0.0.1:18789/v1/models \
 Fetch one model:
 
 ```bash
-curl -sS http://127.0.0.1:18789/v1/models/openai%2Fgpt-5.4 \
+curl -sS http://127.0.0.1:18789/v1/models/openclaw%2Fdefault \
   -H 'Authorization: Bearer YOUR_TOKEN'
 ```
 
@@ -209,15 +251,16 @@ Create embeddings:
 curl -sS http://127.0.0.1:18789/v1/embeddings \
   -H 'Authorization: Bearer YOUR_TOKEN' \
   -H 'Content-Type: application/json' \
-  -H 'x-openclaw-agent-id: main' \
+  -H 'x-openclaw-model: openai/text-embedding-3-small' \
   -d '{
-    "model": "openai/text-embedding-3-small",
+    "model": "openclaw/default",
     "input": ["alpha", "beta"]
   }'
 ```
 
 Notes:
 
-- `/v1/models` returns canonical ids in `provider/model` form so they can be passed back directly as OpenAI `model` values.
-- `/v1/models` stays flat on purpose: it does not enumerate agents or sub-agents as pseudo-model ids.
+- `/v1/models` returns OpenClaw agent targets, not raw provider catalogs.
+- `openclaw/default` is always present so one stable id works across environments.
+- Backend provider/model overrides belong in `x-openclaw-model`, not the OpenAI `model` field.
 - `/v1/embeddings` supports `input` as a string or array of strings.

@@ -46,9 +46,22 @@ const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional
 
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
-  .refine((value) => typeof value === "string", {
-    message: "Discord IDs must be strings (wrap numeric IDs in quotes).",
-  });
+  .transform((value, ctx) => {
+    if (typeof value === "number") {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `Discord ID "${String(value)}" is not a valid non-negative safe integer. ` +
+            `Wrap it in quotes in your config file.`,
+        });
+        return z.NEVER;
+      }
+      return String(value);
+    }
+    return value;
+  })
+  .pipe(z.string());
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
@@ -71,6 +84,7 @@ const SlackCapabilitiesSchema = z.union([
     .strict(),
 ]);
 
+const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -81,6 +95,8 @@ export const TelegramTopicSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     agentId: z.string().optional(),
+    errorPolicy: TelegramErrorPolicySchema,
+    errorCooldownMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -96,6 +112,8 @@ export const TelegramGroupSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    errorPolicy: TelegramErrorPolicySchema,
+    errorCooldownMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -121,6 +139,8 @@ export const TelegramDirectSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    errorPolicy: TelegramErrorPolicySchema,
+    errorCooldownMs: z.number().int().nonnegative().optional(),
     requireTopic: z.boolean().optional(),
     autoTopicLabel: AutoTopicLabelSchema,
   })
@@ -293,6 +313,8 @@ export const TelegramAccountSchemaBase = z
     silentErrorReplies: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    errorPolicy: TelegramErrorPolicySchema,
+    errorCooldownMs: z.number().int().nonnegative().optional(),
     apiRoot: z.string().url().optional(),
     autoTopicLabel: AutoTopicLabelSchema,
   })
@@ -866,6 +888,16 @@ export const SlackAccountSchema = z
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
     capabilities: SlackCapabilitiesSchema.optional(),
+    execApprovals: z
+      .object({
+        enabled: z.boolean().optional(),
+        approvers: z.array(z.union([z.string(), z.number()])).optional(),
+        agentFilter: z.array(z.string()).optional(),
+        sessionFilter: z.array(z.string()).optional(),
+        target: z.enum(["dm", "channel", "both"]).optional(),
+      })
+      .strict()
+      .optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
@@ -1409,9 +1441,11 @@ export const BlueBubblesAccountSchemaBase = z
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
     sendReadReceipts: z.boolean().optional(),
+    allowPrivateNetwork: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
+    enrichGroupParticipantsFromContacts: z.boolean().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),
@@ -1516,6 +1550,7 @@ export const MSTeamsConfigSchema = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
     mediaAuthAllowHosts: z.array(z.string()).optional(),
@@ -1532,6 +1567,12 @@ export const MSTeamsConfigSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),
+    welcomeCard: z.boolean().optional(),
+    promptStarters: z.array(z.string()).optional(),
+    groupWelcomeCard: z.boolean().optional(),
+    feedbackEnabled: z.boolean().optional(),
+    feedbackReflection: z.boolean().optional(),
+    feedbackReflectionCooldownMs: z.number().int().min(0).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

@@ -105,10 +105,10 @@ describe("summarizeMapping", () => {
       exit: vi.fn(),
     };
 
-    summarizeMapping("discord allowlist", ["a", "b", "c", "d", "e", "f", "g"], ["x", "y"], runtime);
+    summarizeMapping("demo allowlist", ["a", "b", "c", "d", "e", "f", "g"], ["x", "y"], runtime);
 
     expect(runtime.log).toHaveBeenCalledWith(
-      "discord allowlist resolved: a, b, c, d, e, f (+1)\ndiscord allowlist unresolved: x, y",
+      "demo allowlist resolved: a, b, c, d, e, f (+1)\ndemo allowlist unresolved: x, y",
     );
   });
 
@@ -119,7 +119,7 @@ describe("summarizeMapping", () => {
       exit: vi.fn(),
     };
 
-    summarizeMapping("discord allowlist", [], [], runtime);
+    summarizeMapping("demo allowlist", [], [], runtime);
 
     expect(runtime.log).not.toHaveBeenCalled();
   });

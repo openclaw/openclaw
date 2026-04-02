@@ -256,6 +256,55 @@ describe("message tool agent routing", () => {
   });
 });
 
+describe("message tool explicit target guard", () => {
+  it("requires an explicit target for upload-file when configured", async () => {
+    const tool = createMessageTool({
+      config: {} as never,
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+    });
+
+    await expect(
+      tool.execute("1", {
+        action: "upload-file",
+        filePath: "/tmp/report.png",
+      }),
+    ).rejects.toThrow(/Explicit message target required/i);
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("allows upload-file when an explicit target is provided", async () => {
+    mocks.runMessageAction.mockResolvedValueOnce({
+      kind: "action",
+      channel: "slack",
+      action: "upload-file",
+      handledBy: "dry-run",
+      payload: { ok: true, dryRun: true, channel: "slack", action: "upload-file" },
+      dryRun: true,
+    });
+
+    const tool = createMessageTool({
+      config: {} as never,
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+    });
+
+    await tool.execute("1", {
+      action: "upload-file",
+      target: "channel:C999",
+      filePath: "/tmp/report.png",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.params?.target).toBe("channel:C999");
+  });
+});
+
 describe("message tool path passthrough", () => {
   it.each([
     { field: "path", value: "~/Downloads/voice.ogg" },
@@ -478,6 +527,24 @@ describe("message tool schema scoping", () => {
       expect(schema.required ?? []).not.toContain("card");
     },
   );
+
+  it("keeps buttons schema optional so plain sends do not require buttons", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+
+    expect(schema.properties?.buttons).toBeDefined();
+    expect(schema.required ?? []).not.toContain("buttons");
+  });
 
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
     const telegramPluginWithConfig = createChannelPlugin({
