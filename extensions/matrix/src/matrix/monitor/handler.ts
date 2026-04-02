@@ -45,6 +45,7 @@ import {
   getAgentScopedMediaLocalRoots,
   logInboundDrop,
   logTypingFailure,
+  type BlockReplyContext,
   type PluginRuntime,
   type ReplyPayload,
   type RuntimeEnv,
@@ -1155,8 +1156,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       let currentDraftMessageGeneration = 0;
       let currentDraftBlockOffset = 0;
       let latestDraftFullText = "";
-      let latestQueuedDraftBoundaryOffset = 0;
       const pendingDraftBoundaries: PendingDraftBoundary[] = [];
+      const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
       // Set after the first final payload consumes the draft event so
       // subsequent finals go through normal delivery.
       let draftConsumed = false;
@@ -1178,21 +1179,35 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       };
 
-      const queueDraftBlockBoundary = (payload: ReplyPayload) => {
+      const queueDraftBlockBoundary = (payload: ReplyPayload, context?: BlockReplyContext) => {
         const payloadTextLength = payload.text?.length ?? 0;
-        latestQueuedDraftBoundaryOffset = Math.max(
-          latestDraftFullText.length,
-          latestQueuedDraftBoundaryOffset + payloadTextLength,
-        );
+        const messageGeneration = context?.assistantMessageIndex ?? currentDraftMessageGeneration;
+        const lastQueuedDraftBoundaryOffset =
+          latestQueuedDraftBoundaryOffsets.get(messageGeneration) ?? 0;
+        const nextDraftBoundaryOffset =
+          messageGeneration === currentDraftMessageGeneration
+            ? Math.max(
+                latestDraftFullText.length,
+                lastQueuedDraftBoundaryOffset + payloadTextLength,
+              )
+            : lastQueuedDraftBoundaryOffset + payloadTextLength;
+        latestQueuedDraftBoundaryOffsets.set(messageGeneration, nextDraftBoundaryOffset);
         pendingDraftBoundaries.push({
-          messageGeneration: currentDraftMessageGeneration,
-          endOffset: latestQueuedDraftBoundaryOffset,
+          messageGeneration,
+          endOffset: nextDraftBoundaryOffset,
         });
       };
 
       const advanceDraftBlockBoundary = (options?: { fallbackToLatestEnd?: boolean }) => {
         const completedBoundary = pendingDraftBoundaries.shift();
         if (completedBoundary) {
+          if (
+            !pendingDraftBoundaries.some(
+              (entry) => entry.messageGeneration === completedBoundary.messageGeneration,
+            )
+          ) {
+            latestQueuedDraftBoundaryOffsets.delete(completedBoundary.messageGeneration);
+          }
           if (completedBoundary.messageGeneration === currentDraftMessageGeneration) {
             currentDraftBlockOffset = completedBoundary.endOffset;
           }
@@ -1207,7 +1222,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         currentDraftMessageGeneration += 1;
         currentDraftBlockOffset = 0;
         latestDraftFullText = "";
-        latestQueuedDraftBoundaryOffset = 0;
       };
 
       const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
@@ -1425,11 +1439,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                     }
                   : undefined,
                 onBlockReplyQueued: draftStream
-                  ? (payload) => {
+                  ? (payload, context) => {
                       if (payload.isCompactionNotice === true) {
                         return;
                       }
-                      queueDraftBlockBoundary(payload);
+                      queueDraftBlockBoundary(payload, context);
                     }
                   : undefined,
                 // Reset draft boundary bookkeeping on assistant message

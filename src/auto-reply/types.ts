@@ -6,6 +6,8 @@ import type { TypingController } from "./reply/typing.js";
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  /** Source assistant message index from the upstream stream, when available. */
+  assistantMessageIndex?: number;
 };
 
 /** Context passed to onModelSelected callback with actual model used. */
@@ -105,3 +107,22 @@ export type ReplyPayload = {
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };
+
+export type ReplyPayloadMetadata = {
+  assistantMessageIndex?: number;
+};
+
+const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
+
+export function setReplyPayloadMetadata<T extends object>(
+  payload: T,
+  metadata: ReplyPayloadMetadata,
+): T {
+  const previous = replyPayloadMetadata.get(payload);
+  replyPayloadMetadata.set(payload, { ...previous, ...metadata });
+  return payload;
+}
+
+export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
+  return replyPayloadMetadata.get(payload);
+}

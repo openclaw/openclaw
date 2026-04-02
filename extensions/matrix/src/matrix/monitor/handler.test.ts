@@ -1553,10 +1553,13 @@ describe("matrix monitor handler draft streaming", () => {
   ) => Promise<void>;
   type ReplyOpts = {
     onPartialReply?: (payload: { text: string }) => void;
-    onBlockReplyQueued?: (payload: {
-      text?: string;
-      isCompactionNotice?: boolean;
-    }) => Promise<void> | void;
+    onBlockReplyQueued?: (
+      payload: {
+        text?: string;
+        isCompactionNotice?: boolean;
+      },
+      context?: { assistantMessageIndex?: number },
+    ) => Promise<void> | void;
     onAssistantMessageStart?: () => void;
     disableBlockStreaming?: boolean;
   };
@@ -1816,6 +1819,55 @@ describe("matrix monitor handler draft streaming", () => {
 
     await opts.onBlockReplyQueued?.({ text: "Alpha" });
     opts.onAssistantMessageStart?.();
+    opts.onPartialReply?.({ text: "Beta" });
+
+    await vi.waitFor(() => {
+      expect(editMessageMatrixMock).toHaveBeenCalledWith(
+        "!room:example.org",
+        "$draft1",
+        "Beta",
+        expect.anything(),
+      );
+    });
+
+    sendSingleTextMessageMatrixMock.mockClear();
+    editMessageMatrixMock.mockClear();
+    sendSingleTextMessageMatrixMock.mockResolvedValueOnce({
+      messageId: "$draft2",
+      roomId: "!room",
+    });
+    await deliver({ text: "Alpha" }, { kind: "block" });
+
+    expect(editMessageMatrixMock).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$draft1",
+      "Alpha",
+      expect.anything(),
+    );
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("Beta");
+
+    await deliver({ text: "Beta" }, { kind: "final" });
+
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("queues late block boundaries against the source assistant message", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onAssistantMessageStart?.();
+    opts.onPartialReply?.({ text: "Alpha" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    opts.onAssistantMessageStart?.();
+    await opts.onBlockReplyQueued?.({ text: "Alpha" }, { assistantMessageIndex: 1 });
     opts.onPartialReply?.({ text: "Beta" });
 
     await vi.waitFor(() => {

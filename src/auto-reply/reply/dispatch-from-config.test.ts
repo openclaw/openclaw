@@ -2931,6 +2931,35 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(callOrder).toEqual(["queued:The answer is 42", "dispatch:The answer is 42"]);
   });
+
+  it("forwards payload metadata into onBlockReplyQueued context", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const onBlockReplyQueued = vi.fn();
+    const { setReplyPayloadMetadata } = await import("../types.js");
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      const payload = setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 7 });
+      await opts?.onBlockReply?.(payload);
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onBlockReplyQueued },
+    });
+
+    expect(onBlockReplyQueued).toHaveBeenCalledWith(
+      { text: "Alpha" },
+      expect.objectContaining({ assistantMessageIndex: 7 }),
+    );
+  });
 });
 
 describe("before_dispatch hook", () => {
