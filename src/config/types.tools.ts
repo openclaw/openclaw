@@ -543,20 +543,6 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
-      firecrawl?: {
-        /** Enable Firecrawl fallback (default: true when apiKey is set). */
-        enabled?: boolean;
-        /** Firecrawl API key (optional; defaults to FIRECRAWL_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Firecrawl base URL (default: https://api.firecrawl.dev). */
-        baseUrl?: string;
-        /** Whether to keep only main content (default: true). */
-        onlyMainContent?: boolean;
-        /** Max age (ms) for cached Firecrawl content. */
-        maxAgeMs?: number;
-        /** Timeout in seconds for Firecrawl requests. */
-        timeoutSeconds?: number;
-      };
     };
   };
   media?: MediaToolsConfig;

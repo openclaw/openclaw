@@ -17,10 +17,19 @@ export function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin {
       "plugins.entries.firecrawl.config.webFetch.apiKey",
       "tools.web.fetch.firecrawl.apiKey",
     ],
-    getCredentialValue: (fetchConfig) =>
-      fetchConfig && typeof fetchConfig === "object"
-        ? (fetchConfig.firecrawl as { apiKey?: unknown } | undefined)?.apiKey
-        : undefined,
+    getCredentialValue: (fetchConfig) => {
+      if (!fetchConfig || typeof fetchConfig !== "object") {
+        return undefined;
+      }
+      const legacy = fetchConfig.firecrawl;
+      if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) {
+        return undefined;
+      }
+      if ((legacy as { enabled?: boolean }).enabled === false) {
+        return undefined;
+      }
+      return (legacy as { apiKey?: unknown }).apiKey;
+    },
     setCredentialValue: (fetchConfigTarget, value) => {
       const existing = fetchConfigTarget.firecrawl;
       const firecrawl =
@@ -54,15 +63,7 @@ export function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin {
           : ((pluginConfig.webFetch = {}), pluginConfig.webFetch as Record<string, unknown>);
       webFetch.apiKey = value;
     },
-    applySelectionConfig: (config) => enablePluginInConfig(config, "firecrawl"),
-    resolveRuntimeMetadata: ({ runtimeMetadata, resolvedCredential }) => ({
-      firecrawl: {
-        active:
-          runtimeMetadata?.selectedProvider === "firecrawl" && Boolean(resolvedCredential?.value),
-        apiKeySource: resolvedCredential?.source ?? "missing",
-        diagnostics: runtimeMetadata?.firecrawl?.diagnostics ?? [],
-      },
-    }),
+    applySelectionConfig: (config) => enablePluginInConfig(config, "firecrawl").config,
     createTool: ({ config }) => ({
       description: "Fetch a page using Firecrawl.",
       parameters: {},

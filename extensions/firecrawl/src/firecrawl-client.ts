@@ -347,7 +347,7 @@ export async function runFirecrawlScrape(
   const apiKey = resolveFirecrawlApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
-      "firecrawl_scrape needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure tools.web.fetch.firecrawl.apiKey.",
+      "firecrawl_scrape needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webFetch.apiKey.",
     );
   }
   const baseUrl = resolveFirecrawlBaseUrl(params.cfg);

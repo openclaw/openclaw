@@ -59,15 +59,11 @@ type GatewaySecretsResolveResult = {
 const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = [
   "tools.web.search",
   "plugins.entries.",
-  "tools.web.fetch.firecrawl",
-  "plugins.entries.firecrawl.config.webFetch",
   "tools.web.x_search",
 ] as const;
 const WEB_RUNTIME_SECRET_PATH_PREFIXES = [
   "tools.web.search.",
   "plugins.entries.",
-  "tools.web.fetch.firecrawl.",
-  "plugins.entries.firecrawl.config.webFetch.",
   "tools.web.x_search.",
 ] as const;
 
@@ -114,11 +110,6 @@ function classifyRuntimeWebTargetPathState(params: {
   config: OpenClawConfig;
   path: string;
 }): "active" | "inactive" | "unknown" {
-  if (params.path === "tools.web.fetch.firecrawl.apiKey") {
-    const fetch = params.config.tools?.web?.fetch;
-    return fetch?.enabled !== false && fetch?.firecrawl?.enabled !== false ? "active" : "inactive";
-  }
-
   if (params.path === "tools.web.x_search.apiKey") {
     return params.config.tools?.web?.x_search?.enabled !== false ? "active" : "inactive";
   }
@@ -178,17 +169,6 @@ function describeInactiveRuntimeWebTargetPath(params: {
   config: OpenClawConfig;
   path: string;
 }): string | undefined {
-  if (params.path === "tools.web.fetch.firecrawl.apiKey") {
-    const fetch = params.config.tools?.web?.fetch;
-    if (fetch?.enabled === false) {
-      return "tools.web.fetch is disabled.";
-    }
-    if (fetch?.firecrawl?.enabled === false) {
-      return "tools.web.fetch.firecrawl.enabled is false.";
-    }
-    return undefined;
-  }
-
   if (params.path === "tools.web.x_search.apiKey") {
     return params.config.tools?.web?.x_search?.enabled === false
       ? "tools.web.x_search is disabled."
@@ -396,8 +376,7 @@ function isUnsupportedSecretsResolveError(err: unknown): boolean {
 
 function isDirectRuntimeWebTargetPath(path: string): boolean {
   return (
-    path === "tools.web.fetch.firecrawl.apiKey" ||
-    path === "plugins.entries.firecrawl.config.webFetch.apiKey" ||
+    /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path) ||
     path === "tools.web.x_search.apiKey" ||
     /^tools\.web\.search\.[^.]+\.apiKey$/.test(path)
   );

@@ -29,7 +29,6 @@ import type {
   RuntimeWebDiagnostic,
   RuntimeWebDiagnosticCode,
   RuntimeWebFetchMetadata,
-  RuntimeWebFetchFirecrawlMetadata,
   RuntimeWebSearchMetadata,
   RuntimeWebToolsMetadata,
   RuntimeWebXSearchMetadata,
@@ -42,7 +41,6 @@ export type {
   RuntimeWebDiagnostic,
   RuntimeWebDiagnosticCode,
   RuntimeWebFetchMetadata,
-  RuntimeWebFetchFirecrawlMetadata,
   RuntimeWebSearchMetadata,
   RuntimeWebToolsMetadata,
   RuntimeWebXSearchMetadata,
@@ -307,17 +305,6 @@ function setResolvedWebSearchApiKey(params: {
   params.provider.setCredentialValue(search, params.value);
 }
 
-function setResolvedFirecrawlApiKey(params: {
-  resolvedConfig: OpenClawConfig;
-  value: string;
-}): void {
-  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
-  const web = ensureObject(tools, "web");
-  const fetch = ensureObject(web, "fetch");
-  const firecrawl = ensureObject(fetch, "firecrawl");
-  firecrawl.apiKey = params.value;
-}
-
 function setResolvedXSearchApiKey(params: { resolvedConfig: OpenClawConfig; value: string }): void {
   const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
   const web = ensureObject(tools, "web");
@@ -371,14 +358,6 @@ function readConfiguredFetchProviderCredential(params: {
   config: OpenClawConfig;
   fetch: Record<string, unknown> | undefined;
 }): unknown {
-  if (
-    params.provider.id === "firecrawl" &&
-    params.fetch &&
-    isRecord(params.fetch.firecrawl) &&
-    params.fetch.firecrawl.enabled === false
-  ) {
-    return undefined;
-  }
   const configuredValue = params.provider.getConfiguredCredentialValue?.(params.config);
   return configuredValue ?? params.provider.getCredentialValue(params.fetch);
 }
@@ -797,7 +776,6 @@ export async function resolveRuntimeWebTools(params: {
   }
 
   const fetch = isRecord(web?.fetch) ? (web.fetch as FetchConfig) : undefined;
-  const firecrawl = isRecord(fetch?.firecrawl) ? fetch.firecrawl : undefined;
   const rawFetchProvider =
     typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
   const configuredBundledFetchPluginId = resolveBundledWebFetchPluginId(rawFetchProvider);
@@ -849,97 +827,6 @@ export async function resolveRuntimeWebTools(params: {
   if (configuredFetchProvider) {
     fetchMetadata.providerConfigured = configuredFetchProvider;
     fetchMetadata.providerSource = "configured";
-  }
-
-  const firecrawlPath = "tools.web.fetch.firecrawl.apiKey";
-  let firecrawlResolution: SecretResolutionResult = {
-    source: "missing",
-    secretRefConfigured: false,
-    fallbackUsedAfterRefFailure: false,
-  };
-  const firecrawlDiagnostics: RuntimeWebDiagnostic[] = [];
-  const firecrawlLegacyActive = Boolean(
-    fetchEnabled &&
-    firecrawl &&
-    firecrawl.enabled !== false &&
-    (!configuredFetchProvider || configuredFetchProvider === "firecrawl"),
-  );
-
-  if (firecrawlLegacyActive) {
-    firecrawlResolution = await resolveSecretInputWithEnvFallback({
-      sourceConfig: params.sourceConfig,
-      context: params.context,
-      defaults,
-      value: firecrawl?.apiKey,
-      path: firecrawlPath,
-      envVars: ["FIRECRAWL_API_KEY"],
-    });
-
-    if (firecrawlResolution.value) {
-      setResolvedFirecrawlApiKey({
-        resolvedConfig: params.resolvedConfig,
-        value: firecrawlResolution.value,
-      });
-    }
-
-    if (
-      firecrawlResolution.secretRefConfigured &&
-      firecrawlResolution.fallbackUsedAfterRefFailure
-    ) {
-      const diagnostic: RuntimeWebDiagnostic = {
-        code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_FALLBACK_USED",
-        message:
-          `${firecrawlPath} SecretRef could not be resolved; using ${firecrawlResolution.fallbackEnvVar ?? "env fallback"}. ` +
-          (firecrawlResolution.unresolvedRefReason ?? "").trim(),
-        path: firecrawlPath,
-      };
-      diagnostics.push(diagnostic);
-      firecrawlDiagnostics.push(diagnostic);
-      fetchMetadata.diagnostics.push(diagnostic);
-      pushWarning(params.context, {
-        code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_FALLBACK_USED",
-        path: firecrawlPath,
-        message: diagnostic.message,
-      });
-    }
-
-    if (
-      firecrawlResolution.secretRefConfigured &&
-      !firecrawlResolution.value &&
-      firecrawlResolution.unresolvedRefReason
-    ) {
-      const diagnostic: RuntimeWebDiagnostic = {
-        code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK",
-        message: firecrawlResolution.unresolvedRefReason,
-        path: firecrawlPath,
-      };
-      diagnostics.push(diagnostic);
-      firecrawlDiagnostics.push(diagnostic);
-      fetchMetadata.diagnostics.push(diagnostic);
-      pushWarning(params.context, {
-        code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK",
-        path: firecrawlPath,
-        message: firecrawlResolution.unresolvedRefReason,
-      });
-      throw new Error(
-        `[WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK] ${firecrawlResolution.unresolvedRefReason}`,
-      );
-    }
-  } else if (hasConfiguredSecretRef(firecrawl?.apiKey, defaults)) {
-    pushInactiveSurfaceWarning({
-      context: params.context,
-      path: firecrawlPath,
-      details: !fetchEnabled
-        ? "tools.web.fetch is disabled."
-        : configuredFetchProvider && configuredFetchProvider !== "firecrawl"
-          ? `tools.web.fetch.provider is "${configuredFetchProvider}".`
-          : "tools.web.fetch.firecrawl.enabled is false.",
-    });
-    firecrawlResolution = {
-      source: "secretRef",
-      secretRefConfigured: true,
-      fallbackUsedAfterRefFailure: false,
-    };
   }
 
   if (fetchEnabled) {
@@ -1162,16 +1049,6 @@ export async function resolveRuntimeWebTools(params: {
       }
     }
   }
-
-  fetchMetadata.firecrawl = {
-    active:
-      firecrawlLegacyActive ||
-      (fetchEnabled &&
-        fetchMetadata.selectedProvider === "firecrawl" &&
-        Boolean(firecrawlResolution.value)),
-    apiKeySource: firecrawlResolution.source,
-    diagnostics: firecrawlDiagnostics,
-  };
 
   return {
     search: searchMetadata,
