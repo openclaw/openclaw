@@ -1,4 +1,4 @@
-# Illustrative Lobster authoring example for a ClawFlow-style PR intake lane.
+# Illustrative Lobster authoring example for a TaskFlow-style PR intake lane.
 # Replace the placeholder commands with repo-specific tooling.
 
 name: pr-intake
