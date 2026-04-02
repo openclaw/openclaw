@@ -462,6 +462,7 @@ function extractShellWrappedCommandPayload(
 function shouldFailClosedInterpreterPreflight(command: string): {
   hasPython: boolean;
   hasNode: boolean;
+  hasInterpreterInvocation: boolean;
   hasComplexSyntax: boolean;
   hasProcessSubstitution: boolean;
   hasScriptHint: boolean;
@@ -506,10 +507,22 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   const hasShellWrappedInterpreterInvocation =
     (nested.hasPython || nested.hasNode) &&
     (nested.hasScriptHint || nested.hasComplexSyntax || nested.hasProcessSubstitution);
+  const hasTopLevelInterpreterInvocation =
+    /(?:^|(?<!\\)[|&;()])\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*python(?:3(?:\.\d+)?)?(?=$|[\s|&;()<>\n\r`$])/i.test(
+      unquotedRaw,
+    ) ||
+    /(?:^|(?<!\\)[|&;()])\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*node(?=$|[\s|&;()<>\n\r`$])/i.test(
+      unquotedRaw,
+    );
+  const hasInterpreterInvocation =
+    isDirectInterpreterCommand ||
+    hasShellWrappedInterpreterInvocation ||
+    hasTopLevelInterpreterInvocation;
 
   return {
     hasPython: topLevel.hasPython || nested.hasPython || isDirectPythonExecutable,
     hasNode: topLevel.hasNode || nested.hasNode || isDirectNodeExecutable,
+    hasInterpreterInvocation,
     hasComplexSyntax: topLevel.hasComplexSyntax || hasShellWrappedInterpreterInvocation,
     hasProcessSubstitution: topLevel.hasProcessSubstitution || nested.hasProcessSubstitution,
     hasScriptHint: topLevel.hasScriptHint || nested.hasScriptHint,
@@ -524,19 +537,16 @@ async function validateScriptFileForShellBleed(params: {
   const target = extractScriptTargetFromCommand(params.command);
   if (!target) {
     const {
-      hasPython,
-      hasNode,
+      hasInterpreterInvocation,
       hasComplexSyntax,
       hasProcessSubstitution,
       hasScriptHint,
       isDirectInterpreterCommand,
     } = shouldFailClosedInterpreterPreflight(params.command);
     if (
-      (hasPython || hasNode) &&
+      hasInterpreterInvocation &&
       hasComplexSyntax &&
-      (hasScriptHint ||
-        !isDirectInterpreterCommand ||
-        (hasProcessSubstitution && isDirectInterpreterCommand))
+      (hasScriptHint || (hasProcessSubstitution && isDirectInterpreterCommand))
     ) {
       // Fail closed when interpreter-driven script execution is ambiguous; otherwise
       // attackers can route script content through forms our fast parser cannot validate.

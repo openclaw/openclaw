@@ -445,6 +445,20 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("does not fail closed for pipelines that only contain interpreter words as plain text", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-echo-pipe-text", {
+        command: "echo python | cat",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).toContain("python");
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
   it("does not fail closed when shell operator characters are escaped", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
