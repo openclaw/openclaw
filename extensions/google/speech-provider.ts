@@ -52,15 +52,22 @@ function readGeminiProviderConfig(config: SpeechProviderConfig): GeminiProviderC
   };
 }
 
+// Gemini TTS pre-built voices (as of 2026)
+const GEMINI_TTS_VOICES: Array<{ id: string; name: string; gender: string }> = [
+  { id: "Aoede", name: "Aoede", gender: "female" },
+  { id: "Charon", name: "Charon", gender: "male" },
+  { id: "Fenrir", name: "Fenrir", gender: "male" },
+  { id: "Kore", name: "Kore", gender: "female" },
+  { id: "Puck", name: "Puck", gender: "male" },
+];
+
 export async function listGeminiVoices(): Promise<SpeechVoiceOption[]> {
-  return [
-    {
-      id: "default",
-      name: "Gemini Default",
-      description: "Default Gemini TTS voice",
-      locale: "en-US",
-    },
-  ];
+  return GEMINI_TTS_VOICES.map((voice) => ({
+    id: voice.id,
+    name: voice.name,
+    gender: voice.gender,
+    locale: "en-US",
+  }));
 }
 
 export function buildGeminiSpeechProvider(): SpeechProviderPlugin {
@@ -93,6 +100,9 @@ export function buildGeminiSpeechProvider(): SpeechProviderPlugin {
       ...(trimToUndefined(params.modelId) == null
         ? {}
         : { modelId: trimToUndefined(params.modelId) }),
+      ...(trimToUndefined(params.voiceId) == null
+        ? {}
+        : { voiceId: trimToUndefined(params.voiceId) }),
     }),
     listVoices: async () => await listGeminiVoices(),
     isConfigured: ({ providerConfig }) =>
@@ -108,19 +118,36 @@ export function buildGeminiSpeechProvider(): SpeechProviderPlugin {
 
       const modelId =
         trimToUndefined(req.providerOverrides?.modelId) ?? config.modelId;
+      const voiceId = trimToUndefined(req.providerOverrides?.voiceId);
       const url = `${config.baseUrl}/${modelId}:generateContent?key=${apiKey}`;
 
       const text = req.text.slice(0, 4096);
 
+      const timeoutMs = config.timeoutMs ?? req.timeoutMs;
+      const signal = timeoutMs != null ? AbortSignal.timeout(timeoutMs) : undefined;
+
+      const generationConfig: Record<string, unknown> = {
+        responseModalities: ["AUDIO"],
+      };
+
+      if (voiceId) {
+        generationConfig.speechConfig = {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: voiceId },
+          },
+        };
+      }
+
+      const requestBody = {
+        contents: [{ parts: [{ text }] }],
+        generationConfig,
+      };
+
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text }] }],
-          generationConfig: {
-            responseModalities: ["AUDIO"],
-          },
-        }),
+        body: JSON.stringify(requestBody),
+        signal,
       });
 
       if (!response.ok) {
@@ -149,7 +176,7 @@ export function buildGeminiSpeechProvider(): SpeechProviderPlugin {
 
       const audioBuffer = Buffer.from(audioBase64, "base64");
       const mimeType =
-        data.candidates[0].content.parts[0].inlineData.mimeType || "audio/mp3";
+        data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.mimeType || "audio/mp3";
       const fileExtension = mimeType.includes("webm") ? ".webm" : ".mp3";
 
       return {
