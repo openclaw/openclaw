@@ -1124,10 +1124,7 @@ describe("resolveMatrixAuth", () => {
         env: {} as NodeJS.ProcessEnv,
       });
 
-      expect(matrixDoRequestMock).toHaveBeenCalledWith(
-        "GET",
-        "/_matrix/client/v3/account/whoami",
-      );
+      expect(matrixDoRequestMock).toHaveBeenCalledWith("GET", "/_matrix/client/v3/account/whoami");
       expect(auth).toMatchObject({
         accountId: "default",
         homeserver: "https://matrix.example.org",

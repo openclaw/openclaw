@@ -14,11 +14,11 @@ import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
 import { logError } from "openclaw/plugin-sdk/text-runtime";
 import {

@@ -1,12 +1,12 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
-import type { BrowserConfig, BrowserProfileConfig } from "../config/types.browser.js";
 import {
   DEFAULT_BROWSER_CONTROL_PORT,
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
+import type { BrowserConfig, BrowserProfileConfig } from "../config/types.browser.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";

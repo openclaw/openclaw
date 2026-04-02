@@ -270,9 +270,11 @@ function resolveScopedChannelPluginId(params: {
   if (explicitPluginId) {
     return explicitPluginId;
   }
-  return getChannelPluginCatalogEntry(params.channel, {
-    workspaceDir: params.workspaceDir,
-  })?.pluginId ?? resolveUniqueManifestScopedChannelPluginId(params);
+  return (
+    getChannelPluginCatalogEntry(params.channel, {
+      workspaceDir: params.workspaceDir,
+    })?.pluginId ?? resolveUniqueManifestScopedChannelPluginId(params)
+  );
 }
 
 function resolveUniqueManifestScopedChannelPluginId(params: {

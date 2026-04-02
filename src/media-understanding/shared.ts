@@ -96,6 +96,7 @@ export async function postTranscriptionRequest(params: {
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  pinDns?: boolean;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -106,12 +107,11 @@ export async function postTranscriptionRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork || params.dispatcherPolicy
-      ? {
-          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
-        }
-      : undefined,
+    {
+      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+      ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+      pinDns: params.pinDns,
+    },
   );
 }
 
@@ -123,6 +123,7 @@ export async function postJsonRequest(params: {
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  pinDns?: boolean;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -133,12 +134,11 @@ export async function postJsonRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork || params.dispatcherPolicy
-      ? {
-          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
-        }
-      : undefined,
+    {
+      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+      ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+      pinDns: params.pinDns,
+    },
   );
 }
 
