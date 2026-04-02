@@ -16,11 +16,11 @@ describe("detectLinuxVolatileStateDir", () => {
     "35 22 0:35 / /home/user/.openclaw rw - ramfs ramfs rw",
   ].join("\n");
 
+  const EXT4_MOUNT_INFO = ["22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw"].join("\n");
+
   const OVERLAY_MOUNT_INFO = [
     "22 1 0:21 / / rw,relatime - overlay overlay rw,lowerdir=/lower,upperdir=/upper",
   ].join("\n");
-
-  const EXT4_MOUNT_INFO = ["22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw"].join("\n");
 
   it("detects tmpfs state directory", () => {
     const result = detectLinuxVolatileStateDir("/home/user/.openclaw", {
@@ -43,14 +43,13 @@ describe("detectLinuxVolatileStateDir", () => {
     expect(result!.fsType).toBe("ramfs");
   });
 
-  it("detects overlay root filesystem", () => {
+  it("does not flag overlay filesystem (Docker overlay2 survives host reboot)", () => {
     const result = detectLinuxVolatileStateDir("/home/user/.openclaw", {
       platform: "linux",
       mountInfo: OVERLAY_MOUNT_INFO,
       resolveRealPath: (p) => p,
     });
-    expect(result).not.toBeNull();
-    expect(result!.fsType).toBe("overlay");
+    expect(result).toBeNull();
   });
 
   it("returns null for ext4 filesystem", () => {
@@ -74,7 +73,7 @@ describe("detectLinuxVolatileStateDir", () => {
   it("returns null when mountInfo is unavailable", () => {
     const result = detectLinuxVolatileStateDir("/home/user/.openclaw", {
       platform: "linux",
-      mountInfo: undefined as unknown as string,
+      mountInfo: "",
       resolveRealPath: (p) => p,
     });
     expect(result).toBeNull();
@@ -123,13 +122,13 @@ describe("formatLinuxVolatileStateDirWarning", () => {
     expect(warning).toContain("OPENCLAW_STATE_DIR");
   });
 
-  it("formats overlay warning", () => {
+  it("formats ramfs warning", () => {
     const warning = formatLinuxVolatileStateDirWarning("~/.openclaw", {
       path: "/home/user/.openclaw",
-      mountPoint: "/",
-      fsType: "overlay",
+      mountPoint: "/home/user/.openclaw",
+      fsType: "ramfs",
     });
-    expect(warning).toContain("overlay");
+    expect(warning).toContain("ramfs");
     expect(warning).toContain("volatile filesystem");
   });
 });
