@@ -7,6 +7,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -643,7 +644,13 @@ export async function runAgentTurnWithFallback(params: {
 
       break;
     } catch (err) {
-      if (err instanceof LiveSessionModelSwitchError) {
+      const switchErr =
+        err instanceof LiveSessionModelSwitchError
+          ? err
+          : err instanceof FailoverError && err.cause instanceof LiveSessionModelSwitchError
+            ? err.cause
+            : undefined;
+      if (switchErr) {
         liveModelSwitchRetries += 1;
         if (liveModelSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
           // Prevent infinite loop when persisted session selection keeps
@@ -653,7 +660,7 @@ export async function runAgentTurnWithFallback(params: {
           // See: https://github.com/openclaw/openclaw/issues/58348
           defaultRuntime.error(
             `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
-              `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
+              `(${sanitizeForLog(switchErr.provider)}/${sanitizeForLog(switchErr.model)}). The requested model may be unavailable.`,
           );
           const switchErrorText = shouldSurfaceToControlUi
             ? "⚠️ Agent failed before reply: model switch could not be completed. " +
@@ -668,14 +675,14 @@ export async function runAgentTurnWithFallback(params: {
             },
           };
         }
-        params.followupRun.run.provider = err.provider;
-        params.followupRun.run.model = err.model;
-        params.followupRun.run.authProfileId = err.authProfileId;
-        params.followupRun.run.authProfileIdSource = err.authProfileId
-          ? err.authProfileIdSource
+        params.followupRun.run.provider = switchErr.provider;
+        params.followupRun.run.model = switchErr.model;
+        params.followupRun.run.authProfileId = switchErr.authProfileId;
+        params.followupRun.run.authProfileIdSource = switchErr.authProfileId
+          ? switchErr.authProfileIdSource
           : undefined;
-        fallbackProvider = err.provider;
-        fallbackModel = err.model;
+        fallbackProvider = switchErr.provider;
+        fallbackModel = switchErr.model;
         continue;
       }
       const message = err instanceof Error ? err.message : String(err);
