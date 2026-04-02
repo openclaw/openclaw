@@ -445,19 +445,26 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlBaseUrl({} as OpenClawConfig)).not.toBe(DEFAULT_FIRECRAWL_BASE_URL);
   });
 
-  it("resolves endpoints for official and self-hosted Firecrawl URLs", () => {
-    expect(firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape")).toBe(
-      "https://api.firecrawl.dev/v2/scrape",
-    );
-    expect(
+  it("resolves endpoints for official and self-hosted Firecrawl URLs", async () => {
+    await expect(
+      firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape"),
+    ).resolves.toBe("https://api.firecrawl.dev/v2/scrape");
+    await expect(
       firecrawlClientTesting.resolveEndpoint("https://firecrawl.mycompany.com", "/v2/scrape"),
-    ).toBe("https://firecrawl.mycompany.com/v2/scrape");
-    expect(firecrawlClientTesting.resolveEndpoint("http://localhost:3002", "/v2/search")).toBe(
-      "http://localhost:3002/v2/search",
-    );
-    expect(firecrawlClientTesting.resolveEndpoint("https://127.0.0.1:8787", "/v2/scrape")).toBe(
-      "https://127.0.0.1:8787/v2/scrape",
-    );
+    ).resolves.toBe("https://firecrawl.mycompany.com/v2/scrape");
+    await expect(
+      firecrawlClientTesting.resolveEndpoint("http://localhost:3002", "/v2/search"),
+    ).resolves.toBe("http://localhost:3002/v2/search");
+    await expect(
+      firecrawlClientTesting.resolveEndpoint("https://127.0.0.1:8787", "/v2/scrape"),
+    ).resolves.toBe("https://127.0.0.1:8787/v2/scrape");
+  });
+
+  it("rejects HTTP base URL targeting a non-private host", async () => {
+    // DNS failure or SSRF guard both prevent the request — either is acceptable
+    await expect(
+      firecrawlClientTesting.resolveEndpoint("http://firecrawl.example.com", "/v2/scrape"),
+    ).rejects.toThrow();
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {

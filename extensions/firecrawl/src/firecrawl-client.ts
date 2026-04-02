@@ -11,6 +11,7 @@ import {
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
+import { assertHttpUrlTargetsPrivateNetwork } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   resolveFirecrawlApiKey,
@@ -63,8 +64,17 @@ export type FirecrawlScrapeParams = {
   timeoutSeconds?: number;
 };
 
-function resolveEndpoint(baseUrl: string, pathname: "/v2/search" | "/v2/scrape"): string {
+async function resolveEndpoint(
+  baseUrl: string,
+  pathname: "/v2/search" | "/v2/scrape",
+): Promise<string> {
   const url = new URL(baseUrl.trim() || DEFAULT_FIRECRAWL_BASE_URL);
+  // HTTPS anywhere; HTTP only for private/loopback (protects API key from plaintext leak)
+  await assertHttpUrlTargetsPrivateNetwork(url.toString(), {
+    allowPrivateNetwork: true,
+    errorMessage:
+      "Firecrawl HTTP base URL must target a private or loopback host. Use https:// for public hosts.",
+  });
   url.username = "";
   url.password = "";
   url.search = "";
@@ -278,7 +288,7 @@ export async function runFirecrawlSearch(
   const start = Date.now();
   const payload = await postFirecrawlJson(
     {
-      url: resolveEndpoint(baseUrl, "/v2/search"),
+      url: await resolveEndpoint(baseUrl, "/v2/search"),
       timeoutSeconds,
       apiKey,
       body,
@@ -422,7 +432,7 @@ export async function runFirecrawlScrape(
 
   const payload = await postFirecrawlJson(
     {
-      url: resolveEndpoint(baseUrl, "/v2/scrape"),
+      url: await resolveEndpoint(baseUrl, "/v2/scrape"),
       timeoutSeconds,
       apiKey,
       errorLabel: "Firecrawl",
