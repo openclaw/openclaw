@@ -114,6 +114,7 @@ Docs: https://docs.openclaw.ai
 - Discord/gateway: hand reconnect ownership back to Carbon, keep runtime status aligned with close/reconnect state, and force-stop sockets that open without reaching READY so Discord monitors recover promptly instead of waiting on stale health timeouts. (#59019) Thanks @obviyus
 - QQBot/voice: lazy-load `silk-wasm` in `audio-convert.ts` so qqbot still starts when the optional voice dependency is missing, while voice encode/decode degrades gracefully instead of crashing at module load time. (#58829) Thanks @WideLee.
 - Config/Telegram: migrate removed `channels.telegram.groupMentionsOnly` into `channels.telegram.groups["*"].requireMention` on load so legacy configs no longer crash at startup. (#55336) thanks @jameslcowan.
+- Control UI/build: stop `pnpm ui:build` from reinstalling the UI with production-only dependencies, so fresh self-healing UI builds keep `vite` available instead of failing before asset generation. (#59267) Thanks @juliabush.
 
 ## 2026.3.31
 
