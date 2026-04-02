@@ -203,6 +203,14 @@ describe("buildNodeRuntimeWarnings", () => {
     // No schedule entry for Node 26, and 26 >= RECOMMENDED_NODE_MAJOR (24)
     expect(warnings).toEqual([]);
   });
+
+  it("does not label unknown non-LTS majors as supported (e.g. Node 23)", () => {
+    const diag = makeDiag({ version: "23.0.0", major: 23 });
+    const warnings = buildNodeRuntimeWarnings(diag, new Date("2025-06-01"));
+    // Node 23 is not in NODE_RELEASE_SCHEDULE and is not an LTS line,
+    // so Doctor should not emit "Node 23 is supported" nudge.
+    expect(warnings).toEqual([]);
+  });
 });
 
 // ─── buildNodeRuntimeSummary ────────────────────────────────────
@@ -261,5 +269,26 @@ describe("buildNodeRuntimeSummary", () => {
     // Should have exactly 2 " · " separators (3 parts)
     const separatorCount = (summary.match(/ · /g) || []).length;
     expect(separatorCount).toBe(2);
+  });
+
+  it("does not shorten path when home dir is a prefix of sibling directory", () => {
+    // Regression test for P1: HOME=/home/alice must not match /home/alice2/...
+    const diag = makeDiag({
+      version: "24.14.0",
+      execPath: "/home/alice2/.nvm/versions/node/v24.14.0/bin/node",
+      versionManaged: true,
+      versionManagerHint: "nvm",
+    });
+    // Temporarily override HOME for this test
+    const originalHome = process.env.HOME;
+    process.env.HOME = "/home/alice";
+    try {
+      const summary = buildNodeRuntimeSummary(diag);
+      // Path should NOT be shortened — /home/alice2 is not under /home/alice
+      expect(summary).toContain("/home/alice2/.nvm/versions/node/v24.14.0/bin/node");
+      expect(summary).not.toContain("~2/");
+    } finally {
+      process.env.HOME = originalHome;
+    }
   });
 });
