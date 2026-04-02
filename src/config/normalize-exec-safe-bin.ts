@@ -22,11 +22,17 @@ export function normalizeExecSafeBinProfilesInConfig(cfg: OpenClawConfig): void 
         }
       >,
     );
-    typedExec.safeBinProfiles =
-      Object.keys(normalizedProfiles).length > 0 ? normalizedProfiles : undefined;
+    if (Object.keys(normalizedProfiles).length > 0) {
+      typedExec.safeBinProfiles = normalizedProfiles;
+    } else {
+      delete typedExec.safeBinProfiles;
+    }
     const normalizedTrustedDirs = normalizeTrustedSafeBinDirs(typedExec.safeBinTrustedDirs);
-    typedExec.safeBinTrustedDirs =
-      normalizedTrustedDirs.length > 0 ? normalizedTrustedDirs : undefined;
+    if (normalizedTrustedDirs.length > 0) {
+      typedExec.safeBinTrustedDirs = normalizedTrustedDirs;
+    } else {
+      delete typedExec.safeBinTrustedDirs;
+    }
   };
 
   normalizeExec(cfg.tools?.exec);
