@@ -161,6 +161,23 @@ describe("web fetch runtime", () => {
     });
   });
 
+  it("auto-detects providers from provider-declared env vars", () => {
+    const provider = createProvider({
+      pluginId: "firecrawl",
+      id: "firecrawl",
+      credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
+      autoDetectOrder: 1,
+    });
+    resolveBundledPluginWebFetchProvidersMock.mockReturnValue([provider]);
+    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-key");
+
+    const resolved = resolveWebFetchDefinition({
+      config: {},
+    });
+
+    expect(resolved?.provider.id).toBe("firecrawl");
+  });
+
   it("keeps sandboxed web fetch on bundled providers even when runtime providers are preferred", () => {
     const bundled = createProvider({
       pluginId: "firecrawl",
