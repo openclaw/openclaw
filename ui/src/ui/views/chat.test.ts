@@ -17,6 +17,8 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
+import { renderExecApprovalPrompt } from "./exec-approval.ts";
+import { renderGatewayUrlConfirmation } from "./gateway-url-confirmation.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
 
 function readDeleteConfirmPreference(): string | null {
@@ -1295,5 +1297,75 @@ describe("chat view", () => {
     expect(labels.filter((label) => label === "Deep Chat (alpha) / main")).toHaveLength(1);
     expect(labels).toContain("Deep Chat (alpha) / main · named-main");
     expect(labels).toContain("Coding (beta) / main");
+  });
+});
+
+function createExecApprovalState(overrides: Partial<AppViewState> = {}): AppViewState {
+  const now = Date.now();
+  return {
+    execApprovalQueue: [
+      {
+        id: "req-1",
+        createdAtMs: now - 1_000,
+        expiresAtMs: now + 60_000,
+        request: {
+          command:
+            "python - <<'PY'\nprint('very long command body')\nprint('still going')\nprint('done')\nPY",
+          host: "gateway.local",
+          agentId: "agent:main",
+          sessionKey: "main",
+          cwd: "/workspace",
+          resolvedPath: "/usr/bin/python",
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+    ],
+    execApprovalBusy: false,
+    execApprovalError: "Approval failed",
+    pendingGatewayUrl: "https://example.invalid/ws",
+    handleExecApprovalDecision: vi.fn(),
+    handleGatewayUrlConfirm: vi.fn(),
+    handleGatewayUrlCancel: vi.fn(),
+    ...overrides,
+  } as unknown as AppViewState;
+}
+
+describe("approval modal rendering", () => {
+  it("keeps the exec approval action row outside the scrollable body", () => {
+    const state = createExecApprovalState();
+    const container = document.createElement("div");
+
+    render(renderExecApprovalPrompt(state), container);
+
+    const overlay = container.querySelector(".exec-approval-overlay");
+    const card = container.querySelector(".exec-approval-card");
+    const body = container.querySelector(".exec-approval-body");
+    const actions = container.querySelector(".exec-approval-actions");
+
+    expect(overlay?.getAttribute("aria-modal")).toBe("true");
+    expect(card?.children[1]).toBe(body);
+    expect(card?.lastElementChild).toBe(actions);
+    expect(body?.querySelector(".exec-approval-command")?.textContent).toContain(
+      "very long command body",
+    );
+    expect(body?.querySelector(".exec-approval-error")?.textContent).toContain("Approval failed");
+  });
+
+  it("uses the same scrollable body layout for gateway URL confirmation", () => {
+    const state = createExecApprovalState({ execApprovalQueue: [] });
+    const container = document.createElement("div");
+
+    render(renderGatewayUrlConfirmation(state), container);
+
+    const card = container.querySelector(".exec-approval-card");
+    const body = container.querySelector(".exec-approval-body");
+    const actions = container.querySelector(".exec-approval-actions");
+
+    expect(card?.children[1]).toBe(body);
+    expect(card?.lastElementChild).toBe(actions);
+    expect(body?.querySelector(".exec-approval-command")?.textContent).toContain(
+      "https://example.invalid/ws",
+    );
   });
 });

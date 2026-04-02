@@ -2915,6 +2915,10 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 20px;
+  display: flex;
+  flex-direction: column;
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: hidden;
   animation: scale-in 0.2s var(--ease-out);
 }
 
@@ -2945,20 +2949,27 @@ td.data-table-key-col {
   padding: 4px 10px;
 }
 
-.exec-approval-command {
+.exec-approval-body {
   margin-top: 12px;
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.exec-approval-command {
   padding: 10px 12px;
   background: var(--secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   word-break: break-word;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   font-family: var(--mono);
   font-size: 13px;
 }
 
 .exec-approval-meta {
-  margin-top: 12px;
   display: grid;
   gap: 6px;
   font-size: 13px;
@@ -2977,7 +2988,6 @@ td.data-table-key-col {
 }
 
 .exec-approval-error {
-  margin-top: 10px;
   font-size: 13px;
   color: var(--danger);
 }
@@ -2987,6 +2997,7 @@ td.data-table-key-col {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 /* ===========================================

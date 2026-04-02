@@ -67,7 +67,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
     ? (active.pluginTitle ?? "Plugin approval needed")
     : "Exec approval needed";
   return html`
-    <div class="exec-approval-overlay" role="dialog" aria-live="polite">
+    <div class="exec-approval-overlay" role="dialog" aria-modal="true" aria-live="polite">
       <div class="exec-approval-card">
         <div class="exec-approval-header">
           <div>
@@ -78,10 +78,12 @@ export function renderExecApprovalPrompt(state: AppViewState) {
             ? html`<div class="exec-approval-queue">${queueCount} pending</div>`
             : nothing}
         </div>
-        ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
-        ${state.execApprovalError
-          ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
-          : nothing}
+        <div class="exec-approval-body">
+          ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
+          ${state.execApprovalError
+            ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
+            : nothing}
+        </div>
         <div class="exec-approval-actions">
           <button
             class="btn primary"
