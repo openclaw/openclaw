@@ -1352,11 +1352,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               replyOptions: {
                 ...replyOptions,
                 skillFilter: roomConfig?.skills,
-                // Matrix expects explicit assistant progress updates as
-                // separate messages only when block streaming is explicitly
-                // enabled. Partial draft streaming still disables the shared
-                // block pipeline so draft edits do not double-send.
-                disableBlockStreaming: draftStream ? true : !blockStreamingEnabled,
+                // Keep block streaming enabled when explicitly requested, even
+                // with draft previews on. The draft remains the live preview
+                // for the current assistant block, while block deliveries
+                // finalize completed blocks into their own preserved events.
+                disableBlockStreaming: !blockStreamingEnabled,
                 onPartialReply: draftStream
                   ? (payload) => {
                       const fullText = payload.text ?? "";
