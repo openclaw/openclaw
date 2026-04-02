@@ -230,6 +230,32 @@ Behavior details:
 - The main-session summary respects `wakeMode`: `now` triggers an immediate heartbeat and
   `next-heartbeat` waits for the next scheduled heartbeat.
 
+#### Announce mode behavior
+
+Announce mode reuses existing routing state before it tries to guess anything new.
+
+Channel selection priority:
+
+1. Reuse the session route for this run: `sessionKey` thread entry first, then the agent's main
+   session entry.
+2. If there is no stored last channel, auto-pick the only configured deliverable channel.
+3. If multiple deliverable channels are configured and there is no stored last route, announce
+   mode stops with a channel-selection error instead of guessing.
+
+Target selection priority after the channel is chosen:
+
+1. Reuse the stored last target for that route when one exists.
+2. Fall back to the channel's configured default target, if that channel exposes one.
+3. Otherwise fail with a missing-target error.
+
+`delivery.channel` and `delivery.to` do not bypass this announce-mode resolution flow. If cron
+still cannot derive a valid recipient, the run fails with a missing-target error such as
+`Delivering to Slack requires target`.
+
+In practice, announce mode works best when the agent already has a previous route for the job's
+session. If you need a fixed HTTP endpoint instead of chat-route reuse, use
+`delivery.mode = "webhook"`.
+
 #### Webhook delivery flow
 
 When `delivery.mode = "webhook"`, cron posts the finished event payload to `delivery.to` when the finished event includes a summary.
@@ -449,6 +475,7 @@ When a job fails, OpenClaw classifies errors as **transient** (retryable) or **p
 
 - On any error: apply exponential backoff (30s → 1m → 5m → 15m → 60m) before the next scheduled run.
 - Job stays enabled; backoff resets after the next successful run.
+- The current failure streak is persisted in `~/.openclaw/cron/jobs.json` as `state.consecutiveErrors`.
 
 Configure `cron.retry` to override these defaults (see [Configuration](/automation/cron-jobs#configuration)).
 
@@ -737,6 +764,11 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - OpenClaw applies exponential retry backoff for recurring jobs after consecutive errors:
   30s, 1m, 5m, 15m, then 60m between retries.
 - Backoff resets automatically after the next successful run.
+- The persisted failure streak lives in `~/.openclaw/cron/jobs.json` as `state.consecutiveErrors`.
+- To clear the backoff manually, stop the Gateway, reset that job's
+  `state.consecutiveErrors` value in `jobs.json`, then restart the Gateway. If you want an
+  immediate retry after restart, run `openclaw cron run <job-id>` instead of waiting for the
+  stored `nextRunAtMs`.
 - One-shot (`at`) jobs retry transient errors (rate limit, overloaded, network, server_error) up to 3 times with backoff; permanent errors disable immediately. See [Retry policy](/automation/cron-jobs#retry-policy).
 
 ### Telegram delivers to the wrong place
