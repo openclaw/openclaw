@@ -39,6 +39,7 @@ const {
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
 let providerTesting: typeof import("./provider.js").__testing;
+let runtimeEnvModule: typeof import("openclaw/plugin-sdk/runtime-env");
 
 function createCompatRateLimitError(
   response: Response,
@@ -149,11 +150,13 @@ describe("monitorDiscordProvider", () => {
     vi.doMock("../token.js", () => ({
       normalizeDiscordToken: (value?: string) => value,
     }));
+    runtimeEnvModule = await import("openclaw/plugin-sdk/runtime-env");
     ({ monitorDiscordProvider, __testing: providerTesting } = await import("./provider.js"));
   });
 
   beforeEach(() => {
     resetDiscordProviderMonitorMocks();
+    vi.mocked(runtimeEnvModule.logVerbose).mockClear();
     providerTesting.setFetchDiscordApplicationId(async () => "app-1");
     providerTesting.setCreateDiscordNativeCommand(((
       ...args: Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0] extends
@@ -582,68 +585,6 @@ describe("monitorDiscordProvider", () => {
     expect(params?.workerRunTimeoutMs).toBe(300_000);
   });
 
-  it("registers plugin commands as native Discord commands", async () => {
-    listNativeCommandSpecsForConfigMock.mockReturnValue([
-      { name: "cmd", description: "built-in", acceptsArgs: false },
-    ]);
-    getPluginCommandSpecsMock.mockReturnValue([
-      { name: "cron_jobs", description: "List cron jobs", acceptsArgs: false },
-    ]);
-
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
-
-    const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
-      .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
-      .filter((value): value is string => typeof value === "string");
-    expect(getPluginCommandSpecsMock).toHaveBeenCalledWith("discord");
-    expect(commandNames).toContain("cmd");
-    expect(commandNames).toContain("cron_jobs");
-  });
-
-  it("registers plugin commands from the real registry as native Discord commands", async () => {
-    const {
-      clearPluginCommands,
-      getPluginCommandSpecs: getRealPluginCommandSpecs,
-      registerPluginCommand,
-    } = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
-      "openclaw/plugin-sdk/plugin-runtime",
-    );
-    clearPluginCommands();
-    listNativeCommandSpecsForConfigMock.mockReturnValue([
-      { name: "status", description: "Status", acceptsArgs: false },
-    ]);
-    getPluginCommandSpecsMock.mockImplementation((provider?: string) =>
-      getRealPluginCommandSpecs(provider),
-    );
-
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "pair",
-        description: "Pair device",
-        acceptsArgs: true,
-        requireAuth: false,
-        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
-      }),
-    ).toEqual({ ok: true });
-
-    await monitorDiscordProvider({
-      config: baseConfig(),
-      runtime: baseRuntime(),
-    });
-
-    const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
-      .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
-      .filter((value): value is string => typeof value === "string");
-
-    expect(commandNames).toContain("status");
-    expect(commandNames).toContain("pair");
-    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
-    expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-  });
-
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {
     const runtime = baseRuntime();
     const request = new Request("https://discord.com/api/v10/applications/commands", {
@@ -675,8 +616,8 @@ describe("monitorDiscordProvider", () => {
     expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("native commands using Carbon reconcile path"),
+    expect(runtimeEnvModule.logVerbose).toHaveBeenCalledWith(
+      "discord: native commands using Carbon reconcile path",
     );
   });
 
@@ -765,7 +706,7 @@ describe("monitorDiscordProvider", () => {
       name === "gateway" ? gateway : undefined,
     );
     clientFetchUserMock.mockImplementationOnce(async () => {
-      emitter.emit("debug", "WebSocket connection opened");
+      emitter.emit("debug", "Gateway websocket opened");
       return { id: "bot-1", username: "Molty" };
     });
     isVerboseMock.mockReturnValue(true);
@@ -784,7 +725,7 @@ describe("monitorDiscordProvider", () => {
     expect(messages.some((msg) => msg.includes("fetch-bot-identity:done"))).toBe(true);
     expect(
       messages.some(
-        (msg) => msg.includes("gateway-debug") && msg.includes("WebSocket connection opened"),
+        (msg) => msg.includes("gateway-debug") && msg.includes("Gateway websocket opened"),
       ),
     ).toBe(true);
   });

@@ -1619,6 +1619,69 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("redacts forwarded origin inside reply targets when context visibility is allowlist", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    replySpy.mockReset();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          contextVisibility: "allowlist",
+          groups: {
+            "-1007": {
+              requireMention: false,
+              allowFrom: ["1"],
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        message_id: 9004,
+        chat: { id: -1007, type: "group", title: "Ops" },
+        text: "Thoughts?",
+        date: 1736380800,
+        from: { id: 1, first_name: "Ada", username: "ada", is_bot: false },
+        reply_to_message: {
+          message_id: 9003,
+          text: "forwarded text",
+          from: { id: 1, first_name: "Ada", username: "ada", is_bot: false },
+          forward_origin: {
+            type: "user",
+            sender_user: {
+              id: 999,
+              first_name: "Bob",
+              last_name: "Smith",
+              username: "bobsmith",
+              is_bot: false,
+            },
+            date: 500,
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.ReplyToId).toBe("9003");
+    expect(payload.ReplyToBody).toBe("forwarded text");
+    expect(payload.ReplyToSender).toBe("Ada");
+    expect(payload.ReplyToForwardedFrom).toBeUndefined();
+    expect(payload.ReplyToForwardedFromType).toBeUndefined();
+    expect(payload.ReplyToForwardedFromId).toBeUndefined();
+    expect(payload.ReplyToForwardedFromUsername).toBeUndefined();
+    expect(payload.ReplyToForwardedDate).toBeUndefined();
+    expect(payload.Body).not.toContain("[Forwarded from Bob Smith (@bobsmith)");
+  });
+
   it("accepts group replies to the bot without explicit mention when requireMention is enabled", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

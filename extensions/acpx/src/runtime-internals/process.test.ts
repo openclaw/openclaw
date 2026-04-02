@@ -116,6 +116,36 @@ describe("resolveSpawnCommand", () => {
     });
   });
 
+  it("falls back to node on PATH when execPath is unavailable for a node shebang wrapper", async () => {
+    const dir = await createTempDir();
+    const binDir = path.join(dir, "bin");
+    const scriptPath = path.join(binDir, "acpx");
+    const nodePath = path.join(binDir, "node");
+    await mkdir(binDir, { recursive: true });
+    await writeFile(scriptPath, "#!/usr/bin/env node\nconsole.log('ok')\n", "utf8");
+    await writeFile(nodePath, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(scriptPath, 0o755);
+    await chmod(nodePath, 0o755);
+
+    const resolved = resolveSpawnCommand(
+      {
+        command: scriptPath,
+        args: ["--help"],
+      },
+      undefined,
+      {
+        platform: "darwin",
+        env: { PATH: binDir },
+        execPath: "/missing/node",
+      },
+    );
+
+    expect(resolved).toEqual({
+      command: nodePath,
+      args: [scriptPath, "--help"],
+    });
+  });
+
   it("routes .js command execution through node on windows", () => {
     const resolved = resolveSpawnCommand(
       {

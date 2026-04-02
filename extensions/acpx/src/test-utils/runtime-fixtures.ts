@@ -84,13 +84,16 @@ const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
 
 if (command === "sessions" && args[commandIndex + 1] === "ensure") {
   writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
+  if (process.env.MOCK_ACPX_ENSURE_STDERR) {
+    process.stderr.write(String(process.env.MOCK_ACPX_ENSURE_STDERR) + "\n");
+  }
   if (process.env.MOCK_ACPX_ENSURE_EXIT_1 === "1") {
     return emitJsonAndExit({
       jsonrpc: "2.0",
       id: null,
       error: {
         code: -32603,
-        message: "mock ensure failure",
+        message: process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE || "mock ensure failure",
       },
     }, 1);
   }
@@ -112,6 +115,19 @@ if (command === "sessions" && args[commandIndex + 1] === "ensure") {
 
 if (command === "sessions" && args[commandIndex + 1] === "new") {
   writeLog({ kind: "new", agent, args, sessionName: ensureName });
+  if (process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME === "1" && args.includes("--resume-session")) {
+    return emitJsonAndExit(
+      {
+        jsonrpc: "2.0",
+        id: null,
+        error: {
+          code: -32603,
+          message: "mock stale resume session",
+        },
+      },
+      1,
+    );
+  }
   if (process.env.MOCK_ACPX_NEW_EMPTY === "1") {
     emitJson({ action: "session_created", name: ensureName });
   } else {
@@ -198,10 +214,11 @@ if (command === "status") {
   }
   const status = process.env.MOCK_ACPX_STATUS_STATUS || (sessionFromOption ? "alive" : "no-session");
   const summary = process.env.MOCK_ACPX_STATUS_SUMMARY || "";
+  const omitStatusIds = process.env.MOCK_ACPX_STATUS_NO_IDS === "1";
   emitJson({
-    acpxRecordId: sessionFromOption ? "rec-" + sessionFromOption : null,
-    acpxSessionId: sessionFromOption ? "sid-" + sessionFromOption : null,
-    agentSessionId: sessionFromOption ? "inner-" + sessionFromOption : null,
+    acpxRecordId: sessionFromOption && !omitStatusIds ? "rec-" + sessionFromOption : null,
+    acpxSessionId: sessionFromOption && !omitStatusIds ? "sid-" + sessionFromOption : null,
+    agentSessionId: sessionFromOption && !omitStatusIds ? "inner-" + sessionFromOption : null,
     status,
     ...(summary ? { summary } : {}),
     pid: 4242,
@@ -419,8 +436,12 @@ export async function readMockRuntimeLogEntries(
 export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_LOG;
   delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+  delete process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE;
   delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
+  delete process.env.MOCK_ACPX_ENSURE_STDERR;
+  delete process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME;
   delete process.env.MOCK_ACPX_STATUS_STATUS;
+  delete process.env.MOCK_ACPX_STATUS_NO_IDS;
   delete process.env.MOCK_ACPX_STATUS_SUMMARY;
   sharedMockCliScriptPath = null;
   logFileSequence = 0;

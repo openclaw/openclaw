@@ -9,7 +9,7 @@ title: "Background Tasks"
 
 # Background Tasks
 
-> **Cron vs Heartbeat vs Tasks?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for choosing the right scheduling mechanism. This page covers **tracking** background work, not scheduling it.
+> **Looking for scheduling?** See [Automation & Tasks](/automation) for choosing the right mechanism. This page covers **tracking** background work, not scheduling it.
 
 Background tasks track work that runs **outside your main conversation session**:
 ACP runs, subagent spawns, isolated cron job executions, and CLI-initiated operations.
@@ -59,7 +59,7 @@ openclaw tasks audit
 | ACP background runs    | `acp`        | Spawning a child ACP session                           | `done_only`           |
 | Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`               | `done_only`           |
 | Cron jobs (all types)  | `cron`       | Every cron execution (main-session and isolated)       | `silent`              |
-| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `done_only`           |
+| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `silent`              |
 
 Main-session cron tasks use `silent` notify policy by default — they create records for tracking but do not generate notifications. Isolated cron tasks also default to `silent` but are more visible because they run in their own session.
 
@@ -172,6 +172,16 @@ Surfaces operational issues. Findings also appear in `openclaw status` when issu
 | `missing_cleanup`         | warn     | Terminal task with no cleanup timestamp               |
 | `inconsistent_timestamps` | warn     | Timeline violation (for example ended before started) |
 
+## Chat task board (`/tasks`)
+
+Use `/tasks` in any chat session to see background tasks linked to that session. The board shows
+active and recently completed tasks with runtime, status, timing, and progress or error detail.
+
+When the current session has no visible linked tasks, `/tasks` falls back to agent-local task counts
+so you still get an overview without leaking other-session details.
+
+For the full operator ledger, use the CLI: `openclaw tasks list`.
+
 ## Status integration (task pressure)
 
 `openclaw status` includes an at-a-glance task summary:
@@ -185,6 +195,10 @@ The summary reports:
 - **active** — count of `queued` + `running`
 - **failures** — count of `failed` + `timed_out` + `lost`
 - **byRuntime** — breakdown by `acp`, `subagent`, `cron`, `cli`
+
+Both `/status` and the `session_status` tool use a cleanup-aware task snapshot: active tasks are
+preferred, stale completed rows are hidden, and recent failures only surface when no active work
+remains. This keeps the status card focused on what matters right now.
 
 ## Storage and maintenance
 
@@ -210,11 +224,11 @@ A sweeper runs every **60 seconds** and handles three things:
 
 ## How tasks relate to other systems
 
-### Tasks and ClawFlow
+### Tasks and Task Flow
 
-ClawFlow is the flow layer above tasks. A flow groups one or more task runs into a single job, owns the parent session context, and gives you a higher-level control surface for blocked or multi-step work.
+[Task Flow](/automation/taskflow) is the flow orchestration layer above background tasks. A single flow may coordinate multiple tasks over its lifetime using managed or mirrored sync modes. Use `openclaw tasks` to inspect individual task records and `openclaw tasks flow` to inspect the orchestrating flow.
 
-See [ClawFlow](/automation/clawflow) for the flow overview and [CLI: flows](/cli/flows) for the command surface.
+See [Task Flow](/automation/taskflow) for details.
 
 ### Tasks and cron
 
@@ -238,10 +252,8 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 
 ## Related
 
-- [Automation Overview](/automation) — all automation mechanisms at a glance
-- [ClawFlow](/automation/clawflow) — job-level orchestration above tasks
-- [Cron Jobs](/automation/cron-jobs) — scheduling background work
-- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism
+- [Automation & Tasks](/automation) — all automation mechanisms at a glance
+- [Task Flow](/automation/taskflow) — flow orchestration above tasks
+- [Scheduled Tasks](/automation/cron-jobs) — scheduling background work
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
-- [CLI: flows](/cli/flows) — flow inspection and control commands
 - [CLI: Tasks](/cli/index#tasks) — CLI command reference

@@ -39,8 +39,8 @@ let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;
 let resetAcpSessionManagerForTests: typeof import("./manager.js").__testing.resetAcpSessionManagerForTests;
 let findTaskByRunId: typeof import("../../tasks/task-registry.js").findTaskByRunId;
 let resetTaskRegistryForTests: typeof import("../../tasks/task-registry.js").resetTaskRegistryForTests;
-let resetFlowRegistryForTests: typeof import("../../tasks/flow-registry.js").resetFlowRegistryForTests;
-let installInMemoryTaskAndFlowRegistryRuntime: typeof import("../../test-utils/task-flow-registry-runtime.js").installInMemoryTaskAndFlowRegistryRuntime;
+let resetTaskFlowRegistryForTests: typeof import("../../tasks/task-flow-registry.js").resetTaskFlowRegistryForTests;
+let installInMemoryTaskRegistryRuntime: typeof import("../../test-utils/task-registry-runtime.js").installInMemoryTaskRegistryRuntime;
 
 const baseCfg = {
   acp: {
@@ -55,13 +55,13 @@ async function withAcpManagerTaskStateDir(run: (root: string) => Promise<void>):
   await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
     resetTaskRegistryForTests({ persist: false });
-    resetFlowRegistryForTests({ persist: false });
-    installInMemoryTaskAndFlowRegistryRuntime();
+    resetTaskFlowRegistryForTests({ persist: false });
+    installInMemoryTaskRegistryRuntime();
     try {
       await run(root);
     } finally {
       resetTaskRegistryForTests({ persist: false });
-      resetFlowRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
 }
@@ -178,16 +178,15 @@ function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | un
 
 describe("AcpSessionManager", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({
       AcpSessionManager,
       __testing: { resetAcpSessionManagerForTests },
     } = await import("./manager.js"));
     ({ AcpRuntimeError } = await import("../runtime/errors.js"));
     ({ findTaskByRunId, resetTaskRegistryForTests } = await import("../../tasks/task-registry.js"));
-    ({ resetFlowRegistryForTests } = await import("../../tasks/flow-registry.js"));
-    ({ installInMemoryTaskAndFlowRegistryRuntime } =
-      await import("../../test-utils/task-flow-registry-runtime.js"));
+    ({ resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js"));
+    ({ installInMemoryTaskRegistryRuntime } =
+      await import("../../test-utils/task-registry-runtime.js"));
   });
 
   beforeEach(() => {
@@ -206,7 +205,7 @@ describe("AcpSessionManager", () => {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
     resetTaskRegistryForTests({ persist: false });
-    resetFlowRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("marks ACP-shaped sessions without metadata as stale", () => {
@@ -333,7 +332,8 @@ describe("AcpSessionManager", () => {
 
       expect(findTaskByRunId("direct-parented-run")).toMatchObject({
         runtime: "acp",
-        requesterSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
         childSessionKey: "agent:codex:acp:child-1",
         label: "Quant patch",
         task: "Implement the feature and report back",
