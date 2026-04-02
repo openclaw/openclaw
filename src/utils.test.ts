@@ -4,14 +4,20 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertWebChannel,
+  clamp,
+  clampInt,
+  clampNumber,
   CONFIG_DIR,
   ensureDir,
+  escapeRegExp,
+  isRecord,
   jidToE164,
   normalizeE164,
   resolveConfigDir,
   resolveHomeDir,
   resolveJidToE164,
   resolveUserPath,
+  safeParseJson,
   shortenHomeInString,
   shortenHomePath,
   sleep,
@@ -245,5 +251,152 @@ describe("resolveUserPath", () => {
   it("returns empty string for undefined/null input", () => {
     expect(resolveUserPath(undefined as unknown as string)).toBe("");
     expect(resolveUserPath(null as unknown as string)).toBe("");
+  });
+});
+
+describe("clampNumber", () => {
+  it("returns value when within range", () => {
+    expect(clampNumber(5, 0, 10)).toBe(5);
+  });
+
+  it("returns min when value is below range", () => {
+    expect(clampNumber(-5, 0, 10)).toBe(0);
+  });
+
+  it("returns max when value is above range", () => {
+    expect(clampNumber(15, 0, 10)).toBe(10);
+  });
+
+  it("handles negative ranges", () => {
+    expect(clampNumber(-15, -10, -5)).toBe(-10);
+    expect(clampNumber(-3, -10, -5)).toBe(-5);
+  });
+
+  it("handles equal min and max", () => {
+    expect(clampNumber(100, 5, 5)).toBe(5);
+  });
+});
+
+describe("clampInt", () => {
+  it("floors the value before clamping", () => {
+    expect(clampInt(5.7, 0, 10)).toBe(5);
+    expect(clampInt(5.3, 0, 10)).toBe(5);
+  });
+
+  it("returns min when floored value is below range", () => {
+    expect(clampInt(-0.5, 0, 10)).toBe(0);
+  });
+
+  it("returns max when floored value is above range", () => {
+    expect(clampInt(10.9, 0, 10)).toBe(10);
+  });
+});
+
+describe("clamp", () => {
+  it("is an alias for clampNumber", () => {
+    expect(clamp(5, 0, 10)).toBe(5);
+    expect(clamp(-5, 0, 10)).toBe(0);
+    expect(clamp(15, 0, 10)).toBe(10);
+  });
+});
+
+describe("escapeRegExp", () => {
+  it("escapes special regex characters", () => {
+    expect(escapeRegExp("a.b")).toBe("a\\.b");
+    expect(escapeRegExp("a*b")).toBe("a\\*b");
+    expect(escapeRegExp("a+b")).toBe("a\\+b");
+    expect(escapeRegExp("a?b")).toBe("a\\?b");
+    expect(escapeRegExp("a^b")).toBe("a\\^b");
+    expect(escapeRegExp("a$b")).toBe("a\\$b");
+    expect(escapeRegExp("a{b")).toBe("a\\{b");
+    expect(escapeRegExp("a}b")).toBe("a\\}b");
+    expect(escapeRegExp("a(b")).toBe("a\\(b");
+    expect(escapeRegExp("a)b")).toBe("a\\)b");
+    expect(escapeRegExp("a|b")).toBe("a\\|b");
+    expect(escapeRegExp("a[b")).toBe("a\\[b");
+    expect(escapeRegExp("a]b")).toBe("a\\]b");
+    expect(escapeRegExp("a\\b")).toBe("a\\\\b");
+  });
+
+  it("returns unchanged string without special chars", () => {
+    expect(escapeRegExp("abc123")).toBe("abc123");
+  });
+
+  it("handles empty string", () => {
+    expect(escapeRegExp("")).toBe("");
+  });
+
+  it("escapes multiple special chars in one string", () => {
+    expect(escapeRegExp("a.b*c+d?e")).toBe("a\\.b\\*c\\+d\\?e");
+  });
+
+  it("can be used in RegExp constructor", () => {
+    const input = "file.name.txt";
+    const escaped = escapeRegExp(input);
+    const regex = new RegExp(`^${escaped}$`);
+    expect(regex.test(input)).toBe(true);
+    expect(regex.test("fileXname.txt")).toBe(false);
+  });
+});
+
+describe("safeParseJson", () => {
+  it("parses valid JSON", () => {
+    expect(safeParseJson('{"a": 1}')).toEqual({ a: 1 });
+    expect(safeParseJson("[1, 2, 3]")).toEqual([1, 2, 3]);
+    expect(safeParseJson('"hello"')).toBe("hello");
+    expect(safeParseJson("123")).toBe(123);
+    expect(safeParseJson("true")).toBe(true);
+    expect(safeParseJson("null")).toBe(null);
+  });
+
+  it("returns null for invalid JSON", () => {
+    expect(safeParseJson("{")).toBe(null);
+    expect(safeParseJson("not json")).toBe(null);
+    expect(safeParseJson("[1, 2,")).toBe(null);
+  });
+
+  it("returns null for empty string", () => {
+    expect(safeParseJson("")).toBe(null);
+  });
+
+  it("preserves parsed type", () => {
+    interface TestType {
+      name: string;
+      value: number;
+    }
+    const result = safeParseJson<TestType>('{"name":"test","value":42}');
+    expect(result).toEqual({ name: "test", value: 42 });
+  });
+});
+
+describe("isRecord", () => {
+  it("returns true for plain objects", () => {
+    expect(isRecord({})).toBe(true);
+    expect(isRecord({ a: 1 })).toBe(true);
+    expect(isRecord({ a: "b", c: 2 })).toBe(true);
+  });
+
+  it("returns false for null", () => {
+    expect(isRecord(null)).toBe(false);
+  });
+
+  it("returns false for undefined", () => {
+    expect(isRecord(undefined)).toBe(false);
+  });
+
+  it("returns false for arrays", () => {
+    expect(isRecord([])).toBe(false);
+    expect(isRecord([1, 2, 3])).toBe(false);
+  });
+
+  it("returns false for primitives", () => {
+    expect(isRecord("string")).toBe(false);
+    expect(isRecord(123)).toBe(false);
+    expect(isRecord(true)).toBe(false);
+  });
+
+  it("returns true for object instances", () => {
+    expect(isRecord(new Date())).toBe(true);
+    expect(isRecord(/regex/)).toBe(true);
   });
 });
