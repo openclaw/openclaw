@@ -1,0 +1,46 @@
+{
+  "name": "@openclaw/databricks-plugin",
+  "version": "0.1.0",
+  "description": "External Databricks read-only SQL plugin for OpenClaw.",
+  "files": [
+    "index.ts",
+    "runtime-api.ts",
+    "openclaw.plugin.json",
+    "README.md",
+    "skills",
+    "src"
+  ],
+  "type": "module",
+  "scripts": {
+    "lint": "oxlint --type-aware packages/openclaw-databricks-plugin",
+    "test": "vitest run",
+    "typecheck": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.28"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/databricks-plugin",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.28"
+    }
+  }
+}

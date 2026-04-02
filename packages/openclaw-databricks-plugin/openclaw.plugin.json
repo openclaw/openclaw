@@ -1,0 +1,116 @@
+{
+  "id": "databricks",
+  "name": "Databricks",
+  "description": "External Databricks plugin with conservative read-only SQL execution.",
+  "skills": ["./skills"],
+  "providerAuthEnvVars": {
+    "databricks": ["DATABRICKS_HOST", "DATABRICKS_TOKEN", "DATABRICKS_WAREHOUSE_ID"]
+  },
+  "contracts": {
+    "tools": ["databricks_sql_readonly"]
+  },
+  "uiHints": {
+    "host": {
+      "label": "Databricks Host",
+      "help": "Workspace host URL. Must be HTTPS and an allowed Databricks domain."
+    },
+    "token": {
+      "label": "Databricks Token",
+      "help": "Databricks PAT used by SQL Statements API.",
+      "sensitive": true,
+      "placeholder": "dapi..."
+    },
+    "warehouseId": {
+      "label": "Warehouse ID",
+      "help": "Default Databricks SQL warehouse ID."
+    },
+    "timeoutMs": {
+      "label": "HTTP Timeout (ms)",
+      "help": "Per-request timeout for SQL submit/poll requests."
+    },
+    "retryCount": {
+      "label": "Retry Count",
+      "help": "Maximum retry attempts for transient submit/poll failures."
+    },
+    "pollingIntervalMs": {
+      "label": "Polling Interval (ms)",
+      "help": "Polling interval while statement is pending/running/queued."
+    },
+    "maxPollingWaitMs": {
+      "label": "Max Polling Wait (ms)",
+      "help": "Maximum wait budget for polling before timeout."
+    },
+    "allowedCatalogs": {
+      "label": "Allowed Catalogs",
+      "help": "Optional allowlist. If set, all resolved targets must include and match catalog."
+    },
+    "allowedSchemas": {
+      "label": "Allowed Schemas",
+      "help": "Optional allowlist. If set, all resolved targets must include and match schema."
+    },
+    "readOnly": {
+      "label": "Read-Only Mode",
+      "help": "Must stay true. Mutating SQL operations are blocked."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "host": {
+        "type": ["string", "object"],
+        "description": "Databricks workspace host URL."
+      },
+      "token": {
+        "type": ["string", "object"],
+        "description": "Databricks access token (supports secret input resolution)."
+      },
+      "warehouseId": {
+        "type": ["string", "object"],
+        "description": "Default Databricks SQL warehouse ID."
+      },
+      "timeoutMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 120000,
+        "description": "HTTP timeout in milliseconds."
+      },
+      "retryCount": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 3,
+        "description": "Retry attempts for transient failures."
+      },
+      "pollingIntervalMs": {
+        "type": "number",
+        "minimum": 200,
+        "maximum": 5000,
+        "description": "Polling interval while statement is not terminal."
+      },
+      "maxPollingWaitMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 120000,
+        "description": "Maximum total wait time for polling."
+      },
+      "allowedCatalogs": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Optional read-only allowlist for catalogs."
+      },
+      "allowedSchemas": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Optional read-only allowlist for schemas."
+      },
+      "readOnly": {
+        "type": "boolean",
+        "description": "Must stay true."
+      }
+    }
+  }
+}
