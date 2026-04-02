@@ -625,6 +625,69 @@ function shouldFailClosedInterpreterPreflight(command: string): {
       segment,
     );
   };
+  const isPipelineScriptExecutingInterpreterCommand = (rawPipelineCommand: string): boolean => {
+    const argv = splitShellArgs(rawPipelineCommand.trim());
+    if (!argv || argv.length === 0) {
+      return false;
+    }
+    const normalizedArgv = stripPreflightEnvPrefix(argv);
+    let commandIdx = 0;
+    while (
+      commandIdx < normalizedArgv.length &&
+      /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(normalizedArgv[commandIdx] ?? "")
+    ) {
+      commandIdx += 1;
+    }
+    const executable = normalizedArgv[commandIdx]?.toLowerCase();
+    if (!executable) {
+      return false;
+    }
+    const args = normalizedArgv.slice(commandIdx + 1);
+
+    if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
+      const pythonInfoOnlyFlags = new Set(["-V", "--version", "-h", "--help"]);
+      if (args.some((arg) => pythonInfoOnlyFlags.has(arg))) {
+        return false;
+      }
+      if (
+        args.some(
+          (arg) =>
+            arg === "-c" ||
+            arg === "-m" ||
+            arg.startsWith("-c") ||
+            arg.startsWith("-m") ||
+            arg === "--check-hash-based-pycs",
+        )
+      ) {
+        return false;
+      }
+      return true;
+    }
+
+    if (executable === "node") {
+      const nodeInfoOnlyFlags = new Set(["-v", "--version", "-h", "--help", "--check"]);
+      if (args.some((arg) => nodeInfoOnlyFlags.has(arg))) {
+        return false;
+      }
+      if (
+        args.some(
+          (arg) =>
+            arg === "-e" ||
+            arg === "-p" ||
+            arg === "--eval" ||
+            arg === "--print" ||
+            arg.startsWith("--eval=") ||
+            arg.startsWith("--print=") ||
+            ((arg.startsWith("-e") || arg.startsWith("-p")) && arg.length > 2),
+        )
+      ) {
+        return false;
+      }
+      return true;
+    }
+
+    return false;
+  };
   const hasScriptHintInSegment = (segment: string): boolean =>
     /(?:^|[\s()<>])(?:"[^"\n\r`|&;()<>]*\.(?:py|js)"|'[^'\n\r`|&;()<>]*\.(?:py|js)'|[^"'`\s|&;()<>]+\.(?:py|js))(?=$|[\s()<>])/i.test(
       segment,
@@ -641,11 +704,11 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   const hasInterpreterPipelineScriptHintInSameSegment = (rawText: string): boolean => {
     const commandSegments = splitShellSegmentsOutsideQuotes(rawText, { splitPipes: false });
     return commandSegments.some((segment) => {
-      const hasInterpreterPipelineCarrierInSegment =
-        /(?<!\\)\|\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
-          extractUnquotedShellText(segment) ?? segment,
-        );
-      if (!hasInterpreterPipelineCarrierInSegment) {
+      const pipelineCommands = splitShellSegmentsOutsideQuotes(segment, { splitPipes: true });
+      const hasScriptExecutingPipedInterpreter = pipelineCommands
+        .slice(1)
+        .some((pipelineCommand) => isPipelineScriptExecutingInterpreterCommand(pipelineCommand));
+      if (!hasScriptExecutingPipedInterpreter) {
         return false;
       }
       return hasScriptHintInSegment(segment);

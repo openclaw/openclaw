@@ -629,11 +629,25 @@ describeNonWin("exec script preflight", () => {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
       const result = await tool.execute("call-interpreter-version-and-list", {
-        command: "python --version && ls *.py",
+        command: "node --version && ls *.py",
         workdir: tmp,
       });
       const text = result.content.find((block) => block.type === "text")?.text ?? "";
       expect(text).toContain("sample.py");
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
+  it("does not fail closed for piped interpreter version commands with script-like upstream text", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-piped-interpreter-version", {
+        command: "echo bad.py | node --version",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).toMatch(/v\d+/);
       expect(text).not.toMatch(/exec preflight:/);
     });
   });
