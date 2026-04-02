@@ -65,6 +65,7 @@ type PendingPrompt = {
   sessionId: string;
   sessionKey: string;
   idempotencyKey: string;
+  sendAccepted?: boolean;
   resolve: (response: PromptResponse) => void;
   reject: (err: Error) => void;
   sentTextLength?: number;
@@ -705,12 +706,20 @@ export class AcpGatewayAgent implements Agent {
             },
             { timeoutMs: null },
           );
+          const pending = this.pendingPrompts.get(params.sessionId);
+          if (pending) {
+            pending.sendAccepted = true;
+          }
         } catch (err) {
           if (
             (systemInputProvenance || systemProvenanceReceipt) &&
             isAdminScopeProvenanceRejection(err)
           ) {
             await this.gateway.request("chat.send", requestParams, { timeoutMs: null });
+            const pending = this.pendingPrompts.get(params.sessionId);
+            if (pending) {
+              pending.sendAccepted = true;
+            }
             return;
           }
           throw err;
@@ -1039,6 +1048,7 @@ export class AcpGatewayAgent implements Agent {
     }
 
     const pendingEntries = [...this.pendingPrompts.entries()];
+    let keepDisconnectTimer = false;
     for (const [sessionId, pending] of pendingEntries) {
       if (this.pendingPrompts.get(sessionId) !== pending) {
         continue;
@@ -1055,6 +1065,7 @@ export class AcpGatewayAgent implements Agent {
         );
       } catch (err) {
         this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
+        keepDisconnectTimer = true;
         continue;
       }
 
@@ -1067,10 +1078,15 @@ export class AcpGatewayAgent implements Agent {
       }
       if (result?.status === "error") {
         void this.finishPrompt(sessionId, pending, "end_turn");
+        continue;
+      }
+      if (result?.status === "timeout" && !pending.sendAccepted) {
+        keepDisconnectTimer = true;
+        continue;
       }
     }
 
-    if (this.disconnectGeneration === observedDisconnectGeneration) {
+    if (!keepDisconnectTimer && this.disconnectGeneration === observedDisconnectGeneration) {
       this.clearDisconnectTimer();
     }
   }

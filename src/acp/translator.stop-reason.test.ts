@@ -345,4 +345,51 @@ describe("acp translator stop reason mapping", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps the disconnect deadline after reconnect when a pre-ack send never started", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionId = "session-1";
+      const sessionKey = "agent:main:main";
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          throw new Error("gateway closed (1006): connection lost");
+        }
+        if (method === "agent.wait") {
+          return { status: "timeout" };
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const sessionStore = createInMemorySessionStore();
+      sessionStore.createSession({
+        sessionId,
+        sessionKey,
+        cwd: "/tmp",
+      });
+      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+        sessionStore,
+      });
+      const promptPromise = agent.prompt({
+        sessionId,
+        prompt: [{ type: "text", text: "hello" }],
+        _meta: {},
+      } as unknown as PromptRequest);
+      void promptPromise.catch(() => {});
+
+      await Promise.resolve();
+      agent.handleGatewayDisconnect("1006: connection lost");
+      agent.handleGatewayReconnect();
+      await Promise.resolve();
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      await expect(Promise.race([promptPromise, Promise.resolve("pending")])).resolves.toBe(
+        "pending",
+      );
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
