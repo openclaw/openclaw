@@ -20,6 +20,13 @@ export function registerLazyCommand({
   const placeholder = program.command(name).description(description);
   placeholder.allowUnknownOption(true);
   placeholder.allowExcessArguments(true);
+  // Disable the placeholder's built-in help option so that flags like --help
+  // are treated as unknown arguments and passed through to the action. Without
+  // this, Commander intercepts --help at the placeholder level and prints the
+  // placeholder's (empty) help text instead of forwarding the flag to the real
+  // subcommand after lazy registration. The parent program's help option
+  // remains active for top-level `openclaw --help` invocations.
+  placeholder.helpOption(false);
   placeholder.action(async (...actionArgs) => {
     for (const commandName of new Set(removeNames ?? [name])) {
       removeCommandByName(program, commandName);

@@ -110,4 +110,36 @@ describe("registerSubCliCommands", () => {
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
     expect(acpAction).toHaveBeenCalledTimes(1);
   });
+
+  it("passes --help through to the real subcommand, not the placeholder", async () => {
+    // Regression test for: `openclaw nodes list --help` was displaying the
+    // placeholder `nodes` help text instead of `nodes list` help text because
+    // Commander intercepted --help on the placeholder before lazy registration.
+    const program = createRegisteredProgram(
+      ["node", "openclaw", "nodes", "list", "--help"],
+      "openclaw",
+    );
+    program.exitOverride(); // prevent process.exit during --help
+
+    let helpOutput = "";
+    program.configureOutput({
+      writeOut: (str) => {
+        helpOutput += str;
+      },
+      writeErr: (str) => {
+        helpOutput += str;
+      },
+    });
+
+    await program
+      .parseAsync(["node", "openclaw", "nodes", "list", "--help"])
+      .catch((err: Error & { code?: string }) => {
+        if (err.code !== "commander.helpDisplayed") throw err;
+      });
+
+    // Should show help for `nodes list` subcommand, not the `nodes` parent.
+    expect(nodesAction).not.toHaveBeenCalled();
+    expect(helpOutput).toMatch(/nodes list/i);
+    expect(helpOutput).not.toMatch(/^Usage: openclaw nodes \[options\]/m);
+  });
 });
