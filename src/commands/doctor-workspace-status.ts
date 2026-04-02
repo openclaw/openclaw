@@ -2,7 +2,11 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { buildPluginCompatibilityWarnings, buildPluginSnapshotReport } from "../plugins/status.js";
+import {
+  buildPluginCompatibilityWarnings,
+  buildPluginDiagnosticsReport,
+  buildPluginSnapshotReport,
+} from "../plugins/status.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 import { note } from "../terminal/note.js";
@@ -105,7 +109,10 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
   const compatibilityWarnings = buildPluginCompatibilityWarnings({
     config: cfg,
     workspaceDir,
-    report: pluginRegistry,
+    report: buildPluginDiagnosticsReport({
+      config: cfg,
+      workspaceDir,
+    }),
   });
   if (compatibilityWarnings.length > 0) {
     note(compatibilityWarnings.map((line) => `- ${line}`).join("\n"), "Plugin compatibility");

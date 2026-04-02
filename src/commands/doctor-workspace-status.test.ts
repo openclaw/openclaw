@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   resolveDefaultAgentId: vi.fn(),
   buildWorkspaceSkillStatus: vi.fn(),
   buildPluginSnapshotReport: vi.fn(),
+  buildPluginDiagnosticsReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
   listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
   listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
@@ -28,6 +29,7 @@ vi.mock("../agents/skills-status.js", () => ({
 
 vi.mock("../plugins/status.js", () => ({
   buildPluginSnapshotReport: (...args: unknown[]) => mocks.buildPluginSnapshotReport(...args),
+  buildPluginDiagnosticsReport: (...args: unknown[]) => mocks.buildPluginDiagnosticsReport(...args),
   buildPluginCompatibilityWarnings: (...args: unknown[]) =>
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
@@ -54,6 +56,10 @@ async function runNoteWorkspaceStatusForTest(
     skills: [],
   });
   mocks.buildPluginSnapshotReport.mockReturnValue({
+    workspaceDir: "/workspace",
+    ...loadResult,
+  });
+  mocks.buildPluginDiagnosticsReport.mockReturnValue({
     workspaceDir: "/workspace",
     ...loadResult,
   });
@@ -86,6 +92,10 @@ describe("noteWorkspaceStatus", () => {
     );
     try {
       expect(mocks.buildPluginSnapshotReport).toHaveBeenCalledWith({
+        config: {},
+        workspaceDir: "/workspace",
+      });
+      expect(mocks.buildPluginDiagnosticsReport).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
       });
@@ -182,6 +192,10 @@ describe("noteWorkspaceStatus", () => {
       "legacy-plugin still uses legacy before_agent_start",
     ]);
     try {
+      expect(mocks.buildPluginDiagnosticsReport).toHaveBeenCalledWith({
+        config: {},
+        workspaceDir: "/workspace",
+      });
       expect(mocks.buildPluginCompatibilityWarnings).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
