@@ -99,9 +99,9 @@ async function resolveCompactionRequestAuth(
 
   if (typeof modelRegistry.getApiKeyForProvider === "function") {
     const apiKey = await modelRegistry.getApiKeyForProvider(model.provider);
-    return apiKey !== undefined
-      ? { ok: true, apiKey }
-      : { ok: false, error: `missing auth for provider "${model.provider}"` };
+    if (apiKey !== undefined) {
+      return { ok: true, apiKey };
+    }
   }
 
   if (typeof modelRegistry.getApiKey === "function") {

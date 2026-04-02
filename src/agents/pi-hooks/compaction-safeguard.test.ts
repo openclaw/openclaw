@@ -1732,16 +1732,33 @@ describe("compaction-safeguard extension model fallback", () => {
       includeGetApiKeyForProvider: true,
       getApiKeyForProviderMock,
     });
-    const result = await compactionHandler(createCompactionEvent({ messageText: "test", tokensBefore: 500 }), mockContext);
+    const event = createCompactionEvent({ messageText: "test", tokensBefore: 500 });
+    const result = (await compactionHandler(
+      {
+        ...event,
+        preparation: {
+          ...event.preparation,
+          settings: { reserveTokens: 4_000 },
+        },
+      },
+      mockContext,
+    )) as {
+      cancel?: boolean;
+      compaction?: {
+        summary: string;
+        firstKeptEntryId: string;
+        tokensBefore: number;
+      };
+    };
 
-    expect(result).toBeDefined();
+    const compaction = expectCompactionResult(result);
     expect(getApiKeyForProviderMock).toHaveBeenCalledWith(model.provider);
-    expect(consumeCompactionSafeguardCancelReason(sessionManager) ?? "").not.toContain(
-      "model registry auth lookup unavailable",
-    );
+    expect(compaction.firstKeptEntryId).toBe("entry-1");
+    expect(compaction.tokensBefore).toBe(500);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
   });
 
-  it("falls back to legacy getApiKey when request auth lookup is unavailable", async () => {
+  it("falls through to legacy getApiKey when provider auth lookup misses", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue(
       [
@@ -1760,6 +1777,7 @@ describe("compaction-safeguard extension model fallback", () => {
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
+    const getApiKeyForProviderMock = vi.fn().mockResolvedValue(undefined);
     const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
     setCompactionSafeguardRuntime(sessionManager, { model });
 
@@ -1767,16 +1785,36 @@ describe("compaction-safeguard extension model fallback", () => {
     const mockContext = createCompactionContext({
       sessionManager,
       includeGetApiKeyAndHeaders: false,
+      includeGetApiKeyForProvider: true,
+      getApiKeyForProviderMock,
       includeGetApiKey: true,
       getApiKeyMock,
     });
-    const result = await compactionHandler(createCompactionEvent({ messageText: "test", tokensBefore: 500 }), mockContext);
+    const event = createCompactionEvent({ messageText: "test", tokensBefore: 500 });
+    const result = (await compactionHandler(
+      {
+        ...event,
+        preparation: {
+          ...event.preparation,
+          settings: { reserveTokens: 4_000 },
+        },
+      },
+      mockContext,
+    )) as {
+      cancel?: boolean;
+      compaction?: {
+        summary: string;
+        firstKeptEntryId: string;
+        tokensBefore: number;
+      };
+    };
 
-    expect(result).toBeDefined();
+    const compaction = expectCompactionResult(result);
+    expect(getApiKeyForProviderMock).toHaveBeenCalledWith(model.provider);
     expect(getApiKeyMock).toHaveBeenCalledWith(model);
-    expect(consumeCompactionSafeguardCancelReason(sessionManager) ?? "").not.toContain(
-      "model registry auth lookup unavailable",
-    );
+    expect(compaction.firstKeptEntryId).toBe("entry-1");
+    expect(compaction.tokensBefore).toBe(500);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
   });
 
   it("records a clear cancel reason when no compatible auth lookup exists", async () => {
