@@ -287,3 +287,13 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     );
   });
 });
+
+describe("channelsStatusCommand option validation", () => {
+  it("throws for invalid timeout values", async () => {
+    const { runtime } = createCapturingTestRuntime();
+
+    await expect(
+      channelsStatusCommand({ probe: false, timeout: "0" }, runtime as never),
+    ).rejects.toThrow("invalid --timeout: 0");
+  });
+});
