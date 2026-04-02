@@ -1,6 +1,6 @@
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import type { CoreConfig } from "../../types.js";
-import { resolveMatrixAccountConfig } from "../accounts.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixInboundRoute } from "./route.js";
