@@ -116,12 +116,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 ## Use the right auth flow
 
 - OpenClaw publish uses GitHub trusted publishing.
-- Stable npm promotion from `beta` to `latest` also uses GitHub Actions OIDC by
-  exchanging the workflow token for a short-lived npm registry token; it should
-  not depend on a stored `NPM_TOKEN`.
-- Keep that promotion inside `.github/workflows/openclaw-npm-release.yml`.
-  npm trusted publishing is bound to the trusted workflow file identity, so a
-  separate promotion workflow needs its own npm trust configuration.
+- Stable npm promotion from `beta` to `latest` is an explicit mode on
+  `.github/workflows/openclaw-npm-release.yml`, but it still needs a valid
+  `NPM_TOKEN` because `npm dist-tag` management is separate from trusted
+  publishing.
 - The publish run must be started manually with `workflow_dispatch`.
 - The npm workflow and the private mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
