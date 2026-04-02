@@ -766,28 +766,36 @@ function stripDelimitedBlock(text: string, begin: string, end: string): string {
   }
 }
 
+// Legacy cleanup is intentionally conservative: only strip the old unmarked
+// internal block when the text starts with the exact canonical preamble.
+// Ordinary replies that merely mention these strings must survive untouched.
+const LEGACY_INTERNAL_CONTEXT_PREFIX = [
+  "OpenClaw runtime context (internal):",
+  "This context is runtime-generated, not user-authored. Keep internal details private.",
+  "",
+  "[Internal task completion event]",
+].join("\n");
+
+function stripLegacyInternalRuntimeContext(text: string): string {
+  const trimmedStart = text.trimStart();
+  if (!trimmedStart.startsWith(LEGACY_INTERNAL_CONTEXT_PREFIX)) {
+    return text;
+  }
+  return "";
+}
+
 function stripInternalRuntimeContext(text: string): string {
   if (!text) {
     return text;
   }
 
-  let next = stripDelimitedBlock(
+  const withoutDelimitedBlocks = stripDelimitedBlock(
     text,
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
     INTERNAL_RUNTIME_CONTEXT_END,
   );
 
-  const legacyHeaderIndex = next.indexOf("OpenClaw runtime context (internal):");
-  if (legacyHeaderIndex !== -1) {
-    return next.slice(0, legacyHeaderIndex).trimEnd();
-  }
-
-  const legacyTaskIndex = next.indexOf("[Internal task completion event]");
-  if (legacyTaskIndex !== -1) {
-    return next.slice(0, legacyTaskIndex).trimEnd();
-  }
-
-  return next;
+  return stripLegacyInternalRuntimeContext(withoutDelimitedBlocks);
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {

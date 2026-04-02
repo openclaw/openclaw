@@ -206,6 +206,22 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("");
   });
 
+  it("does not strip ordinary text that merely mentions internal marker strings", () => {
+    const input = [
+      "The literal header `OpenClaw runtime context (internal):` appears in this note.",
+      "The phrase `[Internal task completion event]` is also mentioned as an example.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
+  it("does not strip text that starts with the legacy header phrase but is not the canonical block", () => {
+    const input =
+      "OpenClaw runtime context (internal): is the label used by the old runtime block formatter.";
+
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
   it.each(["\n\n", "  \n  "])("returns empty for whitespace-only input: %j", (input) => {
     expect(sanitizeUserFacingText(input)).toBe("");
   });
