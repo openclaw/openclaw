@@ -20,6 +20,7 @@ export function registerLazyCommand({
   const placeholder = program.command(name).description(description);
   placeholder.allowUnknownOption(true);
   placeholder.allowExcessArguments(true);
+  placeholder.helpOption(false);
   placeholder.action(async (...actionArgs) => {
     for (const commandName of new Set(removeNames ?? [name])) {
       removeCommandByName(program, commandName);

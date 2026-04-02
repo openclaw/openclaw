@@ -130,6 +130,28 @@ describe("registerSubCliCommands", () => {
     expect(nodesAction).toHaveBeenCalledTimes(1);
   });
 
+  it("passes --help through to the real subcommand via re-parse", async () => {
+    const program = createRegisteredProgram(["node", "openclaw", "nodes", "list"], "openclaw");
+    program.exitOverride();
+
+    let helpOutput = "";
+    program.configureOutput({ writeOut: (str) => (helpOutput += str), writeErr: () => {} });
+
+    // Before fix: --help was intercepted by the placeholder and showed parent help.
+    // After fix: --help passes through to action, re-parse routes to the real subcommand.
+    try {
+      await program.parseAsync(["nodes", "list", "--help"], { from: "user" });
+    } catch (err: unknown) {
+      // Commander throws with exitOverride when outputting help — that's expected.
+      expect((err as { code?: string }).code).toBe("commander.helpDisplayed");
+    }
+
+    // The real CLI module was loaded (placeholder didn't swallow --help).
+    expect(registerNodesCli).toHaveBeenCalledTimes(1);
+    // Help output came from the real "list" subcommand, not the placeholder.
+    expect(helpOutput).toContain("list");
+  });
+
   it("replaces placeholder when registering a subcommand by name", async () => {
     const program = createRegisteredProgram(["node", "openclaw", "acp", "--help"], "openclaw");
 
