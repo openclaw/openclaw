@@ -1690,7 +1690,7 @@ describe("compaction-safeguard extension model fallback", () => {
 
     // KEY ASSERTION: Prove the fallback path was exercised
     // The handler should have resolved request auth with runtime.model
-    // (via ctx.model ?? runtime?.model).
+    // (via runtime?.model ?? ctx.model).
     expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
 
     // Verify runtime.model is still available (for completeness)
