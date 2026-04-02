@@ -367,12 +367,15 @@ async function evaluateSystemRunPolicyPhase(
     allowlist: approvals.allowlist,
     commandText: parsed.commandText,
   });
+  const inlineEvalExecutableTrusted =
+    inlineEvalHit !== null &&
+    segmentAllowlistEntries.some((entry) => entry?.source === "allow-always");
   const policy = evaluateSystemRunPolicy({
     security,
     ask,
     analysisOk,
     allowlistSatisfied,
-    durableApprovalSatisfied,
+    durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
     approvalDecision: parsed.approvalDecision,
     approved: parsed.approved,
     isWindows,
@@ -563,18 +566,17 @@ async function executeSystemRunPhase(
   }
 
   if (phase.policy.approvalDecision === "allow-always" && phase.inlineEvalHit === null) {
-    const patterns =
-      phase.policy.analysisOk
-        ? persistAllowAlwaysPatterns({
-            approvals: phase.approvals.file,
-            agentId: phase.agentId,
-            segments: phase.segments,
-            cwd: phase.cwd,
-            env: phase.env,
-            platform: process.platform,
-            strictInlineEval: phase.strictInlineEval,
-          })
-        : [];
+    const patterns = phase.policy.analysisOk
+      ? persistAllowAlwaysPatterns({
+          approvals: phase.approvals.file,
+          agentId: phase.agentId,
+          segments: phase.segments,
+          cwd: phase.cwd,
+          env: phase.env,
+          platform: process.platform,
+          strictInlineEval: phase.strictInlineEval,
+        })
+      : [];
     if (patterns.length === 0) {
       addDurableCommandApproval(phase.approvals.file, phase.agentId, phase.commandText);
     }
@@ -585,7 +587,10 @@ async function executeSystemRunPhase(
     agentId: phase.agentId,
     matches: phase.allowlistMatches,
     command: phase.commandText,
-    resolvedPath: resolveApprovalAuditCandidatePath(phase.segments[0]?.resolution ?? null, phase.cwd),
+    resolvedPath: resolveApprovalAuditCandidatePath(
+      phase.segments[0]?.resolution ?? null,
+      phase.cwd,
+    ),
   });
 
   if (phase.needsScreenRecording) {
