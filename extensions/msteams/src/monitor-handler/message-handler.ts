@@ -33,6 +33,7 @@ import {
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsBotMentionTag,
+  stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
@@ -85,6 +86,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     context: MSTeamsTurnContext;
     rawText: string;
     text: string;
+    /** All mentions stripped — used for command detection so @Name doesn't break /slash commands. */
+    commandText: string;
     attachments: MSTeamsAttachmentLike[];
     wasMentioned: boolean;
     implicitMention: boolean;
@@ -95,6 +98,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const activity = context.activity;
     const rawText = params.rawText;
     const text = params.text;
+    const commandText = params.commandText;
     const attachments = params.attachments;
     const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
     const rawBody = text || attachmentPlaceholder;
@@ -555,7 +559,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             timestamp: entry.timestamp,
           }))
         : undefined;
-    const commandBody = text.trim();
+    const commandBody = commandText.trim();
 
     // Prepend thread history to the agent body so the agent has full thread context.
     const bodyForAgent = threadContext
@@ -739,10 +743,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         .join("\n");
       const wasMentioned = entries.some((entry) => entry.wasMentioned);
       const implicitMention = entries.some((entry) => entry.implicitMention);
+      const combinedCommandText = entries
+        .map((entry) => entry.commandText)
+        .filter(Boolean)
+        .join("\n");
       await handleTeamsMessageNow({
         context: last.context,
         rawText: combinedRawText,
         text: combinedText,
+        commandText: combinedCommandText,
         attachments: [],
         wasMentioned,
         implicitMention,
@@ -762,6 +771,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     ) as { type?: string; mentioned?: { id?: string; name?: string } } | undefined;
     const botMentionName = botMentionEntity?.mentioned?.name;
     const text = stripMSTeamsBotMentionTag(rawText, botMentionName);
+    // Strip all mentions for command detection — preserved @Name mentions would
+    // break slash command parsing (e.g., "@Alice /status" fails to detect "/status").
+    const commandText = stripMSTeamsMentionTags(rawText);
     const attachments = Array.isArray(activity.attachments)
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
       : [];
@@ -776,6 +788,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       context,
       rawText,
       text,
+      commandText,
       attachments,
       wasMentioned,
       implicitMention,
