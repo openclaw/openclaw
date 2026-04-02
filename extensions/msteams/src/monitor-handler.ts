@@ -253,6 +253,10 @@ async function handleFeedbackInvoke(
   const isChannel = convType === "channel";
 
   const core = getMSTeamsRuntime();
+  // TODO(#58615 follow-up): feedback events use the channel-level session key.
+  // When thread isolation is enabled, feedback given in a thread will be recorded
+  // in the wrong session. Apply resolveThreadSessionKeys here once the feedback
+  // invoke payload is confirmed to carry replyToId.
   const route = core.channel.routing.resolveAgentRoute({
     cfg: deps.cfg,
     channel: "msteams",

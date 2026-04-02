@@ -276,6 +276,12 @@ export async function buildActivity(
 ): Promise<Record<string, unknown>> {
   const activity: Record<string, unknown> = { type: "message" };
 
+  // Thread targeting: set replyToId early so all return paths (including
+  // SharePoint file card and OneDrive link early returns) land in the correct thread.
+  if (conversationRef.replyToId) {
+    activity.replyToId = conversationRef.replyToId;
+  }
+
   // Mark as AI-generated so Teams renders the "AI generated" badge.
   activity.channelData = {
     feedbackLoopEnabled: options?.feedbackLoopEnabled ?? false,

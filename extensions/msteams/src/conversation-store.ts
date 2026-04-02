@@ -36,6 +36,8 @@ export type StoredConversationReference = {
   graphChatId?: string;
   /** IANA timezone from Teams clientInfo entity (e.g. "America/New_York") */
   timezone?: string;
+  /** Thread parent message ID for channel thread replies (used for outbound thread targeting). */
+  replyToId?: string;
 };
 
 export type MSTeamsConversationStoreEntry = {

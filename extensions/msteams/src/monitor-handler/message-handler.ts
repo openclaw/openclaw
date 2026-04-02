@@ -1,3 +1,4 @@
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -31,6 +32,7 @@ import {
   extractMSTeamsQuoteInfo,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
+  stripMSTeamsBotMentionTag,
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
@@ -84,6 +86,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     context: MSTeamsTurnContext;
     rawText: string;
     text: string;
+    /** All mentions stripped — used for command detection so @Name doesn't break /slash commands. */
+    commandText: string;
     attachments: MSTeamsAttachmentLike[];
     wasMentioned: boolean;
     implicitMention: boolean;
@@ -94,6 +98,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const activity = context.activity;
     const rawText = params.rawText;
     const text = params.text;
+    const commandText = params.commandText;
     const attachments = params.attachments;
     const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
     const rawBody = text || attachmentPlaceholder;
@@ -376,13 +381,38 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       },
     });
 
+    const threadBindingsEnabled = cfg.session?.threadBindings?.enabled === true;
+    const isThreadReply = Boolean(activity.replyToId && isChannel && threadBindingsEnabled);
+    const threadId = isThreadReply ? activity.replyToId : undefined;
+    // Normalize once — resolveThreadSessionKeys lowercases by default, so all key
+    // derivations (session key, history key, store key) must use the same form.
+    const normalizedThreadId = threadId?.toLowerCase();
+
+    const { sessionKey, parentSessionKey } = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId,
+      parentSessionKey: threadId ? route.sessionKey : undefined,
+    });
+
+    // Store thread-level reference for proactive outbound targeting.
+    if (isThreadReply && normalizedThreadId) {
+      const threadRef: StoredConversationReference = { ...conversationRef, replyToId: threadId };
+      conversationStore
+        .upsert(`${conversationId}:thread:${normalizedThreadId}`, threadRef)
+        .catch((err) => {
+          log.debug?.("failed to save thread conversation reference", {
+            error: formatUnknownError(err),
+          });
+        });
+    }
+
     const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
       : `Teams message in ${conversationType} from ${senderName}`;
 
     core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
-      sessionKey: route.sessionKey,
+      sessionKey,
       contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
     });
 
@@ -414,7 +444,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         });
         recordPendingHistoryEntryIfEnabled({
           historyMap: conversationHistories,
-          historyKey: conversationId,
+          historyKey: isThreadReply
+            ? `${conversationId}:thread:${normalizedThreadId}`
+            : conversationId,
           limit: historyLimit,
           entry: {
             sender: senderName,
@@ -485,7 +517,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
       cfg,
       agentId: route.agentId,
-      sessionKey: route.sessionKey,
+      sessionKey,
     });
     const body = core.channel.reply.formatAgentEnvelope({
       channel: "Teams",
@@ -497,7 +529,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
     let combinedBody = body;
     const isRoomish = !isDirectMessage;
-    const historyKey = isRoomish ? conversationId : undefined;
+    const historyKey = isRoomish
+      ? isThreadReply
+        ? `${conversationId}:thread:${normalizedThreadId}`
+        : conversationId
+      : undefined;
     if (isRoomish && historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: conversationHistories,
@@ -523,7 +559,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             timestamp: entry.timestamp,
           }))
         : undefined;
-    const commandBody = text.trim();
+    const commandBody = commandText.trim();
 
     // Prepend thread history to the agent body so the agent has full thread context.
     const bodyForAgent = threadContext
@@ -539,7 +575,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       BodyForCommands: commandBody,
       From: teamsFrom,
       To: teamsTo,
-      SessionKey: route.sessionKey,
+      SessionKey: sessionKey,
+      ParentSessionKey: parentSessionKey,
+      MessageThreadId: threadId,
       AccountId: route.accountId,
       ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
       ConversationLabel: envelopeFrom,
@@ -563,7 +601,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     await core.channel.session.recordInboundSession({
       storePath,
-      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+      sessionKey: ctxPayload.SessionKey ?? sessionKey,
       ctx: ctxPayload,
       onRecordError: (err) => {
         logVerboseMessage(`msteams: failed updating session meta: ${formatUnknownError(err)}`);
@@ -573,6 +611,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
 
     const sharePointSiteId = msteamsCfg?.sharePointSiteId;
+    const dispatcherRef: StoredConversationReference =
+      isThreadReply && threadId ? { ...conversationRef, replyToId: threadId } : conversationRef;
     const { dispatcher, replyOptions, markDispatchIdle } = createMSTeamsReplyDispatcher({
       cfg,
       agentId: route.agentId,
@@ -581,7 +621,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       log,
       adapter,
       appId,
-      conversationRef,
+      conversationRef: dispatcherRef,
       context,
       replyStyle,
       textLimit,
@@ -608,7 +648,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           }
         : undefined;
 
-    log.info("dispatching to agent", { sessionKey: route.sessionKey });
+    log.info("dispatching to agent", { sessionKey });
     try {
       const { queuedFinal, counts } = await dispatchReplyFromConfigWithSettledDispatcher({
         cfg,
@@ -664,7 +704,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       if (!senderId || !conversationId) {
         return null;
       }
-      return `msteams:${appId}:${conversationId}:${senderId}`;
+      // Include replyToId in debounce key when thread bindings are enabled so that
+      // rapid messages from the same user in different threads are not merged.
+      const threadSuffix =
+        cfg.session?.threadBindings?.enabled === true && entry.context.activity.replyToId
+          ? `:${entry.context.activity.replyToId}`
+          : "";
+      return `msteams:${appId}:${conversationId}:${senderId}${threadSuffix}`;
     },
     shouldDebounce: (entry) => {
       if (!entry.text.trim()) {
@@ -673,7 +719,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       if (entry.attachments.length > 0) {
         return false;
       }
-      return !core.channel.text.hasControlCommand(entry.text, cfg);
+      // Use commandText (all mentions stripped) so that mention-prefixed slash
+      // commands like "@Alice /status" still bypass debounce.
+      return !core.channel.text.hasControlCommand(entry.commandText, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -697,10 +745,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         .join("\n");
       const wasMentioned = entries.some((entry) => entry.wasMentioned);
       const implicitMention = entries.some((entry) => entry.implicitMention);
+      const combinedCommandText = entries
+        .map((entry) => entry.commandText)
+        .filter(Boolean)
+        .join("\n");
       await handleTeamsMessageNow({
         context: last.context,
         rawText: combinedRawText,
         text: combinedText,
+        commandText: combinedCommandText,
         attachments: [],
         wasMentioned,
         implicitMention,
@@ -714,7 +767,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   return async function handleTeamsMessage(context: MSTeamsTurnContext) {
     const activity = context.activity;
     const rawText = activity.text?.trim() ?? "";
-    const text = stripMSTeamsMentionTags(rawText);
+    const botMentionEntity = activity.entities?.find(
+      (e: { type?: string; mentioned?: { id?: string; name?: string } }) =>
+        e.type === "mention" && e.mentioned?.id === activity.recipient?.id,
+    ) as { type?: string; mentioned?: { id?: string; name?: string } } | undefined;
+    const botMentionName = botMentionEntity?.mentioned?.name;
+    const text = stripMSTeamsBotMentionTag(rawText, botMentionName);
+    // Strip all mentions for command detection — preserved @Name mentions would
+    // break slash command parsing (e.g., "@Alice /status" fails to detect "/status").
+    const commandText = stripMSTeamsMentionTags(rawText);
     const attachments = Array.isArray(activity.attachments)
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
       : [];
@@ -729,6 +790,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       context,
       rawText,
       text,
+      commandText,
       attachments,
       wasMentioned,
       implicitMention,

@@ -5,6 +5,7 @@ import {
   htmlToPlainText,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
+  stripMSTeamsBotMentionTag,
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
 } from "./inbound.js";
@@ -19,6 +20,61 @@ describe("msteams inbound", () => {
     it("removes <at ...> tags with attributes", () => {
       expect(stripMSTeamsMentionTags('<at id="1">Bot</at> hi')).toBe("hi");
       expect(stripMSTeamsMentionTags('hi <at itemid="2">Bot</at>')).toBe("hi");
+    });
+  });
+
+  describe("stripMSTeamsBotMentionTag", () => {
+    it("strips only the bot mention and preserves other user mentions as @Name", () => {
+      expect(
+        stripMSTeamsBotMentionTag("<at>Bot</at> <at>John</at> what do you think?", "Bot"),
+      ).toBe("@John what do you think?");
+    });
+
+    it("handles bot mention with attributes", () => {
+      expect(stripMSTeamsBotMentionTag('<at id="1">Bot</at> <at>Alice</at> hello', "Bot")).toBe(
+        "@Alice hello",
+      );
+    });
+
+    it("is case-insensitive when matching bot name", () => {
+      expect(stripMSTeamsBotMentionTag("<at>MyBot</at> hi <at>Dave</at>", "mybot")).toBe(
+        "hi @Dave",
+      );
+    });
+
+    it("converts multiple non-bot mentions to @Name", () => {
+      expect(
+        stripMSTeamsBotMentionTag(
+          "<at>Bot</at> <at>Alice</at> and <at>Bob</at> please review",
+          "Bot",
+        ),
+      ).toBe("@Alice and @Bob please review");
+    });
+
+    it("falls back to stripping all mentions when botMentionName is undefined", () => {
+      expect(stripMSTeamsBotMentionTag("<at>Bot</at> <at>John</at> hi", undefined)).toBe("hi");
+    });
+
+    it("falls back to stripping all mentions when botMentionName is empty", () => {
+      expect(stripMSTeamsBotMentionTag("<at>Bot</at> <at>John</at> hi", "")).toBe("hi");
+    });
+
+    it("handles message with only bot mention", () => {
+      expect(stripMSTeamsBotMentionTag("<at>Bot</at> hello world", "Bot")).toBe("hello world");
+    });
+
+    it("handles message with no mentions", () => {
+      expect(stripMSTeamsBotMentionTag("plain text message", "Bot")).toBe("plain text message");
+    });
+
+    it("handles bot name with regex special characters", () => {
+      expect(stripMSTeamsBotMentionTag("<at>Bot (Test)</at> hi", "Bot (Test)")).toBe("hi");
+    });
+
+    it("preserves user mention when bot mention not found (graceful degradation)", () => {
+      expect(stripMSTeamsBotMentionTag("<at>OtherBot</at> <at>John</at> hi", "MyBot")).toBe(
+        "@OtherBot @John hi",
+      );
     });
   });
 

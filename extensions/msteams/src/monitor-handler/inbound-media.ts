@@ -52,11 +52,20 @@ export async function resolveMSTeamsInboundMedia(params: {
   });
 
   if (mediaList.length === 0) {
-    const onlyHtmlAttachments =
+    // Fall back to Graph API when direct download produced nothing and attachments
+    // look like they could contain downloadable media. Only trigger for text/html
+    // (Teams file thumbnails, inline images) and file.download.info (Teams file
+    // attachments that may lack a downloadUrl in thread replies). Skip Adaptive Cards,
+    // Hero Cards, and other metadata-only content types to avoid unnecessary Graph calls.
+    const mayHaveDownloadableMedia =
       attachments.length > 0 &&
-      attachments.every((att) => String(att.contentType ?? "").startsWith("text/html"));
+      attachments.some(
+        (att) =>
+          String(att.contentType ?? "").startsWith("text/html") ||
+          String(att.contentType ?? "").includes("file.download.info"),
+      );
 
-    if (onlyHtmlAttachments) {
+    if (mayHaveDownloadableMedia) {
       const messageUrls = buildMSTeamsGraphMessageUrls({
         conversationType,
         conversationId,
