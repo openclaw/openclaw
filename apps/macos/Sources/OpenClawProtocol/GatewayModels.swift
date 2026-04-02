@@ -3428,18 +3428,22 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
 public struct ExecApprovalResolveParams: Codable, Sendable {
     public let id: String
     public let decision: String
+    public let sourcechannel: AnyCodable?
 
     public init(
         id: String,
-        decision: String)
+        decision: String,
+        sourcechannel: AnyCodable?)
     {
         self.id = id
         self.decision = decision
+        self.sourcechannel = sourcechannel
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case decision
+        case sourcechannel = "sourceChannel"
     }
 }
 
