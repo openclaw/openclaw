@@ -108,6 +108,20 @@ describe("buildDockerExecArgs", () => {
     expect(commandArg).not.toContain("echo $HOME");
   });
 
+  it("preserves inline env assignments before the executable", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "FOO=bar echo hi",
+      env: { HOME: "/home/user" },
+      tty: false,
+    });
+
+    const commandArg = args[args.length - 1];
+    expect(commandArg).toContain("FOO='bar'");
+    expect(commandArg).toMatch(/'[^']*echo'/);
+    expect(commandArg).toContain("'hi'");
+  });
+
   it("rejects unsupported shell token commands", () => {
     expect(() =>
       buildDockerExecArgs({

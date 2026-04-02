@@ -724,6 +724,7 @@ export function createExecTool(
       }
 
       if (host === "sandbox" && !bypassApprovals) {
+        const sandboxShellPlatform: NodeJS.Platform = "linux";
         const approvals = resolveExecApprovals(agentId, { security, ask });
         const hostSecurity = minSecurity(security, approvals.agent.security);
         if (hostSecurity === "deny") {
@@ -737,7 +738,7 @@ export function createExecTool(
             safeBinProfiles,
             cwd: workdir,
             env,
-            platform: process.platform,
+            platform: sandboxShellPlatform,
             trustedSafeBinDirs,
           });
           if (!allowlistEval.analysisOk || !allowlistEval.allowlistSatisfied) {
@@ -746,7 +747,7 @@ export function createExecTool(
           const enforced = buildEnforcedShellCommand({
             command: params.command,
             segments: allowlistEval.segments,
-            platform: process.platform,
+            platform: sandboxShellPlatform,
           });
           if (!enforced.ok || !enforced.command) {
             throw new Error("exec denied: allowlist execution plan unavailable");

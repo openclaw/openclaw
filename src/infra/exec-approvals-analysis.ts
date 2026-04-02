@@ -647,6 +647,22 @@ function renderQuotedArgv(argv: string[]): string {
   return argv.map((token) => shellEscapeSingleArg(token)).join(" ");
 }
 
+function parseShellEnvAssignmentToken(token: string): { key: string; value: string } | null {
+  const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/su.exec(token);
+  if (!match?.[1]) {
+    return null;
+  }
+  return { key: match[1], value: match[2] ?? "" };
+}
+
+function renderShellEnvAssignmentToken(token: string): string | null {
+  const parsed = parseShellEnvAssignmentToken(token);
+  if (!parsed) {
+    return null;
+  }
+  return `${parsed.key}=${shellEscapeSingleArg(parsed.value)}`;
+}
+
 function finalizeRebuiltShellCommand(
   rebuilt: ReturnType<typeof rebuildShellCommandFromSource>,
   expectedSegmentCount?: number,
@@ -743,7 +759,33 @@ export function buildEnforcedShellCommand(params: {
       if (!argv) {
         return { ok: false, reason: "segment execution plan unavailable" };
       }
-      return { ok: true, rendered: renderQuotedArgv(argv) };
+
+      let leadingAssignments = 0;
+      while (
+        leadingAssignments < seg.argv.length &&
+        parseShellEnvAssignmentToken(seg.argv[leadingAssignments] ?? "") !== null
+      ) {
+        leadingAssignments += 1;
+      }
+      if (leadingAssignments > argv.length) {
+        return { ok: false, reason: "segment execution plan unavailable" };
+      }
+
+      const renderedAssignments: string[] = [];
+      for (let i = 0; i < leadingAssignments; i += 1) {
+        const assignmentToken = seg.argv[i] ?? "";
+        const renderedAssignment = renderShellEnvAssignmentToken(assignmentToken);
+        if (!renderedAssignment) {
+          return { ok: false, reason: "segment execution plan unavailable" };
+        }
+        renderedAssignments.push(renderedAssignment);
+      }
+
+      const renderedArgv = renderQuotedArgv(argv.slice(leadingAssignments));
+      const rendered = [renderedAssignments.join(" "), renderedArgv]
+        .filter((part) => part.length > 0)
+        .join(" ");
+      return { ok: true, rendered };
     },
   });
   return finalizeRebuiltShellCommand(rebuilt, params.segments.length);

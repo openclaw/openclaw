@@ -68,6 +68,22 @@ describe("exec approvals shell analysis", () => {
       expect(res.command).not.toContain("'env'");
     });
 
+    it("preserves leading inline env assignments while enforcing command argv", () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const analysis = expectAnalyzedShellCommand("FOO=bar echo hi");
+      const res = buildEnforcedShellCommand({
+        command: "FOO=bar echo hi",
+        segments: analysis.segments,
+        platform: process.platform,
+      });
+      expect(res.ok).toBe(true);
+      expect(res.command).toContain("FOO='bar'");
+      expect(res.command).toMatch(/'[^']*echo'/);
+      expect(res.command).toContain("'hi'");
+    });
+
     it("keeps shell multiplexer rebuilds as coherent execution argv", () => {
       if (process.platform === "win32") {
         return;
