@@ -322,6 +322,9 @@ export async function resolveApiKeyForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  /** When true, treat profileId as a user-locked selection that must not be
+   *  silently overridden by env/config credentials (e.g. ollama-local). */
+  lockedProfile?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
@@ -343,17 +346,19 @@ export async function resolveApiKeyForProvider(params: {
       source: `profile:${profileId}`,
       mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
     };
-    // When the resolved key is the synthetic ollama-local marker, fall through
-    // to env/config resolution so real cloud credentials take precedence.
-    // The auth controller iterates profile candidates and passes each as an
-    // explicit profileId, so we cannot assume explicit === user-chosen.
+    // When the resolved key is the synthetic ollama-local marker and the
+    // caller has not locked this profile, fall through to env/config
+    // resolution so real cloud credentials take precedence. The auth
+    // controller iterates profile candidates and passes each as an explicit
+    // profileId, so we cannot assume explicit === user-locked.
     if (
+      !params.lockedProfile &&
       shouldDeferSyntheticOllamaProfileAuth({
         provider,
         resolvedApiKey: resolved.apiKey,
       })
     ) {
-      return resolveApiKeyForProvider({ ...params, profileId: undefined }) //
+      return resolveApiKeyForProvider({ ...params, profileId: undefined, lockedProfile: true }) //
         .catch(() => result);
     }
     return result;
@@ -593,6 +598,7 @@ export async function getApiKeyForModel(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  lockedProfile?: boolean;
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
     provider: params.model.provider,
@@ -601,6 +607,7 @@ export async function getApiKeyForModel(params: {
     preferredProfile: params.preferredProfile,
     store: params.store,
     agentDir: params.agentDir,
+    lockedProfile: params.lockedProfile,
   });
 }
 
