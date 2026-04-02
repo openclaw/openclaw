@@ -67,6 +67,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals/config: strip invalid `security`, `ask`, and `askFallback` values from `~/.openclaw/exec-approvals.json` during normalization so malformed policy enums fall back cleanly to the documented defaults instead of corrupting runtime policy resolution. (#59112) Thanks @openperf.
 - Gateway/session kill: enforce HTTP operator scopes on session kill requests and gate authorization before session lookup so unauthenticated callers cannot probe session existence. (#59128) Thanks @jacobtomlinson.
 - MS Teams/logging: format non-`Error` failures with the shared unknown-error helper so logs stop collapsing caught SDK or Axios objects into `[object Object]`. (#59321) Thanks @bradgroux.
+- Channels/setup: ignore untrusted workspace channel plugins during setup resolution so a shadowing workspace plugin cannot override built-in channel setup/login flows unless explicitly trusted in config. (#59158) Thanks @mappel-nv.
 - Gateway: prune empty `node-pending-work` state entries after explicit acknowledgments and natural expiry so the per-node state map no longer grows indefinitely. (#58179) Thanks @gavyngong.
 - Webhooks/secret comparison: replace ad-hoc timing-safe secret comparisons across BlueBubbles, Feishu, Mattermost, Telegram, Twilio, and Zalo webhook handlers with the shared `safeEqualSecret` helper and reject empty auth tokens in BlueBubbles. (#58432) Thanks @eleqtrizit.
 - OpenShell/mirror: constrain `remoteWorkspaceDir` and `remoteAgentWorkspaceDir` to the managed `/sandbox` and `/agent` roots so mirror sync cannot escape the intended remote workspace paths. (#58515) Thanks @eleqtrizit.
@@ -75,6 +76,7 @@ Docs: https://docs.openclaw.ai
 - OpenShell/mirror sync: constrain mirror sync to managed roots only so user-added shell roots are no longer overwritten or removed during config synchronization. (#58515) Thanks @eleqtrizit.
 - Dotenv/workspace overrides: block workspace `.env` files from overriding `OPENCLAW_PINNED_PYTHON` and `OPENCLAW_PINNED_WRITE_PYTHON` so trusted helper interpreters cannot be redirected by repo-local env injection. (#58473) Thanks @eleqtrizit.
 - Plugins/install: accept JSON5 syntax in `openclaw.plugin.json` and bundle `plugin.json` manifests during install/validation, so third-party plugins with trailing commas, comments, or unquoted keys no longer fail to install. (#59084) Thanks @singleGanghood.
+- Telegram/exec approvals: rewrite shared `/approve … allow-always` callback payloads to `/approve … always` before Telegram button rendering so plugin approval IDs still fit Telegram's `callback_data` limit and keep the Allow Always action visible. (#59217) Thanks @jameslcowan.
 
 ## 2026.4.1-beta.1
 
