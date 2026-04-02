@@ -371,6 +371,86 @@ export function formatLinuxSdBackedStateDirWarning(
   ].join("\n");
 }
 
+export type LinuxVolatileStateDir = {
+  path: string;
+  mountPoint: string;
+  fsType: string;
+};
+
+/** Filesystem types that do not survive a reboot. */
+const VOLATILE_FS_TYPES = new Set(["tmpfs", "ramfs", "overlay"]);
+
+/**
+ * Detect whether the state directory resides on a volatile (non-persistent)
+ * filesystem such as tmpfs, ramfs, or an overlay root.  These filesystems
+ * lose all data on reboot, which means sessions, credentials, and config
+ * are silently destroyed.
+ *
+ * Reuses the same /proc/self/mountinfo parsing and mount-point matching
+ * infrastructure as detectLinuxSdBackedStateDir.
+ */
+export function detectLinuxVolatileStateDir(
+  stateDir: string,
+  deps?: {
+    platform?: NodeJS.Platform;
+    mountInfo?: string;
+    resolveRealPath?: (targetPath: string) => string | null;
+  },
+): LinuxVolatileStateDir | null {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "linux") {
+    return null;
+  }
+  const linuxPath = path.posix;
+
+  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolvedStatePath = resolveRealPath(stateDir) ?? linuxPath.resolve(stateDir);
+  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
+  if (!mountInfo) {
+    return null;
+  }
+
+  const mountEntry = findLinuxMountInfoEntryForPath(
+    resolvedStatePath,
+    parseLinuxMountInfo(mountInfo),
+    linuxPath,
+  );
+  if (!mountEntry) {
+    return null;
+  }
+
+  if (!VOLATILE_FS_TYPES.has(mountEntry.fsType)) {
+    return null;
+  }
+
+  return {
+    path: linuxPath.resolve(resolvedStatePath),
+    mountPoint: linuxPath.resolve(mountEntry.mountPoint),
+    fsType: mountEntry.fsType,
+  };
+}
+
+/**
+ * Build a human-readable warning string for a volatile-filesystem state
+ * directory detection, following the same format conventions as
+ * formatLinuxSdBackedStateDirWarning.
+ */
+export function formatLinuxVolatileStateDirWarning(
+  displayStateDir: string,
+  volatileDir: LinuxVolatileStateDir,
+): string {
+  const safeFsType = escapeControlCharsForTerminal(volatileDir.fsType);
+  const safeMountPoint =
+    volatileDir.mountPoint === "/"
+      ? "/"
+      : escapeControlCharsForTerminal(shortenHomePath(volatileDir.mountPoint));
+  return [
+    `- State directory is on a volatile filesystem (${displayStateDir}; fs ${safeFsType}, mount ${safeMountPoint}).`,
+    "- Sessions, credentials, and config will be lost on reboot.",
+    "- Move OPENCLAW_STATE_DIR to a persistent filesystem to avoid data loss.",
+  ].join("\n");
+}
+
 export function detectMacCloudSyncedStateDir(
   stateDir: string,
   deps?: {
@@ -508,6 +588,7 @@ export async function noteStateIntegrity(
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
+  const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
   const suppressOrphanTranscriptWarning = shouldSuppressOrphanTranscriptWarning(cfg, agentId);
 
   if (cloudSyncedStateDir) {
@@ -522,6 +603,9 @@ export async function noteStateIntegrity(
   }
   if (linuxSdBackedStateDir) {
     warnings.push(formatLinuxSdBackedStateDirWarning(displayStateDir, linuxSdBackedStateDir));
+  }
+  if (linuxVolatileStateDir) {
+    warnings.push(formatLinuxVolatileStateDirWarning(displayStateDir, linuxVolatileStateDir));
   }
 
   let stateDirExists = existsDir(stateDir);
