@@ -1,8 +1,91 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveCliSpawnInvocation } from "./qmd-process.js";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: spawnMock,
+  };
+});
+
+import { runCliCommand, resolveCliSpawnInvocation } from "./qmd-process.js";
+
+type HungMockChild = EventEmitter & {
+  pid?: number;
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  kill: ReturnType<typeof vi.fn>;
+};
+
+function createHungChild(pid = 4321): HungMockChild {
+  const child = new EventEmitter() as HungMockChild;
+  child.pid = pid;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = vi.fn();
+  return child;
+}
+
+describe("runCliCommand timeout cleanup", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("kills the process group on POSIX timeout", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const processKillMock = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const child = createHungChild(4321);
+    spawnMock.mockReturnValue(child);
+
+    const promise = runCliCommand({
+      commandSummary: "qmd search",
+      spawnInvocation: { command: "qmd", argv: ["search", "hello"] },
+      env: process.env,
+      cwd: "/tmp",
+      timeoutMs: 25,
+      maxOutputChars: 1000,
+    });
+    const rejection = expect(promise).rejects.toThrow("qmd search timed out after 25ms");
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    await rejection;
+    expect(processKillMock).toHaveBeenCalledWith(-4321, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("falls back to child.kill on Windows timeout", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const processKillMock = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const child = createHungChild(9876);
+    spawnMock.mockReturnValue(child);
+
+    const promise = runCliCommand({
+      commandSummary: "qmd search",
+      spawnInvocation: { command: "qmd", argv: ["search", "hello"] },
+      env: process.env,
+      cwd: "/tmp",
+      timeoutMs: 25,
+      maxOutputChars: 1000,
+    });
+    const rejection = expect(promise).rejects.toThrow("qmd search timed out after 25ms");
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    await rejection;
+    expect(processKillMock).not.toHaveBeenCalled();
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+});
 
 describe("resolveCliSpawnInvocation", () => {
   let tempDir = "";
@@ -11,6 +94,7 @@ describe("resolveCliSpawnInvocation", () => {
   const originalPathExt = process.env.PATHEXT;
 
   beforeEach(async () => {
+    spawnMock.mockReset();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-win-spawn-"));
     platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   });
