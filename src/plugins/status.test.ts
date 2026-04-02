@@ -88,25 +88,39 @@ function expectInspectReport(
 
 function expectPluginLoaderCall(params: {
   config?: unknown;
+  activationSourceConfig?: unknown;
+  autoEnabledReasons?: Record<string, string[]>;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }) {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
     expect.objectContaining({
       ...(params.config !== undefined ? { config: params.config } : {}),
+      ...(params.activationSourceConfig !== undefined
+        ? { activationSourceConfig: params.activationSourceConfig }
+        : {}),
+      ...(params.autoEnabledReasons !== undefined
+        ? { autoEnabledReasons: params.autoEnabledReasons }
+        : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.env ? { env: params.env } : {}),
     }),
   );
 }
 
-function expectAutoEnabledStatusLoad(params: { rawConfig: unknown; autoEnabledConfig: unknown }) {
+function expectAutoEnabledStatusLoad(params: {
+  rawConfig: unknown;
+  autoEnabledConfig: unknown;
+  autoEnabledReasons?: Record<string, string[]>;
+}) {
   expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
     config: params.rawConfig,
     env: process.env,
   });
   expectPluginLoaderCall({
     config: params.autoEnabledConfig,
+    activationSourceConfig: params.rawConfig,
+    autoEnabledReasons: params.autoEnabledReasons ?? {},
   });
 }
 
@@ -237,6 +251,7 @@ describe("buildPluginStatusReport", () => {
     applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
       config: params.config,
       changes: [],
+      autoEnabledReasons: {},
     }));
     resolveBundledProviderCompatPluginIdsMock.mockReturnValue([]);
     withBundledPluginAllowlistCompatMock.mockImplementation(
@@ -271,13 +286,22 @@ describe("buildPluginStatusReport", () => {
       },
       { channels: { demo: { enabled: true } } },
     );
-    applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
+    });
 
     buildPluginStatusReport({ config: rawConfig });
 
     expectAutoEnabledStatusLoad({
       rawConfig,
       autoEnabledConfig,
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
     });
   });
 
@@ -295,7 +319,13 @@ describe("buildPluginStatusReport", () => {
       },
       { channels: { demo: { enabled: true } } },
     );
-    applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
+    });
     setSinglePluginLoadResult(
       createPluginRecord({
         id: "demo",
@@ -314,6 +344,47 @@ describe("buildPluginStatusReport", () => {
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.4"],
       hasAllowedModelsConfig: true,
+    });
+  });
+
+  it("preserves raw config activation context when compatibility notices build their own report", () => {
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
+      {
+        demo: { enabled: true },
+      },
+      { channels: { demo: { enabled: true } } },
+    );
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
+    });
+    setSinglePluginLoadResult(
+      createPluginRecord({
+        id: "demo",
+        name: "Demo",
+        description: "Auto-enabled plugin",
+        origin: "bundled",
+        hookCount: 1,
+      }),
+      {
+        typedHooks: [createTypedHook({ pluginId: "demo", hookName: "before_agent_start" })],
+      },
+    );
+
+    expect(buildPluginCompatibilityNotices({ config: rawConfig })).toEqual([
+      createCompatibilityNotice({ pluginId: "demo", code: "legacy-before-agent-start" }),
+      createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
+    ]);
+
+    expectAutoEnabledStatusLoad({
+      rawConfig,
+      autoEnabledConfig,
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
     });
   });
 
