@@ -25,6 +25,7 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry, resolveLineGroupHistoryKey } from "./group-keys.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 interface MediaRef {
   path: string;
@@ -406,7 +407,7 @@ async function finalizeLineInboundContext(params: {
         }
       : undefined,
     onRecordError: (err) => {
-      logVerbose(`line: failed updating session meta: ${String(err)}`);
+      logVerbose(`line: failed updating session meta: ${formatErrorMessage(err)}`);
     },
   });
 

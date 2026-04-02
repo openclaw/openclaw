@@ -5,6 +5,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import type { LineSendResult } from "./types.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 type Message = messagingApi.Message;
 type TextMessage = messagingApi.TextMessage;
@@ -433,7 +434,7 @@ export async function showLoadingAnimation(
     });
     logVerbose(`line: showing loading animation to ${chatId}`);
   } catch (err) {
-    logVerbose(`line: loading animation failed (non-fatal): ${String(err)}`);
+    logVerbose(`line: loading animation failed (non-fatal): ${formatErrorMessage(err)}`);
   }
 }
 
@@ -466,7 +467,7 @@ export async function getUserProfile(
 
     return result;
   } catch (err) {
-    logVerbose(`line: failed to fetch profile for ${userId}: ${String(err)}`);
+    logVerbose(`line: failed to fetch profile for ${userId}: ${formatErrorMessage(err)}`);
     return null;
   }
 }

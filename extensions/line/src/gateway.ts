@@ -7,6 +7,7 @@ import {
   type ResolvedLineAccount,
 } from "../api.js";
 import { getLineRuntime } from "./runtime.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["gateway"]> = {
   startAccount: async (ctx) => {
@@ -33,7 +34,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
       }
     } catch (err) {
       if (getLineRuntime().logging.shouldLogVerbose()) {
-        ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+        ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${formatErrorMessage(err)}`);
       }
     }
 

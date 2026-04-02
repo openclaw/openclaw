@@ -2,6 +2,7 @@ import type { WebhookRequestBody } from "@line/bot-sdk";
 import type { NextFunction, Request, Response } from "express";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const LINE_WEBHOOK_MAX_RAW_BODY_BYTES = 64 * 1024;
 
@@ -73,7 +74,7 @@ export function createLineWebhookMiddleware(
 
       res.status(200).json({ status: "ok" });
     } catch (err) {
-      runtime?.error?.(danger(`line webhook error: ${String(err)}`));
+      runtime?.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
       if (!res.headersSent) {
         res.status(500).json({ error: "Internal server error" });
       }

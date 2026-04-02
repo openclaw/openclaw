@@ -1,6 +1,7 @@
 import { messagingApi } from "@line/bot-sdk";
 import { withTimeout } from "openclaw/plugin-sdk/text-runtime";
 import type { LineProbeResult } from "./types.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export async function probeLineBot(
   channelAccessToken: string,
@@ -27,7 +28,7 @@ export async function probeLineBot(
       },
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = err instanceof Error ? err.message : formatErrorMessage(err);
     return { ok: false, error: message };
   }
 }

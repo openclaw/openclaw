@@ -7,6 +7,7 @@ import {
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
@@ -120,7 +121,7 @@ export function createLineNodeWebhookHandler(params: {
         res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
         return;
       }
-      params.runtime.error?.(danger(`line webhook error: ${String(err)}`));
+      params.runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
       if (!res.headersSent) {
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");

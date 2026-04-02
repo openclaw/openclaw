@@ -39,6 +39,7 @@ import {
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -256,7 +257,7 @@ export async function monitorLineProvider(
               });
             },
             onError: (err, info) => {
-              runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
+              runtime.error?.(danger(`line ${info.kind} reply failed: ${formatErrorMessage(err)}`));
             },
           },
           replyOptions: {
@@ -268,7 +269,7 @@ export async function monitorLineProvider(
           logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
         }
       } catch (err) {
-        runtime.error?.(danger(`line: auto-reply failed: ${String(err)}`));
+        runtime.error?.(danger(`line: auto-reply failed: ${formatErrorMessage(err)}`));
 
         if (replyToken) {
           try {

@@ -52,6 +52,7 @@ import { downloadLineMedia } from "./download.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 interface MediaRef {
   path: string;
@@ -269,7 +270,7 @@ async function sendLinePairingReply(params: {
           });
           return;
         } catch (err) {
-          logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
+          logVerbose(`line pairing reply failed for ${senderId}: ${formatErrorMessage(err)}`);
         }
       }
       try {
@@ -278,7 +279,7 @@ async function sendLinePairingReply(params: {
           channelAccessToken: context.account.channelAccessToken,
         });
       } catch (err) {
-        logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
+        logVerbose(`line pairing reply failed for ${senderId}: ${formatErrorMessage(err)}`);
       }
     },
   });
@@ -543,7 +544,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         contentType: media.contentType,
       });
     } catch (err) {
-      const errMsg = String(err);
+      const errMsg = formatErrorMessage(err);
       if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
         logVerbose(`line: media exceeds size limit for message ${message.id}`);
       } else {
@@ -644,7 +645,7 @@ export async function handleLineWebhookEvents(
         try {
           await replaySkip.inFlightResult;
         } catch (err) {
-          context.runtime.error?.(danger(`line: replayed in-flight event failed: ${String(err)}`));
+          context.runtime.error?.(danger(`line: replayed in-flight event failed: ${formatErrorMessage(err)}`));
           firstError ??= err;
         }
       }
@@ -686,7 +687,7 @@ export async function handleLineWebhookEvents(
         inFlightReservation?.reject(err);
         clearLineReplayEventInFlight(replayCandidate);
       }
-      context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
+      context.runtime.error?.(danger(`line: event handler failed: ${formatErrorMessage(err)}`));
       firstError ??= err;
     }
   }

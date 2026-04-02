@@ -8,6 +8,7 @@ import {
   type CardAction,
   type ListItem,
 } from "../api.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const CARD_USAGE = `Usage: /card <type> "title" "body" [options]
 
@@ -337,7 +338,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             };
         }
       } catch (err) {
-        return { text: `Error creating card: ${String(err)}` };
+        return { text: `Error creating card: ${formatErrorMessage(err)}` };
       }
     },
   });
