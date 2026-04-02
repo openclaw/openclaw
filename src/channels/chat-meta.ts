@@ -99,39 +99,10 @@ function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
 
 const CHAT_CHANNEL_META = buildChatChannelMetaById();
 
-export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
-  Object.fromEntries(
-    Object.values(CHAT_CHANNEL_META)
-      .flatMap((meta) =>
-        (meta.aliases ?? []).map((alias) => [alias.trim().toLowerCase(), meta.id] as const),
-      )
-      .filter(([alias]) => alias.length > 0)
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  ),
-) as Record<string, ChatChannelId>;
-
-function normalizeChannelKey(raw?: string | null): string | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  return normalized || undefined;
-}
-
 export function listChatChannels(): ChatChannelMeta[] {
   return CHAT_CHANNEL_ORDER.map((id) => CHAT_CHANNEL_META[id]);
 }
 
-export function listChatChannelAliases(): string[] {
-  return Object.keys(CHAT_CHANNEL_ALIASES);
-}
-
 export function getChatChannelMeta(id: ChatChannelId): ChatChannelMeta {
   return CHAT_CHANNEL_META[id];
-}
-
-export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
-  const normalized = normalizeChannelKey(raw);
-  if (!normalized) {
-    return null;
-  }
-  const resolved = CHAT_CHANNEL_ALIASES[normalized] ?? normalized;
-  return CHAT_CHANNEL_ORDER.includes(resolved) ? resolved : null;
 }

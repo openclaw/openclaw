@@ -1,4 +1,4 @@
-import { normalizeChatChannelId } from "../channels/registry.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import type { PluginKind, PluginOrigin } from "./types.js";
