@@ -1451,6 +1451,8 @@ export async function runEmbeddedAttempt(
                         status: "ok" | "error";
                         errorMessage?: string;
                         costUsd?: number;
+                        requestText?: string;
+                        replyText?: string;
                       }) => {
                         const costConfig = resolveModelCostConfig({
                           provider: params.provider,
@@ -1472,6 +1474,8 @@ export async function runEmbeddedAttempt(
                           status: evt.status,
                           ...(evt.errorMessage ? { errorMessage: evt.errorMessage } : {}),
                           ...(costUsd != null ? { costUsd } : {}),
+                          ...(evt.requestText ? { requestText: evt.requestText } : {}),
+                          ...(evt.replyText ? { replyText: evt.replyText } : {}),
                         });
                       }
                     : undefined,
