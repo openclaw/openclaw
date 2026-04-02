@@ -30,7 +30,11 @@ export async function requestJsonlSocket<T>(params: {
 
     client.on("error", () => finish(null));
     client.connect(socketPath, () => {
-      client.write(`${payload}\n`);
+      // Use end() instead of write() to half-close the write side.
+      // This signals to the server that no more data will be sent,
+      // allowing it to complete the read/respond cycle for JSONL protocols.
+      // See: https://github.com/openclaw/openclaw/issues/59633
+      client.end(`${payload}\n`);
     });
     client.on("data", (data) => {
       buffer += data.toString("utf8");
