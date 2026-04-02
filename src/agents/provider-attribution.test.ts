@@ -340,6 +340,23 @@ describe("provider attribution", () => {
     });
   });
 
+  it("classifies native GitHub Copilot endpoints separately from custom hosts", () => {
+    expect(resolveProviderEndpoint("https://api.individual.githubcopilot.com")).toMatchObject({
+      endpointClass: "github-copilot-native",
+      hostname: "api.individual.githubcopilot.com",
+    });
+
+    expect(resolveProviderEndpoint("https://api.enterprise.githubcopilot.com")).toMatchObject({
+      endpointClass: "github-copilot-native",
+      hostname: "api.enterprise.githubcopilot.com",
+    });
+
+    expect(resolveProviderEndpoint("https://api.githubcopilot.example.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "api.githubcopilot.example.com",
+    });
+  });
+
   it("does not classify malformed or embedded Google host strings as native endpoints", () => {
     expect(resolveProviderEndpoint("proxy/generativelanguage.googleapis.com")).toMatchObject({
       endpointClass: "custom",
@@ -514,6 +531,22 @@ describe("provider attribution", () => {
       }),
     ).toMatchObject({
       compatibilityFamily: "moonshot",
+    });
+  });
+
+  it("treats native GitHub Copilot base URLs as known native endpoints", () => {
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "github-copilot",
+        api: "openai-responses",
+        baseUrl: "https://api.individual.githubcopilot.com",
+        capability: "llm",
+        transport: "http",
+      }),
+    ).toMatchObject({
+      endpointClass: "github-copilot-native",
+      knownProviderFamily: "github-copilot",
+      isKnownNativeEndpoint: true,
     });
   });
 });

@@ -34,6 +34,7 @@ export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "o
 export type ProviderEndpointClass =
   | "default"
   | "anthropic-public"
+  | "github-copilot-native"
   | "moonshot-native"
   | "modelstudio-native"
   | "openai-public"
@@ -200,6 +201,9 @@ export function resolveProviderEndpoint(
   }
   if (host === "api.anthropic.com") {
     return { endpointClass: "anthropic-public", hostname: host };
+  }
+  if (host.endsWith(".githubcopilot.com")) {
+    return { endpointClass: "github-copilot-native", hostname: host };
   }
   if (host === "chatgpt.com") {
     return { endpointClass: "openai-codex", hostname: host };
@@ -494,6 +498,7 @@ export function resolveProviderRequestCapabilities(
   const endpointClass = policy.endpointClass;
   const isKnownNativeEndpoint =
     endpointClass === "anthropic-public" ||
+    endpointClass === "github-copilot-native" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||
     endpointClass === "openai-public" ||
