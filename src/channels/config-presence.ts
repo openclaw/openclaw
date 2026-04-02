@@ -115,10 +115,10 @@ function hasEnvConfiguredChannel(env: NodeJS.ProcessEnv): boolean {
 }
 
 export function hasPotentialConfiguredChannels(
-  cfg: OpenClawConfig,
+  cfg: OpenClawConfig | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const channels = isRecord(cfg.channels) ? cfg.channels : null;
+  const channels = isRecord(cfg?.channels) ? cfg.channels : null;
   if (channels) {
     for (const [key, value] of Object.entries(channels)) {
       if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {

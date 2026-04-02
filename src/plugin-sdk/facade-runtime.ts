@@ -155,8 +155,8 @@ function getFacadeBoundaryResolvedConfig() {
   const resolved = {
     rawConfig,
     config,
-    normalizedPluginsConfig: normalizePluginsConfig(config.plugins),
-    sourceNormalizedPluginsConfig: normalizePluginsConfig(rawConfig.plugins),
+    normalizedPluginsConfig: normalizePluginsConfig(config?.plugins),
+    sourceNormalizedPluginsConfig: normalizePluginsConfig(rawConfig?.plugins),
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
   };
   cachedBoundaryRawConfig = rawConfig;

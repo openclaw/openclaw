@@ -653,20 +653,21 @@ export function applyPluginAutoEnable(params: {
   manifestRegistry?: PluginManifestRegistry;
 }): PluginAutoEnableResult {
   const env = params.env ?? process.env;
-  if (!configMayNeedPluginAutoEnable(params.config, env)) {
-    return { config: params.config, changes: [], autoEnabledReasons: {} };
+  const config = params.config ?? ({} as OpenClawConfig);
+  if (!configMayNeedPluginAutoEnable(config, env)) {
+    return { config, changes: [], autoEnabledReasons: {} };
   }
   const registry =
     params.manifestRegistry ??
-    (configMayNeedPluginManifestRegistry(params.config)
-      ? loadPluginManifestRegistry({ config: params.config, env })
+    (configMayNeedPluginManifestRegistry(config)
+      ? loadPluginManifestRegistry({ config, env })
       : EMPTY_PLUGIN_MANIFEST_REGISTRY);
-  const configured = resolveConfiguredPlugins(params.config, env, registry);
+  const configured = resolveConfiguredPlugins(config, env, registry);
   if (configured.length === 0) {
-    return { config: params.config, changes: [], autoEnabledReasons: {} };
+    return { config, changes: [], autoEnabledReasons: {} };
   }
 
-  let next = params.config;
+  let next = config;
   const changes: string[] = [];
   const autoEnabledReasons = new Map<string, string[]>();
 
