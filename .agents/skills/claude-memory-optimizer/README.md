@@ -1,148 +1,223 @@
 # Claude Memory Optimizer
 
-基于 Claude Code 泄露代码的记忆机制优化 OpenClaw 记忆系统。
+> Structured memory system for OpenClaw with 4-type classification and automated migration.
 
-## 核心特性
+## 🎯 Overview
 
-- **4 类记忆分类**：user / feedback / project / reference
-- **结构化 Frontmatter**：name / description / type
-- **语义检索机制**：LLM 选择 Top 5 相关记忆
-- **验证机制**：回忆时验证文件/函数是否存在
-- **日志模式**：可选 KAIROS 日志（追加式）
+Based on Claude Code's memory architecture, this skill brings structured, file-based memory management to OpenClaw with:
 
-## 安装
+- **4-Type Classification**: user, feedback, project, reference
+- **Frontmatter Metadata**: structured name/description/type
+- **Auto-Migration**: one-command refactor of existing memory files
+- **Log Mode**: optional append-only daily logs
+
+## 📦 Installation
 
 ```bash
-# 从 clawhub 安装（待发布）
 clawhub install claude-memory-optimizer
-
-# 或手动复制
-cp -r .agents/skills/claude-memory-optimizer ~/.openclaw/skills/
 ```
 
-## 使用
+## 🚀 Quick Start
 
-### 1. 运行迁移脚本
+### 1. Run Migration
 
 ```bash
-node .agents/skills/claude-memory-optimizer/scripts/refactor-memory.js
+node ~/.openclaw/skills/claude-memory-optimizer/scripts/refactor-memory.js
 ```
 
-### 2. 检查迁移结果
+### 2. Verify Structure
 
 ```bash
-# 查看新的目录结构
 ls -la ~/.openclaw/workspace/memory/
-
-# 查看 MEMORY.md 索引
 cat ~/.openclaw/workspace/MEMORY.md
 ```
 
-### 3. 清理旧文件
+### 3. Configure OpenClaw
 
-确认无误后删除旧的 memory/\*.md 文件：
+Edit your OpenClaw config:
 
-```bash
-# 备份
-cp -r ~/.openclaw/workspace/memory ~/.openclaw/workspace/memory.backup
-
-# 删除旧文件（保留 daily logs）
-rm ~/.openclaw/workspace/memory/*.md
-```
-
-## 记忆类型
-
-| 类型      | 用途       | 示例             |
-| --------- | ---------- | ---------------- |
-| user      | 用户信息   | 角色、偏好、技能 |
-| feedback  | 行为指导   | 纠正、确认       |
-| project   | 项目上下文 | 决策、截止时间   |
-| reference | 外部引用   | 链接、Dashboard  |
-
-## 记忆文件结构
-
-```
-memory/
-├── user/          # 用户信息
-├── feedback/      # 行为指导
-├── project/       # 项目上下文
-├── reference/     # 外部引用
-└── logs/          # 日志模式（可选）
-    └── YYYY/
-        └── MM/
-            └── YYYY-MM-DD.md
-```
-
-### Frontmatter 格式
-
-```markdown
----
-name: 数据科学背景
-description: 用户是数据科学家，专注可观测性和日志分析
-type: user
----
-
-用户在北京工业大学 & 都柏林大学就读...
-```
-
-## 配置示例
-
-```json5
+```json
 {
-  agents: {
-    defaults: {
-      compaction: {
-        memoryFlush: {
-          enabled: true,
-          softThresholdTokens: 4000,
-        },
+  "agents": {
+    "defaults": {
+      "memorySearch": {
+        "enabled": true,
+        "provider": "local",
+        "maxResults": 20,
+        "minScore": 0.3
       },
-    },
-  },
-  plugins: {
-    entries: {
-      memory: {
-        id: "memory-core",
-        config: {
-          memoryDir: "./memory",
-          indexPath: "./MEMORY.md",
-          types: ["user", "feedback", "project", "reference"],
-        },
-      },
-    },
-  },
+      "compaction": {
+        "memoryFlush": {
+          "enabled": true,
+          "softThresholdTokens": 4000
+        }
+      }
+    }
+  }
 }
 ```
 
-## 高级功能
+### 4. Restart Gateway
 
-### 语义检索（待实现）
+```bash
+openclaw gateway restart
+```
+
+## 📁 Directory Structure
+
+```
+memory/
+├── user/          # User information (role, preferences, skills)
+├── feedback/      # Behavior guidance (corrections, confirmations)
+├── project/       # Project context (decisions, deadlines)
+├── reference/     # External references (links, dashboards)
+└── logs/          # Append-only logs (optional KAIROS mode)
+    └── YYYY/MM/DD.md
+```
+
+## 📝 Memory File Format
+
+Each memory file uses frontmatter:
+
+```markdown
+---
+name: Data Science Background
+description: User is a data scientist focused on LLMs and observability
+type: user
+---
+
+User studies at Beijing University of Technology & UCD, GPA 3.95/4.2.
+Research: LLM, AI Agents, MCP.
+
+**Skills:** Python, PyTorch, Transformers, NLP
+```
+
+## 🎓 Examples
+
+### User Memory
+
+```markdown
+---
+name: Communication Preference
+description: User prefers concise replies without summaries
+type: user
+---
+
+**Preference:** No trailing summaries at end of responses.
+
+**Why:** "I can read the diff myself."
+```
+
+### Feedback Memory
+
+```markdown
+---
+name: Database Testing Rule
+description: Integration tests must hit real database, not mocks
+type: feedback
+---
+
+**Rule:** No database mocks in integration tests.
+
+**Why:** Mock/prod divergence masked a broken migration last quarter.
+
+**How to apply:** All integration tests use real PostgreSQL container.
+```
+
+### Project Memory
+
+```markdown
+---
+name: Thesis Deadline
+description: PhD thesis submission due 2026-06-01
+type: project
+---
+
+**Deadline:** 2026-06-01
+
+**Why:** Graduation requirement, legal flagging for compliance.
+
+**How to apply:** Prioritize thesis work over side projects after March.
+```
+
+### Reference Memory
+
+```markdown
+---
+name: Kaggle Profile
+description: User's Kaggle profile with competition history
+type: reference
+---
+
+**URL:** https://kaggle.com/chenziong
+
+**Achievements:**
+- 🥇 Gold: Child Mind Institute (2024.12)
+- 🥉 Bronze: LLM-Detect-AI-Generated-Text
+```
+
+## ⚠️ What NOT to Save
+
+- ❌ Code patterns, architecture (derivable from codebase)
+- ❌ Git history (use `git log`)
+- ❌ Debugging solutions (fix is in the code)
+- ❌ CLAUDE.md content (already documented)
+- ❌ Ephemeral task details (current session only)
+
+## 🔧 Scripts
+
+### refactor-memory.js
+
+Migrates existing `memory/*.md` files to categorized structure.
+
+```bash
+node scripts/refactor-memory.js
+```
+
+**Features:**
+- Auto-detects memory type from keywords
+- Generates frontmatter
+- Updates `MEMORY.md` index
+- Creates log directory structure
+
+## 📊 Comparison
+
+| Feature | Before | After |
+|---------|--------|-------|
+| Classification | None | 4 types |
+| Metadata | None | Frontmatter |
+| Structure | Flat `memory/*.md` | Categorized `memory/{type}/` |
+| Semantic Search | Basic keyword | LLM-powered (future) |
+| Verification | None | On-recall check (future) |
+
+## 🛠️ Advanced
+
+### Semantic Retrieval (Future)
 
 ```typescript
-async function findRelevantMemories(query, memoryDir) {
+async function findRelevantMemories(query: string) {
   const memories = await scanMemoryFiles(memoryDir);
   const selected = await selectRelevantMemories(query, memories);
   return selected.slice(0, 5);
 }
 ```
 
-### 快照同步（待实现）
+### Verification on Recall (Future)
 
-```bash
-# 创建项目快照
-claude-memory snapshot create --project dong-thesis
+```markdown
+## Before recommending from memory
 
-# 同步到团队成员
-claude-memory snapshot sync --to ~/.openclaw/team-memory/
+- If memory names a file → `ls` to verify
+- If memory names a function → `grep` to confirm
+- If conflict with current state → trust observation, update memory
 ```
 
-## 参考资料
+## 📚 References
 
-- Claude Code 泄露代码：`src/memdir/`
-- OpenClaw 记忆文档：`docs/concepts/memory.md`
-- 记忆类型定义：`memoryTypes.ts`
-- 语义检索：`findRelevantMemories.ts`
+- Claude Code: `src/memdir/`
+- OpenClaw Docs: `docs/concepts/memory.md`
+- Related: `memory-setup-openclaw`, `elite-longterm-memory`
 
-## 许可证
+## 📄 License
 
-MIT
+MIT-0

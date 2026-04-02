@@ -1,0 +1,22 @@
+{
+  "name": "claude-memory-optimizer",
+  "version": "1.0.0",
+  "description": "Structured memory system with 4-type classification and automated migration",
+  "author": "Mystour",
+  "license": "MIT-0",
+  "keywords": [
+    "memory",
+    "claude-code",
+    "knowledge-management",
+    "persistence",
+    "openclaw"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Mystour/openclaw",
+    "directory": "skills/claude-memory-optimizer"
+  },
+  "scripts": {
+    "migrate": "node scripts/refactor-memory.js"
+  }
+}
