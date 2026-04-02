@@ -32,24 +32,25 @@ if (!existsSync(distFile)) {
 
 const content = readFileSync(distFile, "utf-8");
 
-// Extract the final export statement from the compiled output.
-// tsdown/rolldown emits a single `export { ... }` at the end of the file.
-const exportMatch = content.match(/export\s*\{([^}]+)\}\s*;?\s*$/);
-if (!exportMatch) {
+// Extract all export blocks from the compiled output.
+// tsdown/rolldown may emit multiple `export { ... }` blocks (one per source module).
+const exportMatches = [...content.matchAll(/export\s*\{([^}]+)\}/g)];
+if (exportMatches.length === 0) {
   console.error("ERROR: Could not find export statement in dist/plugin-sdk/index.js");
   process.exit(1);
 }
 
-const exportedNames = exportMatch[1]
-  .split(",")
-  .map((s) => {
+const exportSet = new Set();
+for (const match of exportMatches) {
+  for (const s of match[1].split(",")) {
     // Handle `foo as bar` aliases — the exported name is the `bar` part
     const parts = s.trim().split(/\s+as\s+/);
-    return (parts[parts.length - 1] || "").trim();
-  })
-  .filter(Boolean);
-
-const exportSet = new Set(exportedNames);
+    const name = (parts[parts.length - 1] || "").trim();
+    if (name) {
+      exportSet.add(name);
+    }
+  }
+}
 
 const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
 
