@@ -38,7 +38,7 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "..
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
-import { resolveSubagentLabel } from "./subagents-utils.js";
+import { formatRunLabel } from "./subagents-utils.js";
 
 // Some usage endpoints only work with CLI/session OAuth tokens, not API keys.
 // Skip those probes when the active auth mode cannot satisfy the endpoint.
@@ -278,7 +278,7 @@ export async function buildStatusText(params: {
       const done = runs.length - active.length;
       if (verboseEnabled) {
         const labels = active
-          .map((entry) => resolveSubagentLabel(entry, ""))
+          .map((entry) => formatRunLabel(entry, { maxLength: 80 }))
           .filter(Boolean)
           .slice(0, 3);
         const labelText = labels.length ? ` (${labels.join(", ")})` : "";

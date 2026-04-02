@@ -2689,6 +2689,24 @@ describe("handleCommands subagents", () => {
       expectedText: ["🤖 Subagents: 1 active", "· 1 done"],
       unexpectedText: [] as string[],
     },
+    {
+      name: "does not leak multiline subagent task text in verbose /status",
+      seedRuns: () => {
+        addSubagentRunForTests({
+          runId: "run-1",
+          childSessionKey: "agent:main:subagent:abc",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "visible title\ninternal runtime context\nsession key: secret",
+          cleanup: "keep",
+          createdAt: 1000,
+          startedAt: 1000,
+        });
+      },
+      verboseLevel: "on" as const,
+      expectedText: ["🤖 Subagents: 1 active", "visible title"],
+      unexpectedText: ["internal runtime context", "session key: secret"],
+    },
   ])("$name", async ({ seedRuns, verboseLevel, expectedText, unexpectedText }) => {
     seedRuns();
     const cfg = {

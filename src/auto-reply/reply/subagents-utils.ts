@@ -2,7 +2,9 @@ import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
 export function resolveSubagentLabel(entry: SubagentRunRecord, fallback = "subagent") {
-  const raw = entry.label?.trim() || entry.task?.trim() || "";
+  const rawLabel = entry.label?.trim() || "";
+  const rawTask = entry.task?.trim() || "";
+  const raw = rawLabel || rawTask.split(/\r?\n/, 1)[0]?.trim() || "";
   return raw || fallback;
 }
 

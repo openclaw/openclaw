@@ -48,6 +48,11 @@ describe("subagents utils", () => {
   it("resolves subagent label with fallback", () => {
     expect(resolveSubagentLabel(makeRun({ label: "  runner " }))).toBe("runner");
     expect(resolveSubagentLabel(makeRun({ label: " ", task: "  task value " }))).toBe("task value");
+    expect(
+      resolveSubagentLabel(
+        makeRun({ label: " ", task: "  first line  \nsecond line with prompt details" }),
+      ),
+    ).toBe("first line");
     expect(resolveSubagentLabel(makeRun({ label: " ", task: " " }), "fallback")).toBe("fallback");
   });
 
