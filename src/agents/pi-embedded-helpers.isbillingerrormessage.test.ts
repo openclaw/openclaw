@@ -638,6 +638,13 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBeNull();
   });
+
+  it("classifies generic provider error messages as timeout for failover", () => {
+    // Anthropic bare "unknown error" during API instability (#49706)
+    expect(classifyFailoverReason("An unknown error occurred")).toBe("timeout");
+    // OpenRouter generic provider error wrapper (#45834)
+    expect(classifyFailoverReason("Provider returned error")).toBe("timeout");
+  });
 });
 
 describe("isFailoverErrorMessage", () => {

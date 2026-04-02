@@ -196,6 +196,22 @@ describe("failover-error", () => {
     ).toBe("overloaded");
   });
 
+  it("classifies Anthropic bare 'unknown error' as timeout for failover (#49706)", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
+  });
+
+  it("classifies OpenRouter 'provider returned error' as timeout for failover (#45834)", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "Provider returned error",
+      }),
+    ).toBe("timeout");
+  });
+
   it("treats 400 insufficient_quota payloads as billing instead of format", () => {
     expect(
       resolveFailoverReasonFromError({
