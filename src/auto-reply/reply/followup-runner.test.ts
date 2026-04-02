@@ -250,12 +250,16 @@ async function loadFreshFollowupRunnerModuleForTest() {
     "../../agents/model-fallback.js",
     async () => await import("../../test-utils/model-fallback.mock.js"),
   );
-  vi.doMock("../../agents/session-write-lock.js", () => ({
-    acquireSessionWriteLock: vi.fn(async () => ({
-      release: async () => {},
-    })),
-    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
-  }));
+  vi.doMock("../../agents/session-write-lock.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../agents/session-write-lock.js")>();
+    return {
+      ...actual,
+      acquireSessionWriteLock: vi.fn(async () => ({
+        release: async () => {},
+      })),
+      resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
+    };
+  });
   vi.doMock("../../agents/pi-embedded.js", () => ({
     abortEmbeddedPiRun: vi.fn(async () => false),
     compactEmbeddedPiSession: (params: unknown) => compactEmbeddedPiSessionMock(params),
@@ -1033,6 +1037,15 @@ describe("createFollowupRunner CLI backend dispatch", () => {
 
     const queued = createQueuedRun({
       run: {
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "claude-cli": {},
+              },
+            },
+          },
+        },
         provider: "claude-cli",
         model: "opus",
       },
@@ -1048,6 +1061,71 @@ describe("createFollowupRunner CLI backend dispatch", () => {
       }),
     );
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalled();
+  });
+
+  it("reuses the latest CLI session binding from the active session entry", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const staleSessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: {
+        ...staleSessionEntry,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "cli-session-current",
+          },
+        },
+      },
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "cli reply" }],
+      meta: {
+        agentMeta: {
+          sessionId: "cli-session-current",
+          provider: "claude-cli",
+          model: "opus",
+          cliSessionBinding: { sessionId: "cli-session-current" },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: staleSessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "claude-cli/opus",
+    });
+
+    const queued = createQueuedRun({
+      run: {
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "claude-cli": {},
+              },
+            },
+          },
+        },
+        provider: "claude-cli",
+        model: "opus",
+      },
+    });
+
+    await runner(queued);
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cliSessionId: "cli-session-current",
+        cliSessionBinding: { sessionId: "cli-session-current" },
+      }),
+    );
     expect(onBlockReply).toHaveBeenCalled();
   });
 });

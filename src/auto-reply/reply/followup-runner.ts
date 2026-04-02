@@ -274,7 +274,7 @@ export function createFollowupRunner(params: {
             let attemptCompactionCount = 0;
             try {
               if (isCliProvider(provider, queued.run.config)) {
-                const cliSessionBinding = getCliSessionBinding(sessionEntry, provider);
+                const cliSessionBinding = getCliSessionBinding(activeSessionEntry, provider);
                 const cliResult = await runCliAgent({
                   sessionId: queued.run.sessionId,
                   sessionKey: queued.run.sessionKey,
