@@ -112,7 +112,7 @@ describe("xai web search config resolution", () => {
     });
   });
 
-  it("offers plugin-owned x_search setup after Grok is selected", async () => {
+  it("offers plugin-owned xSearch setup after Grok is selected", async () => {
     const provider = createXaiWebSearchProvider();
     const select = vi.fn().mockResolvedValueOnce("yes").mockResolvedValueOnce("grok-4-1-fast");
     const prompter = createWizardPrompter({
@@ -146,23 +146,31 @@ describe("xai web search config resolution", () => {
       prompter,
     });
 
-    expect(next?.tools?.web?.x_search).toMatchObject({
+    expect(next?.plugins?.entries?.xai?.config?.xSearch).toMatchObject({
       enabled: true,
       model: "grok-4-1-fast",
     });
   });
 
-  it("keeps explicit x_search disablement untouched during provider-owned setup", async () => {
+  it("keeps explicit xSearch disablement untouched during provider-owned setup", async () => {
     const provider = createXaiWebSearchProvider();
     const config = {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              xSearch: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
       tools: {
         web: {
           search: {
             provider: "grok",
             enabled: true,
-          },
-          x_search: {
-            enabled: false,
           },
         },
       },

@@ -727,16 +727,6 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
-  "tools.web.x_search.enabled":
-    "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
-  "tools.web.x_search.apiKey": "xAI API key for X search (fallback: XAI_API_KEY env var).",
-  "tools.web.x_search.model": 'Model to use for X search (default: "grok-4-1-fast-non-reasoning").',
-  "tools.web.x_search.inlineCitations":
-    "Keep inline citations from xAI in x_search responses when available (default: false).",
-  "tools.web.x_search.maxTurns":
-    "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
-  "tools.web.x_search.timeoutSeconds": "Timeout in seconds for x_search requests.",
-  "tools.web.x_search.cacheTtlMinutes": "Cache TTL in minutes for x_search results.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":

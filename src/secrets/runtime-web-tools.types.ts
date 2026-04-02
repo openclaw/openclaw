@@ -6,9 +6,7 @@ export type RuntimeWebDiagnosticCode =
   | "WEB_FETCH_PROVIDER_INVALID_AUTODETECT"
   | "WEB_FETCH_AUTODETECT_SELECTED"
   | "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_FALLBACK_USED"
-  | "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK"
-  | "WEB_X_SEARCH_KEY_UNRESOLVED_FALLBACK_USED"
-  | "WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK";
+  | "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK";
 
 export type RuntimeWebDiagnostic = {
   code: RuntimeWebDiagnosticCode;
@@ -33,15 +31,8 @@ export type RuntimeWebFetchMetadata = {
   diagnostics: RuntimeWebDiagnostic[];
 };
 
-export type RuntimeWebXSearchMetadata = {
-  active: boolean;
-  apiKeySource: "config" | "secretRef" | "env" | "missing";
-  diagnostics: RuntimeWebDiagnostic[];
-};
-
 export type RuntimeWebToolsMetadata = {
   search: RuntimeWebSearchMetadata;
-  xSearch: RuntimeWebXSearchMetadata;
   fetch: RuntimeWebFetchMetadata;
   diagnostics: RuntimeWebDiagnostic[];
 };

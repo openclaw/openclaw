@@ -60194,6 +60194,101 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.xai.config.xSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.cacheTtlMinutes",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "storage"
+      ],
+      "label": "X Search Cache TTL",
+      "help": "Cache TTL in minutes for x_search results.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable X Search",
+      "help": "Enable the x_search tool for searching X posts with xAI.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.inlineCitations",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "X Search Inline Citations",
+      "help": "Keep inline markdown citations from xAI in x_search responses when available.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.maxTurns",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "X Search Max Turns",
+      "help": "Optional max internal tool turns xAI may use per x_search request.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "X Search Model",
+      "help": "xAI model override for x_search.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.timeoutSeconds",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "X Search Timeout",
+      "help": "Timeout in seconds for x_search requests.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.xai.enabled",
       "kind": "plugin",
       "type": "boolean",
@@ -66797,6 +66892,116 @@
       ],
       "label": "Enable Web Fetch Tool",
       "help": "Enable the web_fetch tool (lightweight HTTP fetch).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.firecrawl",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.fetch.firecrawl.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.fetch.firecrawl.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.firecrawl.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.firecrawl.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.firecrawl.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.firecrawl.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.firecrawl.maxAgeMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.firecrawl.onlyMainContent",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.firecrawl.timeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
