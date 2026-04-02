@@ -9,16 +9,7 @@ import {
 } from "../../account-selection.js";
 import { resolveMatrixAccountStringValues } from "../../auth-precedence.js";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  assertHttpUrlTargetsPrivateNetwork,
-  isPrivateOrLoopbackHost,
-  type LookupFn,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-  normalizeResolvedSecretInputString,
-  ssrfPolicyFromAllowPrivateNetwork,
-} from "../../runtime-api.js";
+import { normalizeResolvedSecretInputString } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import {
@@ -26,7 +17,16 @@ import {
   resolveMatrixBaseConfig,
   listNormalizedMatrixAccountIds,
 } from "../account-config.js";
-import { resolveMatrixConfigFieldPath } from "../config-update.js";
+import { resolveMatrixConfigFieldPath } from "../config-paths.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  assertHttpUrlTargetsPrivateNetwork,
+  isPrivateOrLoopbackHost,
+  type LookupFn,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+  ssrfPolicyFromAllowPrivateNetwork,
+} from "./config-runtime-api.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
 type MatrixAuthClientDeps = {
@@ -44,10 +44,12 @@ let matrixCredentialsReadDepsPromise: Promise<MatrixCredentialsReadDeps> | undef
 let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
 
 export function setMatrixAuthClientDepsForTest(
-  deps?: {
-    MatrixClient: typeof import("../sdk.js").MatrixClient;
-    ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
-  } | undefined,
+  deps?:
+    | {
+        MatrixClient: typeof import("../sdk.js").MatrixClient;
+        ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+      }
+    | undefined,
 ): void {
   matrixAuthClientDepsForTest = deps;
 }
