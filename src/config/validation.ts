@@ -633,6 +633,17 @@ function collectReservedVolumeTargetIssues(params: {
     return [];
   }
   const volumes = params.docker.volumes;
+  return collectReservedVolumeTargetIssuesFromVolumes({
+    volumes,
+    pathPrefix: params.pathPrefix,
+  });
+}
+
+function collectReservedVolumeTargetIssuesFromVolumes(params: {
+  volumes: unknown;
+  pathPrefix: string;
+}): ConfigValidationIssue[] {
+  const volumes = params.volumes;
   if (!Array.isArray(volumes) || volumes.length === 0) {
     return [];
   }
@@ -685,6 +696,29 @@ function validateReservedVolumeTargetsWithInheritedOverrides(
         inheritedAllowReservedContainerTargets: defaultsAllowReservedContainerTargets,
       }),
     );
+    if (!isRecord(docker) || !defaultsAllowReservedContainerTargets) {
+      continue;
+    }
+    // Only an explicit `false` opts this agent out of inherited defaults `true`; unset keeps inheritance.
+    if (docker.dangerouslyAllowReservedContainerTargets !== false) {
+      continue;
+    }
+    const inheritedDefaultVolumeIssues = collectReservedVolumeTargetIssuesFromVolumes({
+      volumes: defaultsDocker?.volumes,
+      pathPrefix: "agents.defaults.sandbox.docker",
+    });
+    if (inheritedDefaultVolumeIssues.length === 0) {
+      continue;
+    }
+    for (const inheritedIssue of inheritedDefaultVolumeIssues) {
+      issues.push({
+        path: `agents.list.${agentIndex}.sandbox.docker.dangerouslyAllowReservedContainerTargets`,
+        message:
+          `${inheritedIssue.message} This agent explicitly sets ` +
+          "dangerouslyAllowReservedContainerTargets=false, so inherited defaults " +
+          "cannot include reserved volume targets.",
+      });
+    }
   }
   return issues;
 }

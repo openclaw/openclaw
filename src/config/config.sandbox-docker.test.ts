@@ -346,6 +346,32 @@ describe("sandbox docker config", () => {
     });
     expect(res.ok).toBe(false);
   });
+
+  it("rejects inherited default reserved volume targets when agent explicitly disables inherited dangerous override", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              dangerouslyAllowReservedContainerTargets: true,
+              volumes: [{ strategy: "named", source: "default-cache", target: "/workspace" }],
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            sandbox: {
+              docker: {
+                dangerouslyAllowReservedContainerTargets: false,
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
 });
 
 describe("sandbox browser binds config", () => {
