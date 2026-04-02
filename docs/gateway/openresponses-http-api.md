@@ -71,6 +71,7 @@ The request follows the OpenResponses API with item-based input. Current support
 - `stream`: enables SSE streaming.
 - `max_output_tokens`: best-effort output limit (provider dependent).
 - `user`: stable session routing.
+- `skills`: per-request skill allowlist override (OpenClaw extension).
 
 Accepted but **currently ignored**:
 
@@ -116,6 +117,22 @@ Provide tools with `tools: [{ type: "function", function: { name, description?, 
 
 If the agent decides to call a tool, the response returns a `function_call` output item.
 You then send a follow-up request with `function_call_output` to continue the turn.
+
+## Skills (per-request allowlist)
+
+OpenClaw extension: pass a `skills` array to override which workspace skills are available for the agent run. When provided, only the listed skills are included in the skill snapshot, regardless of the agent config.
+
+```json
+{
+  "model": "openclaw",
+  "input": "summarize this repo",
+  "skills": ["code-review", "documentation"]
+}
+```
+
+When `skills` is omitted, the agent uses its configured skill allowlist (from `agents.list[].skills`). An empty array disables all skills for that request.
+
+This is an OpenClaw-specific extension and not part of the upstream OpenResponses spec.
 
 ## Images (`input_image`)
 

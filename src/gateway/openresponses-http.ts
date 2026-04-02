@@ -427,6 +427,7 @@ async function runResponsesAgentCommand(params: {
   runId: string;
   messageChannel: string;
   senderIsOwner: boolean;
+  skillsOverride?: string[];
   deps: ReturnType<typeof createDefaultDeps>;
 }) {
   return agentCommandFromIngress(
@@ -444,6 +445,7 @@ async function runResponsesAgentCommand(params: {
       bestEffortDeliver: false,
       senderIsOwner: params.senderIsOwner,
       allowModelOverride: true,
+      skillsOverride: params.skillsOverride,
     },
     defaultRuntime,
     params.deps,
@@ -667,6 +669,8 @@ export async function handleOpenResponsesHttpRequest(
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
 
+  const skillsOverride = payload.skills !== undefined ? payload.skills : undefined;
+
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
   const toolChoiceContext = toolChoicePrompt?.trim();
 
@@ -713,6 +717,7 @@ export async function handleOpenResponsesHttpRequest(
         runId: responseId,
         messageChannel,
         senderIsOwner,
+        skillsOverride,
         deps,
       });
 
@@ -971,6 +976,7 @@ export async function handleOpenResponsesHttpRequest(
         runId: responseId,
         messageChannel,
         senderIsOwner,
+        skillsOverride,
         deps,
       });
 
