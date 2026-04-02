@@ -191,7 +191,10 @@ async function runKimiSearch(params: {
         messages.push({
           role: "assistant",
           content: message?.content ?? "",
-          ...(message?.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
+          reasoning_content:
+            typeof message?.reasoning_content === "string" && message.reasoning_content.trim()
+              ? message.reasoning_content
+              : " ",
           tool_calls: toolCalls,
         });
 
@@ -203,7 +206,14 @@ async function runKimiSearch(params: {
             continue;
           }
           pushed = true;
-          messages.push({ role: "tool", tool_call_id: toolCallId, content: toolContent });
+          const functionName = toolCall.function?.name?.trim();
+          const argumentsContent = toolCall.function?.arguments ?? "";
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: argumentsContent ?? toolContent,
+            ...(functionName ? { name: functionName } : {}),
+          });
         }
         if (!pushed) {
           return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
