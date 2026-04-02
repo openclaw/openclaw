@@ -60,6 +60,25 @@ describe("resolveAnnounceOrigin telegram forum topics", () => {
       to: "telegram:-1001234567890",
     });
   });
+
+  it("strips stale thread ids for direct telegram requester targets", () => {
+    expect(
+      resolveAnnounceOrigin(
+        {
+          lastChannel: "telegram",
+          lastTo: "telegram:-1001234567890:topic:99",
+          lastThreadId: 99,
+        },
+        {
+          channel: "telegram",
+          to: "telegram:123456789",
+        },
+      ),
+    ).toEqual({
+      channel: "telegram",
+      to: "telegram:123456789",
+    });
+  });
 });
 
 describe("queued announce delivery execution boundary", () => {
