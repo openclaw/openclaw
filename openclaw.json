@@ -7,11 +7,42 @@
       "mode": "none"
     }
   },
+  "plugins": {
+    "entries": {
+      "volcengine": {
+        "enabled": true
+      }
+    }
+  },
+  "models": {
+    "providers": {
+      "volcengine": {
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+        "api": "openai-completions",
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "VOLCANO_ENGINE_API_KEY"
+        },
+        "models": [
+          {
+            "id": "doubao-seed-2-0-mini-260215",
+            "name": "Doubao Seed 2.0 Mini",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 4096
+          }
+        ]
+      }
+    }
+  },
   "agents": {
     "defaults": {
+      "model": "volcengine/doubao-seed-2-0-mini-260215",
       "models": {
-        "doubao": {
-          "alias": "volcengine/doubao-seed-2-0-mini-260215"
+        "volcengine/doubao-seed-2-0-mini-260215": {
+          "alias": "doubao"
         }
       }
     }
