@@ -120,7 +120,14 @@ export async function channelsListCommand(
     isExternal: false,
   }));
   if (opts.json) {
-    const usage = includeUsage ? await loadProviderUsageSummary() : undefined;
+    let usage: Awaited<ReturnType<typeof loadProviderUsageSummary>> | undefined;
+    if (includeUsage) {
+      try {
+        usage = await loadProviderUsageSummary();
+      } catch {
+        usage = undefined;
+      }
+    }
     const chat: Record<string, string[]> = {};
     for (const plugin of plugins) {
       chat[plugin.id] = plugin.config.listAccountIds(cfg);

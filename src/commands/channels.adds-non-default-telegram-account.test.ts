@@ -13,11 +13,23 @@ const authMocks = vi.hoisted(() => ({
   loadAuthProfileStore: vi.fn(),
 }));
 
+const usageMocks = vi.hoisted(() => ({
+  loadProviderUsageSummary: vi.fn(),
+}));
+
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
   return {
     ...actual,
     loadAuthProfileStore: authMocks.loadAuthProfileStore,
+  };
+});
+
+vi.mock("../infra/provider-usage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/provider-usage.js")>();
+  return {
+    ...actual,
+    loadProviderUsageSummary: usageMocks.loadProviderUsageSummary,
   };
 });
 
@@ -601,6 +613,26 @@ describe("channels command", () => {
     const ids = payload.auth?.map((entry) => entry.id) ?? [];
     expect(ids).toContain("anthropic:default");
     expect(ids).toContain("openai-codex:default");
+  });
+
+  it("keeps JSON output when usage loading fails", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+    usageMocks.loadProviderUsageSummary.mockRejectedValue(new Error("usage failed"));
+
+    await channelsListCommand({ json: true }, runtime);
+
+    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+      chat?: Record<string, string[]>;
+      auth?: Array<{ id: string }>;
+      usage?: unknown;
+    };
+
+    expect(payload.chat).toBeDefined();
+    expect(payload.auth).toBeDefined();
+    expect(payload.usage).toBeUndefined();
   });
 
   it("stores default account names in accounts when multiple accounts exist", async () => {
