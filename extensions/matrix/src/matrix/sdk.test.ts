@@ -1034,6 +1034,11 @@ describe("MatrixClient crypto bootstrapping", () => {
         crossSigningPublished: true,
         ownDeviceVerified: true,
       });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
     (
       client as unknown as {
         cryptoBootstrapper: { bootstrap: typeof bootstrapSpy };
@@ -1060,6 +1065,11 @@ describe("MatrixClient crypto bootstrapping", () => {
       crossSigningPublished: false,
       ownDeviceVerified: true,
     });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
     (
       client as unknown as {
         cryptoBootstrapper: { bootstrap: typeof bootstrapSpy };
@@ -1106,6 +1116,11 @@ describe("MatrixClient crypto bootstrapping", () => {
       crossSigningPublished: false,
       ownDeviceVerified: false,
     });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
     (
       client as unknown as {
         cryptoBootstrapper: { bootstrap: typeof bootstrapSpy };
