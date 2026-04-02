@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - ACP/Windows spawn: fail closed on unresolved `.cmd` and `.bat` OpenClaw wrappers unless a caller explicitly opts into shell fallback, so Windows ACP launches do not silently drop into shell-mediated execution when wrapper unwrapping fails. (#58436) Thanks @eleqtrizit.
 - Exec/Windows: prefer strict-inline-eval denial over generic allowlist prompts for interpreter carriers, while keeping persisted Windows allow-always approvals argv-bound. (#59780) Thanks @luoyanglang.
 - Gateway/connect: omit admin-scoped config and auth metadata from lower-privilege `hello-ok` snapshots while preserving those fields for admin reconnects. (#58469) Thanks @eleqtrizit.
+- iOS/canvas: restrict A2UI bridge trust to the bundled scaffold and exact capability-backed remote canvas URLs, so generic `canvas.navigate` and `canvas.present` loads no longer gain action-dispatch authority. (#58471) Thanks @eleqtrizit.
 
 ## 2026.4.2-beta.1
 
