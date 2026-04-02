@@ -1,8 +1,4 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
 import {
   formatGatewayServiceDescription,
   GATEWAY_LAUNCH_AGENT_LABEL,
@@ -16,6 +12,10 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("normalizeGatewayProfile", () => {
   it("returns null for empty/default profiles", () => {
