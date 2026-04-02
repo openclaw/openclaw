@@ -1,7 +1,7 @@
 import {
   isTelegramExecApprovalAuthorizedSender,
   isTelegramExecApprovalClientEnabled,
-} from "../../../extensions/telegram/api.js";
+} from "../../plugin-sdk/telegram-surface.js";
 import { callGateway } from "../../gateway/call.js";
 import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
