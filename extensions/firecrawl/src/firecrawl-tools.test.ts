@@ -445,6 +445,33 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlBaseUrl({} as OpenClawConfig)).not.toBe(DEFAULT_FIRECRAWL_BASE_URL);
   });
 
+  it("validates Firecrawl baseUrl and classifies trusted vs strict endpoint mode", async () => {
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("https://api.firecrawl.dev"),
+    ).resolves.toBe("strict");
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("https://firecrawl.mycompany.com"),
+    ).resolves.toBe("strict");
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("http://localhost:3002"),
+    ).resolves.toBe("trusted");
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("https://127.0.0.1:8787"),
+    ).resolves.toBe("trusted");
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("http://api.firecrawl.dev"),
+    ).rejects.toThrow("Firecrawl HTTP base URL must target a private or loopback host");
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("http://example.com"),
+    ).rejects.toThrow("Firecrawl HTTP base URL must target a private or loopback host");
+    await expect(firecrawlClientTesting.validateFirecrawlBaseUrl("not-a-url")).rejects.toThrow(
+      "Firecrawl base URL must be a valid http:// or https:// URL.",
+    );
+    await expect(
+      firecrawlClientTesting.validateFirecrawlBaseUrl("ftp://firecrawl.example.com"),
+    ).rejects.toThrow("Firecrawl base URL must use http:// or https://.");
+  });
+
   it("resolves endpoints for official and self-hosted Firecrawl URLs", async () => {
     await expect(
       firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape"),
@@ -461,10 +488,9 @@ describe("firecrawl tools", () => {
   });
 
   it("rejects HTTP base URL targeting a non-private host", async () => {
-    // DNS failure or SSRF guard both prevent the request — either is acceptable
     await expect(
       firecrawlClientTesting.resolveEndpoint("http://firecrawl.example.com", "/v2/scrape"),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Firecrawl HTTP base URL must target a private or loopback host");
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {

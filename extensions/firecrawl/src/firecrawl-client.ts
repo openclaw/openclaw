@@ -12,7 +12,10 @@ import {
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
-import { assertHttpUrlTargetsPrivateNetwork } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  assertHttpUrlTargetsPrivateNetwork,
+  type LookupFn,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   resolveFirecrawlApiKey,
@@ -33,6 +36,10 @@ const SCRAPE_CACHE = new Map<
 >();
 const DEFAULT_SEARCH_COUNT = 5;
 const DEFAULT_SCRAPE_MAX_CHARS = 50_000;
+const FIRECRAWL_HTTP_PRIVATE_ONLY_ERROR =
+  "Firecrawl HTTP base URL must target a private or loopback host. Use https:// for public hosts.";
+
+type FirecrawlEndpointMode = "strict" | "trusted";
 
 type FirecrawlSearchItem = {
   title: string;
@@ -65,17 +72,53 @@ export type FirecrawlScrapeParams = {
   timeoutSeconds?: number;
 };
 
+async function resolveFirecrawlEndpointMode(
+  baseUrl: string,
+  lookupFn?: LookupFn,
+): Promise<FirecrawlEndpointMode> {
+  const parsed = new URL(baseUrl);
+  const privateNetworkProbe = new URL(parsed.toString());
+  privateNetworkProbe.protocol = "http:";
+  try {
+    await assertHttpUrlTargetsPrivateNetwork(privateNetworkProbe.toString(), {
+      allowPrivateNetwork: true,
+      lookupFn,
+      errorMessage: FIRECRAWL_HTTP_PRIVATE_ONLY_ERROR,
+    });
+    return "trusted";
+  } catch {
+    return "strict";
+  }
+}
+
+async function validateFirecrawlBaseUrl(
+  baseUrl: string,
+  lookupFn?: LookupFn,
+): Promise<FirecrawlEndpointMode> {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("Firecrawl base URL must be a valid http:// or https:// URL.");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Firecrawl base URL must use http:// or https://.");
+  }
+
+  const mode = await resolveFirecrawlEndpointMode(parsed.toString(), lookupFn);
+  if (parsed.protocol === "http:" && mode !== "trusted") {
+    throw new Error(FIRECRAWL_HTTP_PRIVATE_ONLY_ERROR);
+  }
+  return mode;
+}
+
 async function resolveEndpoint(
   baseUrl: string,
   pathname: "/v2/search" | "/v2/scrape",
 ): Promise<string> {
   const url = new URL(baseUrl.trim() || DEFAULT_FIRECRAWL_BASE_URL);
-  // HTTPS anywhere; HTTP only for private/loopback (protects API key from plaintext leak)
-  await assertHttpUrlTargetsPrivateNetwork(url.toString(), {
-    allowPrivateNetwork: true,
-    errorMessage:
-      "Firecrawl HTTP base URL must target a private or loopback host. Use https:// for public hosts.",
-  });
+  await validateFirecrawlBaseUrl(url.toString());
   url.username = "";
   url.password = "";
   url.search = "";
@@ -94,9 +137,9 @@ async function postFirecrawlJson<T>(
   },
   parse: (response: Response) => Promise<T>,
 ): Promise<T> {
-  // Strict SSRF guard for the default public endpoint; trusted mode for self-hosted
-  const isDefault = new URL(params.url).hostname === "api.firecrawl.dev";
-  const withEndpoint = isDefault ? withStrictWebToolsEndpoint : withTrustedWebToolsEndpoint;
+  const endpointMode = await validateFirecrawlBaseUrl(params.url);
+  const withEndpoint =
+    endpointMode === "trusted" ? withTrustedWebToolsEndpoint : withStrictWebToolsEndpoint;
   return await withEndpoint(
     {
       url: params.url,
@@ -485,5 +528,6 @@ export const __testing = {
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
   resolveEndpoint,
+  validateFirecrawlBaseUrl,
   resolveSearchItems,
 };
