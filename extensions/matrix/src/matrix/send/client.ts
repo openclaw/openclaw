@@ -1,6 +1,6 @@
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
-import { resolveMatrixAccountConfig } from "../accounts.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
 import { withResolvedRuntimeMatrixClient } from "../client-bootstrap.js";
 import type { MatrixClient } from "../sdk.js";
 
