@@ -9,6 +9,7 @@ import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
@@ -182,7 +183,7 @@ export async function getStatusSummary(
     opts: { agentIdOverride?: string } = {},
   ) =>
     Object.entries(store)
-      .filter(([key]) => key !== "global" && key !== "unknown")
+      .filter(([key]) => key !== "global" && key !== "unknown" && !isCronRunSessionKey(key))
       .map(([key, entry]) => {
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;

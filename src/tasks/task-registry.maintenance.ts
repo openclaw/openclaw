@@ -63,6 +63,10 @@ function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   return now - referenceAt >= TASK_RECONCILE_GRACE_MS;
 }
 
+function resolveTaskReferenceAt(task: TaskRecord): number {
+  return task.startedAt ?? task.lastEventAt ?? task.createdAt;
+}
+
 function hasBackingSession(task: TaskRecord): boolean {
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
@@ -96,6 +100,30 @@ function shouldMarkLost(task: TaskRecord, now: number): boolean {
   return !hasBackingSession(task);
 }
 
+function findSupersedingCronTask(task: TaskRecord, tasks: TaskRecord[]): TaskRecord | undefined {
+  if (!isActiveTask(task) || task.runtime !== "cron") {
+    return undefined;
+  }
+  const sourceId = task.sourceId?.trim();
+  if (!sourceId) {
+    return undefined;
+  }
+  const taskReferenceAt = resolveTaskReferenceAt(task);
+  return tasks.find((candidate) => {
+    if (candidate.taskId === task.taskId || candidate.runtime !== "cron") {
+      return false;
+    }
+    if (isActiveTask(candidate) || candidate.sourceId?.trim() !== sourceId) {
+      return false;
+    }
+    return resolveTaskReferenceAt(candidate) > taskReferenceAt;
+  });
+}
+
+function shouldMarkSupersededCronTaskLost(task: TaskRecord, tasks: TaskRecord[]): boolean {
+  return findSupersedingCronTask(task, tasks) !== undefined;
+}
+
 function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
   if (!isTerminalTask(task)) {
     return false;
@@ -116,27 +144,27 @@ function resolveCleanupAfter(task: TaskRecord): number {
   return terminalAt + TASK_RETENTION_MS;
 }
 
-function markTaskLost(task: TaskRecord, now: number): TaskRecord {
+function markTaskLost(task: TaskRecord, now: number, error?: string): TaskRecord {
   const cleanupAfter = task.cleanupAfter ?? projectTaskLost(task, now).cleanupAfter;
   const updated =
     markTaskLostById({
       taskId: task.taskId,
       endedAt: task.endedAt ?? now,
       lastEventAt: now,
-      error: task.error ?? "backing session missing",
+      error: error ?? task.error ?? "backing session missing",
       cleanupAfter,
     }) ?? task;
   void maybeDeliverTaskTerminalUpdate(updated.taskId);
   return updated;
 }
 
-function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
+function projectTaskLost(task: TaskRecord, now: number, error?: string): TaskRecord {
   const projected: TaskRecord = {
     ...task,
     status: "lost",
     endedAt: task.endedAt ?? now,
     lastEventAt: now,
-    error: task.error ?? "backing session missing",
+    error: error ?? task.error ?? "backing session missing",
   };
   return {
     ...projected,
@@ -146,17 +174,25 @@ function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
   };
 }
 
-export function reconcileTaskRecordForOperatorInspection(task: TaskRecord): TaskRecord {
+export function reconcileTaskRecordForOperatorInspection(
+  task: TaskRecord,
+  tasksSnapshot?: TaskRecord[],
+): TaskRecord {
   const now = Date.now();
   if (!shouldMarkLost(task, now)) {
-    return task;
+    const snapshot = tasksSnapshot ?? listTaskRecords();
+    if (!shouldMarkSupersededCronTaskLost(task, snapshot)) {
+      return task;
+    }
+    return projectTaskLost(task, now, "superseded by later cron run");
   }
   return projectTaskLost(task, now);
 }
 
 export function reconcileInspectableTasks(): TaskRecord[] {
   ensureTaskRegistryReady();
-  return listTaskRecords().map((task) => reconcileTaskRecordForOperatorInspection(task));
+  const tasks = listTaskRecords();
+  return tasks.map((task) => reconcileTaskRecordForOperatorInspection(task, tasks));
 }
 
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
@@ -171,7 +207,7 @@ export function getInspectableTaskAuditSummary(): TaskAuditSummary {
 export function reconcileTaskLookupToken(token: string): TaskRecord | undefined {
   ensureTaskRegistryReady();
   const task = resolveTaskForLookupToken(token);
-  return task ? reconcileTaskRecordForOperatorInspection(task) : undefined;
+  return task ? reconcileTaskRecordForOperatorInspection(task, listTaskRecords()) : undefined;
 }
 
 export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary {
@@ -180,8 +216,9 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   let reconciled = 0;
   let cleanupStamped = 0;
   let pruned = 0;
-  for (const task of listTaskRecords()) {
-    if (shouldMarkLost(task, now)) {
+  const tasks = listTaskRecords();
+  for (const task of tasks) {
+    if (shouldMarkLost(task, now) || shouldMarkSupersededCronTaskLost(task, tasks)) {
       reconciled += 1;
       continue;
     }
@@ -230,6 +267,17 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     }
     if (shouldMarkLost(current, now)) {
       const next = markTaskLost(current, now);
+      if (next.status === "lost") {
+        reconciled += 1;
+      }
+      processed += 1;
+      if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+        await yieldToEventLoop();
+      }
+      continue;
+    }
+    if (shouldMarkSupersededCronTaskLost(current, tasks)) {
+      const next = markTaskLost(current, now, "superseded by later cron run");
       if (next.status === "lost") {
         reconciled += 1;
       }

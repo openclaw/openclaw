@@ -1101,6 +1101,55 @@ describe("task-registry", () => {
     });
   });
 
+  it("marks stale running cron tasks lost once a later terminal run exists", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const startedAt = Date.now() - 10 * 60_000;
+
+      const stale = createTaskRecord({
+        runtime: "cron",
+        sourceId: "cron-job-1",
+        ownerKey: "system:cron:cron-job-1",
+        scopeKind: "system",
+        runId: "cron:cron-job-1:stale",
+        task: "Stale cron task",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt,
+        lastEventAt: startedAt,
+      });
+      createTaskRecord({
+        runtime: "cron",
+        sourceId: "cron-job-1",
+        ownerKey: "system:cron:cron-job-1",
+        scopeKind: "system",
+        runId: "cron:cron-job-1:newer",
+        task: "Later cron task",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        startedAt: startedAt + 60_000,
+        lastEventAt: startedAt + 90_000,
+      });
+
+      expect(previewTaskRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+
+      expect(await runTaskRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expect(getTaskById(stale.taskId)).toMatchObject({
+        status: "lost",
+        error: "superseded by later cron run",
+      });
+    });
+  });
+
   it("prunes old terminal tasks during maintenance sweeps", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

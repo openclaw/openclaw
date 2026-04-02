@@ -113,6 +113,13 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
 
   it("persists cron payload model on session entry even when the run throws", async () => {
     // Simulate the agent run throwing (e.g. LLM provider timeout)
+    cronSession.sessionEntry = makeFreshSessionEntry({
+      status: "running",
+      startedAt: 123,
+      endedAt: 456,
+      runtimeMs: 789,
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
     runWithModelFallbackMock.mockRejectedValueOnce(new Error("LLM provider timeout"));
 
     const result = await runCronIsolatedAgentTurn(makeParams());
@@ -128,6 +135,10 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
     expect(cronSession.sessionEntry.systemSent).toBe(true);
+    expect(cronSession.sessionEntry.status).toBeUndefined();
+    expect(cronSession.sessionEntry.startedAt).toBeUndefined();
+    expect(cronSession.sessionEntry.endedAt).toBeUndefined();
+    expect(cronSession.sessionEntry.runtimeMs).toBeUndefined();
   });
 
   it("session entry already carries cron model at pre-run persist time (race condition)", async () => {

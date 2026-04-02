@@ -170,6 +170,18 @@ function appendCronDeliveryInstruction(params: {
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
+function clearCronSessionTransientRunState(entry: {
+  status?: unknown;
+  startedAt?: unknown;
+  endedAt?: unknown;
+  runtimeMs?: unknown;
+}) {
+  delete entry.status;
+  delete entry.startedAt;
+  delete entry.endedAt;
+  delete entry.runtimeMs;
+}
+
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -262,6 +274,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (isFastTestEnv) {
       return;
     }
+    clearCronSessionTransientRunState(cronSession.sessionEntry);
     cronSession.store[agentSessionKey] = cronSession.sessionEntry;
     if (runSessionKey !== agentSessionKey) {
       cronSession.store[runSessionKey] = cronSession.sessionEntry;
