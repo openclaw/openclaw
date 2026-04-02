@@ -2,6 +2,7 @@ import type { RequestClient } from "@buape/carbon";
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
@@ -16,6 +17,7 @@ import {
   type RetryRunner,
 } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
@@ -267,6 +269,8 @@ export async function deliverDiscordReply(params: {
   const request: RetryRunner | undefined = channelId
     ? createDiscordRetryRunner({ configRetry: account.config.retry })
     : undefined;
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   let deliveredAny = false;
   for (const payload of params.replies) {
     const tableMode = params.tableMode ?? "code";
@@ -276,6 +280,29 @@ export async function deliverDiscordReply(params: {
     if (!reply.hasContent) {
       continue;
     }
+
+    // Run message_sending plugin hook (may cancel delivery)
+    if (hasMessageSendingHooks) {
+      const hookResult = await hookRunner?.runMessageSending(
+        {
+          to: params.target,
+          content: payload.text || "",
+          metadata: {
+            channel: "discord",
+            accountId: params.accountId,
+          },
+        },
+        {
+          channelId: "discord",
+          accountId: params.accountId,
+        },
+      );
+      if (hookResult?.cancel) {
+        logVerbose(`Discord outbound to ${params.target} cancelled by message_sending hook`);
+        continue;
+      }
+    }
+
     if (!reply.hasMedia) {
       const mode = params.chunkMode ?? "length";
       const chunks = resolveTextChunksWithFallback(
