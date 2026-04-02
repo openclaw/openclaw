@@ -21,11 +21,20 @@ export type KyutaiStreamResult = {
 // ---------------------------------------------------------------------------
 
 export async function kyutaiPrewarm(): Promise<boolean> {
+  const result = await kyutaiPrewarmWithAudio();
+  return result !== null;
+}
+
+/**
+ * Load model + run warmup inference. Returns the raw 24kHz mono s16le PCM
+ * buffer so it can be played as a greeting, or null on failure.
+ */
+export async function kyutaiPrewarmWithAudio(): Promise<Buffer | null> {
   try {
     const res = await fetch(`${KYUTAI_BASE_URL}/load`, { method: "POST" });
-    if (!res.ok) return false;
+    if (!res.ok) return null;
 
-    // Dummy inference to warm CUDA kernels — discard the output
+    // Warmup inference to compile CUDA kernels — collect audio to play as greeting
     try {
       const warmup = await fetch(KYUTAI_STREAM_URL, {
         method: "POST",
@@ -33,17 +42,30 @@ export async function kyutaiPrewarm(): Promise<boolean> {
         body: JSON.stringify({ input: "hey" }),
       });
       if (warmup.body) {
-        // Drain the response to complete the inference
         const reader = warmup.body.getReader();
-        while (!(await reader.read()).done) { /* discard */ }
+        const chunks: Buffer[] = [];
+        let headerSkipped = false;
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const buf = Buffer.from(value);
+          if (!headerSkipped) {
+            // Skip the 8-byte PCMS header
+            chunks.push(buf.subarray(PCMS_HEADER_SIZE));
+            headerSkipped = true;
+          } else {
+            chunks.push(buf);
+          }
+        }
+        return Buffer.concat(chunks);
       }
     } catch {
-      // Best-effort — model is loaded even if warmup inference fails
+      // Model is loaded even if warmup fails
     }
 
-    return true;
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }
 
