@@ -1,16 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  createManagedFlow,
+  getFlowById,
+  listFlowRecords,
+  resetFlowRegistryForTests,
+} from "./flow-registry.js";
+import {
+  cancelFlowById,
+  cancelFlowByIdForOwner,
   cancelDetachedTaskRunById,
   completeTaskRunByRunId,
   createQueuedTaskRun,
   createRunningTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
+  retryBlockedFlowAsQueuedTaskRun,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
 } from "./task-executor.js";
-import { getTaskById, resetTaskRegistryForTests } from "./task-registry.js";
+import {
+  getTaskById,
+  findLatestTaskForFlowId,
+  findTaskByRunId,
+  resetTaskRegistryForTests,
+} from "./task-registry.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const hoisted = vi.hoisted(() => {
@@ -42,10 +56,12 @@ async function withTaskExecutorStateDir(run: (root: string) => Promise<void>): P
   await withTempDir({ prefix: "openclaw-task-executor-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
     resetTaskRegistryForTests();
+    resetFlowRegistryForTests();
     try {
       await run(root);
     } finally {
       resetTaskRegistryForTests();
+      resetFlowRegistryForTests();
     }
   });
 }
@@ -58,6 +74,7 @@ describe("task-executor", () => {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
     resetTaskRegistryForTests();
+    resetFlowRegistryForTests();
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
@@ -141,7 +158,64 @@ describe("task-executor", () => {
     });
   });
 
-  it("records blocked task outcomes without wrapping them in a separate flow model", async () => {
+  it("auto-creates a one-task flow and keeps it synced with task status", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const created = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:subagent:child",
+        runId: "run-executor-flow",
+        task: "Write summary",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+
+      expect(created.parentFlowId).toEqual(expect.any(String));
+      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+        flowId: created.parentFlowId,
+        ownerKey: "agent:main:main",
+        status: "running",
+        goal: "Write summary",
+        notifyPolicy: "done_only",
+      });
+
+      completeTaskRunByRunId({
+        runId: "run-executor-flow",
+        endedAt: 40,
+        lastEventAt: 40,
+        terminalSummary: "Done.",
+      });
+
+      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+        flowId: created.parentFlowId,
+        status: "succeeded",
+        endedAt: 40,
+        goal: "Write summary",
+        notifyPolicy: "done_only",
+      });
+    });
+  });
+
+  it("does not auto-create one-task flows for non-returning bookkeeping runs", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const created = createRunningTaskRun({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-executor-cli",
+        task: "Foreground gateway run",
+        deliveryStatus: "not_applicable",
+        startedAt: 10,
+      });
+
+      expect(created.parentFlowId).toBeUndefined();
+      expect(listFlowRecords()).toEqual([]);
+    });
+  });
+
+  it("records blocked metadata on one-task flows and reuses the same flow for queued retries", async () => {
     await withTaskExecutorStateDir(async () => {
       const created = createRunningTaskRun({
         runtime: "acp",
@@ -156,7 +230,6 @@ describe("task-executor", () => {
         task: "Patch file",
         startedAt: 10,
         deliveryStatus: "pending",
-        notifyPolicy: "silent",
       });
 
       completeTaskRunByRunId({
@@ -172,6 +245,113 @@ describe("task-executor", () => {
         status: "succeeded",
         terminalOutcome: "blocked",
         terminalSummary: "Writable session required.",
+      });
+      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+        flowId: created.parentFlowId,
+        status: "blocked",
+        blockedTaskId: created.taskId,
+        blockedSummary: "Writable session required.",
+        endedAt: 40,
+      });
+
+      const retried = retryBlockedFlowAsQueuedTaskRun({
+        flowId: created.parentFlowId!,
+        runId: "run-executor-retry",
+        childSessionKey: "agent:codex:acp:retry-child",
+      });
+
+      expect(retried).toMatchObject({
+        found: true,
+        retried: true,
+        previousTask: expect.objectContaining({
+          taskId: created.taskId,
+        }),
+        task: expect.objectContaining({
+          parentFlowId: created.parentFlowId,
+          parentTaskId: created.taskId,
+          status: "queued",
+          runId: "run-executor-retry",
+        }),
+      });
+      expect(getFlowById(created.parentFlowId!)).toMatchObject({
+        flowId: created.parentFlowId,
+        status: "queued",
+      });
+      expect(findLatestTaskForFlowId(created.parentFlowId!)).toMatchObject({
+        runId: "run-executor-retry",
+      });
+      expect(findTaskByRunId("run-executor-blocked")).toMatchObject({
+        taskId: created.taskId,
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session required.",
+      });
+    });
+  });
+
+  it("cancels active tasks linked to a managed flow", async () => {
+    await withTaskExecutorStateDir(async () => {
+      hoisted.cancelSessionMock.mockResolvedValue(undefined);
+
+      const flow = createManagedFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Inspect PR batch",
+      });
+      const child = createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-linear-cancel",
+        task: "Inspect a PR",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+
+      const cancelled = await cancelFlowById({
+        cfg: {} as never,
+        flowId: flow.flowId,
+      });
+
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: true,
+      });
+      expect(findTaskByRunId("run-linear-cancel")).toMatchObject({
+        taskId: child.taskId,
+        status: "cancelled",
+      });
+      expect(getFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "cancelled",
+      });
+    });
+  });
+
+  it("denies cross-owner flow cancellation through the owner-scoped wrapper", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Protected flow",
+      });
+
+      const cancelled = await cancelFlowByIdForOwner({
+        cfg: {} as never,
+        flowId: flow.flowId,
+        callerOwnerKey: "agent:main:other",
+      });
+
+      expect(cancelled).toMatchObject({
+        found: false,
+        cancelled: false,
+        reason: "Flow not found.",
+      });
+      expect(getFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "queued",
       });
     });
   });
