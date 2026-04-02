@@ -20,10 +20,9 @@ type MatrixResolvedClientHook = (
 
 type MatrixSharedClientRuntimeDeps = Pick<
   typeof import("./client.js"),
-  "acquireSharedMatrixClient"
+  "acquireSharedMatrixClient" | "resolveMatrixAuthContext"
 > &
-  Pick<typeof import("./client/shared.js"), "releaseSharedClientInstance"> &
-  Pick<typeof import("./client/config.js"), "resolveMatrixAuthContext">;
+  Pick<typeof import("./client/shared.js"), "releaseSharedClientInstance">;
 
 let matrixSharedClientRuntimeDepsPromise: Promise<MatrixSharedClientRuntimeDeps> | undefined;
 
@@ -31,11 +30,10 @@ async function loadMatrixSharedClientRuntimeDeps(): Promise<MatrixSharedClientRu
   matrixSharedClientRuntimeDepsPromise ??= Promise.all([
     import("./client.js"),
     import("./client/shared.js"),
-    import("./client/config.js"),
-  ]).then(([clientModule, sharedModule, configModule]) => ({
+  ]).then(([clientModule, sharedModule]) => ({
     acquireSharedMatrixClient: clientModule.acquireSharedMatrixClient,
+    resolveMatrixAuthContext: clientModule.resolveMatrixAuthContext,
     releaseSharedClientInstance: sharedModule.releaseSharedClientInstance,
-    resolveMatrixAuthContext: configModule.resolveMatrixAuthContext,
   }));
   return await matrixSharedClientRuntimeDepsPromise;
 }
