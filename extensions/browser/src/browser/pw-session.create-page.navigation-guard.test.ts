@@ -165,7 +165,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
     const created = await createPageViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
-      url: "https://example.invalid",
+      url: "https://93.184.216.34/start",
     });
 
     expect(created.targetId).toBe("TARGET_1");
@@ -296,15 +296,13 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
   it("does not quarantine a tab on transient post-navigation check errors", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
-    const assertNavigationAllowedSpy = vi.spyOn(
+    const assertRedirectChainAllowedSpy = vi.spyOn(
       navigationGuardModule,
-      "assertBrowserNavigationAllowed",
+      "assertBrowserNavigationRedirectChainAllowed",
     );
-    assertNavigationAllowedSpy.mockImplementation(async (opts: { url: string }) => {
-      if (opts.url === "https://postcheck.example/hop") {
-        throw new Error("getaddrinfo EAI_AGAIN postcheck.example");
-      }
-    });
+    assertRedirectChainAllowedSpy.mockRejectedValueOnce(
+      new Error("getaddrinfo EAI_AGAIN postcheck.example"),
+    );
     pageGoto.mockImplementationOnce(async () => {
       const handler = getRouteHandler();
       if (!handler) {
@@ -342,7 +340,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       expect(pages[0]?.targetId).toBe("TARGET_1");
       expect(pageClose).not.toHaveBeenCalled();
     } finally {
-      assertNavigationAllowedSpy.mockRestore();
+      assertRedirectChainAllowedSpy.mockRestore();
     }
   });
 
