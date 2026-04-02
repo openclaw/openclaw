@@ -1,6 +1,7 @@
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -249,6 +250,8 @@ export type DiscordAccountConfig = {
    * - "allowlist": only allow channels present in discord.guilds.*.channels
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */

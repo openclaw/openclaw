@@ -1,6 +1,11 @@
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
+import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  filterSupplementalContextItems,
+  shouldIncludeSupplementalContext,
+} from "openclaw/plugin-sdk/security-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch } from "../allow-list.js";
@@ -53,6 +58,7 @@ export async function resolveSlackThreadContextData(params: {
   sessionKey: string;
   allowFromLower: string[];
   allowNameMatching: boolean;
+  contextVisibilityMode: ContextVisibilityMode;
   envelopeOptions: ReturnType<
     typeof import("openclaw/plugin-sdk/channel-inbound").resolveEnvelopeFormatOptions
   >;
@@ -88,8 +94,15 @@ export async function resolveSlackThreadContextData(params: {
       userName: starterSenderName,
       botId: starter.botId,
     });
+  const includeStarterContext =
+    !starter ||
+    shouldIncludeSupplementalContext({
+      mode: params.contextVisibilityMode,
+      kind: "thread",
+      senderAllowed: starterAllowed,
+    });
 
-  if (starter?.text && starterAllowed) {
+  if (starter?.text && includeStarterContext) {
     threadStarterBody = starter.text;
     const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? `: ${snippet}` : ""}`;
@@ -107,8 +120,10 @@ export async function resolveSlackThreadContextData(params: {
   } else {
     threadLabel = `Slack thread ${params.roomLabel}`;
   }
-  if (starter?.text && !starterAllowed) {
-    logVerbose("slack: omitted non-allowlisted thread starter from context");
+  if (starter?.text && !includeStarterContext) {
+    logVerbose(
+      `slack: omitted thread starter from context (mode=${params.contextVisibilityMode}, sender_allowed=${starterAllowed ? "yes" : "no"})`,
+    );
   }
 
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
@@ -142,25 +157,30 @@ export async function resolveSlackThreadContextData(params: {
         }),
       );
 
-      const allowedThreadHistory = threadHistory.filter((historyMsg) => {
-        const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
-        return isSlackThreadContextSenderAllowed({
-          allowFromLower: params.allowFromLower,
-          allowNameMatching: params.allowNameMatching,
-          userId: historyMsg.userId,
-          userName: msgUser?.name,
-          botId: historyMsg.botId,
+      const { items: filteredThreadHistory, omitted: omittedHistoryCount } =
+        filterSupplementalContextItems({
+          items: threadHistory,
+          mode: params.contextVisibilityMode,
+          kind: "thread",
+          isSenderAllowed: (historyMsg) => {
+            const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
+            return isSlackThreadContextSenderAllowed({
+              allowFromLower: params.allowFromLower,
+              allowNameMatching: params.allowNameMatching,
+              userId: historyMsg.userId,
+              userName: msgUser?.name,
+              botId: historyMsg.botId,
+            });
+          },
         });
-      });
-      const omittedHistoryCount = threadHistory.length - allowedThreadHistory.length;
       if (omittedHistoryCount > 0) {
         logVerbose(
-          `slack: omitted ${omittedHistoryCount} non-allowlisted thread message(s) from context`,
+          `slack: omitted ${omittedHistoryCount} thread message(s) from context (mode=${params.contextVisibilityMode})`,
         );
       }
 
       const historyParts: string[] = [];
-      for (const historyMsg of allowedThreadHistory) {
+      for (const historyMsg of filteredThreadHistory) {
         const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
         const msgSenderName =
           msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
@@ -181,7 +201,7 @@ export async function resolveSlackThreadContextData(params: {
       if (historyParts.length > 0) {
         threadHistoryBody = historyParts.join("\n\n");
         logVerbose(
-          `slack: populated thread history with ${allowedThreadHistory.length} messages for new session`,
+          `slack: populated thread history with ${filteredThreadHistory.length} messages for new session`,
         );
       }
     }
