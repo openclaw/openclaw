@@ -7,6 +7,7 @@ export type BundledPluginContractSnapshot = {
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
+  webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
 };
@@ -34,6 +35,7 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
       speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
       mediaUnderstandingProviderIds: uniqueStrings(manifest.contracts?.mediaUnderstandingProviders),
       imageGenerationProviderIds: uniqueStrings(manifest.contracts?.imageGenerationProviders),
+      webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders),
       webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders),
       toolNames: uniqueStrings(manifest.contracts?.tools),
     }))
@@ -44,6 +46,7 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
         entry.speechProviderIds.length > 0 ||
         entry.mediaUnderstandingProviderIds.length > 0 ||
         entry.imageGenerationProviderIds.length > 0 ||
+        entry.webFetchProviderIds.length > 0 ||
         entry.webSearchProviderIds.length > 0 ||
         entry.toolNames.length > 0,
     )
@@ -69,6 +72,8 @@ export const BUNDLED_IMAGE_GENERATION_PLUGIN_IDS = collectPluginIds(
   (entry) => entry.imageGenerationProviderIds,
 );
 
+export const BUNDLED_WEB_FETCH_PLUGIN_IDS = collectPluginIds((entry) => entry.webFetchProviderIds);
+
 export const BUNDLED_RUNTIME_CONTRACT_PLUGIN_IDS = [
   ...new Set(
     BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
@@ -77,6 +82,7 @@ export const BUNDLED_RUNTIME_CONTRACT_PLUGIN_IDS = [
         entry.speechProviderIds.length > 0 ||
         entry.mediaUnderstandingProviderIds.length > 0 ||
         entry.imageGenerationProviderIds.length > 0 ||
+        entry.webFetchProviderIds.length > 0 ||
         entry.webSearchProviderIds.length > 0,
     ).map((entry) => entry.pluginId),
   ),

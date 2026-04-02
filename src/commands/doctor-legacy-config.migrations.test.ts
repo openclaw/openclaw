@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 
 describe("normalizeCompatibilityConfigValues", () => {
@@ -504,6 +505,42 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.changes).toEqual([
       "Merged tools.web.search.gemini → plugins.entries.google.config.webSearch (filled missing fields from legacy; kept explicit plugin config values).",
+    ]);
+  });
+
+  it("migrates legacy web fetch provider config to plugin-owned config paths", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          fetch: {
+            provider: "firecrawl",
+            timeoutSeconds: 15,
+            firecrawl: {
+              apiKey: "firecrawl-key",
+              baseUrl: "https://api.firecrawl.dev",
+              onlyMainContent: false,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(res.config.tools?.web?.fetch).toEqual({
+      provider: "firecrawl",
+      timeoutSeconds: 15,
+    });
+    expect(res.config.plugins?.entries?.firecrawl).toEqual({
+      enabled: true,
+      config: {
+        webFetch: {
+          apiKey: "firecrawl-key",
+          baseUrl: "https://api.firecrawl.dev",
+          onlyMainContent: false,
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.web.fetch.firecrawl → plugins.entries.firecrawl.config.webFetch.",
     ]);
   });
 

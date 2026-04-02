@@ -1267,6 +1267,42 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent).not.toHaveProperty("store");
   });
 
+  it("keeps store=false for proxied openai-responses routes when store is still supported", async () => {
+    releaseWsSession("sess-store-proxy");
+    const proxiedModel = {
+      ...modelStub,
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-store-proxy");
+    const stream = streamFn(
+      proxiedModel as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const completed = new Promise<void>((res, rej) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          const manager = MockManager.lastInstance!;
+          manager.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp_store_proxy", "ok"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          res();
+        } catch (e) {
+          rej(e);
+        }
+      });
+    });
+    await completed;
+
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.store).toBe(false);
+  });
+
   it("emits an AssistantMessage on response.completed", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-2");
     const stream = streamFn(
