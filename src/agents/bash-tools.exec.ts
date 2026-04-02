@@ -73,6 +73,7 @@ function buildExecForegroundResult(params: {
       exitCode: params.outcome.exitCode ?? null,
       durationMs: params.outcome.durationMs,
       aggregated: params.outcome.aggregated,
+      timedOut: params.outcome.timedOut,
       cwd: params.cwd,
     });
   }
