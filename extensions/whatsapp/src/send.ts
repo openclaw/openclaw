@@ -8,11 +8,34 @@ import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
-import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
+import {
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAccount,
+  resolveWhatsAppMediaMaxBytes,
+} from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
+
+/**
+ * Resolves a listener map key by case-insensitively matching `requestedId`
+ * against the configured accounts keys. Listeners are registered with the raw
+ * config key (resolveWebAccountId trims only), so we return the matched key
+ * verbatim to ensure requireActiveWebListener's exact Map lookup succeeds.
+ */
+function resolveListenerAccountId(
+  requestedId: string | undefined,
+  accounts: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!requestedId) return undefined;
+  if (accounts && typeof accounts === "object") {
+    const lower = requestedId.toLowerCase();
+    const match = Object.keys(accounts).find((k) => k.toLowerCase() === lower);
+    if (match) return match;
+  }
+  return requestedId;
+}
 
 export async function sendMessageWhatsApp(
   to: string,
@@ -38,18 +61,28 @@ export async function sendMessageWhatsApp(
   }
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const { listener: active, accountId: resolvedAccountId } = requireActiveWebListener(
-    options.accountId,
-  );
   const cfg = options.cfg ?? loadConfig();
+  // Determine effective account ID:
+  // - Explicit accountId takes precedence (trim only).
+  // - Otherwise use resolveDefaultWhatsAppAccountId which validates defaultAccount
+  //   against known accounts and falls back to DEFAULT_ACCOUNT_ID when it is
+  //   missing or typoed — preserving pre-existing fallback semantics.
+  // Then case-insensitively match against config keys so requireActiveWebListener's
+  // exact Map lookup succeeds (listeners are keyed by raw config key via
+  // setActiveWebListener → resolveWebAccountId, which trims but does not lowercase).
+  const whatsappCfg = cfg.channels?.whatsapp as { accounts?: Record<string, unknown> } | undefined;
+  const effectiveId = options.accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+  const requestedAccountId = resolveListenerAccountId(effectiveId, whatsappCfg?.accounts);
+  const { listener: active, accountId: resolvedAccountId } =
+    requireActiveWebListener(requestedAccountId);
   const account = resolveWhatsAppAccount({
     cfg,
-    accountId: resolvedAccountId ?? options.accountId,
+    accountId: resolvedAccountId,
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "whatsapp",
-    accountId: resolvedAccountId ?? options.accountId,
+    accountId: resolvedAccountId,
   });
   text = convertMarkdownTables(text ?? "", tableMode);
   text = markdownToWhatsApp(text);
@@ -171,7 +204,12 @@ export async function sendPollWhatsApp(
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const { listener: active } = requireActiveWebListener(options.accountId);
+  const cfg = options.cfg ?? loadConfig();
+  // Same account resolution as sendMessageWhatsApp — see comment there.
+  const whatsappCfg = cfg.channels?.whatsapp as { accounts?: Record<string, unknown> } | undefined;
+  const effectiveId = options.accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+  const requestedAccountId = resolveListenerAccountId(effectiveId, whatsappCfg?.accounts);
+  const { listener: active } = requireActiveWebListener(requestedAccountId);
   const redactedTo = redactIdentifier(to);
   const logger = getChildLogger({
     module: "web-outbound",

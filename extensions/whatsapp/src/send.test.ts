@@ -126,6 +126,120 @@ describe("web outbound", () => {
     ).rejects.toThrow(/account: work/);
   });
 
+  it("uses channels.whatsapp.defaultAccount when accountId is omitted", async () => {
+    const primarySendMessage = vi.fn(async () => ({ messageId: "primary-msg" }));
+    const primarySendPoll = vi.fn(async () => ({ messageId: "primary-poll" }));
+    const primarySendReaction = vi.fn(async () => {});
+    const primarySendComposingTo = vi.fn(async () => {});
+
+    setActiveWebListener(null);
+    setActiveWebListener("primary", {
+      sendComposingTo: primarySendComposingTo,
+      sendMessage: primarySendMessage,
+      sendPoll: primarySendPoll,
+      sendReaction: primarySendReaction,
+    });
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          defaultAccount: "primary",
+          accounts: {
+            primary: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg });
+    await sendPollWhatsApp(
+      "+1555",
+      { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 1 },
+      { verbose: false, cfg },
+    );
+
+    expect(primarySendComposingTo).toHaveBeenCalledWith("+1555");
+    expect(primarySendMessage).toHaveBeenCalled();
+    expect(primarySendPoll).toHaveBeenCalledWith("+1555", {
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      maxSelections: 1,
+      durationSeconds: undefined,
+      durationHours: undefined,
+    });
+  });
+
+  it("falls back to default listener when defaultAccount is invalid/typoed", async () => {
+    // Listener registered as the default (no accountId).
+    // defaultAccount is a typo — should fall back to default listener, not throw.
+    const defaultSendMessage = vi.fn(async () => ({ messageId: "default-msg" }));
+    const defaultSendPoll = vi.fn(async () => ({ messageId: "default-poll" }));
+    const defaultSendComposingTo = vi.fn(async () => {});
+
+    setActiveWebListener(null);
+    setActiveWebListener({
+      sendComposingTo: defaultSendComposingTo,
+      sendMessage: defaultSendMessage,
+      sendPoll: defaultSendPoll,
+      sendReaction: vi.fn(async () => {}),
+    });
+
+    // No accounts config = single-account setup. resolveDefaultWhatsAppAccountId
+    // falls back to DEFAULT_ACCOUNT_ID when defaultAccount is invalid/typoed.
+    const cfg = {
+      channels: {
+        whatsapp: {
+          defaultAccount: "priamry", // typo — doesn't match any known account
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg });
+    await sendPollWhatsApp(
+      "+1555",
+      { question: "Q?", options: ["A", "B"], maxSelections: 1 },
+      { verbose: false, cfg },
+    );
+
+    expect(defaultSendMessage).toHaveBeenCalled();
+    expect(defaultSendPoll).toHaveBeenCalled();
+  });
+
+  it("resolves defaultAccount case-insensitively against config keys", async () => {
+    // Listener registered with config key "Primary" (capital P).
+    // defaultAccount set to "primary" (lowercase) — must still find the listener.
+    const sendMessage = vi.fn(async () => ({ messageId: "msg-1" }));
+    const sendPoll = vi.fn(async () => ({ messageId: "poll-1" }));
+    const sendComposingTo = vi.fn(async () => {});
+
+    setActiveWebListener(null);
+    setActiveWebListener("Primary", {
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction: vi.fn(async () => {}),
+    });
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          defaultAccount: "primary",
+          accounts: { Primary: {} },
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg });
+    await sendPollWhatsApp(
+      "+1555",
+      { question: "Q?", options: ["A", "B"], maxSelections: 1 },
+      { verbose: false, cfg },
+    );
+
+    expect(sendMessage).toHaveBeenCalled();
+    expect(sendPoll).toHaveBeenCalled();
+  });
+
   it("maps audio to PTT with opus mime when ogg", async () => {
     const buf = Buffer.from("audio");
     loadWebMediaMock.mockResolvedValueOnce({

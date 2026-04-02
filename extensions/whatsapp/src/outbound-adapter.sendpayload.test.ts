@@ -1,6 +1,155 @@
 import { describe, expect, it, vi } from "vitest";
 import { whatsappOutbound } from "./outbound-adapter.js";
 
+describe("whatsappOutbound send retry", () => {
+  it("retries sendText on safe pre-connect errors and succeeds on second attempt", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }))
+      .mockResolvedValue({ messageId: "wa-1", toJid: "jid" });
+
+    const result = await whatsappOutbound.sendText!({
+      cfg: { channels: { whatsapp: { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 } } } },
+      to: "5511999999999@c.us",
+      text: "hello",
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ messageId: "wa-1" });
+  });
+
+  it("does not retry sendText on ambiguous timeout errors", async () => {
+    const sendWhatsApp = vi.fn().mockRejectedValue(new Error("connection timeout"));
+
+    await expect(
+      whatsappOutbound.sendText!({
+        cfg: { channels: { whatsapp: { retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0 } } } },
+        to: "5511999999999@c.us",
+        text: "hello",
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow("connection timeout");
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry sendText on non-transient errors", async () => {
+    const sendWhatsApp = vi.fn().mockRejectedValue(new Error("forbidden: not allowed"));
+
+    await expect(
+      whatsappOutbound.sendText!({
+        cfg: { channels: { whatsapp: { retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0 } } } },
+        to: "5511999999999@c.us",
+        text: "hello",
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow("forbidden: not allowed");
+
+    // Non-transient error — no retries.
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+  });
+
+  it("respects configured attempts limit for sendText", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error("connect timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+      );
+
+    await expect(
+      whatsappOutbound.sendText!({
+        cfg: { channels: { whatsapp: { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 } } } },
+        to: "5511999999999@c.us",
+        text: "hello",
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow("connect timeout");
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+  });
+
+  it("prefers account-level retry config over channel-level retry config", async () => {
+    const sendWhatsApp = vi.fn().mockRejectedValue(
+      Object.assign(new Error("connect refused"), {
+        code: "ECONNREFUSED",
+      }),
+    );
+
+    await expect(
+      whatsappOutbound.sendText!({
+        cfg: {
+          channels: {
+            whatsapp: {
+              retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0 },
+              accounts: {
+                primary: {
+                  retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 },
+                },
+              },
+            },
+          },
+        },
+        to: "5511999999999@c.us",
+        text: "hello",
+        accountId: "primary",
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow("connect refused");
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the default account retry config when accountId is omitted", async () => {
+    const sendWhatsApp = vi.fn().mockRejectedValue(
+      Object.assign(new Error("connect refused"), {
+        code: "ECONNREFUSED",
+      }),
+    );
+
+    await expect(
+      whatsappOutbound.sendText!({
+        cfg: {
+          channels: {
+            whatsapp: {
+              defaultAccount: "primary",
+              retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0 },
+              accounts: {
+                primary: {
+                  retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 },
+                },
+              },
+            },
+          },
+        },
+        to: "5511999999999@c.us",
+        text: "hello",
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow("connect refused");
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries sendMedia on safe pre-connect errors and succeeds on second attempt", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("dns lookup failed"), { code: "ENOTFOUND" }))
+      .mockResolvedValue({ messageId: "wa-media-1", toJid: "jid" });
+
+    const result = await whatsappOutbound.sendMedia!({
+      cfg: { channels: { whatsapp: { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 } } } },
+      to: "5511999999999@c.us",
+      text: "caption",
+      mediaUrl: "/tmp/test.png",
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ messageId: "wa-media-1" });
+  });
+});
+
 describe("whatsappOutbound sendPayload", () => {
   it("trims leading whitespace for direct text sends", async () => {
     const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));

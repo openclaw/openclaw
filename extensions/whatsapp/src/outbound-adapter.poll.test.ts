@@ -53,4 +53,29 @@ describe("whatsappOutbound sendPoll", () => {
       toJid: "1555@s.whatsapp.net",
     });
   });
+
+  it("does not retry poll sends on permanent errors", async () => {
+    hoisted.sendPollWhatsApp.mockRejectedValueOnce(new Error("forbidden"));
+
+    await expect(
+      whatsappOutbound.sendPoll!({
+        cfg: {
+          channels: {
+            whatsapp: {
+              retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0 },
+            },
+          },
+        } as OpenClawConfig,
+        to: "+1555",
+        poll: {
+          question: "Lunch?",
+          options: ["Pizza", "Sushi"],
+          maxSelections: 1,
+        },
+        accountId: "work",
+      }),
+    ).rejects.toThrow("forbidden");
+
+    expect(hoisted.sendPollWhatsApp).toHaveBeenCalledTimes(1);
+  });
 });

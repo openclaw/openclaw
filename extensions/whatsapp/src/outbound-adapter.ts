@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveWhatsAppRetryConfig, withWhatsAppSendRetry } from "./outbound-retry.js";
 import { resolveWhatsAppOutboundTarget } from "./runtime-api.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
@@ -53,12 +54,17 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       const send =
         resolveOutboundSendDep<typeof import("./send.js").sendMessageWhatsApp>(deps, "whatsapp") ??
         (await import("./send.js")).sendMessageWhatsApp;
-      return await send(to, normalizedText, {
-        verbose: false,
-        cfg,
-        accountId: accountId ?? undefined,
-        gifPlayback,
-      });
+      return await withWhatsAppSendRetry(
+        () =>
+          send(to, normalizedText, {
+            verbose: false,
+            cfg,
+            accountId: accountId ?? undefined,
+            gifPlayback,
+          }),
+        "sendText",
+        resolveWhatsAppRetryConfig(cfg, accountId),
+      );
     },
     sendMedia: async ({
       cfg,
@@ -75,21 +81,31 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       const send =
         resolveOutboundSendDep<typeof import("./send.js").sendMessageWhatsApp>(deps, "whatsapp") ??
         (await import("./send.js")).sendMessageWhatsApp;
-      return await send(to, normalizedText, {
-        verbose: false,
-        cfg,
-        mediaUrl,
-        mediaLocalRoots,
-        mediaReadFile,
-        accountId: accountId ?? undefined,
-        gifPlayback,
-      });
+      return await withWhatsAppSendRetry(
+        () =>
+          send(to, normalizedText, {
+            verbose: false,
+            cfg,
+            mediaUrl,
+            mediaLocalRoots,
+            mediaReadFile,
+            accountId: accountId ?? undefined,
+            gifPlayback,
+          }),
+        "sendMedia",
+        resolveWhatsAppRetryConfig(cfg, accountId),
+      );
     },
     sendPoll: async ({ cfg, to, poll, accountId }) =>
-      await sendPollWhatsApp(to, poll, {
-        verbose: shouldLogVerbose(),
-        accountId: accountId ?? undefined,
-        cfg,
-      }),
+      await withWhatsAppSendRetry(
+        () =>
+          sendPollWhatsApp(to, poll, {
+            verbose: shouldLogVerbose(),
+            accountId: accountId ?? undefined,
+            cfg,
+          }),
+        "sendPoll",
+        resolveWhatsAppRetryConfig(cfg, accountId),
+      ),
   }),
 };

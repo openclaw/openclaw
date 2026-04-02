@@ -25,6 +25,7 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
+import { resolveWhatsAppRetryConfig, withWhatsAppSendRetry } from "./outbound-retry.js";
 import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 import {
   createActionGate,
@@ -130,6 +131,18 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
         resolveTarget: ({ to, allowFrom, mode }) =>
           resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+        wrapSendMessageWhatsApp: async (run, params) =>
+          await withWhatsAppSendRetry(
+            run,
+            params.label,
+            resolveWhatsAppRetryConfig(params.cfg, params.accountId),
+          ),
+        wrapSendPollWhatsApp: async (run, params) =>
+          await withWhatsAppSendRetry(
+            run,
+            params.label,
+            resolveWhatsAppRetryConfig(params.cfg, params.accountId),
+          ),
       }),
       normalizePayload: ({ payload }) => ({
         ...payload,

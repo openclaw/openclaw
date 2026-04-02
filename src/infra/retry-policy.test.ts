@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTelegramRetryRunner } from "./retry-policy.js";
+import { createOutboundRetryRunner, createTelegramRetryRunner } from "./retry-policy.js";
 
 const ZERO_DELAY_RETRY = { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
 
@@ -43,6 +43,122 @@ describe("createTelegramRetryRunner", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  describe("createOutboundRetryRunner", () => {
+    it("applies configRetry before retry overrides", async () => {
+      vi.useFakeTimers();
+
+      const runner = createOutboundRetryRunner({
+        defaults: { attempts: 4, minDelayMs: 25, maxDelayMs: 100, jitter: 0.5 },
+        configRetry: { attempts: 2, minDelayMs: 10 },
+        retry: { attempts: 3, maxDelayMs: 0, jitter: 0 },
+        logLabel: "whatsapp",
+        shouldRetry: () => true,
+      });
+      const fn = vi.fn().mockRejectedValue(new Error("timeout"));
+
+      const promise = runner(fn, "sendText");
+      const assertion = expect(promise).rejects.toThrow("timeout");
+      await vi.runAllTimersAsync();
+
+      await assertion;
+      expect(fn).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not retry when the classifier returns false", async () => {
+      vi.useFakeTimers();
+
+      const runner = createOutboundRetryRunner({
+        defaults: ZERO_DELAY_RETRY,
+        retry: { ...ZERO_DELAY_RETRY, attempts: 2 },
+        logLabel: "whatsapp",
+        shouldRetry: () => false,
+      });
+      const fn = vi.fn().mockRejectedValue(new Error("forbidden"));
+
+      const promise = runner(fn, "sendText");
+      const assertion = expect(promise).rejects.toThrow("forbidden");
+      await vi.runAllTimersAsync();
+
+      await assertion;
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it("honors retryAfterMs when provided", async () => {
+      vi.useFakeTimers();
+
+      const runner = createOutboundRetryRunner({
+        defaults: { attempts: 2, minDelayMs: 0, maxDelayMs: 1_000, jitter: 0 },
+        logLabel: "discord",
+        shouldRetry: () => true,
+        retryAfterMs: () => 250,
+      });
+      const fn = vi.fn().mockRejectedValueOnce(new Error("rate limited")).mockResolvedValue("ok");
+
+      const promise = runner(fn, "send");
+      expect(fn).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(fn).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toBe("ok");
+      expect(fn).toHaveBeenCalledTimes(2);
+    });
+
+    it("logs retries through the shared logger when verbose is enabled", async () => {
+      vi.useFakeTimers();
+      const warn = vi.fn();
+
+      vi.resetModules();
+      vi.doMock("../logging/subsystem.js", () => ({
+        createSubsystemLogger: () => ({
+          warn,
+        }),
+      }));
+
+      const { createOutboundRetryRunner: createLoggedRunner } = await import("./retry-policy.js");
+
+      const runner = createLoggedRunner({
+        defaults: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+        verbose: true,
+        logLabel: "whatsapp",
+        shouldRetry: () => true,
+        formatRetryMessage: (info, logLabel) =>
+          `${logLabel} retry ${info.attempt}/${info.maxAttempts}`,
+      });
+      const fn = vi.fn().mockRejectedValueOnce(new Error("timeout")).mockResolvedValue("ok");
+
+      const promise = runner(fn, "sendText");
+      await vi.runAllTimersAsync();
+
+      await expect(promise).resolves.toBe("ok");
+      expect(warn).toHaveBeenCalledWith("whatsapp retry 1/2");
+    });
+
+    it("can log retries even when verbose is disabled", async () => {
+      vi.useFakeTimers();
+      const warn = vi.fn();
+
+      const runner = createOutboundRetryRunner({
+        defaults: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+        alwaysLogRetries: true,
+        logLabel: "whatsapp",
+        shouldRetry: () => true,
+        logger: { warn },
+        formatRetryMessage: (info, logLabel) =>
+          `${logLabel} retry ${info.attempt}/${info.maxAttempts}`,
+      });
+      const fn = vi.fn().mockRejectedValueOnce(new Error("timeout")).mockResolvedValue("ok");
+
+      const promise = runner(fn, "sendText");
+      await vi.runAllTimersAsync();
+
+      await expect(promise).resolves.toBe("ok");
+      expect(warn).toHaveBeenCalledWith("whatsapp retry 1/2");
+    });
   });
 
   describe("strictShouldRetry", () => {

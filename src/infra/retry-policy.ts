@@ -1,6 +1,6 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
-import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
+import { type RetryConfig, type RetryInfo, resolveRetryConfig, retryAsync } from "./retry.js";
 
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
 
@@ -13,6 +13,49 @@ export const TELEGRAM_RETRY_DEFAULTS = {
 
 const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
 const log = createSubsystemLogger("retry-policy");
+
+type CreateOutboundRetryRunnerParams = {
+  retry?: RetryConfig;
+  configRetry?: RetryConfig;
+  verbose?: boolean;
+  alwaysLogRetries?: boolean;
+  defaults: Required<RetryConfig>;
+  logLabel: string;
+  shouldRetry: (err: unknown) => boolean;
+  retryAfterMs?: (err: unknown) => number | undefined;
+  formatRetryMessage?: (info: RetryInfo, logLabel: string) => string;
+  logger?: {
+    warn: (message: string) => void;
+  };
+};
+
+function buildDefaultRetryMessage(info: RetryInfo, logLabel: string): string {
+  const labelText = info.label ?? "request";
+  const maxRetries = Math.max(1, info.maxAttempts - 1);
+  return `${logLabel} ${labelText} retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`;
+}
+
+export function createOutboundRetryRunner(params: CreateOutboundRetryRunnerParams): RetryRunner {
+  const retryConfig = resolveRetryConfig(params.defaults, {
+    ...params.configRetry,
+    ...params.retry,
+  });
+  return <T>(fn: () => Promise<T>, label?: string) =>
+    retryAsync(fn, {
+      ...retryConfig,
+      label,
+      shouldRetry: params.shouldRetry,
+      retryAfterMs: params.retryAfterMs,
+      onRetry:
+        params.verbose || params.alwaysLogRetries
+          ? (info) => {
+              (params.logger ?? log).warn(
+                (params.formatRetryMessage ?? buildDefaultRetryMessage)(info, params.logLabel),
+              );
+            }
+          : undefined,
+    });
+}
 
 function resolveTelegramShouldRetry(params: {
   shouldRetry?: (err: unknown) => boolean;
@@ -59,26 +102,14 @@ export function createRateLimitRetryRunner(params: {
   shouldRetry: (err: unknown) => boolean;
   retryAfterMs?: (err: unknown) => number | undefined;
 }): RetryRunner {
-  const retryConfig = resolveRetryConfig(params.defaults, {
-    ...params.configRetry,
-    ...params.retry,
+  return createOutboundRetryRunner({
+    ...params,
+    formatRetryMessage: (info, logLabel) => {
+      const labelText = info.label ?? "request";
+      const maxRetries = Math.max(1, info.maxAttempts - 1);
+      return `${logLabel} ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`;
+    },
   });
-  return <T>(fn: () => Promise<T>, label?: string) =>
-    retryAsync(fn, {
-      ...retryConfig,
-      label,
-      shouldRetry: params.shouldRetry,
-      retryAfterMs: params.retryAfterMs,
-      onRetry: params.verbose
-        ? (info) => {
-            const labelText = info.label ?? "request";
-            const maxRetries = Math.max(1, info.maxAttempts - 1);
-            log.warn(
-              `${params.logLabel} ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
-            );
-          }
-        : undefined,
-    });
 }
 
 export function createTelegramRetryRunner(params: {
@@ -94,25 +125,18 @@ export function createTelegramRetryRunner(params: {
    */
   strictShouldRetry?: boolean;
 }): RetryRunner {
-  const retryConfig = resolveRetryConfig(TELEGRAM_RETRY_DEFAULTS, {
-    ...params.configRetry,
-    ...params.retry,
-  });
   const shouldRetry = resolveTelegramShouldRetry(params);
-
-  return <T>(fn: () => Promise<T>, label?: string) =>
-    retryAsync(fn, {
-      ...retryConfig,
-      label,
-      shouldRetry,
-      retryAfterMs: getTelegramRetryAfterMs,
-      onRetry: params.verbose
-        ? (info) => {
-            const maxRetries = Math.max(1, info.maxAttempts - 1);
-            log.warn(
-              `telegram send retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
-            );
-          }
-        : undefined,
-    });
+  return createOutboundRetryRunner({
+    retry: params.retry,
+    configRetry: params.configRetry,
+    verbose: params.verbose,
+    defaults: TELEGRAM_RETRY_DEFAULTS,
+    logLabel: "telegram",
+    shouldRetry,
+    retryAfterMs: getTelegramRetryAfterMs,
+    formatRetryMessage: (info) => {
+      const maxRetries = Math.max(1, info.maxAttempts - 1);
+      return `telegram send retry ${info.attempt}/${maxRetries} for ${info.label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`;
+    },
+  });
 }
