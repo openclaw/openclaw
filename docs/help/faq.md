@@ -2088,13 +2088,13 @@ for usage/billing and raise limits as needed.
 
     1. Install Ollama from `https://ollama.com/download`
     2. Pull a local model such as `ollama pull glm-4.7-flash`
-    3. If you want hosted models too, run `ollama signin`
+    3. If you want cloud models too, run `ollama signin`
     4. Run `openclaw onboard` and choose `Ollama`
     5. Pick `Local` or `Cloud + Local`
 
     Notes:
 
-    - `Cloud + Local` gives you hosted models plus your local Ollama models
+    - `Cloud + Local` gives you cloud models plus your local Ollama models
     - cloud models such as `kimi-k2.5:cloud` do not need a local pull
     - for manual switching, use `openclaw models list` and `openclaw models set ollama/<model>`
 

@@ -344,7 +344,7 @@ export async function promptAndConfigureOllama(params: {
   const mode = (await params.prompter.select({
     message: "Ollama mode",
     options: [
-      { value: "remote", label: "Cloud + Local", hint: "Hosted models + local models" },
+      { value: "remote", label: "Cloud + Local", hint: "Cloud models + local models" },
       { value: "local", label: "Local", hint: "Local models only" },
     ],
   })) as OllamaMode;

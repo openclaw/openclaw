@@ -189,7 +189,7 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
     placeholder: "(run ollama signin)",
     signupUrl: "https://ollama.com/",
     docsUrl: "https://docs.openclaw.ai/tools/web",
-    autoDetectOrder: 80,
+    autoDetectOrder: 110,
     credentialPath: "",
     getCredentialValue: () => undefined,
     setCredentialValue: () => {},
