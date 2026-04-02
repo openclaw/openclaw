@@ -62,6 +62,35 @@ describe("task-flow-registry audit", () => {
     ]);
   });
 
+  it("clears restore-failed findings after a clean reset and restore", () => {
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => {
+          throw new Error("boom");
+        },
+        saveSnapshot: () => {},
+      },
+    });
+
+    expect(listTaskFlowAuditFindings()).toEqual([
+      expect.objectContaining({
+        code: "restore_failed",
+      }),
+    ]);
+
+    resetTaskFlowRegistryForTests({ persist: false });
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          flows: new Map(),
+        }),
+        saveSnapshot: () => {},
+      },
+    });
+
+    expect(listTaskFlowAuditFindings()).toEqual([]);
+  });
+
   it("detects stuck managed flows and missing blocked tasks", async () => {
     await withTaskFlowAuditStateDir(async () => {
       const running = createManagedTaskFlow({
@@ -132,6 +161,58 @@ describe("task-flow-registry audit", () => {
         expect.arrayContaining([
           expect.objectContaining({
             code: "missing_linked_tasks",
+            flow: expect.objectContaining({ flowId: flow.flowId }),
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("does not flag missing linked tasks before the flow is stale", async () => {
+    await withTaskFlowAuditStateDir(async () => {
+      const now = Date.now();
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Fresh managed flow",
+        status: "running",
+        createdAt: now - 5 * 60_000,
+        updatedAt: now - 5 * 60_000,
+      });
+
+      expect(
+        listTaskFlowAuditFindings({ now }).find(
+          (finding) => finding.code === "missing_linked_tasks",
+        ),
+      ).toBeUndefined();
+
+      expect(listTaskFlowAuditFindings({ now: now + 26 * 60_000 })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "missing_linked_tasks",
+            flow: expect.objectContaining({ flowId: flow.flowId }),
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("reports cancel-stuck before maintenance finalizes the flow", async () => {
+    await withTaskFlowAuditStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Cancel work",
+        status: "running",
+        cancelRequestedAt: 100,
+        createdAt: 1,
+        updatedAt: 100,
+      });
+
+      expect(listTaskFlowAuditFindings({ now: 6 * 60_000 })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "cancel_stuck",
             flow: expect.objectContaining({ flowId: flow.flowId }),
           }),
         ]),
