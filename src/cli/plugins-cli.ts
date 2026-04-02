@@ -163,12 +163,6 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
         : (plugin.activationSource ?? (plugin.activated ? "active" : "inactive"));
     parts.push(`  activation: ${activationSummary}`);
   }
-  if (plugin.explicitlyEnabled !== undefined) {
-    parts.push(`  explicitly enabled: ${plugin.explicitlyEnabled ? "yes" : "no"}`);
-  }
-  if (plugin.activationReason) {
-    parts.push(`  activation reason: ${plugin.activationReason}`);
-  }
   if (plugin.error) {
     parts.push(theme.error(`  error: ${plugin.error}`));
   }
