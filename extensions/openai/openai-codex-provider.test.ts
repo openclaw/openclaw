@@ -124,9 +124,9 @@ describe("openai codex provider", () => {
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       reasoning: true,
-      // inherits contextWindow/maxTokens from template
-      contextWindow: 200_000,
-      maxTokens: 64_000,
+      // explicit runtime metadata overrides template values
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
     });
   });
 
@@ -150,6 +150,8 @@ describe("openai codex provider", () => {
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       reasoning: true,
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
     });
   });
 

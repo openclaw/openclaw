@@ -42,6 +42,8 @@ const OPENAI_CODEX_GPT_54_COST = {
 } as const;
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
+const OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS = 1_050_000;
+const OPENAI_CODEX_GPT_54_MINI_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
@@ -108,8 +110,11 @@ function resolveCodexForwardCompatModel(
       cost: OPENAI_CODEX_GPT_54_COST,
     };
   } else if (lower === OPENAI_CODEX_GPT_54_MINI_MODEL_ID) {
-    // mini inherits contextWindow/maxTokens from template; no explicit override needed
     templateIds = OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS;
+    patch = {
+      contextWindow: OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS,
+      maxTokens: OPENAI_CODEX_GPT_54_MINI_MAX_TOKENS,
+    };
   } else if (lower === OPENAI_CODEX_GPT_53_SPARK_MODEL_ID) {
     templateIds = [OPENAI_CODEX_GPT_53_MODEL_ID, ...OPENAI_CODEX_TEMPLATE_MODEL_IDS];
     patch = {
