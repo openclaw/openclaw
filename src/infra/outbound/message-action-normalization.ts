@@ -9,6 +9,17 @@ import {
 import { applyTargetToParams } from "./channel-target.js";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 
+function normalizeCurrentTargetComparable(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.replace(/^channel:/i, "");
+}
+
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -66,7 +77,12 @@ export function normalizeMessageActionInput(params: {
 
   if ((action === "react" || action === "reactions") && !normalizedArgs.messageId) {
     const inferredMessageId = toolContext?.currentMessageTs?.trim();
-    if (inferredMessageId) {
+    const normalizedTarget = normalizeCurrentTargetComparable(normalizedArgs.target);
+    const normalizedCurrentTarget = normalizeCurrentTargetComparable(toolContext?.currentChannelId);
+    const shouldInferMessageId =
+      !normalizedTarget ||
+      (!!normalizedCurrentTarget && normalizedTarget === normalizedCurrentTarget);
+    if (inferredMessageId && shouldInferMessageId) {
       normalizedArgs.messageId = inferredMessageId;
     }
   }

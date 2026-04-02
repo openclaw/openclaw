@@ -161,7 +161,7 @@ describe("normalizeMessageActionInput", () => {
     },
   );
 
-  it("infers react messageId from toolContext.currentMessageTs", () => {
+  it("infers react messageId from toolContext.currentMessageTs for the current target", () => {
     const normalized = normalizeMessageActionInput({
       action: "react",
       args: {
@@ -169,10 +169,43 @@ describe("normalizeMessageActionInput", () => {
         emoji: "👍",
       },
       toolContext: {
+        currentChannelId: "C1",
         currentMessageTs: "1710000000.123456",
       },
     });
 
+    expect(normalized.messageId).toBe("1710000000.123456");
+  });
+
+  it("does not infer react messageId for a different explicit target", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "react",
+      args: {
+        target: "channel:C2",
+        emoji: "👍",
+      },
+      toolContext: {
+        currentChannelId: "channel:C1",
+        currentMessageTs: "1710000000.123456",
+      },
+    });
+
+    expect(normalized.messageId).toBeUndefined();
+  });
+
+  it("infers react messageId when the target is omitted and current target is implied", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "react",
+      args: {
+        emoji: "👍",
+      },
+      toolContext: {
+        currentChannelId: "channel:C1",
+        currentMessageTs: "1710000000.123456",
+      },
+    });
+
+    expect(normalized.target).toBe("channel:C1");
     expect(normalized.messageId).toBe("1710000000.123456");
   });
 

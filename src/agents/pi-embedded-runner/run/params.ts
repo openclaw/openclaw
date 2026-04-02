@@ -58,6 +58,8 @@ export type RunEmbeddedPiAgentParams = {
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
+  /** Current inbound message timestamp for action fallbacks (e.g. Slack react). */
+  currentMessageTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
   /** Reply-to mode for Slack auto-threading. */

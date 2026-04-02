@@ -267,6 +267,8 @@ export function createOpenClawCodingTools(options?: {
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
+  /** Current inbound message timestamp for action fallbacks (e.g. Slack react). */
+  currentMessageTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
   /** Group id for channel-level tool policy resolution. */
