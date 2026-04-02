@@ -5,6 +5,8 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
+import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
@@ -32,6 +34,37 @@ type ChatWebhookPayload = {
   file_url?: string;
   user_ids?: number[];
 };
+
+const ChatUserSchema = z
+  .object({
+    user_id: z.number(),
+    username: z.string().optional(),
+    nickname: z.string().optional(),
+  })
+  .transform(
+    (user): ChatUser => ({
+      user_id: user.user_id,
+      username: user.username ?? "",
+      nickname: user.nickname ?? "",
+    }),
+  );
+
+const ChatUserListResponseSchema = z.object({
+  success: z.boolean(),
+  data: z
+    .object({
+      users: z
+        .array(z.unknown())
+        .optional()
+        .transform((users) =>
+          (users ?? []).flatMap((user) => {
+            const parsed = safeParseWithSchema(ChatUserSchema, user);
+            return parsed ? [parsed] : [];
+          }),
+        ),
+    })
+    .optional(),
+});
 
 // Cache user lists per bot endpoint to avoid cross-account bleed.
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
@@ -140,29 +173,25 @@ export async function fetchChatUsers(
           data += c.toString();
         });
         res.on("end", () => {
-          try {
-            const result = JSON.parse(data);
-            if (result.success && result.data?.users) {
-              const users = result.data.users.map((u: any) => ({
-                user_id: u.user_id,
-                username: u.username || "",
-                nickname: u.nickname || "",
-              }));
-              chatUserCache.set(listUrl, {
-                users,
-                cachedAt: now,
-              });
-              resolve(users);
-            } else {
-              log?.warn(
-                `fetchChatUsers: API returned success=${result.success}, using cached data`,
-              );
-              resolve(cached?.users ?? []);
-            }
-          } catch {
+          const result = safeParseJsonWithSchema(ChatUserListResponseSchema, data);
+          if (!result) {
             log?.warn("fetchChatUsers: failed to parse user_list response");
             resolve(cached?.users ?? []);
+            return;
           }
+
+          if (result.success) {
+            const users = result.data?.users ?? [];
+            chatUserCache.set(listUrl, {
+              users,
+              cachedAt: now,
+            });
+            resolve(users);
+            return;
+          }
+
+          log?.warn(`fetchChatUsers: API returned success=${result.success}, using cached data`);
+          resolve(cached?.users ?? []);
         });
       })
       .on("error", (err) => {

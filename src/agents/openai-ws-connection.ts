@@ -15,7 +15,7 @@
 
 import { EventEmitter } from "node:events";
 import WebSocket, { type ClientOptions } from "ws";
-import { resolveProviderAttributionHeaders } from "./provider-attribution.js";
+import { resolveProviderRequestAttributionHeaders } from "./provider-attribution.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WebSocket Event Types (Server → Client)
@@ -58,10 +58,10 @@ export type OutputItem =
       status?: "in_progress" | "completed";
     }
   | {
-      type: "reasoning";
+      type: "reasoning" | `reasoning.${string}`;
       id: string;
       content?: string;
-      summary?: string;
+      summary?: unknown;
     };
 
 export interface ResponseCreatedEvent {
@@ -198,7 +198,13 @@ export type InputItem =
     }
   | { type: "function_call"; id?: string; call_id?: string; name: string; arguments: string }
   | { type: "function_call_output"; call_id: string; output: string }
-  | { type: "reasoning"; content?: string; encrypted_content?: string; summary?: string }
+  | {
+      type: "reasoning";
+      id?: string;
+      content?: string;
+      encrypted_content?: string;
+      summary?: string;
+    }
   | { type: "item_reference"; id: string };
 
 export type ToolChoice =
@@ -232,6 +238,7 @@ export interface ResponseCreateEvent {
   top_p?: number;
   metadata?: Record<string, string>;
   reasoning?: { effort?: "low" | "medium" | "high"; summary?: "auto" | "concise" | "detailed" };
+  text?: { verbosity?: "low" | "medium" | "high"; [key: string]: unknown };
   truncation?: "auto" | "disabled";
   [key: string]: unknown;
 }
@@ -251,14 +258,6 @@ const OPENAI_WS_URL = "wss://api.openai.com/v1/responses";
 const MAX_RETRIES = 5;
 /** Backoff delays in ms: 1s, 2s, 4s, 8s, 16s */
 const BACKOFF_DELAYS_MS = [1000, 2000, 4000, 8000, 16000] as const;
-
-function isOpenAIPublicWebSocketUrl(url: string): boolean {
-  try {
-    return new URL(url).hostname.toLowerCase() === "api.openai.com";
-  } catch {
-    return url.toLowerCase().includes("api.openai.com");
-  }
-}
 
 export interface OpenAIWebSocketManagerOptions {
   /** Override the default WebSocket URL (useful for testing) */
@@ -407,9 +406,13 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
           "OpenAI-Beta": "responses-websocket=v1",
-          ...(isOpenAIPublicWebSocketUrl(this.wsUrl)
-            ? resolveProviderAttributionHeaders("openai")
-            : undefined),
+          ...resolveProviderRequestAttributionHeaders({
+            provider: "openai",
+            api: "openai-responses",
+            baseUrl: this.wsUrl,
+            capability: "llm",
+            transport: "websocket",
+          }),
         },
       });
 

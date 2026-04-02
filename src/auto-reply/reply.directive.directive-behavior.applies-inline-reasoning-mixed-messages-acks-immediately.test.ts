@@ -6,6 +6,7 @@ import { loadSessionStore, resolveSessionKey, saveSessionStore } from "../config
 import {
   DEFAULT_TEST_MODEL_CATALOG,
   installDirectiveBehaviorE2EHooks,
+  installFreshDirectiveBehaviorReplyMocks,
   makeEmbeddedTextResult,
   makeWhatsAppDirectiveConfig,
   replyText,
@@ -21,29 +22,6 @@ import {
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 let actualRunPreparedReply: typeof import("./reply/get-reply-run.js").runPreparedReply;
 const runPreparedReplyMock = vi.hoisted(() => vi.fn());
-
-function installFreshDirectiveBehaviorReplyMocks() {
-  vi.doMock("../agents/pi-embedded.js", () => ({
-    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-    runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
-    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  }));
-  vi.doMock("../agents/model-catalog.js", () => ({
-    loadModelCatalog: loadModelCatalogMock,
-  }));
-  vi.doMock("./reply/get-reply-run.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./reply/get-reply-run.js")>();
-    actualRunPreparedReply = actual.runPreparedReply;
-    return {
-      ...actual,
-      runPreparedReply: (...args: Parameters<typeof actual.runPreparedReply>) =>
-        runPreparedReplyMock(...args),
-    };
-  });
-}
 
 async function writeSkill(params: { workspaceDir: string; name: string; description: string }) {
   const { workspaceDir, name, description } = params;
@@ -175,7 +153,12 @@ describe("directive behavior", () => {
     vi.resetModules();
     loadModelCatalogMock.mockReset();
     loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
-    installFreshDirectiveBehaviorReplyMocks();
+    installFreshDirectiveBehaviorReplyMocks({
+      onActualRunPreparedReply: (runPreparedReply) => {
+        actualRunPreparedReply = runPreparedReply;
+      },
+      runPreparedReply: (...args) => runPreparedReplyMock(...args),
+    });
     ({ getReplyFromConfig } = await import("./reply.js"));
     runPreparedReplyMock.mockReset();
     runPreparedReplyMock.mockImplementation((...args: Parameters<typeof actualRunPreparedReply>) =>

@@ -39,6 +39,7 @@ export type MockSock = {
   sendPresenceUpdate: AnyMockFn;
   sendMessage: AnyMockFn;
   readMessages: AnyMockFn;
+  groupFetchAllParticipating: AnyMockFn;
   updateMediaMessage: AnyMockFn;
   logger: Record<string, unknown>;
   signalRepository: {
@@ -65,6 +66,7 @@ function createMockSock(): MockSock {
     sendPresenceUpdate: createResolvedMock(),
     sendMessage: createResolvedMock(),
     readMessages: createResolvedMock(),
+    groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
     updateMediaMessage: vi.fn(),
     logger: {},
     signalRepository: {
@@ -155,7 +157,10 @@ export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, c
   );
 }
 
-export async function startInboxMonitor(onMessage: InboxOnMessage) {
+export async function startInboxMonitor(
+  onMessage: InboxOnMessage,
+  options: { selfChatMode?: boolean } = {},
+) {
   if (!monitorWebInbox) {
     ({ monitorWebInbox } = await import("./inbound.js"));
   }
@@ -164,6 +169,7 @@ export async function startInboxMonitor(onMessage: InboxOnMessage) {
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
+    selfChatMode: options.selfChatMode,
   });
   return { listener, sock: getSock() };
 }

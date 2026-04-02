@@ -36,7 +36,7 @@ describe("config io observe", () => {
     return { io, configPath, auditPath, warn, error };
   }
 
-  it("records forensic audit for suspicious out-of-band config clobbers", async () => {
+  it("auto-restores from backup for suspicious update-channel-only root clobbers", async () => {
     await withSuiteHome(async (home) => {
       const { io, configPath, auditPath, warn } = await makeIo(home);
 
@@ -57,6 +57,7 @@ describe("config io observe", () => {
 
       const seeded = await io.readConfigFileSnapshot();
       expect(seeded.valid).toBe(true);
+      await fs.copyFile(configPath, `${configPath}.bak`);
 
       const clobberedRaw = `${JSON.stringify({ update: { channel: "beta" } }, null, 2)}\n`;
       await fs.writeFile(configPath, clobberedRaw, "utf-8");
@@ -64,7 +65,8 @@ describe("config io observe", () => {
       const snapshot = await io.readConfigFileSnapshot();
       expect(snapshot.valid).toBe(true);
       expect(snapshot.config.update?.channel).toBe("beta");
-      expect(snapshot.config.gateway?.mode).toBeUndefined();
+      expect(snapshot.config.gateway?.mode).toBe("local");
+      await expect(fs.readFile(configPath, "utf-8")).resolves.not.toBe(clobberedRaw);
 
       const lines = (await fs.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
       const observe = lines
@@ -76,17 +78,25 @@ describe("config io observe", () => {
       expect(observe?.source).toBe("config-io");
       expect(observe?.configPath).toBe(configPath);
       expect(observe?.valid).toBe(true);
+      expect(observe?.mode).toBeTypeOf("number");
+      expect(observe?.ino).toBeTypeOf("string");
+      expect(observe?.lastKnownGoodMode).toBeTypeOf("number");
+      expect(observe?.backupMode).toBeTypeOf("number");
       expect(observe?.suspicious).toEqual(
         expect.arrayContaining(["gateway-mode-missing-vs-last-good", "update-channel-only-root"]),
       );
       expect(observe?.clobberedPath).toBeTypeOf("string");
+      expect(observe?.restoredFromBackup).toBe(true);
       await expect(fs.readFile(String(observe?.clobberedPath), "utf-8")).resolves.toBe(
         clobberedRaw,
       );
 
       const anomalyLog = warn.mock.calls
         .map((call) => call[0])
-        .find((entry) => typeof entry === "string" && entry.startsWith("Config observe anomaly:"));
+        .find(
+          (entry) =>
+            typeof entry === "string" && entry.startsWith("Config auto-restored from backup:"),
+        );
       expect(anomalyLog).toContain(configPath);
     });
   });
@@ -107,6 +117,7 @@ describe("config io observe", () => {
         },
       });
       await io.readConfigFileSnapshot();
+      await fs.copyFile(configPath, `${configPath}.bak`);
 
       await fs.writeFile(
         configPath,
@@ -123,10 +134,11 @@ describe("config io observe", () => {
         .filter((line) => line.event === "config.observe");
 
       expect(observeEvents).toHaveLength(1);
+      expect(observeEvents[0]?.restoredFromBackup).toBe(true);
     });
   });
 
-  it("records forensic audit from loadConfig when only the backup file provides the baseline", async () => {
+  it("loadConfig auto-restores from backup when only the backup file provides the baseline", async () => {
     await withSuiteHome(async (home) => {
       const { io, configPath, auditPath, warn } = await makeIo(home);
 
@@ -147,7 +159,7 @@ describe("config io observe", () => {
       await fs.writeFile(configPath, clobberedRaw, "utf-8");
 
       const loaded = io.loadConfig();
-      expect(loaded.gateway?.mode).toBeUndefined();
+      expect(loaded.gateway?.mode).toBe("local");
 
       const lines = (await fs.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
       const observe = lines
@@ -157,13 +169,19 @@ describe("config io observe", () => {
 
       expect(observe).toBeDefined();
       expect(observe?.backupHash).toBeTypeOf("string");
+      expect(observe?.backupIno).toBeTypeOf("string");
+      expect(observe?.lastKnownGoodIno ?? null).toBeNull();
       expect(observe?.suspicious).toEqual(
         expect.arrayContaining(["gateway-mode-missing-vs-last-good", "update-channel-only-root"]),
       );
+      expect(observe?.restoredFromBackup).toBe(true);
 
       const anomalyLog = warn.mock.calls
         .map((call) => call[0])
-        .find((entry) => typeof entry === "string" && entry.startsWith("Config observe anomaly:"));
+        .find(
+          (entry) =>
+            typeof entry === "string" && entry.startsWith("Config auto-restored from backup:"),
+        );
       expect(anomalyLog).toContain(configPath);
     });
   });

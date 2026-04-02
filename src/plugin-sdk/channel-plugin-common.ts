@@ -22,4 +22,4 @@ export {
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 
-export { getChatChannelMeta } from "../channels/registry.js";
+export { getChatChannelMeta } from "../channels/chat-meta.js";

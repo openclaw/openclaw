@@ -8,12 +8,12 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
-import { handleSlackHttpRequest } from "../../extensions/slack/api.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { handleSlackHttpRequest } from "../plugin-sdk/slack.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
@@ -40,9 +40,11 @@ import {
   extractHookToken,
   getHookAgentPolicyError,
   getHookChannelError,
+  getHookSessionKeyPrefixError,
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
   isHookAgentAllowed,
+  isSessionKeyAllowedByPrefix,
   normalizeAgentPayload,
   normalizeHookHeaders,
   resolveHookIdempotencyKey,
@@ -55,7 +57,7 @@ import {
   resolveHookDeliver,
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
-import { getBearerToken } from "./http-utils.js";
+import { getBearerToken, resolveHttpBrowserOriginPolicy } from "./http-utils.js";
 import { handleOpenAiModelsHttpRequest } from "./models-http.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
@@ -72,6 +74,7 @@ import {
   type PluginHttpRequestHandler,
   type PluginRoutePathContext,
 } from "./server/plugins-http.js";
+import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleSessionKillHttpRequest } from "./session-kill-http.js";
@@ -216,6 +219,7 @@ async function canRevealReadinessDetails(params: {
     req: params.req,
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
+    browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req),
   });
   return authResult.ok;
 }
@@ -310,12 +314,21 @@ type GatewayHttpRequestStage = {
   run: () => Promise<boolean> | boolean;
 };
 
-async function runGatewayHttpRequestStages(
+export async function runGatewayHttpRequestStages(
   stages: readonly GatewayHttpRequestStage[],
 ): Promise<boolean> {
   for (const stage of stages) {
-    if (await stage.run()) {
-      return true;
+    try {
+      if (await stage.run()) {
+        return true;
+      }
+    } catch (err) {
+      // Log and skip the failing stage so subsequent stages (control-ui,
+      // gateway-probes, etc.) remain reachable.  A common trigger is a
+      // bundled-plugin facade that fails to load because an optional
+      // dependency is missing (e.g. @slack/bolt after the lazy-facade
+      // refactor).
+      console.error(`[gateway-http] stage "${stage.name}" threw — skipping:`, err);
     }
   }
   return false;
@@ -613,6 +626,14 @@ export function createHooksRequestHandler(
         sessionKey: sessionKey.value,
         targetAgentId,
       });
+      const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+      if (
+        allowedPrefixes &&
+        !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
+      ) {
+        sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
+        return true;
+      }
       const runId = dispatchAgentHook({
         ...normalized.value,
         idempotencyKey,
@@ -674,6 +695,14 @@ export function createHooksRequestHandler(
             sessionKey: sessionKey.value,
             targetAgentId,
           });
+          const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+          if (
+            allowedPrefixes &&
+            !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
+          ) {
+            sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
+            return true;
+          }
           const replayKey = buildHookReplayCacheKey({
             pathKey: subPath || "mapping",
             token,
@@ -993,7 +1022,8 @@ export function createGatewayHttpServer(opts: {
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
-    } catch {
+    } catch (err) {
+      console.error("[gateway-http] unhandled error in request handler:", err);
       res.statusCode = 500;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Internal Server Error");
@@ -1008,13 +1038,25 @@ export function attachGatewayUpgradeHandler(opts: {
   wss: WebSocketServer;
   canvasHost: CanvasHostHandler | null;
   clients: Set<GatewayWsClient>;
+  preauthConnectionBudget: PreauthConnectionBudget;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
 }) {
-  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
+  const {
+    httpServer,
+    wss,
+    canvasHost,
+    clients,
+    preauthConnectionBudget,
+    resolvedAuth,
+    rateLimiter,
+  } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      const configSnapshot = loadConfig();
+      const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
@@ -1027,9 +1069,6 @@ export function attachGatewayUpgradeHandler(opts: {
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {
-          const configSnapshot = loadConfig();
-          const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-          const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,
@@ -1050,9 +1089,68 @@ export function attachGatewayUpgradeHandler(opts: {
           return;
         }
       }
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit("connection", ws, req);
-      });
+      const preauthBudgetKey = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
+      if (wss.listenerCount("connection") === 0) {
+        const responseBody = "Gateway websocket handlers unavailable";
+        socket.write(
+          "HTTP/1.1 503 Service Unavailable\r\n" +
+            "Connection: close\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            `Content-Length: ${Buffer.byteLength(responseBody, "utf8")}\r\n` +
+            "\r\n" +
+            responseBody,
+        );
+        socket.destroy();
+        return;
+      }
+      if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
+        const responseBody = "Too many unauthenticated sockets";
+        socket.write(
+          "HTTP/1.1 503 Service Unavailable\r\n" +
+            "Connection: close\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            `Content-Length: ${Buffer.byteLength(responseBody, "utf8")}\r\n` +
+            "\r\n" +
+            responseBody,
+        );
+        socket.destroy();
+        return;
+      }
+      let budgetTransferred = false;
+      const releaseUpgradeBudget = () => {
+        if (budgetTransferred) {
+          return;
+        }
+        budgetTransferred = true;
+        preauthConnectionBudget.release(preauthBudgetKey);
+      };
+      socket.once("close", releaseUpgradeBudget);
+      try {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          (
+            ws as unknown as import("ws").WebSocket & {
+              __openclawPreauthBudgetClaimed?: boolean;
+              __openclawPreauthBudgetKey?: string;
+            }
+          ).__openclawPreauthBudgetKey = preauthBudgetKey;
+          wss.emit("connection", ws, req);
+          const budgetClaimed = Boolean(
+            (
+              ws as unknown as import("ws").WebSocket & {
+                __openclawPreauthBudgetClaimed?: boolean;
+              }
+            ).__openclawPreauthBudgetClaimed,
+          );
+          if (budgetClaimed) {
+            budgetTransferred = true;
+            socket.off("close", releaseUpgradeBudget);
+          }
+        });
+      } catch {
+        socket.off("close", releaseUpgradeBudget);
+        releaseUpgradeBudget();
+        throw new Error("gateway websocket upgrade failed");
+      }
     })().catch(() => {
       socket.destroy();
     });

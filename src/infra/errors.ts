@@ -69,6 +69,23 @@ export function formatErrorMessage(err: unknown): string {
   let formatted: string;
   if (err instanceof Error) {
     formatted = err.message || err.name || "Error";
+    // Traverse .cause chain to include nested error messages (e.g. grammY HttpError wraps network errors in .cause)
+    let cause: unknown = err.cause;
+    const seen = new Set<unknown>([err]);
+    while (cause && !seen.has(cause)) {
+      seen.add(cause);
+      if (cause instanceof Error) {
+        if (cause.message) {
+          formatted += ` | ${cause.message}`;
+        }
+        cause = cause.cause;
+      } else if (typeof cause === "string") {
+        formatted += ` | ${cause}`;
+        break;
+      } else {
+        break;
+      }
+    }
   } else if (typeof err === "string") {
     formatted = err;
   } else if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
