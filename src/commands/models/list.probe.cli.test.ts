@@ -1,0 +1,127 @@
+import os from "node:os";
+import path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import type { OpenClawConfig } from "../../config/config.js";
+
+const runCliAgentMock = vi.fn();
+const runEmbeddedPiAgentMock = vi.fn();
+const loadModelCatalogMock = vi.fn(async () => []);
+
+let mockStore: AuthProfileStore = {
+  version: 1,
+  profiles: {},
+  order: {},
+};
+
+vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
+  return {
+    ...actual,
+    ensureAuthProfileStore: () => mockStore,
+    listProfilesForProvider: (_store: AuthProfileStore, provider: string) =>
+      Object.entries(mockStore.profiles)
+        .filter(([, profile]) => profile.provider === provider)
+        .map(([profileId]) => profileId),
+    resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
+    resolveAuthProfileEligibility: () => ({ eligible: true }),
+    resolveAuthProfileOrder: () => [],
+  };
+});
+
+vi.mock("../../agents/model-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-auth.js")>();
+  return {
+    ...actual,
+    resolveEnvApiKey: () => null,
+    hasUsableCustomProviderApiKey: (_cfg: OpenClawConfig, provider: string) =>
+      provider === "claude-cli",
+  };
+});
+
+vi.mock("../../agents/model-catalog.js", () => ({
+  loadModelCatalog: (...args: unknown[]) => loadModelCatalogMock(...args),
+}));
+
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (params: unknown) => runCliAgentMock(params),
+}));
+
+vi.mock("../../agents/pi-embedded.js", () => ({
+  runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+}));
+
+vi.mock("../../config/sessions/paths.js", () => ({
+  resolveSessionTranscriptsDirForAgent: () => path.join(os.tmpdir(), "openclaw-probe-tests"),
+  resolveSessionTranscriptPath: (sessionId: string) =>
+    path.join(os.tmpdir(), "openclaw-probe-tests", `${sessionId}.jsonl`),
+}));
+
+const { runAuthProbes } = await import("./list.probe.js");
+
+describe("runAuthProbes CLI backend dispatch", () => {
+  beforeEach(() => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "claude-cli:default": {
+          type: "token",
+          provider: "claude-cli",
+          token: "test-token",
+        },
+      },
+      order: {},
+    };
+    runCliAgentMock.mockReset();
+    runEmbeddedPiAgentMock.mockReset();
+    loadModelCatalogMock.mockReset();
+    loadModelCatalogMock.mockResolvedValue([]);
+  });
+
+  it("probes CLI-backed models through runCliAgent", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "OK" }],
+      meta: {
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "opus",
+        },
+      },
+    });
+
+    const summary = await runAuthProbes({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      providers: ["claude-cli"],
+      modelCandidates: ["claude-cli/opus"],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        model: "opus",
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(summary.results).toEqual([
+      expect.objectContaining({
+        provider: "claude-cli",
+        model: "claude-cli/opus",
+        status: "ok",
+      }),
+    ]);
+  });
+});

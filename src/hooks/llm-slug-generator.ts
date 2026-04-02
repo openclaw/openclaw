@@ -11,8 +11,9 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
+import { runCliAgent } from "../agents/cli-runner.js";
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection.js";
+import { isCliProvider, parseModelRef } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -62,20 +63,36 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     const model = parsed?.model ?? DEFAULT_MODEL;
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
-    const result = await runEmbeddedPiAgent({
-      sessionId: `slug-generator-${Date.now()}`,
-      sessionKey: "temp:slug-generator",
-      agentId,
-      sessionFile: tempSessionFile,
-      workspaceDir,
-      agentDir,
-      config: params.cfg,
-      prompt,
-      provider,
-      model,
-      timeoutMs,
-      runId: `slug-gen-${Date.now()}`,
-    });
+    const sessionId = `slug-generator-${Date.now()}`;
+    const runId = `slug-gen-${Date.now()}`;
+    const result = isCliProvider(provider, params.cfg)
+      ? await runCliAgent({
+          sessionId,
+          sessionKey: "temp:slug-generator",
+          agentId,
+          sessionFile: tempSessionFile,
+          workspaceDir,
+          config: params.cfg,
+          prompt,
+          provider,
+          model,
+          timeoutMs,
+          runId,
+        })
+      : await runEmbeddedPiAgent({
+          sessionId,
+          sessionKey: "temp:slug-generator",
+          agentId,
+          sessionFile: tempSessionFile,
+          workspaceDir,
+          agentDir,
+          config: params.cfg,
+          prompt,
+          provider,
+          model,
+          timeoutMs,
+          runId,
+        });
 
     // Extract text from payloads
     if (result.payloads && result.payloads.length > 0) {

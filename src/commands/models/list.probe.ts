@@ -11,11 +11,13 @@ import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import { runCliAgent } from "../../agents/cli-runner.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   findNormalizedProviderValue,
+  isCliProvider,
   normalizeProviderId,
   parseModelRef,
 } from "../../agents/model-selection.js";
@@ -459,27 +461,44 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
-    const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
-    await runEmbeddedPiAgent({
-      sessionId,
-      sessionFile,
-      agentId,
-      workspaceDir,
-      agentDir,
-      config: cfg,
-      prompt: PROBE_PROMPT,
-      provider: target.model.provider,
-      model: target.model.model,
-      authProfileId: target.profileId,
-      authProfileIdSource: target.profileId ? "user" : undefined,
-      timeoutMs,
-      runId: `probe-${crypto.randomUUID()}`,
-      lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
-      thinkLevel: "off",
-      reasoningLevel: "off",
-      verboseLevel: "off",
-      streamParams: { maxTokens },
-    });
+    if (isCliProvider(target.model.provider, cfg)) {
+      await runCliAgent({
+        sessionId,
+        sessionFile,
+        agentId,
+        workspaceDir,
+        config: cfg,
+        prompt: PROBE_PROMPT,
+        provider: target.model.provider,
+        model: target.model.model,
+        authProfileId: target.profileId,
+        timeoutMs,
+        runId: `probe-${crypto.randomUUID()}`,
+        streamParams: { maxTokens },
+      });
+    } else {
+      const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
+      await runEmbeddedPiAgent({
+        sessionId,
+        sessionFile,
+        agentId,
+        workspaceDir,
+        agentDir,
+        config: cfg,
+        prompt: PROBE_PROMPT,
+        provider: target.model.provider,
+        model: target.model.model,
+        authProfileId: target.profileId,
+        authProfileIdSource: target.profileId ? "user" : undefined,
+        timeoutMs,
+        runId: `probe-${crypto.randomUUID()}`,
+        lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
+        thinkLevel: "off",
+        reasoningLevel: "off",
+        verboseLevel: "off",
+        streamParams: { maxTokens },
+      });
+    }
     return buildResult("ok");
   } catch (err) {
     const described = describeFailoverError(err);
