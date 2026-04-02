@@ -307,6 +307,16 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        callTrace: z
+          .object({
+            enabled: z.boolean().optional(),
+            logLlmCalls: z.boolean().optional(),
+            logToolCalls: z.boolean().optional(),
+            dir: z.string().optional(),
+            retainDays: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

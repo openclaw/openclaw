@@ -121,6 +121,10 @@ export type EmbeddedPiSubscribeContext = {
   resolveCompactionRetry: () => void;
   maybeResolveCompactionWait: () => void;
   recordAssistantUsage: (usage: unknown) => void;
+  /** Signal that a new LLM message stream has started (for per-call timing). */
+  noteLlmCallStart: () => void;
+  /** Signal that a LLM message stream ended; triggers onLlmCallComplete callback. */
+  noteLlmCallEnd: (usageLike: unknown, errorMessage?: string) => void;
   incrementCompactionCount: () => void;
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
@@ -142,6 +146,7 @@ export type ToolHandlerParams = Pick<
   | "sessionId"
   | "agentId"
   | "toolResultFormat"
+  | "onToolCallComplete"
 >;
 
 export type ToolHandlerState = Pick<

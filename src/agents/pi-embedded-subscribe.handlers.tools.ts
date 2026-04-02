@@ -761,6 +761,20 @@ export async function handleToolExecutionEnd(
   const toolStartKey = buildToolStartKey(runId, toolCallId);
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
+  // Emit per-tool trace event (tool.call) — only if onToolCallComplete is set.
+  if (ctx.params.onToolCallComplete && startData) {
+    const durationMs = Date.now() - startData.startTime;
+    const errorMessage = isToolError
+      ? extractToolErrorMessage(sanitizeToolResult(result))
+      : undefined;
+    ctx.params.onToolCallComplete({
+      toolName,
+      toolCallId,
+      durationMs,
+      isError: Boolean(isToolError),
+      ...(errorMessage ? { errorMessage } : {}),
+    });
+  }
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const meta = callSummary?.meta;
   ctx.state.toolMetas.push({ toolName, meta });

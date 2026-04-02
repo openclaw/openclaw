@@ -25,6 +25,7 @@ import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { startCallTraceWriter } from "../infra/call-trace-writer.js";
 import {
   ensureControlUiAssetsBuilt,
   isPackageProvenControlUiRootSync,
@@ -550,6 +551,7 @@ export async function startGatewayServer(
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat(undefined, { getConfig: getRuntimeConfig });
+    startCallTraceWriter(cfgAtStart);
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   setPreRestartDeferralCheck(

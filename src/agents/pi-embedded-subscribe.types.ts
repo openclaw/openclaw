@@ -39,6 +39,34 @@ export type SubscribeEmbeddedPiSessionParams = {
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
   internalEvents?: AgentInternalEvent[];
+  /**
+   * Called after every LLM API call completes (model.call trace).
+   * Only invoked when diagnostics.callTrace.enabled and logLlmCalls are true.
+   */
+  onLlmCallComplete?: (event: {
+    callIndex: number;
+    durationMs: number;
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      total?: number;
+    };
+    status: "ok" | "error";
+    errorMessage?: string;
+  }) => void;
+  /**
+   * Called after every internal tool execution completes (tool.call trace).
+   * Only invoked when diagnostics.callTrace.enabled and logToolCalls are true.
+   */
+  onToolCallComplete?: (event: {
+    toolName: string;
+    toolCallId: string;
+    durationMs: number;
+    isError: boolean;
+    errorMessage?: string;
+  }) => void;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

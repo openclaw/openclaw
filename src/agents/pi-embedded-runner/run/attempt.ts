@@ -8,6 +8,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -1432,6 +1433,58 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           internalEvents: params.internalEvents,
+          ...(isDiagnosticsEnabled(params.config) && params.config?.diagnostics?.callTrace?.enabled
+            ? {
+                onLlmCallComplete:
+                  params.config?.diagnostics?.callTrace?.logLlmCalls !== false
+                    ? (evt: {
+                        callIndex: number;
+                        durationMs: number;
+                        usage?: {
+                          input?: number;
+                          output?: number;
+                          cacheRead?: number;
+                          cacheWrite?: number;
+                          total?: number;
+                        };
+                        status: "ok" | "error";
+                        errorMessage?: string;
+                      }) =>
+                        emitDiagnosticEvent({
+                          type: "model.call",
+                          sessionKey: params.sessionKey,
+                          sessionId: params.sessionId,
+                          callIndex: evt.callIndex,
+                          provider: params.provider,
+                          model: params.modelId,
+                          usage: evt.usage,
+                          durationMs: evt.durationMs,
+                          status: evt.status,
+                          ...(evt.errorMessage ? { errorMessage: evt.errorMessage } : {}),
+                        })
+                    : undefined,
+                onToolCallComplete:
+                  params.config?.diagnostics?.callTrace?.logToolCalls === true
+                    ? (evt: {
+                        toolName: string;
+                        toolCallId: string;
+                        durationMs: number;
+                        isError: boolean;
+                        errorMessage?: string;
+                      }) =>
+                        emitDiagnosticEvent({
+                          type: "tool.call",
+                          sessionKey: params.sessionKey,
+                          sessionId: params.sessionId,
+                          toolName: evt.toolName,
+                          toolCallId: evt.toolCallId,
+                          durationMs: evt.durationMs,
+                          isError: evt.isError,
+                          ...(evt.errorMessage ? { errorMessage: evt.errorMessage } : {}),
+                        })
+                    : undefined,
+              }
+            : {}),
         }),
       );
 

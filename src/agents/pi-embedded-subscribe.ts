@@ -335,6 +335,42 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       state.compactionRetryPromise = null;
     }
   };
+  // Per-call timing for model.call trace (reset on each message_start).
+  let llmCallStartedAt = 0;
+  let llmCallIndex = 0;
+  const noteLlmCallStart = () => {
+    llmCallStartedAt = Date.now();
+  };
+  const noteLlmCallEnd = (usageLike: unknown, errorMessage?: string) => {
+    if (!params.onLlmCallComplete) {
+      return;
+    }
+    const usage = normalizeUsage((usageLike ?? undefined) as UsageLike | undefined);
+    const durationMs = llmCallStartedAt > 0 ? Date.now() - llmCallStartedAt : 0;
+    const callIndex = llmCallIndex++;
+    const usageResult = hasNonzeroUsage(usage)
+      ? {
+          input: usage.input ?? undefined,
+          output: usage.output ?? undefined,
+          cacheRead: usage.cacheRead ?? undefined,
+          cacheWrite: usage.cacheWrite ?? undefined,
+          total:
+            usage.total ??
+            ((usage.input ?? 0) +
+              (usage.output ?? 0) +
+              (usage.cacheRead ?? 0) +
+              (usage.cacheWrite ?? 0) ||
+              undefined),
+        }
+      : undefined;
+    params.onLlmCallComplete({
+      callIndex,
+      durationMs,
+      usage: usageResult,
+      status: errorMessage ? "error" : "ok",
+      ...(errorMessage ? { errorMessage } : {}),
+    });
+  };
   const recordAssistantUsage = (usageLike: unknown) => {
     const usage = normalizeUsage((usageLike ?? undefined) as UsageLike | undefined);
     if (!hasNonzeroUsage(usage)) {
@@ -728,6 +764,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     resolveCompactionRetry,
     maybeResolveCompactionWait,
     recordAssistantUsage,
+    noteLlmCallStart,
+    noteLlmCallEnd,
     incrementCompactionCount,
     getUsageTotals,
     getCompactionCount: () => compactionCount,
