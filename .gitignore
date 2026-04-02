@@ -141,3 +141,7 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+
+# Editor history
+.history/
+
