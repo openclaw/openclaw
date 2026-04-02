@@ -12,6 +12,7 @@
   "setup-runtime",
   "channel-setup",
   "setup-tools",
+  "approval-auth-runtime",
   "approval-runtime",
   "config-runtime",
   "reply-runtime",
