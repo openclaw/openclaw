@@ -34,7 +34,6 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   sglang: ["SGLANG_API_KEY"],
   synthetic: ["SYNTHETIC_API_KEY"],
   tavily: ["TAVILY_API_KEY"],
-  tinyfish: ["TINYFISH_API_KEY"],
   together: ["TOGETHER_API_KEY"],
   venice: ["VENICE_API_KEY"],
   "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
