@@ -2881,6 +2881,8 @@ td.data-table-key-col {
 
 .exec-approval-card {
   width: min(540px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
