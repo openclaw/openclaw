@@ -67,6 +67,7 @@ function readGeminiProviderConfig(config: SpeechProviderConfig): GeminiProviderC
       }) ?? defaults.apiKey,
     baseUrl: trimToUndefined(config.baseUrl)?.replace(/\/+$/, "") ?? defaults.baseUrl,
     modelId: trimToUndefined(config.modelId) ?? defaults.modelId,
+    voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
     timeoutMs: asNumber(config.timeoutMs) ?? defaults.timeoutMs,
   };
 }
