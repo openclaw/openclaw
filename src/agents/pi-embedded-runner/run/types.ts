@@ -30,8 +30,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   provider: string;
   modelId: string;
   model: Model<Api>;
-  /** Flow id for this turn — groups all model.call and tool.call records under the same flow. */
-  flowId?: string;
+  /** Turn id — groups all model.call and tool.call records under the same turn. */
+  turnId?: string;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;

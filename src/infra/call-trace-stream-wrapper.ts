@@ -39,7 +39,7 @@ function extractUsage(raw: unknown) {
 type EmitParams = {
   sessionKey?: string;
   sessionId?: string;
-  flowId?: string;
+  turnId?: string;
   callIndex: number;
   provider?: string;
   modelId?: string;
@@ -55,7 +55,7 @@ function emitCallEvent(
     type: "model.call",
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    flowId: params.flowId,
+    turnId: params.turnId,
     callIndex: params.callIndex,
     provider: params.provider,
     model: params.modelId,
@@ -99,7 +99,7 @@ export function wrapStreamFnCallTrace(
     cfg?: OpenClawConfig;
     sessionKey?: string;
     sessionId?: string;
-    flowId?: string;
+    turnId?: string;
     provider?: string;
     modelId?: string;
     callIndexRef: { value: number };
@@ -119,7 +119,7 @@ export function wrapStreamFnCallTrace(
     const emitParams: EmitParams = {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
-      flowId: params.flowId,
+      turnId: params.turnId,
       callIndex,
       provider: params.provider,
       modelId: params.modelId,

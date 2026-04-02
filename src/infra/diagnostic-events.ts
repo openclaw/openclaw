@@ -8,7 +8,7 @@ type DiagnosticBaseEvent = {
 };
 
 export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
-  type: "model.usage";
+  type: "turn.summary";
   sessionKey?: string;
   sessionId?: string;
   channel?: string;
@@ -35,7 +35,7 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   };
   costUsd?: number;
   durationMs?: number;
-  flowId?: string;
+  turnId?: string;
   agentId?: string;
   triggerKind?: string;
   triggerChannel?: string;
@@ -49,7 +49,7 @@ export type DiagnosticModelCallEvent = DiagnosticBaseEvent & {
   type: "model.call";
   sessionKey?: string;
   sessionId?: string;
-  flowId?: string;
+  turnId?: string;
   agentId?: string;
   callIndex: number;
   provider?: string;
@@ -72,7 +72,7 @@ export type DiagnosticToolCallEvent = DiagnosticBaseEvent & {
   type: "tool.call";
   sessionKey?: string;
   sessionId?: string;
-  flowId?: string;
+  turnId?: string;
   agentId?: string;
   toolName: string;
   toolCallId?: string;

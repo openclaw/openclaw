@@ -678,7 +678,7 @@ export async function runEmbeddedPiAgent(
             silentExpected: params.silentExpected,
             bootstrapContextMode: params.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,
-            flowId: params.flowId,
+            turnId: params.turnId,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],

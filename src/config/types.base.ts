@@ -251,11 +251,11 @@ export type DiagnosticsCacheTraceConfig = {
 export type DiagnosticsCallTraceConfig = {
   /** Enable call/tool trace logging. Default: false. */
   enabled?: boolean;
-  /** Log one model.usage record per completed turn to flows/YYYY-MM-DD.jsonl (full aggregate: cost, context, trigger metadata). Default: true when enabled. */
-  logLlmFlows?: boolean;
-  /** Log one model.call record per LLM API call to calls/YYYY-MM-DD.jsonl (tokens for that call, duration, costUsd, flowId, agentId). Default: true when enabled. */
+  /** Log one turn.summary record per completed turn to turns/YYYY-MM-DD.jsonl (full aggregate: cost, context, trigger metadata). Default: true when enabled. */
+  logTurnSummaries?: boolean;
+  /** Log one model.call record per LLM API call to calls/YYYY-MM-DD.jsonl (tokens for that call, duration, costUsd, turnId, agentId). Default: true when enabled. */
   logLlmCalls?: boolean;
-  /** Log one tool.call record per internal tool call to calls/YYYY-MM-DD.jsonl (duration, tool name, error status, flowId, agentId, toolInput). Default: false. */
+  /** Log one tool.call record per internal tool call to calls/YYYY-MM-DD.jsonl (duration, tool name, error status, turnId, agentId, toolInput). Default: false. */
   logToolCalls?: boolean;
   /** Directory for JSONL trace files. Default: .openclaw/call-traces */
   dir?: string;

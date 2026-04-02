@@ -1,17 +1,17 @@
 /**
  * call-trace-writer.ts
  *
- * Subscribes to `model.call`, `tool.call`, and `model.usage` diagnostic events
+ * Subscribes to `model.call`, `tool.call`, and `turn.summary` diagnostic events
  * and appends them to daily JSONL files under `diagnostics.callTrace.dir`.
  *
  * File patterns:
  *   <dir>/calls/YYYY-MM-DD.jsonl — model.call + tool.call records
- *   <dir>/flows/YYYY-MM-DD.jsonl — model.usage (per-turn aggregate) records
+ *   <dir>/turns/YYYY-MM-DD.jsonl — turn.summary (per-turn aggregate) records
  *
  * Each line is a JSON object with a `type` field:
- *   - "model.call":  per-LLM-call record (tokens, cost, duration, flowId, agentId)
- *   - "tool.call":   per-tool record (duration, error status, flowId, agentId, toolInput)
- *   - "model.usage": full per-turn aggregate (usage, cost, context, trigger metadata) — flows/ only
+ *   - "model.call":   per-LLM-call record (tokens, costUsd, duration, turnId, agentId)
+ *   - "tool.call":    per-tool record (duration, error status, turnId, agentId, toolInput)
+ *   - "turn.summary": full per-turn aggregate (usage, cost, context, trigger metadata) — turns/ only
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -61,7 +61,7 @@ function purgeOldFiles(dir: string, retainDays: number): void {
  * Start listening for call-trace diagnostic events and writing them to daily
  * JSONL files:
  *   - calls/YYYY-MM-DD.jsonl  → model.call + tool.call
- *   - flows/YYYY-MM-DD.jsonl  → model.usage (per-turn aggregate)
+ *   - turns/YYYY-MM-DD.jsonl  → turn.summary (per-turn aggregate)
  *
  * Returns an unsubscribe function.
  */
@@ -74,10 +74,10 @@ export function startCallTraceWriter(config: OpenClawConfig): (() => void) | und
     return undefined;
   }
 
-  const logLlmFlows = ct.logLlmFlows !== false; // default true  — model.usage (per-turn aggregate) → flows/
+  const logTurnSummaries = ct.logTurnSummaries !== false; // default true  — turn.summary (per-turn aggregate) → turns/
   const logLlmCalls = ct.logLlmCalls !== false; // default true  — model.call  (per-LLM-call) → calls/
   const logToolCalls = ct.logToolCalls === true; // default false — tool.call   (per-tool) → calls/
-  if (!logLlmFlows && !logLlmCalls && !logToolCalls) {
+  if (!logTurnSummaries && !logLlmCalls && !logToolCalls) {
     return undefined;
   }
 
@@ -90,11 +90,11 @@ export function startCallTraceWriter(config: OpenClawConfig): (() => void) | und
   const unsub = onDiagnosticEvent((evt: DiagnosticEventPayload) => {
     const stamp = dateStamp();
 
-    if (evt.type === "model.usage") {
-      if (!logLlmFlows) {
+    if (evt.type === "turn.summary") {
+      if (!logTurnSummaries) {
         return;
       }
-      const filePath = path.join(baseDir, "flows", `${stamp}.jsonl`);
+      const filePath = path.join(baseDir, "turns", `${stamp}.jsonl`);
       appendJsonl(filePath, evt);
       return;
     }
