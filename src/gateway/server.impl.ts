@@ -626,7 +626,7 @@ export async function startGatewayServer(
   ) as unknown as Record<ChannelId, RuntimeEnv>;
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
   const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
-  let pluginServices: PluginServicesHandle | null = null;
+  let pluginServicesReady: Promise<PluginServicesHandle | null> = Promise.resolve(null);
   const runtimeConfig = await resolveGatewayRuntimeConfig({
     cfg: cfgAtStart,
     port,
@@ -815,7 +815,7 @@ export async function startGatewayServer(
       canvasHostServer,
       releasePluginRouteRegistry,
       stopChannel,
-      pluginServices,
+      pluginServicesReady,
       cron,
       heartbeatRunner,
       updateCheckStop: stopGatewayUpdateCheck,
@@ -1373,7 +1373,7 @@ export async function startGatewayServer(
           logDiagnostics: false,
         }));
       }
-      ({ pluginServices } = await startGatewaySidecars({
+      ({ pluginServicesReady } = await startGatewaySidecars({
         cfg: gatewayPluginConfigAtStart,
         pluginRegistry,
         defaultWorkspaceDir,
@@ -1489,7 +1489,7 @@ export async function startGatewayServer(
     canvasHostServer,
     releasePluginRouteRegistry,
     stopChannel,
-    pluginServices,
+    pluginServicesReady,
     cron,
     heartbeatRunner,
     updateCheckStop: stopGatewayUpdateCheck,

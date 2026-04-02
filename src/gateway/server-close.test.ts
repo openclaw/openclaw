@@ -18,7 +18,7 @@ describe("createGatewayCloseHandler", () => {
       canvasHost: null,
       canvasHostServer: null,
       stopChannel: vi.fn(async () => undefined),
-      pluginServices: null,
+      pluginServicesReady: Promise.resolve(null),
       cron: { stop: vi.fn() },
       heartbeatRunner: { stop: vi.fn() } as never,
       updateCheckStop: null,

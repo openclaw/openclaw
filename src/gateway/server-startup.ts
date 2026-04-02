@@ -199,16 +199,19 @@ export async function startGatewaySidecars(params: {
     }, 250);
   }
 
-  let pluginServices: PluginServicesHandle | null = null;
-  try {
-    pluginServices = await startPluginServices({
-      registry: params.pluginRegistry,
-      config: params.cfg,
-      workspaceDir: params.defaultWorkspaceDir,
-    });
-  } catch (err) {
+  // Start plugin services (notably the browser-control server backed by
+  // Playwright) without blocking the rest of sidecar initialisation.  On
+  // constrained hosts (e.g. Android/proot) the Chromium dependency tree can
+  // block the event loop for over a minute.  The returned promise lets the
+  // shutdown handler await the handle even if startup is still in progress.
+  const pluginServicesReady: Promise<PluginServicesHandle | null> = startPluginServices({
+    registry: params.pluginRegistry,
+    config: params.cfg,
+    workspaceDir: params.defaultWorkspaceDir,
+  }).catch((err): null => {
     params.log.warn(`plugin services failed to start: ${String(err)}`);
-  }
+    return null;
+  });
 
   if (params.cfg.acp?.enabled) {
     void getAcpSessionManager()
@@ -236,7 +239,7 @@ export async function startGatewaySidecars(params: {
     }, 750);
   }
 
-  return { pluginServices };
+  return { pluginServicesReady };
 }
 
 export const __testing = {
