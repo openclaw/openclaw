@@ -160,6 +160,14 @@ function markTargetBlocked(cdpUrl: string, targetId?: string): void {
   blockedTargetsByCdpUrl.add(targetKey(cdpUrl, normalizedTargetId));
 }
 
+function clearBlockedTarget(cdpUrl: string, targetId?: string): void {
+  const normalizedTargetId = targetId?.trim() || "";
+  if (!normalizedTargetId) {
+    return;
+  }
+  blockedTargetsByCdpUrl.delete(targetKey(cdpUrl, normalizedTargetId));
+}
+
 function clearBlockedTargetsForCdpUrl(cdpUrl?: string): void {
   if (!cdpUrl) {
     blockedTargetsByCdpUrl.clear();
@@ -399,6 +407,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {
             cachedByCdpUrl.delete(normalized);
+            clearBlockedTargetsForCdpUrl(normalized);
           }
         };
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
@@ -436,6 +445,23 @@ async function getAllPages(browser: Browser): Promise<Page[]> {
   const contexts = browser.contexts();
   const pages = contexts.flatMap((c) => c.pages());
   return pages;
+}
+
+async function partitionAccessiblePages(opts: {
+  cdpUrl: string;
+  pages: Page[];
+}): Promise<{ accessible: Page[]; blockedCount: number }> {
+  const accessible: Page[] = [];
+  let blockedCount = 0;
+  for (const page of opts.pages) {
+    const targetId = await pageTargetId(page).catch(() => null);
+    if (targetId && isBlockedTarget(opts.cdpUrl, targetId)) {
+      blockedCount += 1;
+      continue;
+    }
+    accessible.push(page);
+  }
+  return { accessible, blockedCount };
 }
 
 async function pageTargetId(page: Page): Promise<string | null> {
@@ -550,19 +576,34 @@ export async function getPageForTargetId(opts: {
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
   }
-  const first = pages[0];
+
+  const { accessible, blockedCount } = await partitionAccessiblePages({
+    cdpUrl: opts.cdpUrl,
+    pages,
+  });
+  if (!accessible.length) {
+    if (blockedCount > 0) {
+      throw new BlockedBrowserTargetError();
+    }
+    throw new Error("No pages available in the connected browser.");
+  }
+  const first = accessible[0];
   if (!opts.targetId) {
     return first;
   }
   const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
-  if (!found) {
-    // If Playwright only exposes a single Page, use it as a best-effort fallback.
-    if (pages.length === 1) {
-      return first;
+  if (found) {
+    const foundTargetId = await pageTargetId(found).catch(() => null);
+    if (foundTargetId && isBlockedTarget(opts.cdpUrl, foundTargetId)) {
+      throw new BlockedBrowserTargetError();
     }
-    throw new BrowserTabNotFoundError();
+    return found;
   }
-  return found;
+  // If Playwright only exposes a single Page, use it as a best-effort fallback.
+  if (accessible.length === 1) {
+    return first;
+  }
+  throw new BrowserTabNotFoundError();
 }
 
 function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
@@ -586,13 +627,10 @@ async function closeBlockedNavigationTarget(opts: {
   targetId?: string;
 }): Promise<void> {
   const targetId = opts.targetId?.trim() || (await pageTargetId(opts.page).catch(() => null)) || "";
-  const closed = await opts.page
-    .close()
-    .then(() => true)
-    .catch(() => false);
-  if (closed && targetId) {
+  if (targetId) {
     markTargetBlocked(opts.cdpUrl, targetId);
   }
+  await opts.page.close().catch(() => {});
 }
 
 export async function assertPageNavigationCompletedSafely(opts: {
@@ -860,6 +898,7 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   if (!cur) {
     return;
   }
+  clearBlockedTargetsForCdpUrl(normalized);
   cachedByCdpUrl.delete(normalized);
   // Also clear the per-url in-flight connect so the next call does a fresh connectOverCDP
   // rather than awaiting a stale promise.
@@ -938,6 +977,7 @@ export async function createPageViaPlaywright(opts: {
   const page = await context.newPage();
   ensurePageState(page);
   const createdTargetId = await pageTargetId(page).catch(() => null);
+  clearBlockedTarget(opts.cdpUrl, createdTargetId ?? undefined);
 
   // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";
@@ -958,7 +998,7 @@ export async function createPageViaPlaywright(opts: {
         targetId: createdTargetId ?? undefined,
       });
     } catch (err) {
-      if (err instanceof SsrFBlockedError || err instanceof BlockedBrowserTargetError) {
+      if (isPolicyDenyNavigationError(err) || err instanceof BlockedBrowserTargetError) {
         throw err;
       }
     }
