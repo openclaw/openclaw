@@ -131,15 +131,10 @@ export function createSessionsSendTool(opts?: {
           ? normalizeAgentId(labelAgentIdParam)
           : undefined;
 
-        if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "forbidden",
-            error: "Sandboxed sessions_send label lookup is limited to this agent",
-          });
-        }
-
-        if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
+        // For cross-agent sends, check a2aPolicy first (applies to both sandboxed and non-sandboxed)
+        const isCrossAgent =
+          requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId;
+        if (isCrossAgent) {
           if (!a2aPolicy.enabled) {
             return jsonResult({
               runId: crypto.randomUUID(),
@@ -157,10 +152,16 @@ export function createSessionsSendTool(opts?: {
           }
         }
 
+        // For sandboxed agents, cross-agent messaging is allowed if a2aPolicy permits it (checked above).
+        // For same-agent sends, restrictToSpawned still limits lookup to sessions spawned by this agent.
+        // The original "Sandboxed sessions_send label lookup is limited to this agent" check has been
+        // replaced by the a2aPolicy check to allow properly configured cross-agent messaging.
+
         const resolveParams: Record<string, unknown> = {
           label: labelParam,
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-          ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
+          // For cross-agent a2a messaging, don't filter by spawnedBy so target agent's sessions are visible
+          ...(restrictToSpawned && !isCrossAgent ? { spawnedBy: effectiveRequesterKey } : {}),
         };
         let resolvedKey = "";
         try {
