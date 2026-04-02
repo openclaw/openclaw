@@ -23,6 +23,7 @@ jobs:
     environment: npm-release
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Validate version input format
         env:
@@ -69,16 +70,15 @@ jobs:
 
       - name: Promote beta to latest
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          registry_token="$(node scripts/npm-oidc-exchange-token.mjs openclaw)"
           userconfig="$(mktemp)"
           trap 'rm -f "${userconfig}"' EXIT
           chmod 0600 "${userconfig}"
-          printf '%s\n' "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > "${userconfig}"
+          printf '%s\n' "//registry.npmjs.org/:_authToken=${registry_token}" > "${userconfig}"
 
-          NPM_CONFIG_USERCONFIG="${userconfig}" npm whoami >/dev/null
           NPM_CONFIG_USERCONFIG="${userconfig}" \
             npm dist-tag add "openclaw@${RELEASE_VERSION}" latest
           promoted_latest="$(npm view openclaw dist-tags.latest)"

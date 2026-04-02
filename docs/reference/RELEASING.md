@@ -52,6 +52,7 @@ OpenClaw has three public release lanes:
   - stable npm releases default to `beta`
   - stable npm publish can target `latest` explicitly via workflow input
   - stable npm promotion from `beta` to `latest` is still available as a separate manual workflow step
+  - that promotion workflow exchanges the GitHub Actions OIDC token for a short-lived npm registry token instead of depending on a stored `NPM_TOKEN`
   - public `macOS Release` is validation-only
   - real private mac publish must pass successful private mac
     `preflight_run_id` and `validate_run_id`
@@ -107,6 +108,9 @@ When cutting a stable npm release:
 5. If the release landed on `beta`, run `OpenClaw NPM Promote Beta` later with
    the exact stable version when you want to move that published build to
    `latest`
+
+The promotion workflow still requires the `npm-release` environment approval,
+but it no longer depends on a long-lived npm publish token.
 
 That keeps the direct publish path and the beta-first promotion path both
 documented and operator-visible.
