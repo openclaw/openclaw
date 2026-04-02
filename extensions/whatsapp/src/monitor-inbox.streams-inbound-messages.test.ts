@@ -94,7 +94,7 @@ describe("web monitor inbox", () => {
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
     const messageId = nextMessageId("stream");
     const upsert = buildNotifyMessageUpsert({
       id: messageId,
@@ -127,6 +127,16 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("stays unavailable on connect in self-chat mode", async () => {
+    const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
+      selfChatMode: true,
+    });
+
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "unavailable");
+
+    await listener.close();
+  });
+
   it("hydrates participating groups once after connect", async () => {
     const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
 
@@ -142,7 +152,7 @@ describe("web monitor inbox", () => {
     const { listener } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
 
     expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
 
     await listener.close();
   });
