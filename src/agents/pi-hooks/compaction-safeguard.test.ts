@@ -1636,6 +1636,37 @@ describe("compaction-safeguard recent-turn preservation", () => {
 });
 
 describe("compaction-safeguard extension model fallback", () => {
+  it("prefers runtime.model override when both ctx.model and runtime.model are present", async () => {
+    const sessionManager = stubSessionManager();
+    const ctxModel = createAnthropicModelFixture({ id: "claude-opus-session" });
+    const runtimeModel = createAnthropicModelFixture({ id: "claude-sonnet-compaction" });
+    setCompactionSafeguardRuntime(sessionManager, { model: runtimeModel });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyAndHeadersMock = vi
+      .fn()
+      .mockResolvedValue({ ok: false, error: "missing auth" });
+    const mockContext = {
+      ...createCompactionContext({
+        sessionManager,
+        getApiKeyAndHeadersMock,
+      }),
+      model: ctxModel,
+    } as unknown as Partial<ExtensionContext>;
+
+    const event = createCompactionEvent({
+      messageText: "test message",
+      tokensBefore: 1000,
+    });
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+    };
+
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(runtimeModel);
+    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalledWith(ctxModel);
+  });
+
   it("uses runtime.model when ctx.model is undefined (compact.ts workflow)", async () => {
     // This test verifies the root-cause fix: when extensionRunner.initialize() is not called
     // (as happens in compact.ts), ctx.model is undefined but runtime.model is available.
