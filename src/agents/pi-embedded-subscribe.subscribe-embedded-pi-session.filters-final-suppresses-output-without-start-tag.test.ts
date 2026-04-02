@@ -78,6 +78,44 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onPartialReply).toHaveBeenCalled();
     expect(onPartialReply.mock.calls[0][0].text).toBe("Hello world");
   });
+  it("ignores self-closing <final/> tags when enforcement is on", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: '<final type="done"/>hidden<final>Visible</final>' });
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply.mock.calls[0][0].text).toBe("Visible");
+  });
+  it("strips thinking tags with attributes without leaking their content", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({
+      emit,
+      delta: '<think signature="gemini">hidden</think>Visible answer',
+    });
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply.mock.calls[0][0].text).toBe("Visible answer");
+  });
   it("does not require <final> when enforcement is off", () => {
     const { session, emit } = createStubSessionHarness();
 

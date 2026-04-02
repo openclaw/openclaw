@@ -338,7 +338,7 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
   return undefined;
 }
 
-const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =

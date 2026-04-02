@@ -194,6 +194,10 @@ describe("stripReasoningTagsFromText", () => {
         input: "A <THINK>hidden</THINK> <Thinking>also hidden</Thinking> B",
         expected: "A   B",
       },
+      {
+        input: "Before <think signature='gemini'/> after",
+        expected: "Before  after",
+      },
     ] as const)("handles unicode/attributes/case-insensitive names: %j", (testCase) => {
       expectStrippedCase(testCase);
     });
