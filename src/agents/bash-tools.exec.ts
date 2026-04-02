@@ -658,9 +658,14 @@ function shouldFailClosedInterpreterPreflight(command: string): {
     hasInterpreterPipelineScriptHintInSameSegment(raw) ||
     (shellWrappedPayload !== null &&
       hasInterpreterPipelineScriptHintInSameSegment(shellWrappedPayload));
+  const hasShellWrappedInterpreterSegmentScriptHint =
+    shellWrappedPayload !== null && hasInterpreterAndScriptHintInSameSegment(shellWrappedPayload);
   const hasShellWrappedInterpreterInvocation =
     (nested.hasPython || nested.hasNode) &&
-    (nested.hasScriptHint || nested.hasComplexSyntax || nested.hasProcessSubstitution);
+    (hasShellWrappedInterpreterSegmentScriptHint ||
+      nested.hasScriptHint ||
+      nested.hasComplexSyntax ||
+      nested.hasProcessSubstitution);
   const hasTopLevelInterpreterInvocation = splitShellSegmentsOutsideQuotes(raw, {
     splitPipes: true,
   }).some((segment) => hasInterpreterInvocationInSegment(segment));
