@@ -441,7 +441,11 @@ export async function prepareSlackMessage(params: {
     ? channelUsersAllowlistConfigured
       ? normalizeAllowListLower(channelConfig?.users)
       : []
-    : allowFromLower;
+    : isDirectMessage
+      ? ctx.dmPolicy === "open"
+        ? []
+        : allowFromLower
+      : [];
   const channelCommandAuthorized =
     isRoom && channelUsersAllowlistConfigured
       ? resolveSlackUserAllowed({

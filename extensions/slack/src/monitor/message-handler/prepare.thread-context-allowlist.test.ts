@@ -173,4 +173,116 @@ describe("prepareSlackMessage thread context allowlists", () => {
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
   });
+
+  it("does not apply the owner allowlist to open DMs when dmPolicy is open", async () => {
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter from open dm", user: "U3", ts: "300.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "starter from open dm", user: "U3", ts: "300.000" },
+          { text: "assistant reply", bot_id: "B1", ts: "300.500" },
+          { text: "dm follow-up", user: "U3", ts: "300.800" },
+          { text: "current message", user: "U3", ts: "301.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+    const storePath = makeTmpStorePath();
+    const ctx = createInboundSlackTestContext({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+      defaultRequireMention: false,
+      replyToMode: "all",
+    });
+    ctx.allowFrom = ["u-owner"];
+    ctx.resolveUserName = async (id: string) => ({
+      name: id === "U3" ? "Dana" : "Owner",
+    });
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackTestAccount({
+        replyToMode: "all",
+        thread: { initialHistoryLimit: 20 },
+      }),
+      message: {
+        channel: "D300",
+        channel_type: "im",
+        user: "U3",
+        text: "current message",
+        ts: "301.000",
+        thread_ts: "300.000",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.ThreadStarterBody).toBe("starter from open dm");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("starter from open dm");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("dm follow-up");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not apply the owner allowlist to MPIM thread context", async () => {
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter from mpim", user: "U4", ts: "400.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "starter from mpim", user: "U4", ts: "400.000" },
+          { text: "assistant reply", bot_id: "B1", ts: "400.500" },
+          { text: "mpim follow-up", user: "U4", ts: "400.800" },
+          { text: "current message", user: "U4", ts: "401.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+    const storePath = makeTmpStorePath();
+    const ctx = createInboundSlackTestContext({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+      defaultRequireMention: false,
+      replyToMode: "all",
+    });
+    ctx.allowFrom = ["u-owner"];
+    ctx.resolveUserName = async (id: string) => ({
+      name: id === "U4" ? "Evan" : "Owner",
+    });
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackTestAccount({
+        replyToMode: "all",
+        thread: { initialHistoryLimit: 20 },
+      }),
+      message: {
+        channel: "G400",
+        channel_type: "mpim",
+        user: "U4",
+        text: "current message",
+        ts: "401.000",
+        thread_ts: "400.000",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.ThreadStarterBody).toBe("starter from mpim");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("starter from mpim");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("mpim follow-up");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
 });
