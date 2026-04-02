@@ -33,6 +33,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,10 +62,12 @@ import ai.openclaw.app.ui.mobileTextTertiary
 
 @Composable
 fun ChatComposer(
+  draftText: String?,
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
   attachments: List<PendingImageAttachment>,
+  onDraftApplied: () -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
   onSetThinkingLevel: (level: String) -> Unit,
@@ -73,7 +76,16 @@ fun ChatComposer(
   onSend: (text: String) -> Unit,
 ) {
   var input by rememberSaveable { mutableStateOf("") }
+  var lastAppliedDraft by rememberSaveable { mutableStateOf<String?>(null) }
   var showThinkingMenu by remember { mutableStateOf(false) }
+
+  LaunchedEffect(draftText) {
+    val draft = draftText?.trim()?.ifEmpty { null } ?: return@LaunchedEffect
+    if (draft == lastAppliedDraft) return@LaunchedEffect
+    input = draft
+    lastAppliedDraft = draft
+    onDraftApplied()
+  }
 
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
   val sendBusy = pendingRunCount > 0
