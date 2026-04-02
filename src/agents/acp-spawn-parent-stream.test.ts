@@ -121,6 +121,12 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.doUnmock("../infra/system-events.js");
+    vi.doUnmock("../infra/heartbeat-wake.js");
+    vi.doUnmock("../gateway/call.js");
+    vi.doUnmock("../acp/runtime/session-meta.js");
+    vi.doUnmock("../config/sessions/paths.js");
+    vi.resetModules();
   });
 
   it("relays assistant progress and completion to the parent session", () => {
