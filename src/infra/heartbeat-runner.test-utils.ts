@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import type { HeartbeatDeps } from "./heartbeat-runner.js";
 import { heartbeatRunnerTelegramPlugin } from "./heartbeat-runner.test-channel-plugins.js";
 
 export type HeartbeatSessionSeed = {
@@ -15,6 +16,15 @@ export type HeartbeatSessionSeed = {
   lastProvider: string;
   lastTo: string;
 };
+
+export type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;
+export type HeartbeatReplySpy = ReturnType<typeof vi.fn<HeartbeatReplyFn>>;
+
+export function createHeartbeatReplySpy(): HeartbeatReplySpy {
+  const replySpy: HeartbeatReplySpy = vi.fn<HeartbeatReplyFn>();
+  replySpy.mockResolvedValue({ text: "ok" });
+  return replySpy;
+}
 
 export async function seedSessionStore(
   storePath: string,
@@ -44,11 +54,7 @@ export async function seedMainSessionStore(
 }
 
 export async function withTempHeartbeatSandbox<T>(
-  fn: (ctx: {
-    tmpDir: string;
-    storePath: string;
-    replySpy: ReturnType<typeof vi.fn>;
-  }) => Promise<T>,
+  fn: (ctx: { tmpDir: string; storePath: string; replySpy: HeartbeatReplySpy }) => Promise<T>,
   options?: {
     prefix?: string;
     unsetEnvVars?: string[];
@@ -57,7 +63,7 @@ export async function withTempHeartbeatSandbox<T>(
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-hb-"));
   await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
   const storePath = path.join(tmpDir, "sessions.json");
-  const replySpy = vi.fn().mockResolvedValue({ text: "ok" });
+  const replySpy = createHeartbeatReplySpy();
   const previousEnv = new Map<string, string | undefined>();
   for (const envName of options?.unsetEnvVars ?? []) {
     previousEnv.set(envName, process.env[envName]);
@@ -79,11 +85,7 @@ export async function withTempHeartbeatSandbox<T>(
 }
 
 export async function withTempTelegramHeartbeatSandbox<T>(
-  fn: (ctx: {
-    tmpDir: string;
-    storePath: string;
-    replySpy: ReturnType<typeof vi.fn>;
-  }) => Promise<T>,
+  fn: (ctx: { tmpDir: string; storePath: string; replySpy: HeartbeatReplySpy }) => Promise<T>,
   options?: {
     prefix?: string;
   },

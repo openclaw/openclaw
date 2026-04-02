@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
+  type HeartbeatReplySpy,
   seedMainSessionStore,
   withTempHeartbeatSandbox,
   withTempTelegramHeartbeatSandbox,
@@ -78,7 +79,7 @@ describe("runHeartbeatOnce ack handling", () => {
   async function runTelegramHeartbeatWithDefaults(params: {
     tmpDir: string;
     storePath: string;
-    replySpy: ReturnType<typeof vi.fn>;
+    replySpy: HeartbeatReplySpy;
     replyText: string;
     messages?: Record<string, unknown>;
     telegramOverrides?: Record<string, unknown>;
