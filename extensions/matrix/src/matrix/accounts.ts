@@ -10,7 +10,7 @@ import {
   resolveMatrixAccountConfig,
   resolveMatrixBaseConfig,
 } from "./account-config.js";
-import { resolveMatrixConfigForAccount } from "./client.js";
+import { resolveMatrixConfigForAccount } from "./resolved-config.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials-read.js";
 
 export type ResolvedMatrixAccount = {
