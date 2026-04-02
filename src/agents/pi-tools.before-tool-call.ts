@@ -24,6 +24,8 @@ type HookOutcome = { blocked: true; reason: string } | { blocked: false; params:
 
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
+const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
+  "Tool call blocked because before_tool_call hook failed";
 const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
@@ -357,7 +359,11 @@ export async function runBeforeToolCallHook(args: {
     }
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
-    log.warn(`before_tool_call hook failed: tool=${toolName}${toolCallId} error=${String(err)}`);
+    log.error(`before_tool_call hook failed: tool=${toolName}${toolCallId} error=${String(err)}`);
+    return {
+      blocked: true,
+      reason: BEFORE_TOOL_CALL_HOOK_FAILURE_REASON,
+    };
   }
 
   return { blocked: false, params };
