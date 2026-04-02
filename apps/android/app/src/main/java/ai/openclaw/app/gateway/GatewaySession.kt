@@ -893,7 +893,8 @@ internal fun formatGatewayAuthority(host: String, port: Int): String {
 }
 
 private fun formatGatewayAuthorityHost(host: String): String {
-  return if (host.contains(":")) "[${host}]" else host
+  val normalizedHost = host.trim().trim('[', ']')
+  return if (normalizedHost.contains(":")) "[${normalizedHost}]" else normalizedHost
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
