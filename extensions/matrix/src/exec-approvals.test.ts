@@ -32,6 +32,11 @@ function buildConfig(
 describe("matrix exec approvals", () => {
   it("requires enablement and an explicit or inferred approver", () => {
     expect(isMatrixExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
+    expect(
+      isMatrixExecApprovalClientEnabled({
+        cfg: buildConfig(undefined, { dm: { allowFrom: ["@owner:example.org"] } }),
+      }),
+    ).toBe(false);
     expect(isMatrixExecApprovalClientEnabled({ cfg: buildConfig({ enabled: true }) })).toBe(false);
     expect(
       isMatrixExecApprovalClientEnabled({
@@ -54,6 +59,13 @@ describe("matrix exec approvals", () => {
     expect(getMatrixExecApprovalApprovers({ cfg })).toEqual(["@override:example.org"]);
     expect(isMatrixExecApprovalApprover({ cfg, senderId: "@override:example.org" })).toBe(true);
     expect(isMatrixExecApprovalApprover({ cfg, senderId: "@owner:example.org" })).toBe(false);
+  });
+
+  it("ignores wildcard allowlist entries when inferring exec approvers", () => {
+    const cfg = buildConfig({ enabled: true }, { dm: { allowFrom: ["*"] } });
+
+    expect(getMatrixExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(isMatrixExecApprovalClientEnabled({ cfg })).toBe(false);
   });
 
   it("defaults target to dm", () => {
@@ -102,6 +114,8 @@ describe("matrix exec approvals", () => {
         execApproval: {
           approvalId: "req-1",
           approvalSlug: "req-1",
+          agentId: "ops-agent",
+          sessionKey: "agent:ops-agent:matrix:channel:!ops:example.org",
         },
       },
     };
@@ -116,6 +130,30 @@ describe("matrix exec approvals", () => {
     expect(
       shouldSuppressLocalMatrixExecApprovalPrompt({
         cfg: buildConfig(),
+        payload,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps local prompts when filters exclude the request", () => {
+    const payload = {
+      channelData: {
+        execApproval: {
+          approvalId: "req-1",
+          approvalSlug: "req-1",
+          agentId: "other-agent",
+          sessionKey: "agent:other-agent:matrix:channel:!ops:example.org",
+        },
+      },
+    };
+
+    expect(
+      shouldSuppressLocalMatrixExecApprovalPrompt({
+        cfg: buildConfig({
+          enabled: true,
+          approvers: ["@owner:example.org"],
+          agentFilter: ["ops-agent"],
+        }),
         payload,
       }),
     ).toBe(false);

@@ -15,7 +15,9 @@ export type ExecApprovalUnavailableReason =
 export type ExecApprovalReplyMetadata = {
   approvalId: string;
   approvalSlug: string;
+  agentId?: string;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  sessionKey?: string;
 };
 
 export type ExecApprovalActionDescriptor = {
@@ -31,11 +33,13 @@ export type ExecApprovalPendingReplyParams = {
   approvalSlug: string;
   approvalCommandId?: string;
   ask?: string | null;
+  agentId?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
   command: string;
   cwd?: string;
   host: ExecHost;
   nodeId?: string;
+  sessionKey?: string | null;
   expiresAtMs?: number;
   nowMs?: number;
 };
@@ -231,10 +235,16 @@ export function getExecApprovalReplyMetadata(
           value === "allow-once" || value === "allow-always" || value === "deny",
       )
     : undefined;
+  const agentId =
+    typeof record.agentId === "string" ? record.agentId.trim() || undefined : undefined;
+  const sessionKey =
+    typeof record.sessionKey === "string" ? record.sessionKey.trim() || undefined : undefined;
   return {
     approvalId,
     approvalSlug,
+    agentId,
     allowedDecisions,
+    sessionKey,
   };
 }
 
@@ -297,7 +307,9 @@ export function buildExecApprovalPendingReplyPayload(
       execApproval: {
         approvalId: params.approvalId,
         approvalSlug: params.approvalSlug,
+        agentId: params.agentId?.trim() || undefined,
         allowedDecisions,
+        sessionKey: params.sessionKey?.trim() || undefined,
       },
     },
   };

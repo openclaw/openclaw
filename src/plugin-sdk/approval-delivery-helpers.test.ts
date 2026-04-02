@@ -165,6 +165,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     expect(
       shouldSuppressForwardingFallback({
         cfg: {} as never,
+        approvalKind: "exec",
         target: { channel: "telegram", to: "target-1" },
         request: {
           request: {
@@ -179,6 +180,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     expect(
       shouldSuppressForwardingFallback({
         cfg: {} as never,
+        approvalKind: "exec",
         target: { channel: "telegram", to: "target-1" },
         request: {
           request: {
@@ -193,6 +195,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     expect(
       shouldSuppressForwardingFallback({
         cfg: {} as never,
+        approvalKind: "exec",
         target: { channel: "slack", to: "target-1" },
         request: {
           request: {
@@ -208,6 +211,21 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       cfg: {} as never,
       accountId: "topic-1",
     });
+
+    expect(
+      shouldSuppressForwardingFallback({
+        cfg: {} as never,
+        approvalKind: "plugin",
+        target: { channel: "telegram", to: "target-1" },
+        request: {
+          request: {
+            command: "pwd",
+            turnSourceChannel: "telegram",
+            turnSourceAccountId: "topic-1",
+          },
+        } as never,
+      }),
+    ).toBe(false);
   });
 });
 

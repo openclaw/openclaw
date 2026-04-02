@@ -65,11 +65,15 @@ function buildPendingApprovalText(params: { request: ApprovalRequest; nowMs: num
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     approvalCommandId: params.request.id,
+    ask: params.request.request.ask ?? undefined,
+    agentId: params.request.request.agentId ?? undefined,
+    allowedDecisions: params.request.request.allowedDecisions,
     command: resolveExecApprovalCommandDisplay((params.request as ExecApprovalRequest).request)
       .commandText,
     cwd: (params.request as ExecApprovalRequest).request.cwd ?? undefined,
     host: (params.request as ExecApprovalRequest).request.host === "node" ? "node" : "gateway",
     nodeId: (params.request as ExecApprovalRequest).request.nodeId ?? undefined,
+    sessionKey: params.request.request.sessionKey ?? undefined,
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
   }).text!;

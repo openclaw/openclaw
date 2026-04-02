@@ -95,6 +95,62 @@ describe("matrix native approval adapter", () => {
     expect(targets).toEqual([{ to: "user:@owner:example.org" }]);
   });
 
+  it("keeps plugin forwarding fallback active when native delivery is exec-only", () => {
+    const shouldSuppress = matrixNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+    if (!shouldSuppress) {
+      throw new Error("delivery suppression helper unavailable");
+    }
+
+    expect(
+      shouldSuppress({
+        cfg: buildConfig(),
+        approvalKind: "plugin",
+        target: {
+          channel: "matrix",
+          to: "room:!ops:example.org",
+          accountId: "default",
+        },
+        request: {
+          id: "req-1",
+          request: {
+            command: "echo hi",
+            turnSourceChannel: "matrix",
+            turnSourceTo: "room:!ops:example.org",
+            turnSourceAccountId: "default",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1000,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves room-id case when matching Matrix origin targets", async () => {
+    const target = await matrixNativeApprovalAdapter.native?.resolveOriginTarget?.({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "matrix",
+          turnSourceTo: "room:!Ops:Example.org",
+          turnSourceThreadId: "$thread",
+          turnSourceAccountId: "default",
+          sessionKey: "agent:main:matrix:channel:!Ops:Example.org",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(target).toEqual({
+      to: "room:!Ops:Example.org",
+      threadId: "$thread",
+    });
+  });
+
   it("keeps plugin approval auth independent from exec approvers", () => {
     const cfg = buildConfig({
       dm: { allowFrom: ["@owner:example.org"] },

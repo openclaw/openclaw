@@ -223,4 +223,37 @@ describe("MatrixExecApprovalHandler", () => {
       }),
     );
   });
+
+  it("honors request decision constraints in pending approval text", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok",
+          execApprovals: {
+            enabled: true,
+            approvers: ["@owner:example.org"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested({
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        ask: "always",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "room:!ops:example.org",
+      expect.not.stringContaining("allow-always"),
+      expect.anything(),
+    );
+  });
 });

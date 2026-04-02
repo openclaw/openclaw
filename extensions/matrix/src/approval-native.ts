@@ -27,7 +27,10 @@ function normalizeComparableTarget(value: string): string {
   if (!target) {
     return value.trim().toLowerCase();
   }
-  return `${target.kind}:${target.id}`.toLowerCase();
+  if (target.kind === "user") {
+    return `user:${normalizeMatrixUserId(target.id)}`;
+  }
+  return `${target.kind.toLowerCase()}:${target.id}`;
 }
 
 function resolveMatrixNativeTarget(raw: string): string | null {
@@ -127,6 +130,17 @@ const splitMatrixApprovalCapability = splitChannelApprovalCapability(
   matrixNativeApprovalCapability,
 );
 const matrixBaseNativeApprovalAdapter = splitMatrixApprovalCapability.native;
+const matrixBaseDeliveryAdapter = splitMatrixApprovalCapability.delivery;
+type MatrixForwardingSuppressionParams = Parameters<
+  NonNullable<NonNullable<typeof matrixBaseDeliveryAdapter>["shouldSuppressForwardingFallback"]>
+>[0];
+const matrixDeliveryAdapter = matrixBaseDeliveryAdapter && {
+  ...matrixBaseDeliveryAdapter,
+  shouldSuppressForwardingFallback: (params: MatrixForwardingSuppressionParams) =>
+    params.approvalKind === "plugin"
+      ? false
+      : (matrixBaseDeliveryAdapter.shouldSuppressForwardingFallback?.(params) ?? false),
+};
 const matrixExecOnlyNativeApprovalAdapter = matrixBaseNativeApprovalAdapter && {
   describeDeliveryCapabilities: (
     params: Parameters<typeof matrixBaseNativeApprovalAdapter.describeDeliveryCapabilities>[0],
@@ -176,7 +190,7 @@ export const matrixApprovalCapability = createChannelApprovalCapability({
     );
   },
   approvals: {
-    delivery: matrixNativeApprovalCapability.delivery,
+    delivery: matrixDeliveryAdapter,
     native: matrixExecOnlyNativeApprovalAdapter,
     render: matrixNativeApprovalCapability.render,
   },
@@ -187,7 +201,7 @@ export const matrixNativeApprovalAdapter = {
     authorizeActorAction: matrixApprovalCapability.authorizeActorAction,
     getActionAvailabilityState: matrixApprovalCapability.getActionAvailabilityState,
   },
-  delivery: matrixApprovalCapability.delivery,
+  delivery: matrixDeliveryAdapter,
   render: matrixApprovalCapability.render,
   native: matrixExecOnlyNativeApprovalAdapter,
 };

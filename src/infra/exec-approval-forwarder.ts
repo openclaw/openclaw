@@ -169,6 +169,7 @@ function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): Exec
 }
 
 function shouldSkipForwardingFallback(params: {
+  approvalKind: "exec" | "plugin";
   target: ExecApprovalForwardTarget;
   cfg: OpenClawConfig;
   routeRequest: ApprovalRouteRequest;
@@ -181,6 +182,7 @@ function shouldSkipForwardingFallback(params: {
   return (
     adapter?.delivery?.shouldSuppressForwardingFallback?.({
       cfg: params.cfg,
+      approvalKind: params.approvalKind,
       target: params.target,
       request: buildSyntheticApprovalRequest(params.routeRequest),
     }) ?? false
@@ -502,8 +504,15 @@ function createApprovalHandlers<
             resolveSessionTarget: params.resolveSessionTarget,
           })
         : []),
-    ].filter((target) => !shouldSkipForwardingFallback({ target, cfg, routeRequest }));
-
+    ].filter(
+      (target) =>
+        !shouldSkipForwardingFallback({
+          approvalKind: params.strategy.kind,
+          target,
+          cfg,
+          routeRequest,
+        }),
+    );
     if (filteredTargets.length === 0) {
       return false;
     }
@@ -598,7 +607,15 @@ function createApprovalHandlers<
                 resolveSessionTarget: params.resolveSessionTarget,
               })
             : []),
-        ].filter((target) => !shouldSkipForwardingFallback({ target, cfg, routeRequest }));
+        ].filter(
+          (target) =>
+            !shouldSkipForwardingFallback({
+              approvalKind: params.strategy.kind,
+              target,
+              cfg,
+              routeRequest,
+            }),
+        );
       }
     }
     if (!targets?.length) {

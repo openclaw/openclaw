@@ -76,14 +76,18 @@ describe("exec approval reply helpers", () => {
           execApproval: {
             approvalId: " req-1 ",
             approvalSlug: " slug-1 ",
+            agentId: " agent-1 ",
             allowedDecisions: ["allow-once", "bad", "deny", "allow-always", 3],
+            sessionKey: " session-1 ",
           },
         },
       }),
     ).toEqual({
       approvalId: "req-1",
       approvalSlug: "slug-1",
+      agentId: "agent-1",
       allowedDecisions: ["allow-once", "deny", "allow-always"],
+      sessionKey: "session-1",
     });
   });
 
@@ -104,7 +108,9 @@ describe("exec approval reply helpers", () => {
       execApproval: {
         approvalId: "req-1",
         approvalSlug: "slug-1",
+        agentId: undefined,
         allowedDecisions: ["allow-once", "allow-always", "deny"],
+        sessionKey: undefined,
       },
     });
     expect(payload.interactive).toEqual({
@@ -177,6 +183,27 @@ describe("exec approval reply helpers", () => {
           ],
         },
       ],
+    });
+  });
+
+  it("stores agent and session metadata for downstream suppression checks", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-meta",
+      approvalSlug: "slug-meta",
+      agentId: "ops-agent",
+      sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      command: "echo ok",
+      host: "gateway",
+    });
+
+    expect(payload.channelData).toEqual({
+      execApproval: {
+        approvalId: "req-meta",
+        approvalSlug: "slug-meta",
+        agentId: "ops-agent",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      },
     });
   });
 
