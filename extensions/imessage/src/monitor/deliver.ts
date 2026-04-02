@@ -52,7 +52,7 @@ export async function deliverReplies(params: {
           accountId,
           replyToId: payload.replyToId,
         });
-        sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
+        sentMessageCache?.remember(scope, { text: sent.sentText, messageId: sent.messageId });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
         const sent = await sendMessageIMessage(target, caption ?? "", {
@@ -62,8 +62,10 @@ export async function deliverReplies(params: {
           accountId,
           replyToId: payload.replyToId,
         });
+        // Use the actual sent text (which may be a media placeholder if caption was empty)
+        // for echo detection. This ensures file-only messages are matched correctly.
         sentMessageCache?.remember(scope, {
-          text: caption || undefined,
+          text: sent.sentText,
           messageId: sent.messageId,
         });
       },

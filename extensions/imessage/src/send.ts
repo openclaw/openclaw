@@ -33,6 +33,7 @@ export type IMessageSendOpts = {
 
 export type IMessageSendResult = {
   messageId: string;
+  sentText: string;
 };
 
 const MAX_REPLY_TO_ID_LENGTH = 256;
@@ -172,6 +173,7 @@ export async function sendMessageIMessage(
     const resolvedId = resolveMessageId(result);
     return {
       messageId: resolvedId ?? (result?.ok ? "ok" : "unknown"),
+      sentText: message,
     };
   } finally {
     if (shouldClose) {

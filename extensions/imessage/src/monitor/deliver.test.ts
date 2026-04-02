@@ -1,18 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 
-const sendMessageIMessageMock = vi.hoisted(() =>
-  vi.fn().mockResolvedValue({ messageId: "imsg-1" }),
-);
-const chunkTextWithModeMock = vi.hoisted(() => vi.fn((text: string) => [text]));
-const resolveChunkModeMock = vi.hoisted(() => vi.fn(() => "length"));
-const convertMarkdownTablesMock = vi.hoisted(() => vi.fn((text: string) => text));
-const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "code"));
+const sendMessageIMessageMock = vi.fn().mockImplementation(async (to: string, message: string) => ({
+  messageId: "imsg-1",
+  sentText: message,
+}));
 
 vi.mock("../send.js", () => ({
   sendMessageIMessage: (to: string, message: string, opts?: unknown) =>
     sendMessageIMessageMock(to, message, opts),
 }));
+
+const chunkTextWithModeMock = vi.hoisted(() => vi.fn((text: string) => [text]));
+const resolveChunkModeMock = vi.hoisted(() => vi.fn(() => "length"));
+const convertMarkdownTablesMock = vi.hoisted(() => vi.fn((text: string) => text));
+const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "code"));
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
