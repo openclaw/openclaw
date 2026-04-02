@@ -264,7 +264,9 @@ function extractUnquotedShellText(raw: string): string | null {
     const ch = raw[i];
     if (escaped) {
       if (!inSingle && !inDouble) {
-        out += ch;
+        // Preserve escapes outside quotes so downstream heuristics can distinguish
+        // escaped literals (e.g. `\|`) from executable shell operators.
+        out += `\\${ch}`;
       }
       escaped = false;
       continue;
@@ -320,16 +322,16 @@ function analyzeInterpreterHeuristicsFromUnquoted(raw: string): {
     );
   const hasNode =
     /(?:^|[|&;()\n\r])\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*node(?=$|[\s|&;()<>\n\r`$])/i.test(raw);
-  const hasProcessSubstitution = raw.includes("<(") || raw.includes(">(");
+  const hasProcessSubstitution = /(?<!\\)<\(|(?<!\\)>\(/u.test(raw);
   const hasComplexSyntax =
-    raw.includes("|") ||
-    raw.includes("&&") ||
-    raw.includes("||") ||
-    raw.includes(";") ||
+    /(?<!\\)\|/u.test(raw) ||
+    /(?<!\\)&&/u.test(raw) ||
+    /(?<!\\)\|\|/u.test(raw) ||
+    /(?<!\\);/u.test(raw) ||
     raw.includes("\n") ||
     raw.includes("\r") ||
-    raw.includes("$(") ||
-    raw.includes("`") ||
+    /(?<!\\)\$\(/u.test(raw) ||
+    /(?<!\\)`/u.test(raw) ||
     hasProcessSubstitution;
   const hasScriptHint = /(?:^|[\s|&;()<>])[^"'`\s|&;()<>]+\.(?:py|js)(?=$|[\s|&;()<>])/i.test(raw);
 
