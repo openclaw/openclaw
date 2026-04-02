@@ -11,7 +11,7 @@
  * Each line is a JSON object with a `type` field:
  *   - "model.call":   per-LLM-call record (tokens, costUsd, duration, turnId, agentId)
  *   - "tool.call":    per-tool record (duration, error status, turnId, agentId, toolInput)
- *   - "turn.summary": full per-turn aggregate (usage, cost, context, trigger metadata) — turns/ only
+ *   - "turn.summary": full per-turn aggregate (usage, cost, trigger metadata) — turns/ only
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -22,7 +22,7 @@ import {
   onDiagnosticEvent,
 } from "./diagnostic-events.js";
 
-const DEFAULT_DIR = path.join(process.env["HOME"] ?? "/tmp", ".openclaw", "call-traces");
+const DEFAULT_DIR = path.join(process.env["HOME"] ?? "/tmp", ".openclaw", "traces");
 const DEFAULT_RETAIN_DAYS = 30;
 
 function dateStamp(): string {
