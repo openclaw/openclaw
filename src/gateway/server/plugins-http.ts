@@ -3,7 +3,7 @@ import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { resolveActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { WRITE_SCOPE } from "../method-scopes.js";
+import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { PROTOCOL_VERSION } from "../protocol/index.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
@@ -28,9 +28,8 @@ export { shouldEnforceGatewayAuthForPluginPath } from "./plugins-http/route-auth
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 function createPluginRouteRuntimeClient(
-  requiresGatewayAuth: boolean,
+  scopes: readonly string[],
 ): GatewayRequestOptions["client"] {
-  const scopes = requiresGatewayAuth ? [WRITE_SCOPE] : [];
   return {
     connect: {
       minProtocol: PROTOCOL_VERSION,
@@ -42,16 +41,22 @@ function createPluginRouteRuntimeClient(
         mode: GATEWAY_CLIENT_MODES.BACKEND,
       },
       role: "operator",
-      scopes,
+      scopes: [...scopes],
     },
   };
 }
+
+export type PluginRouteDispatchContext = {
+  gatewayAuthSatisfied?: boolean;
+  gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
+  gatewayRequestOperatorScopes?: readonly string[];
+};
 
 export type PluginHttpRequestHandler = (
   req: IncomingMessage,
   res: ServerResponse,
   pathContext?: PluginRoutePathContext,
-  dispatchContext?: { gatewayAuthSatisfied?: boolean },
+  dispatchContext?: PluginRouteDispatchContext,
 ) => Promise<boolean>;
 
 export function createGatewayPluginRequestHandler(params: {
@@ -77,11 +82,21 @@ export function createGatewayPluginRequestHandler(params: {
       return false;
     }
     const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
-    if (requiresGatewayAuth && dispatchContext?.gatewayAuthSatisfied === false) {
-      log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
-      return false;
+    let runtimeScopes: readonly string[] = [];
+    if (requiresGatewayAuth) {
+      if (dispatchContext?.gatewayAuthSatisfied !== true) {
+        log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
+        return false;
+      }
+      if (dispatchContext.gatewayRequestOperatorScopes === undefined) {
+        log.warn(
+          `plugin http route blocked without caller scope context (${pathContext.canonicalPath})`,
+        );
+        return false;
+      }
+      runtimeScopes = dispatchContext.gatewayRequestOperatorScopes;
     }
-    const runtimeClient = createPluginRouteRuntimeClient(requiresGatewayAuth);
+    const runtimeClient = createPluginRouteRuntimeClient(runtimeScopes);
 
     return await withPluginRuntimeGatewayRequestScope(
       {
