@@ -109,7 +109,7 @@ export async function resolveDeliveryTarget(
     mode === "explicit" &&
     channel === "telegram" &&
     typeof explicitTo === "string" &&
-    /:topic:\d+$/i.test(explicitTo);
+    /:(?:topic:)?\d+$/i.test(explicitTo);
   let toCandidate = resolved.to;
 
   // Prefer an explicit accountId from the job's delivery config (set via
