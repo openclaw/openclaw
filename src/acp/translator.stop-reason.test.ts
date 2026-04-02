@@ -149,4 +149,47 @@ describe("acp translator stop reason mapping", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps pre-ack send disconnects inside the reconnect grace window", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionStore = createInMemorySessionStore();
+      sessionStore.createSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        cwd: "/tmp",
+      });
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          throw new Error("gateway closed (1006): connection lost");
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+        sessionStore,
+      });
+      const promptPromise = agent.prompt({
+        sessionId: "session-1",
+        prompt: [{ type: "text", text: "hello" }],
+        _meta: {},
+      } as unknown as PromptRequest);
+      const settleSpy = vi.fn();
+      void promptPromise.then(
+        (value) => settleSpy({ kind: "resolve", value }),
+        (error) => settleSpy({ kind: "reject", error }),
+      );
+
+      await Promise.resolve();
+      expect(settleSpy).not.toHaveBeenCalled();
+
+      agent.handleGatewayDisconnect("1006: connection lost");
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settleSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

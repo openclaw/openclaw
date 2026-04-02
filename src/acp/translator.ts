@@ -134,6 +134,10 @@ function isAdminScopeProvenanceRejection(err: unknown): boolean {
   );
 }
 
+function isGatewayCloseError(err: unknown): boolean {
+  return err instanceof Error && err.message.startsWith("gateway closed (");
+}
+
 type SessionSnapshot = SessionPresentation & {
   metadata?: SessionMetadata;
   usage?: SessionUsageSnapshot;
@@ -707,6 +711,9 @@ export class AcpGatewayAgent implements Agent {
       };
 
       void sendWithProvenanceFallback().catch((err) => {
+        if (isGatewayCloseError(err) && this.pendingPrompts.has(params.sessionId)) {
+          return;
+        }
         this.pendingPrompts.delete(params.sessionId);
         this.sessionStore.clearActiveRun(params.sessionId);
         if (this.pendingPrompts.size === 0) {
