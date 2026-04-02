@@ -12,6 +12,7 @@ export {
   requireTranscriptionText,
 } from "../media-understanding/shared.js";
 export type {
+  ProviderAttributionPolicy,
   ProviderEndpointClass,
   ProviderEndpointResolution,
   ProviderRequestCapability,

@@ -303,6 +303,26 @@ describe("provider attribution", () => {
     });
   });
 
+  it("does not classify malformed or embedded Google host strings as native endpoints", () => {
+    expect(resolveProviderEndpoint("proxy/generativelanguage.googleapis.com")).toMatchObject({
+      endpointClass: "invalid",
+    });
+
+    expect(resolveProviderEndpoint("https://xgenerativelanguage.googleapis.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "xgenerativelanguage.googleapis.com",
+    });
+
+    expect(resolveProviderEndpoint("proxy/aiplatform.googleapis.com")).toMatchObject({
+      endpointClass: "invalid",
+    });
+
+    expect(resolveProviderEndpoint("https://xaiplatform.googleapis.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "xaiplatform.googleapis.com",
+    });
+  });
+
   it("requires the dedicated OpenAI audio transcription API for audio attribution", () => {
     expect(
       resolveProviderRequestPolicy({

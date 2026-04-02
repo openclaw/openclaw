@@ -104,13 +104,16 @@ function resolveUrlHostname(value: unknown): string | undefined {
     if (normalized.includes("openrouter.ai")) {
       return "openrouter.ai";
     }
-    if (normalized.includes("generativelanguage.googleapis.com")) {
+    if (/^(?:https?:\/\/)?generativelanguage\.googleapis\.com(?:[:/?#]|$)/.test(normalized)) {
       return "generativelanguage.googleapis.com";
     }
-    if (normalized.includes("aiplatform.googleapis.com")) {
-      const match = /([a-z0-9-]+-aiplatform\.googleapis\.com|aiplatform\.googleapis\.com)/.exec(
-        normalized,
-      );
+    if (
+      /^(?:https?:\/\/)?(?:[a-z0-9-]+-)?aiplatform\.googleapis\.com(?:[:/?#]|$)/.test(normalized)
+    ) {
+      const match =
+        /^(?:https?:\/\/)?([a-z0-9-]+-aiplatform\.googleapis\.com|aiplatform\.googleapis\.com)(?:[:/?#]|$)/.exec(
+          normalized,
+        );
       return match?.[1];
     }
     if (
@@ -167,15 +170,13 @@ export function resolveProviderEndpoint(
       googleVertexRegion: "global",
     };
   }
-  {
-    const googleVertexHost = /^([a-z0-9-]+)-aiplatform\.googleapis\.com$/.exec(host);
-    if (googleVertexHost) {
-      return {
-        endpointClass: "google-vertex",
-        hostname: host,
-        googleVertexRegion: googleVertexHost[1],
-      };
-    }
+  const googleVertexHost = /^([a-z0-9-]+)-aiplatform\.googleapis\.com$/.exec(host);
+  if (googleVertexHost) {
+    return {
+      endpointClass: "google-vertex",
+      hostname: host,
+      googleVertexRegion: googleVertexHost[1],
+    };
   }
   if (isLocalEndpointHost(host)) {
     return { endpointClass: "local", hostname: host };
