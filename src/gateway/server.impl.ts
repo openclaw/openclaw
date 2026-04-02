@@ -624,8 +624,12 @@ export async function startGatewayServer(
   const channelRuntimeEnvs = Object.fromEntries(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
   ) as unknown as Record<ChannelId, RuntimeEnv>;
-  const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
-  const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
+  let gatewayMethods = Array.from(
+    new Set([
+      ...baseGatewayMethods,
+      ...listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []),
+    ]),
+  );
   let pluginServices: PluginServicesHandle | null = null;
   const runtimeConfig = await resolveGatewayRuntimeConfig({
     cfg: cfgAtStart,
@@ -1363,7 +1367,7 @@ export async function startGatewayServer(
 
     if (!minimalTestGateway) {
       if (deferredConfiguredChannelPluginIds.length > 0) {
-        ({ pluginRegistry } = reloadDeferredGatewayPlugins({
+        ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = reloadDeferredGatewayPlugins({
           cfg: gatewayPluginConfigAtStart,
           workspaceDir: defaultWorkspaceDir,
           log,
@@ -1372,6 +1376,12 @@ export async function startGatewayServer(
           pluginIds: startupPluginIds,
           logDiagnostics: false,
         }));
+        gatewayMethods = Array.from(
+          new Set([
+            ...baseGatewayMethods,
+            ...listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []),
+          ]),
+        );
       }
       ({ pluginServices } = await startGatewaySidecars({
         cfg: gatewayPluginConfigAtStart,

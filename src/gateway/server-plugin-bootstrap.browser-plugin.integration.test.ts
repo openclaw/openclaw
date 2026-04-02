@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createBundledBrowserPluginFixture } from "../../test/helpers/browser-bundled-plugin-fixture.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
@@ -58,6 +60,45 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
     expect(loaded.gatewayMethods).toContain("browser.request");
     expect(
       loaded.pluginRegistry.services.some(
+        (entry) => entry.pluginId === "browser" && entry.service.id === "browser-control",
+      ),
+    ).toBe(true);
+  });
+
+  it("refreshes browser gateway ownership when deferred reload replaces the active registry", () => {
+    const startupLoaded = loadGatewayStartupPlugins({
+      cfg: {
+        plugins: {
+          allow: ["browser"],
+        },
+      } as OpenClawConfig,
+      workspaceDir: process.cwd(),
+      log: createTestLog(),
+      coreGatewayHandlers,
+      baseMethods: listGatewayMethods(),
+      logDiagnostics: false,
+    });
+
+    expect(startupLoaded.gatewayMethods).toContain("browser.request");
+
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const deferredLoaded = loadGatewayStartupPlugins({
+      cfg: {
+        plugins: {
+          allow: ["browser"],
+        },
+      } as OpenClawConfig,
+      workspaceDir: process.cwd(),
+      log: createTestLog(),
+      coreGatewayHandlers,
+      baseMethods: listGatewayMethods(),
+      logDiagnostics: false,
+    });
+
+    expect(deferredLoaded.gatewayMethods).toContain("browser.request");
+    expect(
+      deferredLoaded.pluginRegistry.services.some(
         (entry) => entry.pluginId === "browser" && entry.service.id === "browser-control",
       ),
     ).toBe(true);
