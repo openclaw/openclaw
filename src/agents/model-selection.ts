@@ -5,6 +5,7 @@ import {
   resolveAgentModelPrimaryValue,
   toAgentModelListLike,
 } from "../config/model-input.js";
+import type { GatewayControlUiModelSelectorFilter } from "../config/types.gateway.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { normalizeXaiModelId } from "../plugin-sdk/xai-model-id.js";
@@ -14,8 +15,10 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
 } from "./agent-scope.js";
+import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "./model-auth.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
@@ -796,4 +799,146 @@ export function normalizeModelSelection(value: unknown): string | undefined {
     return primary.trim();
   }
   return undefined;
+}
+
+/**
+ * Check whether a provider has usable authentication (profiles, env vars,
+ * or custom API key in config).  This is the synchronous variant used by
+ * the model-picker and the server-side "authenticated" filter.
+ */
+export function hasAuthForProvider(
+  provider: string,
+  cfg: OpenClawConfig,
+  store: ReturnType<typeof ensureAuthProfileStore>,
+): boolean {
+  if (listProfilesForProvider(store, provider).length > 0) {
+    return true;
+  }
+  if (resolveEnvApiKey(provider)) {
+    return true;
+  }
+  if (hasUsableCustomProviderApiKey(cfg, provider)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Check whether a provider has usable credentials without requiring callers
+ * to manage the auth profile store directly.  Convenience wrapper around
+ * {@link hasAuthForProvider} used by the sessions.patch pre-flight check.
+ */
+export function checkProviderAuth(
+  provider: string,
+  cfg: OpenClawConfig,
+): boolean {
+  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  const normalized = normalizeProviderId(provider);
+  return hasAuthForProvider(normalized, cfg, store);
+}
+
+/**
+ * Build a set of model keys that are explicitly referenced in the agent
+ * configuration (both global defaults and per-agent overrides).
+ */
+export function buildConfiguredAgentModelKeys(params: {
+  cfg: OpenClawConfig;
+  defaultProvider: string;
+}): Set<string> {
+  const keys = new Set<string>();
+
+  // Global default model.
+  const globalPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
+  if (globalPrimary) {
+    const parsed = parseModelRef(globalPrimary, params.defaultProvider);
+    if (parsed) {
+      keys.add(modelKey(parsed.provider, parsed.model));
+    }
+  }
+
+  // Global fallbacks.
+  const globalFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  for (const fallback of globalFallbacks) {
+    const parsed = parseModelRef(String(fallback), params.defaultProvider);
+    if (parsed) {
+      keys.add(modelKey(parsed.provider, parsed.model));
+    }
+  }
+
+  // Models from the allowlist (agents.defaults.models).
+  const allowlistKeys = buildConfiguredAllowlistKeys({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  if (allowlistKeys) {
+    for (const key of allowlistKeys) {
+      keys.add(key);
+    }
+  }
+
+  // Per-agent model overrides.
+  const agentList = params.cfg.agents?.list ?? [];
+  for (const agent of agentList) {
+    const agentModel = resolveAgentModelPrimaryValue(agent.model);
+    if (agentModel) {
+      const parsed = parseModelRef(agentModel, params.defaultProvider);
+      if (parsed) {
+        keys.add(modelKey(parsed.provider, parsed.model));
+      }
+    }
+  }
+
+  return keys;
+}
+
+/**
+ * Filter a model catalog based on the specified filter mode.
+ *
+ * - `"all"`: returns the catalog unchanged.
+ * - `"authenticated"`: keeps only models whose provider has valid credentials
+ *   (auth profiles, env vars, or custom API key in config).
+ * - `"configured"`: keeps only models explicitly referenced in the agent
+ *   configuration (global defaults + per-agent overrides).
+ */
+export function filterModelCatalog(params: {
+  catalog: ModelCatalogEntry[];
+  cfg: OpenClawConfig;
+  filter: GatewayControlUiModelSelectorFilter;
+  defaultProvider: string;
+}): ModelCatalogEntry[] {
+  if (params.filter === "all") {
+    return params.catalog;
+  }
+
+  if (params.filter === "authenticated") {
+    const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+    const authCache = new Map<string, boolean>();
+    const checkAuth = (provider: string): boolean => {
+      const normalized = normalizeProviderId(provider);
+      const cached = authCache.get(normalized);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const result = hasAuthForProvider(normalized, params.cfg, store);
+      authCache.set(normalized, result);
+      return result;
+    };
+    return params.catalog.filter((entry) => checkAuth(entry.provider));
+  }
+
+  if (params.filter === "configured") {
+    const configuredKeys = buildConfiguredAgentModelKeys({
+      cfg: params.cfg,
+      defaultProvider: params.defaultProvider,
+    });
+    if (configuredKeys.size === 0) {
+      // No explicit model configuration — fall back to showing everything.
+      return params.catalog;
+    }
+    return params.catalog.filter((entry) =>
+      configuredKeys.has(modelKey(entry.provider, entry.id)),
+    );
+  }
+
+  return params.catalog;
 }

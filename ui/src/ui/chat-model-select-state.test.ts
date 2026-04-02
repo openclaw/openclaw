@@ -16,6 +16,7 @@ describe("chat-model-select-state", () => {
       sessionKey: "main",
       chatModelOverrides: {},
       chatModelCatalog: createModelCatalog(DEEPSEEK_CHAT_MODEL),
+      chatModelCatalogMeta: null,
       sessionsResult: createSessionsListResult({
         model: "deepseek-chat",
         modelProvider: "zai",
@@ -30,6 +31,7 @@ describe("chat-model-select-state", () => {
       sessionKey: "main",
       chatModelOverrides: {},
       chatModelCatalog: [],
+      chatModelCatalogMeta: null,
       sessionsResult: createSessionsListResult({
         model: "gpt-5-mini",
         modelProvider: "openai",
@@ -44,6 +46,7 @@ describe("chat-model-select-state", () => {
       sessionKey: "main",
       chatModelOverrides: {},
       chatModelCatalog: createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG),
+      chatModelCatalogMeta: null,
       sessionsResult: createSessionsListResult({
         model: "gpt-5-mini",
         modelProvider: "openai",

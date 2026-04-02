@@ -9701,6 +9701,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               dangerouslyDisableDeviceAuth: {
                 type: "boolean",
               },
+              modelSelector: {
+                type: "object",
+                properties: {
+                  filter: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "all",
+                      },
+                      {
+                        type: "string",
+                        const: "authenticated",
+                      },
+                      {
+                        type: "string",
+                        const: "configured",
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
             },
             additionalProperties: false,
           },
@@ -12724,6 +12746,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Dangerously Disable Control UI Device Auth",
       help: "Disables Control UI device identity checks and relies on token/password only. Use only for short-lived debugging on trusted networks, then turn it off immediately.",
       tags: ["security", "access", "network", "advanced"],
+    },
+    "gateway.controlUi.modelSelector": {
+      label: "Control UI Model Selector",
+      help: "Model selector display settings for the Control UI dropdown. Controls which models are visible to users when switching models.",
+      tags: ["network"],
+    },
+    "gateway.controlUi.modelSelector.filter": {
+      label: "Model Selector Filter",
+      help: 'Controls which models appear in the Control UI model selector. "all" shows every model from the provider catalog (default). "authenticated" shows only models whose provider has valid credentials. "configured" shows only models explicitly listed in the agent models config.',
+      tags: ["network"],
     },
     "gateway.push": {
       label: "Gateway Push Delivery",

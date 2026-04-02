@@ -648,6 +648,13 @@ export type ModelCatalogEntry = {
   input?: Array<"text" | "image" | "document">;
 };
 
+/** Metadata about model catalog filtering returned by models.list. */
+export type ModelCatalogMeta = {
+  totalCount: number;
+  filteredCount: number;
+  filterMode: "all" | "authenticated" | "configured";
+};
+
 export type ToolCatalogProfile =
   import("../../../src/gateway/protocol/schema/types.js").ToolCatalogProfile;
 export type ToolCatalogEntry =

@@ -6,11 +6,11 @@ import type { OpenClawApp } from "./app.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand } from "./chat/slash-commands.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
-import { loadModels } from "./controllers/models.ts";
+import { loadModelsWithMeta } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
-import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
+import type { ChatModelOverride, ModelCatalogEntry, ModelCatalogMeta } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -33,6 +33,7 @@ export type ChatHost = {
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  chatModelCatalogMeta: ModelCatalogMeta | null;
   sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
@@ -413,11 +414,14 @@ async function refreshChatModels(host: ChatHost) {
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
     host.chatModelCatalog = [];
+    host.chatModelCatalogMeta = null;
     return;
   }
   host.chatModelsLoading = true;
   try {
-    host.chatModelCatalog = await loadModels(host.client);
+    const { models, meta } = await loadModelsWithMeta(host.client);
+    host.chatModelCatalog = models;
+    host.chatModelCatalogMeta = meta;
   } finally {
     host.chatModelsLoading = false;
   }

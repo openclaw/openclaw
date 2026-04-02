@@ -1,5 +1,10 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { ModelCatalogEntry } from "../types.ts";
+import type { ModelCatalogEntry, ModelCatalogMeta } from "../types.ts";
+
+export type ModelsListResponse = {
+  models: ModelCatalogEntry[];
+  _meta?: ModelCatalogMeta;
+};
 
 /**
  * Fetch the model catalog from the gateway.
@@ -10,9 +15,30 @@ import type { ModelCatalogEntry } from "../types.ts";
  */
 export async function loadModels(client: GatewayBrowserClient): Promise<ModelCatalogEntry[]> {
   try {
-    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {});
+    const result = await client.request<ModelsListResponse>("models.list", {});
     return result?.models ?? [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * Fetch the model catalog with filter metadata from the gateway.
+ *
+ * Like {@link loadModels} but also returns the optional `_meta` object
+ * that describes how many models were filtered and which filter mode
+ * is active.
+ */
+export async function loadModelsWithMeta(
+  client: GatewayBrowserClient,
+): Promise<{ models: ModelCatalogEntry[]; meta: ModelCatalogMeta | null }> {
+  try {
+    const result = await client.request<ModelsListResponse>("models.list", {});
+    return {
+      models: result?.models ?? [],
+      meta: result?._meta ?? null,
+    };
+  } catch {
+    return { models: [], meta: null };
   }
 }

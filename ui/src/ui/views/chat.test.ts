@@ -126,6 +126,7 @@ function createChatHeaderState(
     }),
     chatModelOverrides: {},
     chatModelCatalog: catalog,
+    chatModelCatalogMeta: null,
     chatModelsLoading: false,
     client: { request } as unknown as GatewayBrowserClient,
     settings: {

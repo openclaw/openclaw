@@ -265,6 +265,8 @@ export const FIELD_LABELS: Record<string, string> = {
     "Dangerously Allow Host-Header Origin Fallback",
   "gateway.controlUi.allowInsecureAuth": "Insecure Control UI Auth Toggle",
   "gateway.controlUi.dangerouslyDisableDeviceAuth": "Dangerously Disable Control UI Device Auth",
+  "gateway.controlUi.modelSelector": "Control UI Model Selector",
+  "gateway.controlUi.modelSelector.filter": "Model Selector Filter",
   "gateway.push": "Gateway Push Delivery",
   "gateway.push.apns": "Gateway APNs Delivery",
   "gateway.push.apns.relay": "Gateway APNs Relay",

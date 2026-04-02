@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
+  checkProviderAuth,
   resolveAllowedModelRef,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
@@ -19,6 +20,7 @@ import {
 } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { GatewayControlUiModelSelectorFilter } from "../config/types.gateway.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
   isAcpSessionKey,
@@ -399,6 +401,20 @@ export async function applySessionsPatchToStore(params: {
       if ("error" in resolved) {
         return invalid(resolved.error);
       }
+
+      // Pre-flight credential check: when the model selector filter is
+      // "authenticated" or "configured", verify the resolved provider has
+      // usable credentials before accepting the selection.
+      const selectorFilter: GatewayControlUiModelSelectorFilter =
+        cfg.gateway?.controlUi?.modelSelector?.filter ?? "all";
+      if (selectorFilter === "authenticated" || selectorFilter === "configured") {
+        if (!checkProviderAuth(resolved.ref.provider, cfg)) {
+          return invalid(
+            `No valid credentials for provider: ${resolved.ref.provider}. Configure auth or change model selector filter.`,
+          );
+        }
+      }
+
       const isDefault =
         resolved.ref.provider === resolvedDefault.provider &&
         resolved.ref.model === resolvedDefault.model;

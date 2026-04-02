@@ -96,6 +96,18 @@ export type TalkConfigResponse = TalkConfig & {
   resolved?: ResolvedTalkConfig;
 };
 
+export type GatewayControlUiModelSelectorFilter = "all" | "authenticated" | "configured";
+
+export type GatewayControlUiModelSelectorConfig = {
+  /**
+   * Which models appear in the Control UI model selector dropdown.
+   * - "all": show every model from the provider catalog (default)
+   * - "authenticated": show only models whose provider has valid credentials
+   * - "configured": show only models explicitly listed in the agent's models config
+   */
+  filter?: GatewayControlUiModelSelectorFilter;
+};
+
 export type GatewayControlUiConfig = {
   /** If false, the Gateway will not serve the Control UI (default /). */
   enabled?: boolean;
@@ -118,6 +130,8 @@ export type GatewayControlUiConfig = {
   allowInsecureAuth?: boolean;
   /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
   dangerouslyDisableDeviceAuth?: boolean;
+  /** Model selector display settings for the Control UI. */
+  modelSelector?: GatewayControlUiModelSelectorConfig;
 };
 
 export type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";

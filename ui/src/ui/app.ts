@@ -82,6 +82,7 @@ import type {
   LogEntry,
   LogLevel,
   ModelCatalogEntry,
+  ModelCatalogMeta,
   PresenceEntry,
   ChannelsStatusSnapshot,
   SessionsListResult,
@@ -168,6 +169,7 @@ export class OpenClawApp extends LitElement {
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
   @state() chatModelsLoading = false;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
+  @state() chatModelCatalogMeta: ModelCatalogMeta | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;

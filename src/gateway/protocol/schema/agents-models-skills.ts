@@ -174,11 +174,36 @@ export const AgentsFilesSetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ModelsListParamsSchema = Type.Object({}, { additionalProperties: false });
+export const ModelsListFilterSchema = Type.Union([
+  Type.Literal("all"),
+  Type.Literal("authenticated"),
+  Type.Literal("configured"),
+]);
+
+export const ModelsListParamsSchema = Type.Object(
+  {
+    filter: Type.Optional(ModelsListFilterSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ModelsListMetaSchema = Type.Object(
+  {
+    totalCount: Type.Integer({ minimum: 0 }),
+    filteredCount: Type.Integer({ minimum: 0 }),
+    filterMode: Type.Union([
+      Type.Literal("all"),
+      Type.Literal("authenticated"),
+      Type.Literal("configured"),
+    ]),
+  },
+  { additionalProperties: false },
+);
 
 export const ModelsListResultSchema = Type.Object(
   {
     models: Type.Array(ModelChoiceSchema),
+    _meta: Type.Optional(ModelsListMetaSchema),
   },
   { additionalProperties: false },
 );

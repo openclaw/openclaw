@@ -526,8 +526,39 @@ async function refreshSessionOptions(state: AppViewState) {
   });
 }
 
+function renderModelFilterStatus(meta: import("./types.ts").ModelCatalogMeta | null) {
+  if (!meta || meta.filterMode === "all" || meta.totalCount === meta.filteredCount) {
+    return nothing;
+  }
+  const label =
+    meta.filterMode === "authenticated"
+      ? "Showing authenticated models only"
+      : meta.filterMode === "configured"
+        ? "Showing configured models only"
+        : `Showing ${meta.filteredCount} of ${meta.totalCount} models`;
+  return html`
+    <span
+      class="chat-controls__model-filter-status"
+      title="${meta.filteredCount} of ${meta.totalCount} models shown (filter: ${meta.filterMode})"
+      style="
+        font-size: 11px;
+        opacity: 0.65;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 220px;
+        display: inline-block;
+        vertical-align: middle;
+        line-height: 1;
+        padding: 2px 0;
+      "
+      >${label}</span
+    >
+  `;
+}
+
 function renderChatModelSelect(state: AppViewState) {
-  const { currentOverride, defaultLabel, options } = resolveChatModelSelectState(state);
+  const { currentOverride, defaultLabel, options, meta } = resolveChatModelSelectState(state);
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
@@ -554,6 +585,7 @@ function renderChatModelSelect(state: AppViewState) {
         )}
       </select>
     </label>
+    ${renderModelFilterStatus(meta)}
   `;
 }
 

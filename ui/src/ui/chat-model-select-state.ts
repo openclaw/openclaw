@@ -5,11 +5,11 @@ import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "./chat-model-ref.ts";
-import type { ModelCatalogEntry } from "./types.ts";
+import type { ModelCatalogEntry, ModelCatalogMeta } from "./types.ts";
 
 type ChatModelSelectStateInput = Pick<
   AppViewState,
-  "sessionKey" | "chatModelOverrides" | "chatModelCatalog" | "sessionsResult"
+  "sessionKey" | "chatModelOverrides" | "chatModelCatalog" | "chatModelCatalogMeta" | "sessionsResult"
 >;
 
 export type ChatModelSelectOption = {
@@ -23,6 +23,7 @@ export type ChatModelSelectState = {
   defaultDisplay: string;
   defaultLabel: string;
   options: ChatModelSelectOption[];
+  meta: ModelCatalogMeta | null;
 };
 
 function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
@@ -101,5 +102,6 @@ export function resolveChatModelSelectState(
     defaultDisplay,
     defaultLabel: defaultModel ? `Default (${defaultDisplay})` : "Default model",
     options: buildChatModelOptions(state.chatModelCatalog ?? [], currentOverride, defaultModel),
+    meta: state.chatModelCatalogMeta ?? null,
   };
 }

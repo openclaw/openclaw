@@ -23,6 +23,7 @@ import type {
   LogLevel,
   ChatModelOverride,
   ModelCatalogEntry,
+  ModelCatalogMeta,
   NostrProfile,
   PresenceEntry,
   SessionsUsageResult,
@@ -75,6 +76,7 @@ export type AppViewState = {
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  chatModelCatalogMeta: ModelCatalogMeta | null;
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;
