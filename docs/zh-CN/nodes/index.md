@@ -275,13 +275,15 @@ macOS 节点暴露 `system.run`、`system.notify` 和 `system.execApprovals.get/
 示例：
 
 ```bash
-openclaw nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
 openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
+openclaw nodes invoke --node <idOrNameOrIp> --command system.which --params '{"name":"git"}'
 ```
 
 注意事项：
 
 - `system.run` 在负载中返回 stdout/stderr/退出码。
+- Shell 执行现在统一走带 `host=node` 的 `exec` 工具；`nodes` 保持为显式节点命令的直接 RPC 表面。
+- `nodes invoke` 不暴露 `system.run` 或 `system.run.prepare`；这些仅保留在 `exec` 路径上。
 - `system.notify` 遵守 macOS 应用上的通知权限状态。
 - `system.run` 支持 `--cwd`、`--env KEY=VAL`、`--command-timeout` 和 `--needs-screen-recording`。
 - `system.notify` 支持 `--priority <passive|active|timeSensitive>` 和 `--delivery <system|overlay|auto>`。

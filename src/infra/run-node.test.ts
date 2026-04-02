@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { runNodeMain } from "../../scripts/run-node.mjs";
+import { resolveBuildRequirement, runNodeMain } from "../../scripts/run-node.mjs";
+import {
+  bundledDistPluginFile,
+  bundledPluginFile,
+  bundledPluginRoot,
+} from "../../test/helpers/bundled-plugin-paths.js";
 
 const ROOT_SRC = "src/index.ts";
 const ROOT_TSCONFIG = "tsconfig.json";
@@ -11,12 +16,12 @@ const ROOT_PACKAGE = "package.json";
 const ROOT_TSDOWN = "tsdown.config.ts";
 const DIST_ENTRY = "dist/entry.js";
 const BUILD_STAMP = "dist/.buildstamp";
-const EXTENSION_SRC = "extensions/demo/src/index.ts";
-const EXTENSION_MANIFEST = "extensions/demo/openclaw.plugin.json";
-const EXTENSION_PACKAGE = "extensions/demo/package.json";
-const EXTENSION_README = "extensions/demo/README.md";
-const DIST_EXTENSION_MANIFEST = "dist/extensions/demo/openclaw.plugin.json";
-const DIST_EXTENSION_PACKAGE = "dist/extensions/demo/package.json";
+const EXTENSION_SRC = bundledPluginFile("demo", "src/index.ts");
+const EXTENSION_MANIFEST = bundledPluginFile("demo", "openclaw.plugin.json");
+const EXTENSION_PACKAGE = bundledPluginFile("demo", "package.json");
+const EXTENSION_README = bundledPluginFile("demo", "README.md");
+const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
+const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
 
 const OLD_TIME = new Date("2026-03-13T10:00:00.000Z");
 const BUILD_TIME = new Date("2026-03-13T12:00:00.000Z");
@@ -124,6 +129,41 @@ function createSpawnRecorder(
     return { status: 1, stdout: "" };
   };
   return { spawnCalls, spawn, spawnSync };
+}
+
+function createBuildRequirementDeps(
+  tmp: string,
+  options: {
+    gitHead?: string;
+    gitStatus?: string;
+    env?: Record<string, string>;
+  } = {},
+) {
+  const { spawnSync } = createSpawnRecorder({
+    gitHead: options.gitHead,
+    gitStatus: options.gitStatus,
+  });
+  return {
+    cwd: tmp,
+    env: {
+      ...process.env,
+      ...options.env,
+    },
+    fs: fsSync,
+    spawnSync,
+    distRoot: path.join(tmp, "dist"),
+    distEntry: path.join(tmp, DIST_ENTRY),
+    buildStampPath: path.join(tmp, BUILD_STAMP),
+    sourceRoots: [path.join(tmp, "src"), path.join(tmp, bundledPluginRoot("demo"))].map(
+      (sourceRoot) => ({
+        name: path.relative(tmp, sourceRoot).replaceAll("\\", "/"),
+        path: sourceRoot,
+      }),
+    ),
+    configFiles: [ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN].map((filePath) =>
+      path.join(tmp, filePath),
+    ),
+  };
 }
 
 async function runStatusCommand(params: {
@@ -319,6 +359,27 @@ describe("run-node script", () => {
     });
   });
 
+  it("rebuilds when git HEAD changes even if source mtimes do not exceed the old build stamp", async () => {
+    await withTempDir(async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "def456\n",
+        gitStatus: "",
+      });
+      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+    });
+  });
+
   it("skips rebuilding when extension package metadata is newer than the build stamp", async () => {
     await withTempDir(async (tmp) => {
       await setupTrackedProject(tmp, {
@@ -365,7 +426,7 @@ describe("run-node script", () => {
 
       const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
         gitHead: "abc123\n",
-        gitStatus: " M extensions/demo/README.md\n",
+        gitStatus: ` M ${EXTENSION_README}\n`,
       });
       const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
 
@@ -397,13 +458,60 @@ describe("run-node script", () => {
 
       const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
         gitHead: "abc123\n",
-        gitStatus: " M extensions/demo/openclaw.plugin.json\n",
+        gitStatus: ` M ${EXTENSION_MANIFEST}\n`,
       });
       const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
       await expectManifestId(tmp, DIST_EXTENSION_MANIFEST, "demo");
+    });
+  });
+
+  it("reports dirty watched source trees as an explicit build reason", async () => {
+    await withTempDir(async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        buildPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const requirement = resolveBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: ` M ${ROOT_SRC}\n`,
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldBuild: true,
+        reason: "dirty_watched_tree",
+      });
+    });
+  });
+
+  it("reports a clean tree explicitly when dist is current", async () => {
+    await withTempDir(async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const requirement = resolveBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldBuild: false,
+        reason: "clean",
+      });
     });
   });
 
@@ -459,7 +567,7 @@ describe("run-node script", () => {
         ],
       });
 
-      await fs.mkdir(resolvePath(tmp, "extensions/demo"), { recursive: true });
+      await fs.mkdir(resolvePath(tmp, bundledPluginRoot("demo")), { recursive: true });
 
       const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
         gitHead: "abc123\n",

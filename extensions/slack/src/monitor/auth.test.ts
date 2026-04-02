@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "./context.js";
 
 const readStoreAllowFromForDmPolicyMock = vi.hoisted(() => vi.fn());
@@ -25,12 +25,10 @@ function makeSlackCtx(allowFrom: string[]): SlackMonitorContext {
 describe("resolveSlackEffectiveAllowFrom", () => {
   const prevTtl = process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ clearSlackAllowFromCacheForTest, resolveSlackEffectiveAllowFrom } =
       await import("./auth.js"));
-  });
-
-  beforeEach(() => {
     readStoreAllowFromForDmPolicyMock.mockReset();
     clearSlackAllowFromCacheForTest();
     if (prevTtl === undefined) {

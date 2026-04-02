@@ -6,7 +6,7 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import { handleDiscordAction } from "./runtime.js";
+import { handleDiscordAction } from "../../action-runtime-api.js";
 import {
   isDiscordModerationAction,
   readDiscordModerationCommand,

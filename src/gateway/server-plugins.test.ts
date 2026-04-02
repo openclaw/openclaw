@@ -7,6 +7,7 @@ import type { GatewayRequestContext, GatewayRequestOptions } from "./server-meth
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
 const resolveGatewayStartupPluginIds = vi.hoisted(() => vi.fn(() => ["discord", "telegram"]));
+const applyPluginAutoEnable = vi.hoisted(() => vi.fn(({ config }) => ({ config, changes: [] })));
 const primeConfiguredBindingRegistry = vi.hoisted(() =>
   vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
 );
@@ -23,6 +24,10 @@ vi.mock("../plugins/loader.js", () => ({
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
   resolveGatewayStartupPluginIds,
+}));
+
+vi.mock("../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable,
 }));
 
 vi.mock("../channels/plugins/binding-registry.js", async (importOriginal) => {
@@ -185,6 +190,7 @@ beforeAll(async () => {
 beforeEach(() => {
   loadOpenClawPlugins.mockReset();
   resolveGatewayStartupPluginIds.mockReset().mockReturnValue(["discord", "telegram"]);
+  applyPluginAutoEnable.mockReset().mockImplementation(({ config }) => ({ config, changes: [] }));
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   handleGatewayRequest.mockReset();
   runtimeModule.clearGatewaySubagentRuntime();
@@ -235,6 +241,10 @@ describe("loadGatewayPlugins", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayPluginsForTest();
 
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: {},
+      env: process.env,
+    });
     expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
       config: {},
       workspaceDir: "/tmp",
@@ -243,6 +253,40 @@ describe("loadGatewayPlugins", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["discord", "telegram"],
+      }),
+    );
+  });
+
+  test("reuses the provided startup plugin scope without recomputing it", async () => {
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayPluginsForTest({
+      pluginIds: ["browser"],
+    });
+
+    expect(resolveGatewayStartupPluginIds).not.toHaveBeenCalled();
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["browser"],
+      }),
+    );
+  });
+
+  test("loads gateway plugins from the auto-enabled config snapshot", async () => {
+    const autoEnabledConfig = { channels: { slack: { enabled: true } }, autoEnabled: true };
+    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayPluginsForTest();
+
+    expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
+      config: autoEnabledConfig,
+      workspaceDir: "/tmp",
+      env: process.env,
+    });
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: autoEnabledConfig,
       }),
     );
   });
@@ -542,9 +586,41 @@ describe("loadGatewayPlugins", () => {
   test("primes configured bindings during gateway startup", async () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     const cfg = {};
+    const autoEnabledConfig = { channels: { slack: { enabled: true } }, autoEnabled: true };
+    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     loadGatewayStartupPluginsForTest({ cfg });
 
-    expect(primeConfiguredBindingRegistry).toHaveBeenCalledWith({ cfg });
+    expect(primeConfiguredBindingRegistry).toHaveBeenCalledWith({ cfg: autoEnabledConfig });
+  });
+
+  test("uses the auto-enabled config snapshot for gateway bootstrap policies", async () => {
+    const serverPlugins = serverPluginsModule;
+    const autoEnabledConfig = {
+      plugins: {
+        entries: {
+          demo: {
+            subagent: { allowModelOverride: true, allowedModels: ["openai/gpt-5.4"] },
+          },
+        },
+      },
+    };
+    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    const runtime = await createSubagentRuntime(serverPlugins, {});
+    serverPlugins.setFallbackGatewayContext(createTestContext("auto-enabled-bootstrap-policy"));
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("demo", () =>
+      runtime.run({
+        sessionKey: "s-auto-enabled-bootstrap-policy",
+        message: "use trusted override",
+        model: "openai/gpt-5.4",
+        deliver: false,
+      }),
+    );
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-auto-enabled-bootstrap-policy",
+      model: "openai/gpt-5.4",
+    });
   });
 
   test("can suppress duplicate diagnostics when reloading full runtime plugins", async () => {
@@ -571,6 +647,28 @@ describe("loadGatewayPlugins", () => {
 
     expect(log.error).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
+  });
+
+  test("reuses the initial startup plugin scope during deferred reloads", async () => {
+    const { reloadDeferredGatewayPlugins } = serverPluginBootstrapModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    reloadDeferredGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: createTestLog(),
+      coreGatewayHandlers: {},
+      baseMethods: [],
+      pluginIds: ["discord"],
+      logDiagnostics: false,
+    });
+
+    expect(resolveGatewayStartupPluginIds).not.toHaveBeenCalled();
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["discord"],
+      }),
+    );
   });
 
   test("runs registry hook before priming configured bindings", async () => {

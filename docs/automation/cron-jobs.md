@@ -14,6 +14,11 @@ title: "Cron Jobs"
 Cron is the Gateway’s built-in scheduler. It persists jobs, wakes the agent at
 the right time, and can optionally deliver output back to a chat.
 
+All cron executions create [background task](/automation/tasks) records. The key difference is visibility:
+
+- `sessionTarget: "main"` creates a task with `silent` notify policy — it schedules a system event for the main session and heartbeat flow but does not generate notifications.
+- `sessionTarget: "isolated"` or `sessionTarget: "session:..."` creates a visible task that shows up in `openclaw tasks` with delivery notifications.
+
 If you want _“run this every morning”_ or _“poke the agent in 20 minutes”_,
 cron is the mechanism.
 
@@ -31,7 +36,7 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 - Webhook posting is per job via `delivery.mode = "webhook"` + `delivery.to = "<url>"`.
 - Legacy fallback remains for stored jobs with `notify: true` when `cron.webhook` is set, migrate those jobs to webhook delivery mode.
-- For upgrades, `openclaw doctor --fix` can normalize legacy cron store fields before the scheduler touches them.
+- For upgrades, `openclaw doctor --fix` can normalize legacy cron store fields, including old top-level delivery hints such as `threadId`.
 
 ## Quick start (actionable)
 
@@ -155,6 +160,8 @@ They must use `payload.kind = "systemEvent"`.
 This is the best fit when you want the normal heartbeat prompt + main-session context.
 See [Heartbeat](/gateway/heartbeat).
 
+Main-session cron jobs create [background task](/automation/tasks) records with `silent` notify policy (no notifications by default). They appear in `openclaw tasks list` but do not generate delivery messages.
+
 #### Isolated jobs (dedicated cron sessions)
 
 Isolated jobs run a dedicated agent turn in session `cron:<jobId>` or a custom session.
@@ -176,6 +183,8 @@ Key behaviors:
 Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
 your main chat history.
 
+These detached runs create [background task](/automation/tasks) records visible in `openclaw tasks` and subject to task audit and maintenance.
+
 ### Payload shapes (what runs)
 
 Two payload kinds are supported:
@@ -189,12 +198,14 @@ Common `agentTurn` fields:
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
 - `lightContext`: optional lightweight bootstrap mode for jobs that do not need workspace bootstrap file injection.
+- `toolsAllow`: optional array of tool names to restrict which tools the job can use (e.g. `["exec", "read", "write"]`).
 
 Delivery config:
 
 - `delivery.mode`: `none` | `announce` | `webhook`.
 - `delivery.channel`: `last` or a specific channel.
 - `delivery.to`: channel-specific target (announce) or webhook URL (webhook mode).
+- `delivery.threadId`: optional explicit thread or topic id when the target channel supports threaded delivery.
 - `delivery.bestEffort`: avoid failing the job if announce delivery fails.
 
 Announce delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
@@ -261,8 +272,9 @@ Isolated jobs (`agentTurn`) can set `lightContext: true` to run with lightweight
 Isolated jobs can deliver output to a channel via the top-level `delivery` config:
 
 - `delivery.mode`: `announce` (channel delivery), `webhook` (HTTP POST), or `none`.
-- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `irc` / `googlechat` / `line` / `last`, plus extension channels like `msteams` / `mattermost` (plugins).
+- `delivery.channel`: `last` or any deliverable channel id, for example `discord`, `matrix`, `telegram`, or `whatsapp`.
 - `delivery.to`: channel-specific recipient target.
+- `delivery.threadId`: optional thread/topic override for channels like Telegram, Slack, Discord, or Matrix when you want a specific thread without encoding it into `delivery.to`.
 
 `announce` delivery is only valid for isolated jobs (`sessionTarget: "isolated"`).
 `webhook` delivery is valid for both main and isolated jobs.
@@ -369,7 +381,8 @@ Notes:
 - `"current"` is resolved to `"session:<sessionKey>"` at creation time.
 - Custom sessions (`session:xxx`) maintain persistent context across runs.
 - Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun` (defaults to true for `at`),
-  `delivery`.
+  `delivery`, `toolsAllow`.
+- `toolsAllow`: optional array of tool names to restrict which tools the job can use (e.g. `["exec", "read"]`). Omit or set `null` to use all tools.
 - `wakeMode` defaults to `"now"` when omitted.
 
 ### cron.update params
@@ -656,6 +669,19 @@ openclaw cron edit <jobId> --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
 
+Tool allowlists (restrict which tools a job can use):
+
+```bash
+# Only allow exec and read tools for this job
+openclaw cron add --name "Scoped job" --cron "0 8 * * *" --session isolated --message "Run scoped checks" --tools exec,read
+
+# Update an existing job's tool allowlist
+openclaw cron edit <jobId> --tools exec,read,write
+
+# Remove a tool allowlist (use all tools)
+openclaw cron edit <jobId> --clear-tools
+```
+
 Manual run (force is the default, use `--due` to only run when due):
 
 ```bash
@@ -725,3 +751,11 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - If the announce flow returns `false` (e.g. requester session is busy), the gateway retries up to 3 times with tracking via `announceRetryCount`.
 - Announces older than 5 minutes past `endedAt` are force-expired to prevent stale entries from looping indefinitely.
 - If you see repeated announce deliveries in logs, check the subagent registry for entries with high `announceRetryCount` values.
+
+## Related
+
+- [Automation Overview](/automation) — all automation mechanisms at a glance
+- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — when to use each
+- [Background Tasks](/automation/tasks) — task ledger for cron executions
+- [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [Troubleshooting](/automation/troubleshooting) — debugging automation issues

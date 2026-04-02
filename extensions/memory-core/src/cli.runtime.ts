@@ -7,13 +7,7 @@ import {
   defaultRuntime,
   formatErrorMessage,
   isRich,
-  listMemoryFiles,
-  loadConfig,
-  normalizeExtraMemoryPaths,
   resolveCommandSecretRefsViaGateway,
-  resolveDefaultAgentId,
-  resolveSessionTranscriptsDirForAgent,
-  resolveStateDir,
   setVerbose,
   shortenHomeInString,
   shortenHomePath,
@@ -21,10 +15,21 @@ import {
   withManager,
   withProgress,
   withProgressTotals,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import {
+  loadConfig,
+  resolveDefaultAgentId,
+  resolveSessionTranscriptsDirForAgent,
+  resolveStateDir,
   type OpenClawConfig,
-} from "./api.js";
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  listMemoryFiles,
+  normalizeExtraMemoryPaths,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
-import { getMemorySearchManager } from "./runtime-api.js";
+import { getMemorySearchManager } from "./memory/index.js";
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
@@ -106,6 +111,15 @@ function resolveAgent(cfg: OpenClawConfig, agent?: string) {
     return trimmed;
   }
   return resolveDefaultAgentId(cfg);
+}
+
+function buildCliMemorySearchSessionKey(agentId: string): string {
+  return buildAgentSessionKey({
+    agentId,
+    channel: "cli",
+    peer: { kind: "direct", id: "memory-search" },
+    dmScope: "per-channel-peer",
+  });
 }
 
 function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
@@ -722,11 +736,13 @@ export async function runMemorySearch(
     cfg,
     agentId,
     run: async (manager) => {
+      const sessionKey = buildCliMemorySearchSessionKey(agentId);
       let results: Awaited<ReturnType<typeof manager.search>>;
       try {
         results = await manager.search(query, {
           maxResults: opts.maxResults,
           minScore: opts.minScore,
+          sessionKey,
         });
       } catch (err) {
         const message = formatErrorMessage(err);

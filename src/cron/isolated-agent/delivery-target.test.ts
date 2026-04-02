@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
+const whatsappAccountMocks = vi.hoisted(() => ({
+  resolveWhatsAppAccount: vi.fn<() => { allowFrom: string[] }>(() => ({ allowFrom: [] })),
+}));
+
 vi.mock("../../config/sessions.js", () => ({
   loadSessionStore: vi.fn().mockReturnValue({}),
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
@@ -24,8 +28,8 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStoreSync: vi.fn(() => []),
 }));
 
-vi.mock("../../../extensions/whatsapp/src/accounts.js", () => ({
-  resolveWhatsAppAccount: vi.fn(() => ({ allowFrom: [] })),
+vi.mock("../../plugin-sdk/whatsapp.js", () => ({
+  resolveWhatsAppAccount: whatsappAccountMocks.resolveWhatsAppAccount,
 }));
 
 const mockedModuleIds = [
@@ -33,10 +37,9 @@ const mockedModuleIds = [
   "../../infra/outbound/channel-selection.js",
   "../../infra/outbound/target-resolver.js",
   "../../pairing/pairing-store.js",
-  "../../../extensions/whatsapp/src/accounts.js",
+  "../../plugin-sdk/whatsapp.js",
 ];
 
-import { resolveWhatsAppAccount } from "../../../extensions/whatsapp/src/accounts.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
@@ -140,9 +143,7 @@ function setLastSessionEntry(params: {
 }
 
 function setWhatsAppAllowFrom(allowFrom: string[]) {
-  vi.mocked(resolveWhatsAppAccount).mockReturnValue({
-    allowFrom,
-  } as unknown as ReturnType<typeof resolveWhatsAppAccount>);
+  vi.mocked(whatsappAccountMocks.resolveWhatsAppAccount).mockReturnValue({ allowFrom });
 }
 
 function setStoredWhatsAppAllowFrom(allowFrom: string[]) {

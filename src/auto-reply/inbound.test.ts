@@ -2,8 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveDiscordGroupRequireMention } from "../../extensions/discord/src/group-policy.js";
-import { resolveSlackGroupRequireMention } from "../../extensions/slack/src/group-policy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
@@ -876,7 +874,7 @@ describe("resolveGroupRequireMention", () => {
     await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
-  it("matches the Slack plugin resolver for default-account wildcard fallbacks", async () => {
+  it("keeps core reply-stage resolution aligned for Slack default-account wildcard fallbacks", async () => {
     resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
@@ -904,13 +902,7 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(
-      resolveSlackGroupRequireMention({
-        cfg,
-        groupId: groupResolution.id,
-        groupChannel: ctx.GroupSubject,
-      }),
-    );
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
   it("uses Discord fallback resolver semantics for guild slug matches", async () => {
@@ -943,7 +935,7 @@ describe("resolveGroupRequireMention", () => {
     await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
-  it("matches the Discord plugin resolver for slug + wildcard guild fallbacks", async () => {
+  it("keeps core reply-stage resolution aligned for Discord slug + wildcard guild fallbacks", async () => {
     resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
@@ -972,14 +964,7 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(
-      resolveDiscordGroupRequireMention({
-        cfg,
-        groupId: groupResolution.id,
-        groupChannel: ctx.GroupChannel,
-        groupSpace: ctx.GroupSpace,
-      }),
-    );
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(true);
   });
 
   it("respects LINE prefixed group keys in reply-stage requireMention resolution", async () => {

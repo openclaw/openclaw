@@ -64,11 +64,13 @@ describe("provider attribution", () => {
       version: "2026.3.22",
       headers: {
         originator: "openclaw",
+        version: "2026.3.22",
         "User-Agent": "openclaw/2026.3.22",
       },
     });
     expect(resolveProviderAttributionHeaders("openai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
       originator: "openclaw",
+      version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
   });
@@ -87,6 +89,7 @@ describe("provider attribution", () => {
       version: "2026.3.22",
       headers: {
         originator: "openclaw",
+        version: "2026.3.22",
         "User-Agent": "openclaw/2026.3.22",
       },
     });

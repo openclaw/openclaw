@@ -2,13 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/extensions/directory.ts";
+} from "../../../test/helpers/plugins/directory.ts";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 
 const uploadGoogleChatAttachmentMock = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessageMock = vi.hoisted(() => vi.fn());
 const resolveGoogleChatAccountMock = vi.hoisted(() => vi.fn());
 const resolveGoogleChatOutboundSpaceMock = vi.hoisted(() => vi.fn());
+const loadWebMediaMock = vi.hoisted(() => vi.fn());
+const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api.js")>();
@@ -35,14 +38,27 @@ vi.mock("./targets.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: (...args: Parameters<typeof actual.loadOutboundMediaFromUrl>) =>
+      loadOutboundMediaFromUrlMock(...args),
+    loadWebMedia: (...args: Parameters<typeof actual.loadWebMedia>) => loadWebMediaMock(...args),
+    fetchRemoteMedia: (...args: Parameters<typeof actual.fetchRemoteMedia>) =>
+      fetchRemoteMediaMock(...args),
+  };
+});
+
 const accountsActual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
 const targetsActual = await vi.importActual<typeof import("./targets.js")>("./targets.js");
+const runtimeApiActual =
+  await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
 
 resolveGoogleChatAccountMock.mockImplementation(accountsActual.resolveGoogleChatAccount);
 resolveGoogleChatOutboundSpaceMock.mockImplementation(targetsActual.resolveGoogleChatOutboundSpace);
 
 import { googlechatPlugin } from "./channel.js";
-import { setGoogleChatRuntime } from "./runtime.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -50,6 +66,9 @@ afterEach(() => {
   resolveGoogleChatOutboundSpaceMock.mockImplementation(
     targetsActual.resolveGoogleChatOutboundSpace,
   );
+  loadOutboundMediaFromUrlMock.mockImplementation(runtimeApiActual.loadOutboundMediaFromUrl);
+  loadWebMediaMock.mockImplementation(runtimeApiActual.loadWebMedia);
+  fetchRemoteMediaMock.mockImplementation(runtimeApiActual.fetchRemoteMedia);
 });
 
 function createGoogleChatCfg(): OpenClawConfig {
@@ -69,6 +88,11 @@ function createGoogleChatCfg(): OpenClawConfig {
 }
 
 function setupRuntimeMediaMocks(params: { loadFileName: string; loadBytes: string }) {
+  const loadOutboundMediaFromUrl = vi.fn(async () => ({
+    buffer: Buffer.from(params.loadBytes),
+    fileName: params.loadFileName,
+    contentType: "image/png",
+  }));
   const loadWebMedia = vi.fn(async () => ({
     buffer: Buffer.from(params.loadBytes),
     fileName: params.loadFileName,
@@ -80,20 +104,25 @@ function setupRuntimeMediaMocks(params: { loadFileName: string; loadBytes: strin
     contentType: "image/png",
   }));
 
-  setGoogleChatRuntime({
-    media: { loadWebMedia },
-    channel: {
-      media: { fetchRemoteMedia },
-      text: { chunkMarkdownText: (text: string) => [text] },
-    },
-  } as unknown as PluginRuntime);
+  loadOutboundMediaFromUrlMock.mockImplementation(loadOutboundMediaFromUrl);
+  loadWebMediaMock.mockImplementation(loadWebMedia);
+  fetchRemoteMediaMock.mockImplementation(fetchRemoteMedia);
 
-  return { loadWebMedia, fetchRemoteMedia };
+  return { loadOutboundMediaFromUrl, loadWebMedia, fetchRemoteMedia };
 }
 
 describe("googlechatPlugin outbound sendMedia", () => {
+  it("chunks outbound text without requiring Google Chat runtime initialization", () => {
+    const chunker = googlechatPlugin.outbound?.chunker;
+    if (!chunker) {
+      throw new Error("Expected googlechatPlugin.outbound.chunker to be defined");
+    }
+
+    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  });
+
   it("loads local media with mediaLocalRoots via runtime media loader", async () => {
-    const { loadWebMedia, fetchRemoteMedia } = setupRuntimeMediaMocks({
+    const { loadOutboundMediaFromUrl, fetchRemoteMedia } = setupRuntimeMediaMocks({
       loadFileName: "image.png",
       loadBytes: "image-bytes",
     });
@@ -116,10 +145,10 @@ describe("googlechatPlugin outbound sendMedia", () => {
       accountId: "default",
     });
 
-    expect(loadWebMedia).toHaveBeenCalledWith(
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledWith(
       "/tmp/workspace/image.png",
       expect.objectContaining({
-        localRoots: ["/tmp/workspace"],
+        mediaLocalRoots: ["/tmp/workspace"],
       }),
     );
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
@@ -144,7 +173,7 @@ describe("googlechatPlugin outbound sendMedia", () => {
   });
 
   it("keeps remote URL media fetch on fetchRemoteMedia with maxBytes cap", async () => {
-    const { loadWebMedia, fetchRemoteMedia } = setupRuntimeMediaMocks({
+    const { loadOutboundMediaFromUrl, fetchRemoteMedia } = setupRuntimeMediaMocks({
       loadFileName: "unused.png",
       loadBytes: "should-not-be-used",
     });
@@ -172,7 +201,7 @@ describe("googlechatPlugin outbound sendMedia", () => {
         maxBytes: 20 * 1024 * 1024,
       }),
     );
-    expect(loadWebMedia).not.toHaveBeenCalled();
+    expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
     expect(uploadGoogleChatAttachmentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         space: "spaces/AAA",
@@ -271,6 +300,51 @@ describe("googlechatPlugin outbound resolveTarget", () => {
 });
 
 describe("googlechatPlugin outbound cfg threading", () => {
+  it("preserves accountId when sending pairing approvals", async () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          enabled: true,
+          accounts: {
+            work: {
+              serviceAccount: {
+                type: "service_account",
+              },
+            },
+          },
+        },
+      },
+    };
+    const account = {
+      accountId: "work",
+      config: {},
+      credentialSource: "inline",
+    };
+    resolveGoogleChatAccountMock.mockReturnValue(account);
+    resolveGoogleChatOutboundSpaceMock.mockResolvedValue("spaces/WORK");
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/WORK/messages/msg-1",
+    });
+
+    await googlechatPlugin.pairing?.notifyApproval?.({
+      cfg: cfg as never,
+      id: "user@example.com",
+      accountId: "work",
+    });
+
+    expect(resolveGoogleChatAccountMock).toHaveBeenCalledWith({
+      cfg,
+      accountId: "work",
+    });
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account,
+        space: "spaces/WORK",
+        text: expect.any(String),
+      }),
+    );
+  });
+
   it("threads resolved cfg into sendText account resolution", async () => {
     const cfg = {
       channels: {
@@ -371,6 +445,44 @@ describe("googlechatPlugin outbound cfg threading", () => {
       expect.objectContaining({
         account,
         attachments: [{ attachmentUploadToken: "token-1", contentName: "remote.png" }],
+      }),
+    );
+  });
+
+  it("sends media without requiring Google Chat runtime initialization", async () => {
+    const { loadOutboundMediaFromUrl } = setupRuntimeMediaMocks({
+      loadFileName: "image.png",
+      loadBytes: "image-bytes",
+    });
+
+    uploadGoogleChatAttachmentMock.mockResolvedValue({
+      attachmentUploadToken: "token-cold",
+    });
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-cold",
+    });
+
+    const cfg = createGoogleChatCfg();
+
+    await expect(
+      googlechatPlugin.outbound?.sendMedia?.({
+        cfg,
+        to: "spaces/AAA",
+        text: "caption",
+        mediaUrl: "/tmp/workspace/image.png",
+        mediaLocalRoots: ["/tmp/workspace"],
+        accountId: "default",
+      }),
+    ).resolves.toEqual({
+      channel: "googlechat",
+      messageId: "spaces/AAA/messages/msg-cold",
+      chatId: "spaces/AAA",
+    });
+
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledWith(
+      "/tmp/workspace/image.png",
+      expect.objectContaining({
+        mediaLocalRoots: ["/tmp/workspace"],
       }),
     );
   });

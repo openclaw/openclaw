@@ -1,25 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import {
-  buildStructuredCard,
-  editMessageFeishu,
-  getMessageFeishu,
-  listFeishuThreadMessages,
-  resolveFeishuCardTemplate,
-} from "./send.js";
 
 const {
+  mockConvertMarkdownTables,
   mockClientGet,
   mockClientList,
   mockClientPatch,
   mockCreateFeishuClient,
+  mockResolveMarkdownTableMode,
   mockResolveFeishuAccount,
+  mockRuntimeConvertMarkdownTables,
+  mockRuntimeResolveMarkdownTableMode,
 } = vi.hoisted(() => ({
+  mockConvertMarkdownTables: vi.fn((text: string) => text),
   mockClientGet: vi.fn(),
   mockClientList: vi.fn(),
   mockClientPatch: vi.fn(),
   mockCreateFeishuClient: vi.fn(),
+  mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
   mockResolveFeishuAccount: vi.fn(),
+  mockRuntimeConvertMarkdownTables: vi.fn((text: string) => text),
+  mockRuntimeResolveMarkdownTableMode: vi.fn(() => "preserve"),
+}));
+
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+  resolveMarkdownTableMode: mockResolveMarkdownTableMode,
+}));
+
+vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+  convertMarkdownTables: mockConvertMarkdownTables,
 }));
 
 vi.mock("./client.js", () => ({
@@ -35,16 +44,36 @@ vi.mock("./runtime.js", () => ({
   getFeishuRuntime: () => ({
     channel: {
       text: {
-        resolveMarkdownTableMode: () => "preserve",
-        convertMarkdownTables: (text: string) => text,
+        resolveMarkdownTableMode: mockRuntimeResolveMarkdownTableMode,
+        convertMarkdownTables: mockRuntimeConvertMarkdownTables,
       },
     },
   }),
 }));
 
+let buildStructuredCard: typeof import("./send.js").buildStructuredCard;
+let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
+let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
+let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
+let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
+
 describe("getMessageFeishu", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      buildStructuredCard,
+      editMessageFeishu,
+      getMessageFeishu,
+      listFeishuThreadMessages,
+      resolveFeishuCardTemplate,
+      sendMessageFeishu,
+    } = await import("./send.js"));
     vi.clearAllMocks();
+    mockResolveMarkdownTableMode.mockReturnValue("preserve");
+    mockConvertMarkdownTables.mockImplementation((text: string) => text);
+    mockRuntimeResolveMarkdownTableMode.mockReturnValue("preserve");
+    mockRuntimeConvertMarkdownTables.mockImplementation((text: string) => text);
     mockResolveFeishuAccount.mockReturnValue({
       accountId: "default",
       configured: true,
@@ -52,12 +81,47 @@ describe("getMessageFeishu", () => {
     mockCreateFeishuClient.mockReturnValue({
       im: {
         message: {
+          create: vi.fn(),
           get: mockClientGet,
           list: mockClientList,
           patch: mockClientPatch,
         },
       },
     });
+  });
+
+  it("sends text without requiring Feishu runtime text helpers", async () => {
+    mockRuntimeResolveMarkdownTableMode.mockImplementation(() => {
+      throw new Error("Feishu runtime not initialized");
+    });
+    mockRuntimeConvertMarkdownTables.mockImplementation(() => {
+      throw new Error("Feishu runtime not initialized");
+    });
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_send" } }),
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "hello",
+    });
+
+    expect(mockResolveMarkdownTableMode).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "feishu",
+    });
+    expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
+    expect(result).toEqual({ messageId: "om_send", chatId: "oc_send" });
   });
 
   it("extracts text content from interactive card elements", async () => {
@@ -276,6 +340,12 @@ describe("editMessageFeishu", () => {
   });
 
   it("patches post content for text edits", async () => {
+    mockRuntimeResolveMarkdownTableMode.mockImplementation(() => {
+      throw new Error("Feishu runtime not initialized");
+    });
+    mockRuntimeConvertMarkdownTables.mockImplementation(() => {
+      throw new Error("Feishu runtime not initialized");
+    });
     mockClientPatch.mockResolvedValueOnce({ code: 0 });
 
     const result = await editMessageFeishu({
