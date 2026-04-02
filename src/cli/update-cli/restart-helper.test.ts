@@ -24,35 +24,60 @@ describe("restart-helper", () => {
 
   function expectWindowsRestartWaitOrdering(content: string, port = 18789) {
     const endCommand = 'schtasks /End /TN "';
+    const scanFileVar = `set "port_scan_file=%TEMP%\\openclaw-port-${port}-`;
+    const matchFileVar = `set "port_match_file=%TEMP%\\openclaw-port-${port}-`;
+    const initialScanCleanup = 'del "%port_scan_file%" >nul 2>&1';
+    const initialMatchCleanup = 'del "%port_match_file%" >nul 2>&1';
     const pollAttemptsInit = "set /a attempts=0";
     const pollLabel = ":wait_for_port_release";
     const pollAttemptIncrement = "set /a attempts+=1";
-    const pollNetstatCheck = `netstat -ano | findstr /R /C:":${port} .*LISTENING" >nul`;
+    const pollNetstatDump = 'netstat -ano >"%port_scan_file%" 2>nul';
+    const pollFindstrCheck = `findstr /R /C:":${port} .*LISTENING" "%port_scan_file%" >"%port_match_file%" 2>nul`;
     const forceKillLabel = ":force_kill_listener";
+    const forceKillInput = 'for /f "tokens=5" %%P in ("%port_match_file%") do (';
     const forceKillCommand = "taskkill /F /PID %%P >nul 2>&1";
     const portReleasedLabel = ":port_released";
+    const finalScanCleanup = 'del "%port_scan_file%" >nul 2>&1';
+    const finalMatchCleanup = 'del "%port_match_file%" >nul 2>&1';
     const runCommand = 'schtasks /Run /TN "';
     const endIndex = content.indexOf(endCommand);
+    const scanFileVarIndex = content.indexOf(scanFileVar, endIndex);
+    const matchFileVarIndex = content.indexOf(matchFileVar, scanFileVarIndex);
+    const initialScanCleanupIndex = content.indexOf(initialScanCleanup, matchFileVarIndex);
+    const initialMatchCleanupIndex = content.indexOf(initialMatchCleanup, initialScanCleanupIndex);
     const attemptsInitIndex = content.indexOf(pollAttemptsInit, endIndex);
     const pollLabelIndex = content.indexOf(pollLabel, attemptsInitIndex);
     const pollAttemptIncrementIndex = content.indexOf(pollAttemptIncrement, pollLabelIndex);
-    const pollNetstatCheckIndex = content.indexOf(pollNetstatCheck, pollAttemptIncrementIndex);
-    const forceKillLabelIndex = content.indexOf(forceKillLabel, pollNetstatCheckIndex);
-    const forceKillCommandIndex = content.indexOf(forceKillCommand, forceKillLabelIndex);
+    const pollNetstatDumpIndex = content.indexOf(pollNetstatDump, pollAttemptIncrementIndex);
+    const pollFindstrCheckIndex = content.indexOf(pollFindstrCheck, pollNetstatDumpIndex);
+    const forceKillLabelIndex = content.indexOf(forceKillLabel, pollFindstrCheckIndex);
+    const forceKillInputIndex = content.indexOf(forceKillInput, forceKillLabelIndex);
+    const forceKillCommandIndex = content.indexOf(forceKillCommand, forceKillInputIndex);
     const portReleasedLabelIndex = content.indexOf(portReleasedLabel, forceKillCommandIndex);
-    const runIndex = content.indexOf(runCommand, portReleasedLabelIndex);
+    const finalScanCleanupIndex = content.indexOf(finalScanCleanup, portReleasedLabelIndex);
+    const finalMatchCleanupIndex = content.indexOf(finalMatchCleanup, finalScanCleanupIndex);
+    const runIndex = content.indexOf(runCommand, finalMatchCleanupIndex);
 
     expect(endIndex).toBeGreaterThanOrEqual(0);
-    expect(attemptsInitIndex).toBeGreaterThan(endIndex);
+    expect(scanFileVarIndex).toBeGreaterThan(endIndex);
+    expect(matchFileVarIndex).toBeGreaterThan(scanFileVarIndex);
+    expect(initialScanCleanupIndex).toBeGreaterThan(matchFileVarIndex);
+    expect(initialMatchCleanupIndex).toBeGreaterThan(initialScanCleanupIndex);
+    expect(attemptsInitIndex).toBeGreaterThan(initialMatchCleanupIndex);
     expect(pollLabelIndex).toBeGreaterThan(attemptsInitIndex);
     expect(pollAttemptIncrementIndex).toBeGreaterThan(pollLabelIndex);
-    expect(pollNetstatCheckIndex).toBeGreaterThan(pollAttemptIncrementIndex);
-    expect(forceKillLabelIndex).toBeGreaterThan(pollNetstatCheckIndex);
-    expect(forceKillCommandIndex).toBeGreaterThan(forceKillLabelIndex);
+    expect(pollNetstatDumpIndex).toBeGreaterThan(pollAttemptIncrementIndex);
+    expect(pollFindstrCheckIndex).toBeGreaterThan(pollNetstatDumpIndex);
+    expect(forceKillLabelIndex).toBeGreaterThan(pollFindstrCheckIndex);
+    expect(forceKillInputIndex).toBeGreaterThan(forceKillLabelIndex);
+    expect(forceKillCommandIndex).toBeGreaterThan(forceKillInputIndex);
     expect(portReleasedLabelIndex).toBeGreaterThan(forceKillCommandIndex);
-    expect(runIndex).toBeGreaterThan(portReleasedLabelIndex);
+    expect(finalScanCleanupIndex).toBeGreaterThan(portReleasedLabelIndex);
+    expect(finalMatchCleanupIndex).toBeGreaterThan(finalScanCleanupIndex);
+    expect(runIndex).toBeGreaterThan(finalMatchCleanupIndex);
 
     expect(content).not.toContain("timeout /t 3 /nobreak >nul");
+    expect(content).not.toContain('for /f "tokens=5" %%P in (\'netstat -ano ^| findstr');
   }
 
   beforeEach(() => {
@@ -156,10 +181,10 @@ describe("restart-helper", () => {
         },
         customPort,
       );
-      expect(content).toContain(`netstat -ano | findstr /R /C:":${customPort} .*LISTENING" >nul`);
       expect(content).toContain(
-        `for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${customPort} .*LISTENING"') do (`,
+        `findstr /R /C:":${customPort} .*LISTENING" "%port_scan_file%" >"%port_match_file%" 2>nul`,
       );
+      expect(content).toContain('for /f "tokens=5" %%P in ("%port_match_file%") do (');
       expectWindowsRestartWaitOrdering(content, customPort);
       await cleanupScript(scriptPath);
     });

@@ -119,20 +119,27 @@ REM Wait briefly to ensure file locks are released after update.
 timeout /t 2 /nobreak >nul
 schtasks /End /TN "${taskName}"
 REM Poll for gateway port release before rerun; force-kill listener if stuck.
+set "port_scan_file=%TEMP%\\openclaw-port-${port}-${timestamp}.netstat"
+set "port_match_file=%TEMP%\\openclaw-port-${port}-${timestamp}.match"
+del "%port_scan_file%" >nul 2>&1
+del "%port_match_file%" >nul 2>&1
 set /a attempts=0
 :wait_for_port_release
 set /a attempts+=1
-netstat -ano | findstr /R /C:":${port} .*LISTENING" >nul
+netstat -ano >"%port_scan_file%" 2>nul
+findstr /R /C:":${port} .*LISTENING" "%port_scan_file%" >"%port_match_file%" 2>nul
 if errorlevel 1 goto port_released
 if %attempts% GEQ 10 goto force_kill_listener
 timeout /t 1 /nobreak >nul
 goto wait_for_port_release
 :force_kill_listener
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${port} .*LISTENING"') do (
+for /f "tokens=5" %%P in ("%port_match_file%") do (
   taskkill /F /PID %%P >nul 2>&1
   goto port_released
 )
 :port_released
+del "%port_scan_file%" >nul 2>&1
+del "%port_match_file%" >nul 2>&1
 schtasks /Run /TN "${taskName}"
 REM Self-cleanup
 del "%~f0"
