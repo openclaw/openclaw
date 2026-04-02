@@ -159,6 +159,51 @@ describe("matrix exec approvals", () => {
     ).toBe(false);
   });
 
+  it("suppresses local prompts for generic exec payloads when metadata matches filters", () => {
+    const payload = {
+      channelData: {
+        execApproval: {
+          approvalId: "req-1",
+          approvalSlug: "req-1",
+          approvalKind: "exec",
+          agentId: "ops-agent",
+          sessionKey: "agent:ops-agent:matrix:channel:!ops:example.org",
+        },
+      },
+    };
+
+    expect(
+      shouldSuppressLocalMatrixExecApprovalPrompt({
+        cfg: buildConfig({
+          enabled: true,
+          approvers: ["@owner:example.org"],
+          agentFilter: ["ops-agent"],
+          sessionFilter: ["matrix:channel:"],
+        }),
+        payload,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress local prompts for plugin approval payloads", () => {
+    const payload = {
+      channelData: {
+        execApproval: {
+          approvalId: "plugin:req-1",
+          approvalSlug: "plugin:r",
+          approvalKind: "plugin",
+        },
+      },
+    };
+
+    expect(
+      shouldSuppressLocalMatrixExecApprovalPrompt({
+        cfg: buildConfig({ enabled: true, approvers: ["@owner:example.org"] }),
+        payload,
+      }),
+    ).toBe(false);
+  });
+
   it("normalizes prefixed approver ids", () => {
     expect(normalizeMatrixApproverId("matrix:@owner:example.org")).toBe("@owner:example.org");
     expect(normalizeMatrixApproverId("user:@owner:example.org")).toBe("@owner:example.org");

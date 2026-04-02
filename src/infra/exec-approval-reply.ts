@@ -15,6 +15,7 @@ export type ExecApprovalUnavailableReason =
 export type ExecApprovalReplyMetadata = {
   approvalId: string;
   approvalSlug: string;
+  approvalKind: "exec" | "plugin";
   agentId?: string;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
   sessionKey?: string;
@@ -229,6 +230,7 @@ export function getExecApprovalReplyMetadata(
   if (!approvalId || !approvalSlug) {
     return null;
   }
+  const approvalKind = record.approvalKind === "plugin" ? "plugin" : "exec";
   const allowedDecisions = Array.isArray(record.allowedDecisions)
     ? record.allowedDecisions.filter(
         (value): value is ExecApprovalReplyDecision =>
@@ -242,6 +244,7 @@ export function getExecApprovalReplyMetadata(
   return {
     approvalId,
     approvalSlug,
+    approvalKind,
     agentId,
     allowedDecisions,
     sessionKey,
@@ -307,6 +310,7 @@ export function buildExecApprovalPendingReplyPayload(
       execApproval: {
         approvalId: params.approvalId,
         approvalSlug: params.approvalSlug,
+        approvalKind: "exec",
         agentId: params.agentId?.trim() || undefined,
         allowedDecisions,
         sessionKey: params.sessionKey?.trim() || undefined,

@@ -353,7 +353,9 @@ function buildExecPendingPayload(params: {
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     text: buildRequestMessage(params.request, params.nowMs),
+    agentId: params.request.request.agentId ?? null,
     allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
+    sessionKey: params.request.request.sessionKey ?? null,
   });
 }
 

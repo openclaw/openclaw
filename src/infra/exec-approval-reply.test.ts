@@ -85,6 +85,7 @@ describe("exec approval reply helpers", () => {
     ).toEqual({
       approvalId: "req-1",
       approvalSlug: "slug-1",
+      approvalKind: "exec",
       agentId: "agent-1",
       allowedDecisions: ["allow-once", "deny", "allow-always"],
       sessionKey: "session-1",
@@ -108,6 +109,7 @@ describe("exec approval reply helpers", () => {
       execApproval: {
         approvalId: "req-1",
         approvalSlug: "slug-1",
+        approvalKind: "exec",
         agentId: undefined,
         allowedDecisions: ["allow-once", "allow-always", "deny"],
         sessionKey: undefined,
@@ -157,6 +159,7 @@ describe("exec approval reply helpers", () => {
       execApproval: {
         approvalId: "req-ask-always",
         approvalSlug: "slug-always",
+        approvalKind: "exec",
         allowedDecisions: ["allow-once", "deny"],
       },
     });
@@ -200,6 +203,7 @@ describe("exec approval reply helpers", () => {
       execApproval: {
         approvalId: "req-meta",
         approvalSlug: "slug-meta",
+        approvalKind: "exec",
         agentId: "ops-agent",
         allowedDecisions: ["allow-once", "allow-always", "deny"],
         sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",

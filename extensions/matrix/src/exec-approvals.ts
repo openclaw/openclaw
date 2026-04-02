@@ -117,6 +117,9 @@ export function shouldSuppressLocalMatrixExecApprovalPrompt(params: {
   if (!metadata) {
     return false;
   }
+  if (metadata.approvalKind !== "exec") {
+    return false;
+  }
   const request = buildFilterCheckRequest({
     metadata,
   });
