@@ -325,7 +325,10 @@ function parseInteractiveCardContent(parsed: unknown): string {
   }
 
   // Support both schema 1.0 (card.elements) and schema 2.0 (card.body.elements).
-  const cardElements: unknown[] = Array.isArray(card.elements)
+  // NOTE: Some schema 2.0 cards include an empty top-level `elements: []` plus
+  // the real content in `body.elements`. Treat empty arrays as absent so we
+  // don't drop valid content.
+  const cardElements: unknown[] = Array.isArray(card.elements) && card.elements.length > 0
     ? card.elements
     : Array.isArray(card.body?.elements)
       ? card.body.elements

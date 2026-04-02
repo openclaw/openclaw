@@ -63,6 +63,21 @@ describe("parseFeishuMessageEvent – interactive cards", () => {
     expect(ctx.contentType).toBe("interactive");
   });
 
+  it("falls back to body.elements when schema 1.0 elements is an empty array", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeInteractiveEvent({
+        header: { title: { content: "Mixed empty" } },
+        elements: [],
+        body: {
+          elements: [{ tag: "markdown", content: "v2 content" }],
+        },
+      }) as any,
+    );
+
+    expect(ctx.content).toBe("Mixed empty\nv2 content");
+    expect(ctx.contentType).toBe("interactive");
+  });
+
   it("supports interactive_card alias", () => {
     const ctx = parseFeishuMessageEvent(
       makeInteractiveEvent(
