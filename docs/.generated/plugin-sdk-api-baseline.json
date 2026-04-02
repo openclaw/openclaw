@@ -3468,7 +3468,7 @@
           "exportName": "buildAgentSessionKey",
           "kind": "function",
           "source": {
-            "line": 92,
+            "line": 91,
             "path": "src/routing/resolve-route.ts"
           }
         },
@@ -4431,7 +4431,7 @@
           "exportName": "RoutePeer",
           "kind": "type",
           "source": {
-            "line": 21,
+            "line": 20,
             "path": "src/routing/resolve-route.ts"
           }
         },
@@ -4440,7 +4440,7 @@
           "exportName": "RoutePeerKind",
           "kind": "type",
           "source": {
-            "line": 19,
+            "line": 18,
             "path": "src/routing/resolve-route.ts"
           }
         },

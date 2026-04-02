@@ -157,4 +157,38 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
 
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
   });
+
+  it("passes configured bot senderAgentId through inbound context", async () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          agentId: "atlas-agent",
+          match: { channel: "telegram", accountId: "atlas" },
+        },
+      ],
+      channels: {
+        telegram: {
+          accounts: {
+            atlas: { botToken: "7:atlas-token" },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg,
+      accountId: "atlas",
+      message: {
+        message_id: 1,
+        chat: { id: 814912386, type: "private" },
+        date: 1700000000,
+        text: "hello from atlas bot",
+        from: { id: 7, first_name: "Atlas", is_bot: true },
+      },
+    });
+
+    expect(ctx?.ctxPayload?.SenderAgentId).toBe("atlas-agent");
+  });
 });

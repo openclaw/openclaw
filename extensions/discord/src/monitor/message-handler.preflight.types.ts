@@ -27,6 +27,7 @@ type DiscordMessagePreflightSharedFields = {
   token: string;
   runtime: RuntimeEnv;
   botUserId?: string;
+  identityAgentIds?: ReadonlyMap<string, string>;
   abortSignal?: AbortSignal;
   guildHistories: Map<string, HistoryEntry[]>;
   historyLimit: number;

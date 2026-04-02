@@ -23,6 +23,7 @@ import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveOwningAgentIdForChannelAccount } from "openclaw/plugin-sdk/routing";
 import {
   danger,
   isVerbose,
@@ -40,10 +41,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordAccount } from "../accounts.js";
-import { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";
-import { fetchDiscordApplicationId } from "../probe.js";
-import { normalizeDiscordToken } from "../token.js";
+import { listEnabledDiscordAccounts, resolveDiscordAccount } from "../accounts.js";`r`nimport { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";`r`nimport { fetchDiscordApplicationId, parseApplicationIdFromToken } from "../probe.js";`r`nimport { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
 import {
   createAgentComponentButton,
@@ -200,6 +198,39 @@ function appendPluginCommandSpecs(params: {
 
 const DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS = 8_000;
 const DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS = 2 * 60 * 1000;
+
+function normalizeDiscordBotUserId(botUserId?: string | null): string | undefined {
+  const normalizedBotUserId = botUserId?.trim();
+  return normalizedBotUserId || undefined;
+}
+
+function buildDiscordSenderAgentIdByBotUserId(params: {
+  cfg: OpenClawConfig;
+  currentAccountId: string;
+  currentBotUserId?: string | null;
+}): ReadonlyMap<string, string> {
+  const identityAgentIds = new Map<string, string>();
+  for (const account of listEnabledDiscordAccounts(params.cfg)) {
+    const senderAgentId = resolveOwningAgentIdForChannelAccount(
+      params.cfg,
+      "discord",
+      account.accountId,
+    );
+    if (!senderAgentId) {
+      continue;
+    }
+    const botUserId = normalizeDiscordBotUserId(
+      account.accountId === params.currentAccountId
+        ? params.currentBotUserId
+        : parseApplicationIdFromToken(account.token),
+    );
+    if (!botUserId) {
+      continue;
+    }
+    identityAgentIds.set(botUserId, senderAgentId);
+  }
+  return identityAgentIds;
+}
 
 function isLegacyMissingSessionError(message: string): boolean {
   return (
@@ -972,6 +1003,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           details,
         }),
     });
+    const identityAgentIds = buildDiscordSenderAgentIdByBotUserId({
+      cfg,
+      currentAccountId: account.accountId,
+      currentBotUserId: botUserId,
+    });
     let voiceManager: DiscordVoiceManager | null = null;
 
     if (nativeDisabledExplicit) {
@@ -1020,6 +1056,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       abortSignal: opts.abortSignal,
       workerRunTimeoutMs: discordCfg.inboundWorker?.runTimeoutMs,
       botUserId,
+      identityAgentIds,
       guildHistories,
       historyLimit,
       mediaMaxBytes,

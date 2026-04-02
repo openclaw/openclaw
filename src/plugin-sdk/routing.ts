@@ -24,7 +24,11 @@ export {
   sanitizeAgentId,
 } from "../routing/session-key.js";
 export { resolveAccountEntry } from "../routing/account-lookup.js";
-export { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
+export {
+  listBoundAccountIds,
+  resolveDefaultAgentBoundAccountId,
+  resolveOwningAgentIdForChannelAccount,
+} from "../routing/bindings.js";
 export {
   formatSetExplicitDefaultInstruction,
   formatSetExplicitDefaultToConfiguredInstruction,

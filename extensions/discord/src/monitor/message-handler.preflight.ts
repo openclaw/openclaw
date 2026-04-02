@@ -289,8 +289,9 @@ export async function preflightDiscordMessage(
   const pluralkitConfig = params.discordConfig?.pluralkit;
   const webhookId = resolveDiscordWebhookId(message);
   const shouldCheckPluralKit = Boolean(pluralkitConfig?.enabled) && !webhookId;
-  let pluralkitInfo: Awaited<ReturnType<typeof import("../pluralkit.js").fetchPluralKitMessageInfo>> =
-    null;
+  let pluralkitInfo: Awaited<
+    ReturnType<typeof import("../pluralkit.js").fetchPluralKitMessageInfo>
+  > = null;
   if (shouldCheckPluralKit) {
     try {
       const { fetchPluralKitMessageInfo } = await loadPluralKitRuntime();
@@ -926,6 +927,7 @@ export async function preflightDiscordMessage(
     token: params.token,
     runtime: params.runtime,
     botUserId: params.botUserId,
+    identityAgentIds: params.identityAgentIds,
     abortSignal: params.abortSignal,
     guildHistories: params.guildHistories,
     historyLimit: params.historyLimit,

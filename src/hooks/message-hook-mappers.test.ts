@@ -32,6 +32,7 @@ function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): Finalized
     AccountId: "acc-1",
     MessageSid: "msg-1",
     SenderId: "sender-1",
+    SenderAgentId: "ops-agent",
     SenderName: "User One",
     SenderUsername: "userone",
     SenderE164: "+15551234567",
@@ -108,6 +109,7 @@ describe("message hook mappers", () => {
       timestamp: 1710000000,
       metadata: expect.objectContaining({
         messageId: "msg-1",
+        senderAgentId: "ops-agent",
         senderName: "User One",
         threadId: 42,
       }),
@@ -121,6 +123,7 @@ describe("message hook mappers", () => {
       conversationId: "telegram:chat:456",
       messageId: "msg-1",
       metadata: expect.objectContaining({
+        senderAgentId: "ops-agent",
         senderUsername: "userone",
         senderE164: "+15551234567",
       }),

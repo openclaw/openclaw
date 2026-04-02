@@ -15,6 +15,7 @@ import {
   resolveDefaultAgentBoundAccountId,
 } from "openclaw/plugin-sdk/routing";
 import { formatSetExplicitDefaultInstruction } from "openclaw/plugin-sdk/routing";
+import { resolveOwningAgentIdForChannelAccount } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import type {
   TelegramAccountConfig,
@@ -215,4 +216,33 @@ export function listEnabledTelegramAccounts(cfg: OpenClawConfig): ResolvedTelegr
   return listTelegramAccountIds(cfg)
     .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
+}
+
+const telegramSenderAgentIdsByBotIdCache = new WeakMap<OpenClawConfig, Map<string, string>>();
+
+function parseTelegramBotIdFromToken(token: string | undefined): string | undefined {
+  const match = /^(\d+):/.exec(token?.trim() ?? "");
+  return match?.[1];
+}
+
+export function resolveConfiguredTelegramBotAgentIdsByBotId(
+  cfg: OpenClawConfig,
+): ReadonlyMap<string, string> {
+  const cached = telegramSenderAgentIdsByBotIdCache.get(cfg);
+  if (cached) {
+    return cached;
+  }
+  const ids = new Map<string, string>();
+  for (const account of listEnabledTelegramAccounts(cfg)) {
+    const senderAgentId = resolveOwningAgentIdForChannelAccount(cfg, "telegram", account.accountId);
+    if (!senderAgentId) {
+      continue;
+    }
+    const botId = parseTelegramBotIdFromToken(account.token);
+    if (botId) {
+      ids.set(botId, senderAgentId);
+    }
+  }
+  telegramSenderAgentIdsByBotIdCache.set(cfg, ids);
+  return ids;
 }

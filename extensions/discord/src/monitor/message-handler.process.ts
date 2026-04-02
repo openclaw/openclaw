@@ -253,6 +253,7 @@ export async function processDiscordMessage(
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
   const senderTag = sender.tag;
+  const senderAgentId = ctx.identityAgentIds?.get(sender.id.trim());
   const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
     channelConfig,
     guildInfo,
@@ -440,6 +441,7 @@ export async function processDiscordMessage(
     ConversationLabel: fromLabel,
     SenderName: senderName,
     SenderId: sender.id,
+    SenderAgentId: senderAgentId,
     SenderUsername: senderUsername,
     SenderTag: senderTag,
     GroupSubject: groupSubject,
