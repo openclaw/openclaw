@@ -474,9 +474,8 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   hasInterpreterInvocation: boolean;
   hasComplexSyntax: boolean;
   hasProcessSubstitution: boolean;
-  hasAnyScriptHint: boolean;
   hasInterpreterSegmentScriptHint: boolean;
-  hasInterpreterPipelineCarrier: boolean;
+  hasInterpreterPipelineScriptHint: boolean;
   isDirectInterpreterCommand: boolean;
 } {
   const raw = command.trim();
@@ -528,19 +527,25 @@ function shouldFailClosedInterpreterPreflight(command: string): {
       return /(?:^|[\s()<>])[^"'`\s|&;()<>]+\.(?:py|js)(?=$|[\s()<>])/i.test(segment);
     });
   };
-  const hasInterpreterPipelineCarrier = Boolean(
-    /(?<!\\)\|\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
-      unquotedRaw,
-    ) ||
-    (nestedUnquoted &&
-      /(?<!\\)\|\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
-        nestedUnquoted,
-      )),
-  );
+  const hasInterpreterPipelineScriptHintInSameSegment = (rawText: string): boolean => {
+    const commandSegments = rawText.split(/(?<!\\)\|\||(?<!\\)&&|(?<!\\);|\n|\r/u);
+    return commandSegments.some((segment) => {
+      const hasInterpreterPipelineCarrierInSegment =
+        /(?<!\\)\|\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
+          segment,
+        );
+      if (!hasInterpreterPipelineCarrierInSegment) {
+        return false;
+      }
+      return /(?:^|[\s()<>])[^"'`\s|&;()<>]+\.(?:py|js)(?=$|[\s()<>])/i.test(segment);
+    });
+  };
   const hasInterpreterSegmentScriptHint =
     hasInterpreterAndScriptHintInSameSegment(unquotedRaw) ||
     (nestedUnquoted.length > 0 && hasInterpreterAndScriptHintInSameSegment(nestedUnquoted));
-  const hasAnyScriptHint = topLevel.hasScriptHint || nested.hasScriptHint;
+  const hasInterpreterPipelineScriptHint =
+    hasInterpreterPipelineScriptHintInSameSegment(unquotedRaw) ||
+    (nestedUnquoted.length > 0 && hasInterpreterPipelineScriptHintInSameSegment(nestedUnquoted));
   const hasShellWrappedInterpreterInvocation =
     (nested.hasPython || nested.hasNode) &&
     (nested.hasScriptHint || nested.hasComplexSyntax || nested.hasProcessSubstitution);
@@ -560,9 +565,8 @@ function shouldFailClosedInterpreterPreflight(command: string): {
     hasInterpreterInvocation,
     hasComplexSyntax: topLevel.hasComplexSyntax || hasShellWrappedInterpreterInvocation,
     hasProcessSubstitution: topLevel.hasProcessSubstitution || nested.hasProcessSubstitution,
-    hasAnyScriptHint,
     hasInterpreterSegmentScriptHint,
-    hasInterpreterPipelineCarrier,
+    hasInterpreterPipelineScriptHint,
     isDirectInterpreterCommand,
   };
 }
@@ -577,16 +581,15 @@ async function validateScriptFileForShellBleed(params: {
       hasInterpreterInvocation,
       hasComplexSyntax,
       hasProcessSubstitution,
-      hasAnyScriptHint,
       hasInterpreterSegmentScriptHint,
-      hasInterpreterPipelineCarrier,
+      hasInterpreterPipelineScriptHint,
       isDirectInterpreterCommand,
     } = shouldFailClosedInterpreterPreflight(params.command);
     if (
       hasInterpreterInvocation &&
       hasComplexSyntax &&
       (hasInterpreterSegmentScriptHint ||
-        (hasInterpreterPipelineCarrier && hasAnyScriptHint) ||
+        hasInterpreterPipelineScriptHint ||
         (hasProcessSubstitution && isDirectInterpreterCommand))
     ) {
       // Fail closed when interpreter-driven script execution is ambiguous; otherwise
