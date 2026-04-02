@@ -19,7 +19,6 @@ function buildGatewayProbeCredentialPolicy(params: {
     explicitAuth: params.explicitAuth,
     modeOverride: params.mode,
     mode: params.mode,
-    includeLegacyEnv: false,
     remoteTokenFallback: "remote-only" as const,
   };
 }
@@ -45,9 +44,42 @@ export async function resolveGatewayProbeAuthWithSecretInputs(params: {
     env: policy.env,
     explicitAuth: policy.explicitAuth,
     modeOverride: policy.modeOverride,
-    includeLegacyEnv: policy.includeLegacyEnv,
     remoteTokenFallback: policy.remoteTokenFallback,
   });
+}
+
+export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {
+  cfg: OpenClawConfig;
+  mode: "local" | "remote";
+  env?: NodeJS.ProcessEnv;
+  explicitAuth?: ExplicitGatewayAuth;
+}): Promise<{
+  auth: { token?: string; password?: string };
+  warning?: string;
+}> {
+  const explicitToken = params.explicitAuth?.token?.trim();
+  const explicitPassword = params.explicitAuth?.password?.trim();
+  if (explicitToken || explicitPassword) {
+    return {
+      auth: {
+        ...(explicitToken ? { token: explicitToken } : {}),
+        ...(explicitPassword ? { password: explicitPassword } : {}),
+      },
+    };
+  }
+
+  try {
+    const auth = await resolveGatewayProbeAuthWithSecretInputs(params);
+    return { auth };
+  } catch (error) {
+    if (!isGatewaySecretRefUnavailableError(error)) {
+      throw error;
+    }
+    return {
+      auth: {},
+      warning: `${error.path} SecretRef is unresolved in this command path; probing without configured auth credentials.`,
+    };
+  }
 }
 
 export function resolveGatewayProbeAuthSafe(params: {

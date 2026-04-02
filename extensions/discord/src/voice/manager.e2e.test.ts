@@ -8,10 +8,7 @@ const {
   createAudioPlayerMock,
   resolveAgentRouteMock,
   agentCommandMock,
-  buildProviderRegistryMock,
-  createMediaAttachmentCacheMock,
-  normalizeMediaAttachmentsMock,
-  runCapabilityMock,
+  transcribeAudioFileMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -68,46 +65,46 @@ const {
     })),
     resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
     agentCommandMock: vi.fn(async (_opts?: unknown, _runtime?: unknown) => ({ payloads: [] })),
-    buildProviderRegistryMock: vi.fn(() => ({})),
-    createMediaAttachmentCacheMock: vi.fn(() => ({
-      cleanup: vi.fn(async () => undefined),
-    })),
-    normalizeMediaAttachmentsMock: vi.fn(() => [{ kind: "audio", path: "/tmp/test.wav" }]),
-    runCapabilityMock: vi.fn(async () => ({
-      outputs: [{ kind: "audio.transcription", text: "hello from voice" }],
-    })),
+    transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
   };
 });
 
-vi.mock("@discordjs/voice", () => ({
-  AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
-  EndBehaviorType: { AfterSilence: "AfterSilence" },
-  VoiceConnectionStatus: {
-    Ready: "ready",
-    Disconnected: "disconnected",
-    Destroyed: "destroyed",
-    Signalling: "signalling",
-    Connecting: "connecting",
-  },
-  createAudioPlayer: createAudioPlayerMock,
-  createAudioResource: vi.fn(),
-  entersState: entersStateMock,
-  joinVoiceChannel: joinVoiceChannelMock,
+vi.mock("./sdk-runtime.js", () => ({
+  loadDiscordVoiceSdk: () => ({
+    AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
+    EndBehaviorType: { AfterSilence: "AfterSilence" },
+    VoiceConnectionStatus: {
+      Ready: "ready",
+      Disconnected: "disconnected",
+      Destroyed: "destroyed",
+      Signalling: "signalling",
+      Connecting: "connecting",
+    },
+    createAudioPlayer: createAudioPlayerMock,
+    createAudioResource: vi.fn(),
+    entersState: entersStateMock,
+    joinVoiceChannel: joinVoiceChannelMock,
+  }),
 }));
 
-vi.mock("../../../../src/routing/resolve-route.js", () => ({
-  resolveAgentRoute: resolveAgentRouteMock,
-}));
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+  return {
+    ...actual,
+    resolveAgentRoute: resolveAgentRouteMock,
+  };
+});
 
-vi.mock("../../../../src/commands/agent.js", () => ({
-  agentCommandFromIngress: agentCommandMock,
-}));
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+  return {
+    ...actual,
+    agentCommandFromIngress: agentCommandMock,
+  };
+});
 
-vi.mock("../../../../src/media-understanding/runner.js", () => ({
-  buildProviderRegistry: buildProviderRegistryMock,
-  createMediaAttachmentCache: createMediaAttachmentCacheMock,
-  normalizeMediaAttachments: normalizeMediaAttachmentsMock,
-  runCapability: runCapabilityMock,
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
+  transcribeAudioFile: transcribeAudioFileMock,
 }));
 
 let managerModule: typeof import("./manager.js");
@@ -117,7 +114,12 @@ function createClient() {
     fetchChannel: vi.fn(async (channelId: string) => ({
       id: channelId,
       guildId: "g1",
+      guild: { id: "g1", name: "Guild One" },
       type: ChannelType.GuildVoice,
+    })),
+    fetchGuild: vi.fn(async (guildId: string) => ({
+      id: guildId,
+      name: "Guild One",
     })),
     getPlugin: vi.fn(() => ({
       getGatewayAdapterCreator: vi.fn(() => vi.fn()),
@@ -149,15 +151,8 @@ describe("DiscordVoiceManager", () => {
     resolveAgentRouteMock.mockClear();
     agentCommandMock.mockReset();
     agentCommandMock.mockResolvedValue({ payloads: [] });
-    buildProviderRegistryMock.mockReset();
-    buildProviderRegistryMock.mockReturnValue({});
-    createMediaAttachmentCacheMock.mockClear();
-    normalizeMediaAttachmentsMock.mockReset();
-    normalizeMediaAttachmentsMock.mockReturnValue([{ kind: "audio", path: "/tmp/test.wav" }]);
-    runCapabilityMock.mockReset();
-    runCapabilityMock.mockResolvedValue({
-      outputs: [{ kind: "audio.transcription", text: "hello from voice" }],
-    });
+    transcribeAudioFileMock.mockReset();
+    transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
   });
 
   const createManager = (
@@ -165,10 +160,11 @@ describe("DiscordVoiceManager", () => {
       typeof managerModule.DiscordVoiceManager
     >[0]["discordConfig"] = {},
     clientOverride?: ReturnType<typeof createClient>,
+    cfgOverride: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"] = {},
   ) =>
     new managerModule.DiscordVoiceManager({
       client: (clientOverride ?? createClient()) as never,
-      cfg: {},
+      cfg: cfgOverride,
       discordConfig,
       accountId: "default",
       runtime: createRuntime(),
@@ -215,8 +211,8 @@ describe("DiscordVoiceManager", () => {
     await (manager as unknown as ProcessSegmentInvoker).processSegment({
       entry: {
         guildId: "g1",
-        channelId: "c1",
-        route: { sessionKey: "discord:g1:c1", agentId: "agent-1" },
+        channelId: "1001",
+        route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
       },
       wavPath: "/tmp/test.wav",
       userId,
@@ -296,6 +292,17 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("stores guild metadata on joined voice sessions", async () => {
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
+      | { guildName?: string }
+      | undefined;
+    expect(entry?.guildName).toBe("Guild One");
+  });
+
   it("attempts rejoin after repeated decrypt failures", async () => {
     const manager = createManager();
 
@@ -321,7 +328,7 @@ describe("DiscordVoiceManager", () => {
         discriminator: "1234",
       },
     });
-    const manager = createManager({ allowFrom: ["discord:u-owner"] }, client);
+    const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client);
     await processVoiceSegment(manager, "u-owner");
 
     const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
@@ -341,7 +348,9 @@ describe("DiscordVoiceManager", () => {
         discriminator: "4321",
       },
     });
-    const manager = createManager({ allowFrom: ["discord:u-owner"] }, client);
+    const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client, {
+      commands: { useAccessGroups: false },
+    });
     await processVoiceSegment(manager, "u-guest");
 
     const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
@@ -367,6 +376,161 @@ describe("DiscordVoiceManager", () => {
     await runSegment();
     await runSegment();
 
-    expect(client.fetchMember).toHaveBeenCalledTimes(1);
+    expect(client.fetchMember).toHaveBeenCalledTimes(3);
+  });
+
+  it("persists full speaker context in cache writes", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Role Speaker",
+      roles: ["role-voice"],
+      user: {
+        id: "u-role",
+        username: "role",
+        globalName: "Role",
+        discriminator: "2222",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "allowlist",
+        guilds: {
+          g1: {
+            channels: {
+              "1001": {
+                roles: ["role:role-voice"],
+              },
+            },
+          },
+        },
+      },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-role");
+
+    const cache = (
+      manager as unknown as {
+        speakerContextCache: Map<
+          string,
+          {
+            id?: string;
+            label: string;
+            name?: string;
+            tag?: string;
+            senderIsOwner: boolean;
+            expiresAt: number;
+          }
+        >;
+      }
+    ).speakerContextCache;
+    const cached = cache.get("g1:u-role");
+
+    expect(cached).toEqual(
+      expect.objectContaining({
+        id: "u-role",
+        label: "Role Speaker",
+      }),
+    );
+  });
+
+  it("re-fetches member roles for repeated voice auth checks", async () => {
+    const client = createClient();
+    client.fetchMember
+      .mockResolvedValueOnce({
+        nickname: "Role Speaker",
+        roles: ["role-voice"],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      })
+      .mockResolvedValueOnce({
+        nickname: "Role Speaker",
+        roles: ["role-voice"],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      })
+      .mockResolvedValueOnce({
+        nickname: "Role Speaker",
+        roles: [],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      })
+      .mockResolvedValue({
+        nickname: "Role Speaker",
+        roles: [],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      });
+    const manager = createManager(
+      {
+        groupPolicy: "allowlist",
+        guilds: {
+          g1: {
+            channels: {
+              "1001": {
+                roles: ["role:role-voice"],
+              },
+            },
+          },
+        },
+      },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-role");
+    await processVoiceSegment(manager, "u-role");
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expect(client.fetchMember).toHaveBeenCalledTimes(3);
+  });
+
+  it("fetches guild metadata before allowlist checks when the session lacks a guild name", async () => {
+    const client = createClient();
+    client.fetchGuild.mockResolvedValue({ id: "g1", name: "Guild One" });
+    client.fetchMember.mockResolvedValue({
+      nickname: "Owner Nick",
+      user: {
+        id: "u-owner",
+        username: "owner",
+        globalName: "Owner",
+        discriminator: "1234",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "allowlist",
+        guilds: {
+          "guild-one": {
+            channels: {
+              "*": {
+                users: ["discord:u-owner"],
+              },
+            },
+          },
+        },
+      },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-owner");
+
+    expect(client.fetchGuild).toHaveBeenCalledWith("g1");
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 });

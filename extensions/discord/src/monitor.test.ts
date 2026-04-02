@@ -1,6 +1,6 @@
 import { ChannelType, type Guild } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { typedCases } from "../../../src/test-utils/typed-cases.js";
+import { typedCases } from "../../../test/helpers/plugins/typed-cases.js";
 import {
   allowListMatches,
   buildDiscordMediaPayload,
@@ -18,7 +18,12 @@ import {
   sanitizeDiscordThreadName,
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
-import { DiscordMessageListener, DiscordReactionListener } from "./monitor/listeners.js";
+type DiscordReactionEvent = Parameters<
+  import("./monitor/listeners.js").DiscordReactionListener["handle"]
+>[0];
+type DiscordReactionClient = Parameters<
+  import("./monitor/listeners.js").DiscordReactionListener["handle"]
+>[1];
 
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 
@@ -61,6 +66,11 @@ function createAutoThreadMentionContext() {
   return { guildInfo, channelConfig };
 }
 
+beforeEach(() => {
+  vi.useRealTimers();
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+});
+
 describe("registerDiscordListener", () => {
   class FakeListener {}
 
@@ -89,6 +99,11 @@ describe("DiscordMessageListener", () => {
     };
   }
 
+  async function flushAsyncWork() {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
   it("returns immediately while handler continues in background", async () => {
     let handlerResolved = false;
     const deferred = createDeferred();
@@ -105,9 +120,8 @@ describe("DiscordMessageListener", () => {
 
     // handle() returns immediately while the background queue starts on the next tick.
     await expect(handlePromise).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(handler).toHaveBeenCalledOnce();
-    });
+    await flushAsyncWork();
+    expect(handler).toHaveBeenCalledOnce();
     expect(handlerResolved).toBe(false);
 
     // Release and let background handler finish.
@@ -144,9 +158,8 @@ describe("DiscordMessageListener", () => {
     ).resolves.toBeUndefined();
 
     // Both handlers are dispatched concurrently (fire-and-forget).
-    await vi.waitFor(() => {
-      expect(handler).toHaveBeenCalledTimes(2);
-    });
+    await flushAsyncWork();
+    expect(handler).toHaveBeenCalledTimes(2);
 
     first.resolve();
     second.resolve();
@@ -158,7 +171,7 @@ describe("DiscordMessageListener", () => {
       warn: vi.fn(),
       error: vi.fn(),
     } as unknown as ReturnType<
-      typeof import("../../../src/logging/subsystem.js").createSubsystemLogger
+      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
     >;
     const handler = vi.fn(async () => {
       throw new Error("boom");
@@ -169,9 +182,8 @@ describe("DiscordMessageListener", () => {
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
       {} as unknown as import("@buape/carbon").Client,
     );
-    await vi.waitFor(() => {
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
-    });
+    await flushAsyncWork();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
   });
 
   it("does not apply its own slow-listener logging (owned by inbound worker)", async () => {
@@ -181,7 +193,7 @@ describe("DiscordMessageListener", () => {
       warn: vi.fn(),
       error: vi.fn(),
     } as unknown as ReturnType<
-      typeof import("../../../src/logging/subsystem.js").createSubsystemLogger
+      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
     >;
     const listener = new DiscordMessageListener(handler, logger);
 
@@ -192,9 +204,8 @@ describe("DiscordMessageListener", () => {
     await expect(handlePromise).resolves.toBeUndefined();
 
     deferred.resolve();
-    await vi.waitFor(() => {
-      expect(handler).toHaveBeenCalledOnce();
-    });
+    await flushAsyncWork();
+    expect(handler).toHaveBeenCalledOnce();
     // The listener no longer wraps handlers with slow-listener logging;
     // that responsibility moved to the inbound worker.
     expect(logger.warn).not.toHaveBeenCalled();
@@ -888,17 +899,20 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
     channel: "discord",
     accountId: "acc-1",
     sessionKey: "discord:acc-1:dm:user-1",
+    mainSessionKey: "discord:acc-1:dm:user-1",
+    lastRoutePolicy: "session" as const,
+    matchedBy: "default" as const,
     ...(typeof params === "object" && params !== null ? { _params: params } : {}),
   })),
 }));
 
-vi.mock("../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: enqueueSystemEventSpy,
-}));
+const channelRuntimeModule = await import("openclaw/plugin-sdk/channel-runtime");
+vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
 
-vi.mock("../../../src/routing/resolve-route.js", () => ({
-  resolveAgentRoute: resolveAgentRouteMock,
-}));
+const routingModule = await import("openclaw/plugin-sdk/routing");
+vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
+
+const { DiscordMessageListener, DiscordReactionListener } = await import("./monitor/listeners.js");
 
 function makeReactionEvent(overrides?: {
   guildId?: string;
@@ -940,7 +954,7 @@ function makeReactionEvent(overrides?: {
     message: {
       fetch: messageFetch,
     },
-  } as unknown as Parameters<DiscordReactionListener["handle"]>[0];
+  } as DiscordReactionEvent;
 }
 
 function makeReactionClient(options?: {
@@ -962,7 +976,7 @@ function makeReactionClient(options?: {
       }
       return { type: channelType, name: channelName, parentId };
     }),
-  } as unknown as Parameters<DiscordReactionListener["handle"]>[1];
+  } as unknown as DiscordReactionClient;
 }
 
 function makeReactionListenerParams(overrides?: {
@@ -977,9 +991,9 @@ function makeReactionListenerParams(overrides?: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
-    cfg: {} as ReturnType<typeof import("../../../src/config/config.js").loadConfig>,
+    cfg: {} as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>,
     accountId: "acc-1",
-    runtime: {} as import("../../../src/runtime.js").RuntimeEnv,
+    runtime: {} as import("openclaw/plugin-sdk/runtime-env").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
     dmEnabled: overrides?.dmEnabled ?? true,
     groupDmEnabled: overrides?.groupDmEnabled ?? true,
@@ -995,7 +1009,7 @@ function makeReactionListenerParams(overrides?: {
       error: vi.fn(),
       debug: vi.fn(),
     } as unknown as ReturnType<
-      typeof import("../../../src/logging/subsystem.js").createSubsystemLogger
+      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
     >,
   };
 }
@@ -1140,6 +1154,9 @@ describe("discord DM reaction handling", () => {
       channel: "discord",
       accountId: "acc-1",
       sessionKey: "discord:acc-1:guild-123:channel-1",
+      mainSessionKey: "discord:acc-1:guild-123:channel-1",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
     });
 
     const data = makeReactionEvent({

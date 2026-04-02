@@ -1,9 +1,7 @@
-import { createActionGate } from "../../../src/agents/tools/common.js";
-import type {
-  ChannelMessageActionName,
-  ChannelToolSend,
-} from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import { createActionGate } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ChannelToolSend } from "openclaw/plugin-sdk/tool-send";
 import { listEnabledSlackAccounts } from "./accounts.js";
 
 export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
@@ -36,6 +34,7 @@ export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActi
     actions.add("edit");
     actions.add("delete");
     actions.add("download-file");
+    actions.add("upload-file");
   }
   if (isActionEnabled("pins")) {
     actions.add("pin");

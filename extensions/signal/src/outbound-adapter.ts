@@ -1,11 +1,16 @@
-import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
-import { createScopedChannelMediaMaxBytesResolver } from "../../../src/channels/plugins/outbound/direct-text-media.js";
-import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
-import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  attachChannelToResult,
+  attachChannelToResults,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { createScopedChannelMediaMaxBytesResolver } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
-} from "../../../src/infra/outbound/send-deps.js";
+} from "openclaw/plugin-sdk/outbound-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { markdownToSignalTextChunks } from "./format.js";
 import { sendMessageSignal } from "./send.js";
 
@@ -56,9 +61,9 @@ export const signalOutbound: ChannelOutboundAdapter = {
         textMode: "plain",
         textStyles: chunk.styles,
       });
-      results.push({ channel: "signal" as const, ...result });
+      results.push(result);
     }
-    return results;
+    return attachChannelToResults("signal", results);
   },
   sendFormattedMedia: async ({
     cfg,
@@ -66,6 +71,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
     text,
     mediaUrl,
     mediaLocalRoots,
+    mediaReadFile,
     accountId,
     deps,
     abortSignal,
@@ -91,35 +97,47 @@ export const signalOutbound: ChannelOutboundAdapter = {
       textMode: "plain",
       textStyles: formatted.styles,
       mediaLocalRoots,
+      mediaReadFile,
     });
-    return { channel: "signal", ...result };
+    return attachChannelToResult("signal", result);
   },
-  sendText: async ({ cfg, to, text, accountId, deps }) => {
-    const send = resolveSignalSender(deps);
-    const maxBytes = resolveSignalMaxBytes({
+  ...createAttachedChannelResultAdapter({
+    channel: "signal",
+    sendText: async ({ cfg, to, text, accountId, deps }) => {
+      const send = resolveSignalSender(deps);
+      const maxBytes = resolveSignalMaxBytes({
+        cfg,
+        accountId: accountId ?? undefined,
+      });
+      return await send(to, text, {
+        cfg,
+        maxBytes,
+        accountId: accountId ?? undefined,
+      });
+    },
+    sendMedia: async ({
       cfg,
-      accountId: accountId ?? undefined,
-    });
-    const result = await send(to, text, {
-      cfg,
-      maxBytes,
-      accountId: accountId ?? undefined,
-    });
-    return { channel: "signal", ...result };
-  },
-  sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) => {
-    const send = resolveSignalSender(deps);
-    const maxBytes = resolveSignalMaxBytes({
-      cfg,
-      accountId: accountId ?? undefined,
-    });
-    const result = await send(to, text, {
-      cfg,
+      to,
+      text,
       mediaUrl,
-      maxBytes,
-      accountId: accountId ?? undefined,
       mediaLocalRoots,
-    });
-    return { channel: "signal", ...result };
-  },
+      mediaReadFile,
+      accountId,
+      deps,
+    }) => {
+      const send = resolveSignalSender(deps);
+      const maxBytes = resolveSignalMaxBytes({
+        cfg,
+        accountId: accountId ?? undefined,
+      });
+      return await send(to, text, {
+        cfg,
+        mediaUrl,
+        maxBytes,
+        accountId: accountId ?? undefined,
+        mediaLocalRoots,
+        mediaReadFile,
+      });
+    },
+  }),
 };

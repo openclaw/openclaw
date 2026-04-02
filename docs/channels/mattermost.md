@@ -25,7 +25,7 @@ openclaw plugins install @openclaw/mattermost
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/mattermost
+openclaw plugins install ./path/to/local/mattermost-plugin
 ```
 
 If you choose Mattermost during setup and a git checkout is detected,
@@ -190,6 +190,35 @@ OpenClaw resolves them **user-first**:
 - Otherwise the ID is treated as a **channel ID**.
 
 If you need deterministic behavior, always use the explicit prefixes (`user:<id>` / `channel:<id>`).
+
+## DM channel retry
+
+When OpenClaw sends to a Mattermost DM target and needs to resolve the direct channel first, it
+retries transient direct-channel creation failures by default.
+
+Use `channels.mattermost.dmChannelRetry` to tune that behavior globally for the Mattermost plugin,
+or `channels.mattermost.accounts.<id>.dmChannelRetry` for one account.
+
+```json5
+{
+  channels: {
+    mattermost: {
+      dmChannelRetry: {
+        maxRetries: 3,
+        initialDelayMs: 1000,
+        maxDelayMs: 10000,
+        timeoutMs: 30000,
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- This applies only to DM channel creation (`/api/v4/channels/direct`), not every Mattermost API call.
+- Retries apply to transient failures such as rate limits, 5xx responses, and network or timeout errors.
+- 4xx client errors other than `429` are treated as permanent and are not retried.
 
 ## Reactions (message tool)
 
@@ -396,3 +425,11 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 - Gateway logs `missing _token in context`: the `_token` field is not in the button's context. Ensure it is included when building the integration payload.
 - Confirmation shows raw ID instead of button name: `context.action_id` does not match the button's `id`. Set both to the same sanitized value.
 - Agent doesn't know about buttons: add `capabilities: ["inlineButtons"]` to the Mattermost channel config.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

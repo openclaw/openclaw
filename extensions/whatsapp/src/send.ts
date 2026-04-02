@@ -1,16 +1,16 @@
-import { loadConfig, type OpenClawConfig } from "../../../src/config/config.js";
-import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
-import { generateSecureUuid } from "../../../src/infra/secure-random.js";
-import { getChildLogger } from "../../../src/logging/logger.js";
-import { redactIdentifier } from "../../../src/logging/redact-identifier.js";
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
-import { convertMarkdownTables } from "../../../src/markdown/tables.js";
-import { markdownToWhatsApp } from "../../../src/markdown/whatsapp.js";
-import { normalizePollInput, type PollInput } from "../../../src/polls.js";
-import { toWhatsappJid } from "../../../src/utils.js";
+import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { generateSecureUuid } from "openclaw/plugin-sdk/core";
+import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
+import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
+import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
-import { loadWebMedia } from "./media.js";
+import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
@@ -21,7 +21,12 @@ export async function sendMessageWhatsApp(
     verbose: boolean;
     cfg?: OpenClawConfig;
     mediaUrl?: string;
+    mediaAccess?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+    };
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     gifPlayback?: boolean;
     accountId?: string;
   },
@@ -60,13 +65,15 @@ export async function sendMessageWhatsApp(
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
     if (options.mediaUrl) {
-      const media = await loadWebMedia(options.mediaUrl, {
+      const media = await loadOutboundMediaFromUrl(options.mediaUrl, {
         maxBytes: resolveWhatsAppMediaMaxBytes(account),
-        localRoots: options.mediaLocalRoots,
+        mediaAccess: options.mediaAccess,
+        mediaLocalRoots: options.mediaLocalRoots,
+        mediaReadFile: options.mediaReadFile,
       });
       const caption = text || undefined;
       mediaBuffer = media.buffer;
-      mediaType = media.contentType;
+      mediaType = media.contentType ?? "application/octet-stream";
       if (media.kind === "audio") {
         // WhatsApp expects explicit opus codec for PTT voice notes.
         mediaType =

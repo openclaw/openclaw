@@ -1,14 +1,61 @@
+import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi, type Mock } from "vitest";
-import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
+import type { TelegramBotDeps } from "./bot-deps.js";
+
+type TelegramBotRuntimeForTest = NonNullable<
+  Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
+>;
+type DispatchReplyWithBufferedBlockDispatcherFn =
+  typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyHarnessParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
+type FetchRemoteMediaFn = typeof import("openclaw/plugin-sdk/media-runtime").fetchRemoteMedia;
 
 export const useSpy: Mock = vi.fn();
 export const middlewareUseSpy: Mock = vi.fn();
 export const onSpy: Mock = vi.fn();
 export const stopSpy: Mock = vi.fn();
 export const sendChatActionSpy: Mock = vi.fn();
-export const undiciFetchSpy: Mock = vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
-  globalThis.fetch(input, init),
-);
+
+function defaultUndiciFetch(input: RequestInfo | URL, init?: RequestInit) {
+  return globalThis.fetch(input, init);
+}
+
+export const undiciFetchSpy: Mock = vi.fn(defaultUndiciFetch);
+
+export function resetUndiciFetchMock() {
+  undiciFetchSpy.mockReset();
+  undiciFetchSpy.mockImplementation(defaultUndiciFetch);
+}
+
+async function defaultFetchRemoteMedia(
+  params: Parameters<FetchRemoteMediaFn>[0],
+): ReturnType<FetchRemoteMediaFn> {
+  if (!params.fetchImpl) {
+    throw new Error(`Missing fetchImpl for ${params.url}`);
+  }
+  const response = await params.fetchImpl(params.url, { redirect: "manual" });
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch media from ${params.url}: HTTP ${response.status} ${response.statusText}`,
+    );
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  return {
+    buffer: Buffer.from(arrayBuffer),
+    contentType: response.headers.get("content-type") ?? undefined,
+    fileName: params.filePathHint ? path.basename(params.filePathHint) : undefined,
+  } as Awaited<ReturnType<FetchRemoteMediaFn>>;
+}
+
+export const fetchRemoteMediaSpy: Mock = vi.fn(defaultFetchRemoteMedia);
+
+export function resetFetchRemoteMediaMock() {
+  fetchRemoteMediaSpy.mockReset();
+  fetchRemoteMediaSpy.mockImplementation(defaultFetchRemoteMedia);
+}
 
 async function defaultSaveMediaBuffer(buffer: Buffer, contentType?: string) {
   return {
@@ -44,6 +91,7 @@ export function resetSaveMediaBufferMock() {
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
+  getChat: Mock;
   sendChatAction: Mock;
   sendMessage: Mock;
   setMyCommands: (commands: Array<{ command: string; description: string }>) => Promise<void>;
@@ -51,17 +99,15 @@ type ApiStub = {
 
 const apiStub: ApiStub = {
   config: { use: useSpy },
+  getChat: vi.fn(async () => undefined),
   sendChatAction: sendChatActionSpy,
   sendMessage: vi.fn(async () => ({ message_id: 1 })),
   setMyCommands: vi.fn(async () => undefined),
 };
 
-beforeEach(() => {
-  resetInboundDedupe();
-  resetSaveMediaBufferMock();
-});
+const throttlerSpy = vi.fn(() => "throttler");
 
-vi.mock("grammy", () => ({
+export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
   Bot: class {
     api = apiStub;
     use = middlewareUseSpy;
@@ -70,18 +116,67 @@ vi.mock("grammy", () => ({
     stop = stopSpy;
     catch = vi.fn();
     constructor(public token: string) {}
-  },
-  InputFile: class {},
-  webhookCallback: vi.fn(),
-}));
+  } as unknown as TelegramBotRuntimeForTest["Bot"],
+  sequentialize: (() => vi.fn()) as TelegramBotRuntimeForTest["sequentialize"],
+  apiThrottler: (() => throttlerSpy()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
+};
 
-vi.mock("@grammyjs/runner", () => ({
-  sequentialize: () => vi.fn(),
-}));
+const mediaHarnessReplySpy = vi.hoisted(() =>
+  vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+    await opts?.onReplyStart?.();
+    return undefined;
+  }),
+);
 
-const throttlerSpy = vi.fn(() => "throttler");
-vi.mock("@grammyjs/transformer-throttler", () => ({
-  apiThrottler: () => throttlerSpy(),
+const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
+  vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(async (params: DispatchReplyHarnessParams) => {
+    await params.dispatcherOptions.typingCallbacks?.onReplyStart?.();
+    const reply = await mediaHarnessReplySpy(params.ctx, params.replyOptions);
+    const payloads = reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
+    for (const payload of payloads) {
+      await params.dispatcherOptions?.deliver?.(payload, { kind: "final" });
+    }
+    return {
+      queuedFinal: payloads.length > 0,
+      counts: { block: 0, final: payloads.length, tool: 0 },
+    };
+  }),
+);
+
+export const telegramBotDepsForTest: TelegramBotDeps = {
+  loadConfig: (() =>
+    ({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    }) as OpenClawConfig) as TelegramBotDeps["loadConfig"],
+  resolveStorePath: vi.fn(
+    (storePath?: string) => storePath ?? "/tmp/telegram-media-sessions.json",
+  ) as TelegramBotDeps["resolveStorePath"],
+  readChannelAllowFromStore: vi.fn(async () => []) as TelegramBotDeps["readChannelAllowFromStore"],
+  upsertChannelPairingRequest: vi.fn(async () => ({
+    code: "PAIRCODE",
+    created: true,
+  })) as TelegramBotDeps["upsertChannelPairingRequest"],
+  enqueueSystemEvent: vi.fn() as TelegramBotDeps["enqueueSystemEvent"],
+  dispatchReplyWithBufferedBlockDispatcher: mediaHarnessDispatchReplyWithBufferedBlockDispatcher,
+  buildModelsProviderData: vi.fn(async () => ({
+    byProvider: new Map<string, Set<string>>(),
+    providers: [],
+    resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+    modelNames: new Map<string, string>(),
+  })) as TelegramBotDeps["buildModelsProviderData"],
+  listSkillCommandsForAgents: vi.fn(() => []) as TelegramBotDeps["listSkillCommandsForAgents"],
+  wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
+};
+
+beforeEach(() => {
+  resetInboundDedupe();
+  resetSaveMediaBufferMock();
+  resetUndiciFetchMock();
+  resetFetchRemoteMediaMock();
+});
+
+vi.doMock("./bot.runtime.js", () => ({
+  ...telegramBotRuntimeForTest,
 }));
 
 vi.mock("undici", async (importOriginal) => {
@@ -92,10 +187,18 @@ vi.mock("undici", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/media/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/media/store.js")>();
+export async function mockMediaRuntimeModuleForTest(
+  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/media-runtime")>,
+) {
+  const actual = await importOriginal();
   const mockModule = Object.create(null) as Record<string, unknown>;
   Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "fetchRemoteMedia", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: (...args: Parameters<typeof fetchRemoteMediaSpy>) => fetchRemoteMediaSpy(...args),
+  });
   Object.defineProperty(mockModule, "saveMediaBuffer", {
     configurable: true,
     enumerable: true,
@@ -103,38 +206,50 @@ vi.mock("../../../src/media/store.js", async (importOriginal) => {
     value: (...args: Parameters<typeof saveMediaBufferSpy>) => saveMediaBufferSpy(...args),
   });
   return mockModule;
-});
+}
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/media-runtime", mockMediaRuntimeModuleForTest);
+
+vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
-    loadConfig: () => ({
-      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-    }),
-  };
-});
-
-vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
-  return {
-    ...actual,
+    loadConfig: telegramBotDepsForTest.loadConfig,
     updateLastRoute: vi.fn(async () => undefined),
   };
 });
 
-vi.mock("../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
-  upsertChannelPairingRequest: vi.fn(async () => ({
-    code: "PAIRCODE",
-    created: true,
-  })),
-}));
+vi.doMock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+  return {
+    ...actual,
+    findModelInCatalog: vi.fn(() => undefined),
+    loadModelCatalog: vi.fn(async () => []),
+    modelSupportsVision: vi.fn(() => false),
+    resolveDefaultModelForAgent: vi.fn(() => ({
+      provider: "openai",
+      model: "gpt-test",
+    })),
+  };
+});
 
-vi.mock("../../../src/auto-reply/reply.js", () => {
-  const replySpy = vi.fn(async (_ctx, opts) => {
-    await opts?.onReplyStart?.();
-    return undefined;
-  });
-  return { getReplyFromConfig: replySpy, __replySpy: replySpy };
+vi.doMock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    readChannelAllowFromStore: telegramBotDepsForTest.readChannelAllowFromStore,
+    upsertChannelPairingRequest: vi.fn(async () => ({
+      code: "PAIRCODE",
+      created: true,
+    })),
+  };
+});
+
+vi.doMock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    getReplyFromConfig: mediaHarnessReplySpy,
+    __replySpy: mediaHarnessReplySpy,
+  };
 });

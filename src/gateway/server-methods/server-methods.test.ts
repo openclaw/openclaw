@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
-import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
+import {
+  buildSystemRunApprovalBinding,
+  buildSystemRunApprovalEnvBinding,
+} from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
@@ -264,6 +267,27 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
   ])("$name", ({ attachments, expected }) => {
     expect(normalizeRpcAttachmentsToChatAttachments(attachments)).toEqual(expected);
   });
+
+  it("accepts dashboard image attachments with nested base64 source", () => {
+    const res = normalizeRpcAttachmentsToChatAttachments([
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: "Zm9v",
+        },
+      },
+    ]);
+    expect(res).toEqual([
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: undefined,
+        content: "Zm9v",
+      },
+    ]);
+  });
 });
 
 describe("sanitizeChatSendMessageInput", () => {
@@ -396,11 +420,15 @@ describe("exec approval handlers", () => {
   async function resolveExecApproval(params: {
     handlers: ExecApprovalHandlers;
     id: string;
+    decision?: "allow-once" | "allow-always" | "deny";
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
   }) {
     return params.handlers["exec.approval.resolve"]({
-      params: { id: params.id, decision: "allow-once" } as ExecApprovalResolveArgs["params"],
+      params: {
+        id: params.id,
+        decision: params.decision ?? "allow-once",
+      } as ExecApprovalResolveArgs["params"],
       respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
       context: toExecApprovalResolveContext(params.context),
       client: null,
@@ -542,6 +570,51 @@ describe("exec approval handlers", () => {
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
   });
 
+  it("rejects allow-always when the request ask mode is always", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { twoPhase: true, ask: "always" },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const id = (requested?.payload as { id?: string })?.id ?? "";
+    expect(id).not.toBe("");
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "allow-always",
+      respond: resolveRespond,
+      context,
+    });
+
+    expect(resolveRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message:
+          "allow-always is unavailable because the effective policy requires approval every time",
+      }),
+    );
+
+    const denyRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "deny",
+      respond: denyRespond,
+      context,
+    });
+
+    await requestPromise;
+    expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
   it("does not reuse a resolved exact id as a prefix for another pending approval", () => {
     const manager = new ExecApprovalManager();
     const resolvedRecord = manager.create({ command: "echo old", host: "gateway" }, 2_000, "abc");
@@ -581,6 +654,62 @@ describe("exec approval handlers", () => {
         env: { A_VAR: "a", Z_VAR: "z" },
       }).binding,
     );
+  });
+
+  it("includes Windows-compatible env keys in approval env bindings", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        commandArgv: ["cmd.exe", "/c", "echo", "ok"],
+        command: "cmd.exe /c echo ok",
+        env: {
+          "ProgramFiles(x86)": "C:\\Program Files (x86)",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    const envBinding = buildSystemRunApprovalEnvBinding({
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    });
+    expect(request["envKeys"]).toEqual(envBinding.envKeys);
+    expect(request["systemRunBinding"]).toEqual(
+      buildSystemRunApprovalBinding({
+        argv: ["cmd.exe", "/c", "echo", "ok"],
+        cwd: "/tmp",
+        env: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
+      }).binding,
+    );
+  });
+
+  it("stores sorted env keys for gateway approvals without node-only binding", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+        env: {
+          Z_VAR: "z",
+          A_VAR: "a",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["envKeys"]).toEqual(
+      buildSystemRunApprovalEnvBinding({ A_VAR: "a", Z_VAR: "z" }).envKeys,
+    );
+    expect(request["systemRunBinding"]).toBeNull();
   });
 
   it("prefers systemRunPlan canonical command/cwd when present", async () => {
@@ -819,7 +948,9 @@ describe("exec approval handlers", () => {
       false,
       undefined,
       expect.objectContaining({
+        code: "INVALID_REQUEST",
         message: "unknown or expired approval id",
+        details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
       }),
     );
   });
@@ -934,6 +1065,45 @@ describe("exec approval handlers", () => {
       expect.objectContaining({ id: "approval-no-approver", decision: null }),
       undefined,
     );
+  });
+
+  it("keeps approvals pending when the originating chat can handle /approve directly", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, handlers, forwarder, respond, context } =
+        createForwardingExecApprovalFixture();
+      const expireSpy = vi.spyOn(manager, "expire");
+
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: {
+          twoPhase: true,
+          timeoutMs: 60_000,
+          id: "approval-chat-route",
+          host: "gateway",
+          turnSourceChannel: "slack",
+          turnSourceTo: "D123",
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", id: "approval-chat-route" }),
+          undefined,
+        );
+      });
+
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+      expect(expireSpy).not.toHaveBeenCalled();
+
+      manager.resolve("approval-chat-route", "allow-once");
+      await requestPromise;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps approvals pending when no approver clients but forwarding accepted the request", async () => {

@@ -1,30 +1,34 @@
-import { resolveMatrixRoomId, sendMessageMatrix } from "../send.js";
-import { resolveActionClient } from "./client.js";
+import { fetchMatrixPollMessageSummary, resolveMatrixPollRootEventId } from "../poll-summary.js";
+import { isPollEventType } from "../poll-types.js";
+import { editMessageMatrix, sendMessageMatrix } from "../send.js";
+import { withResolvedRoomAction } from "./client.js";
 import { resolveMatrixActionLimit } from "./limits.js";
 import { summarizeMatrixRawEvent } from "./summary.js";
 import {
   EventType,
-  MsgType,
-  RelationType,
   type MatrixActionClientOpts,
   type MatrixMessageSummary,
   type MatrixRawEvent,
-  type RoomMessageEventContent,
 } from "./types.js";
 
 export async function sendMatrixMessage(
   to: string,
-  content: string,
+  content: string | undefined,
   opts: MatrixActionClientOpts & {
     mediaUrl?: string;
     replyToId?: string;
     threadId?: string;
+    audioAsVoice?: boolean;
   } = {},
 ) {
   return await sendMessageMatrix(to, content, {
+    cfg: opts.cfg,
     mediaUrl: opts.mediaUrl,
+    mediaLocalRoots: opts.mediaLocalRoots,
     replyToId: opts.replyToId,
     threadId: opts.threadId,
+    audioAsVoice: opts.audioAsVoice,
+    accountId: opts.accountId ?? undefined,
     client: opts.client,
     timeoutMs: opts.timeoutMs,
   });
@@ -40,29 +44,13 @@ export async function editMatrixMessage(
   if (!trimmed) {
     throw new Error("Matrix edit requires content");
   }
-  const { client, stopOnDone } = await resolveActionClient(opts);
-  try {
-    const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-    const newContent = {
-      msgtype: MsgType.Text,
-      body: trimmed,
-    } satisfies RoomMessageEventContent;
-    const payload: RoomMessageEventContent = {
-      msgtype: MsgType.Text,
-      body: `* ${trimmed}`,
-      "m.new_content": newContent,
-      "m.relates_to": {
-        rel_type: RelationType.Replace,
-        event_id: messageId,
-      },
-    };
-    const eventId = await client.sendMessage(resolvedRoom, payload);
-    return { eventId: eventId ?? null };
-  } finally {
-    if (stopOnDone) {
-      client.stop();
-    }
-  }
+  const eventId = await editMessageMatrix(roomId, messageId, trimmed, {
+    cfg: opts.cfg,
+    accountId: opts.accountId ?? undefined,
+    client: opts.client,
+    timeoutMs: opts.timeoutMs,
+  });
+  return { eventId: eventId || null };
 }
 
 export async function deleteMatrixMessage(
@@ -70,15 +58,9 @@ export async function deleteMatrixMessage(
   messageId: string,
   opts: MatrixActionClientOpts & { reason?: string } = {},
 ) {
-  const { client, stopOnDone } = await resolveActionClient(opts);
-  try {
-    const resolvedRoom = await resolveMatrixRoomId(client, roomId);
+  await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     await client.redactEvent(resolvedRoom, messageId, opts.reason);
-  } finally {
-    if (stopOnDone) {
-      client.stop();
-    }
-  }
+  });
 }
 
 export async function readMatrixMessages(
@@ -93,13 +75,11 @@ export async function readMatrixMessages(
   nextBatch?: string | null;
   prevBatch?: string | null;
 }> {
-  const { client, stopOnDone } = await resolveActionClient(opts);
-  try {
-    const resolvedRoom = await resolveMatrixRoomId(client, roomId);
+  return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     const limit = resolveMatrixActionLimit(opts.limit, 20);
     const token = opts.before?.trim() || opts.after?.trim() || undefined;
     const dir = opts.after ? "f" : "b";
-    // @vector-im/matrix-bot-sdk uses doRequest for room messages
+    // Room history is queried via the low-level endpoint for compatibility.
     const res = (await client.doRequest(
       "GET",
       `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/messages`,
@@ -109,18 +89,34 @@ export async function readMatrixMessages(
         from: token,
       },
     )) as { chunk: MatrixRawEvent[]; start?: string; end?: string };
-    const messages = res.chunk
-      .filter((event) => event.type === EventType.RoomMessage)
-      .filter((event) => !event.unsigned?.redacted_because)
-      .map(summarizeMatrixRawEvent);
+    const hydratedChunk = await client.hydrateEvents(resolvedRoom, res.chunk);
+    const seenPollRoots = new Set<string>();
+    const messages: MatrixMessageSummary[] = [];
+    for (const event of hydratedChunk) {
+      if (event.unsigned?.redacted_because) {
+        continue;
+      }
+      if (event.type === EventType.RoomMessage) {
+        messages.push(summarizeMatrixRawEvent(event));
+        continue;
+      }
+      if (!isPollEventType(event.type)) {
+        continue;
+      }
+      const pollRootId = resolveMatrixPollRootEventId(event);
+      if (!pollRootId || seenPollRoots.has(pollRootId)) {
+        continue;
+      }
+      seenPollRoots.add(pollRootId);
+      const pollSummary = await fetchMatrixPollMessageSummary(client, resolvedRoom, event);
+      if (pollSummary) {
+        messages.push(pollSummary);
+      }
+    }
     return {
       messages,
       nextBatch: res.end ?? null,
       prevBatch: res.start ?? null,
     };
-  } finally {
-    if (stopOnDone) {
-      client.stop();
-    }
-  }
+  });
 }

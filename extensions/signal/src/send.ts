@@ -1,7 +1,7 @@
-import { loadConfig, type OpenClawConfig } from "../../../src/config/config.js";
-import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
-import { kindFromMime } from "../../../src/media/mime.js";
-import { resolveOutboundAttachmentFromUrl } from "../../../src/media/outbound-attachment.js";
+import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
@@ -13,7 +13,12 @@ export type SignalSendOpts = {
   account?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
@@ -128,7 +133,9 @@ export async function sendMessageSignal(
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
+      mediaAccess: opts.mediaAccess,
       localRoots: opts.mediaLocalRoots,
+      readFile: opts.mediaReadFile,
     });
     attachments = [resolved.path];
     const kind = kindFromMime(resolved.contentType ?? undefined);

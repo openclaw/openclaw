@@ -1,22 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const recordChannelActivity = vi.fn();
-vi.mock("../../../../src/infra/channel-activity.js", () => ({
-  recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
-}));
+const recordChannelActivity = vi.hoisted(() => vi.fn());
+let createWebSendApi: typeof import("./send-api.js").createWebSendApi;
 
-import { createWebSendApi } from "./send-api.js";
+vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
+  return {
+    ...actual,
+    recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
+  };
+});
 
 describe("createWebSendApi", () => {
   const sendMessage = vi.fn(async () => ({ key: { id: "msg-1" } }));
   const sendPresenceUpdate = vi.fn(async () => {});
-  const api = createWebSendApi({
-    sock: { sendMessage, sendPresenceUpdate },
-    defaultAccountId: "main",
-  });
+  let api: ReturnType<typeof createWebSendApi>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    ({ createWebSendApi } = await import("./send-api.js"));
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+    });
   });
 
   it("uses sendOptions fileName for outbound documents", async () => {
@@ -154,5 +161,25 @@ describe("createWebSendApi", () => {
   it("sends composing presence updates to the recipient JID", async () => {
     await api.sendComposingTo("+1555");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
+  });
+
+  it("sends media as document when mediaType is undefined", async () => {
+    const mediaBuffer = Buffer.from("test");
+
+    await api.sendMessage("123", "hello", mediaBuffer, undefined);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123@s.whatsapp.net",
+      expect.objectContaining({
+        document: mediaBuffer,
+        mimetype: "application/octet-stream",
+      }),
+    );
+  });
+
+  it("does not set mediaType when mediaBuffer is absent", async () => {
+    await api.sendMessage("123", "hello");
+
+    expect(sendMessage).toHaveBeenCalledWith("123@s.whatsapp.net", { text: "hello" });
   });
 });

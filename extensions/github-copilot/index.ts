@@ -1,22 +1,15 @@
+import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
-  type ProviderAuthContext,
-  type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
-import { listProfilesForProvider } from "../../src/agents/auth-profiles/profiles.js";
-import { ensureAuthProfileStore } from "../../src/agents/auth-profiles/store.js";
-import { normalizeModelCompat } from "../../src/agents/model-compat.js";
-import { coerceSecretRef } from "../../src/config/types.secrets.js";
-import { githubCopilotLoginCommand } from "../../src/providers/github-copilot-auth.js";
+  coerceSecretRef,
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "openclaw/plugin-sdk/provider-auth";
+import { githubCopilotLoginCommand } from "openclaw/plugin-sdk/provider-auth-login";
+import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
-const PROVIDER_ID = "github-copilot";
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
-const CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
-const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
 
 function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
@@ -51,27 +44,6 @@ function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.Proces
     };
   }
   return { githubToken: "", hasProfile };
-}
-
-function resolveCopilotForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  const trimmedModelId = ctx.modelId.trim();
-  if (trimmedModelId.toLowerCase() !== CODEX_GPT_53_MODEL_ID) {
-    return undefined;
-  }
-  for (const templateId of CODEX_TEMPLATE_MODEL_IDS) {
-    const template = ctx.modelRegistry.find(PROVIDER_ID, templateId) as ProviderRuntimeModel | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-    } as ProviderRuntimeModel);
-  }
-  return undefined;
 }
 
 async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
@@ -114,12 +86,11 @@ async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
   };
 }
 
-const githubCopilotPlugin = {
+export default definePluginEntry({
   id: "github-copilot",
   name: "GitHub Copilot Provider",
   description: "Bundled GitHub Copilot provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "GitHub Copilot",
@@ -194,6 +165,4 @@ const githubCopilotPlugin = {
         await fetchCopilotUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
   },
-};
-
-export default githubCopilotPlugin;
+});

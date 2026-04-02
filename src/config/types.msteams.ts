@@ -1,5 +1,6 @@
 import type {
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -83,10 +84,14 @@ export type MSTeamsConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Enable progressive block-by-block message delivery instead of a single reply. */
+  blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /**
@@ -121,4 +126,22 @@ export type MSTeamsConfig = {
   healthMonitor?: ChannelHealthMonitorConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Show a welcome Adaptive Card when the bot is added to a 1:1 chat. Default: true. */
+  welcomeCard?: boolean;
+  /** Custom prompt starter labels shown on the welcome card. */
+  promptStarters?: string[];
+  /** Show a welcome message when the bot is added to a group chat. Default: false. */
+  groupWelcomeCard?: boolean;
+  /** Enable the Teams feedback loop (thumbs up/down) on AI-generated messages. Default: true. */
+  feedbackEnabled?: boolean;
+  /** Enable background reflection when a user gives negative feedback. Default: true. */
+  feedbackReflection?: boolean;
+  /** Minimum interval (ms) between reflections per session. Default: 300000 (5 min). */
+  feedbackReflectionCooldownMs?: number;
 };
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    msteams?: MSTeamsConfig;
+  }
+}

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 
 const resolveProviderUsageSnapshotWithPluginMock = vi.fn();
@@ -12,11 +12,15 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     resolveProviderUsageSnapshotWithPluginMock(...args),
 }));
 
-import { loadProviderUsageSummary } from "./provider-usage.load.js";
+let loadProviderUsageSummary: typeof import("./provider-usage.load.js").loadProviderUsageSummary;
 
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
 
-describe("provider-usage.load plugin seam", () => {
+describe("provider-usage.load plugin boundary", () => {
+  beforeAll(async () => {
+    ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
+  });
+
   beforeEach(() => {
     resolveProviderUsageSnapshotWithPluginMock.mockReset();
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);

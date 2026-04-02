@@ -1,24 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  formatSkillsForPrompt,
-  loadSkillsFromDir,
-  type Skill,
-} from "@mariozechner/pi-coding-agent";
+import { formatSkillsForPrompt, type Skill } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
-import {
-  parseFrontmatter,
-  resolveOpenClawMetadata,
-  resolveSkillInvocationPolicy,
-} from "./frontmatter.js";
+import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import type {
@@ -343,7 +337,11 @@ function loadSkillEntries(
         return [];
       }
 
-      const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
+      const loaded = loadSkillsFromDirSafe({
+        dir: baseDir,
+        source: params.source,
+        maxBytes: limits.maxSkillFileBytes,
+      });
       return filterLoadedSkillsInsideRoot({
         skills: unwrapLoadedSkills(loaded),
         source: params.source,
@@ -417,7 +415,11 @@ function loadSkillEntries(
         continue;
       }
 
-      const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
+      const loaded = loadSkillsFromDirSafe({
+        dir: skillDir,
+        source: params.source,
+        maxBytes: limits.maxSkillFileBytes,
+      });
       loadedSkills.push(
         ...filterLoadedSkillsInsideRoot({
           skills: unwrapLoadedSkills(loaded),
@@ -509,13 +511,12 @@ function loadSkillEntries(
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values()).map((skill) => {
-    let frontmatter: ParsedSkillFrontmatter = {};
-    try {
-      const raw = fs.readFileSync(skill.filePath, "utf-8");
-      frontmatter = parseFrontmatter(raw);
-    } catch {
-      // ignore malformed skills
-    }
+    const frontmatter =
+      readSkillFrontmatterSafe({
+        rootDir: skill.baseDir,
+        filePath: skill.filePath,
+        maxBytes: limits.maxSkillFileBytes,
+      }) ?? ({} as ParsedSkillFrontmatter);
     return {
       skill,
       frontmatter,
@@ -929,6 +930,41 @@ export function buildWorkspaceSkillCommandSpecs(
       skillName: rawName,
       description,
       ...(dispatch ? { dispatch } : {}),
+    });
+  }
+
+  const bundleCommands = loadEnabledClaudeBundleCommands({
+    workspaceDir,
+    cfg: opts?.config,
+  });
+  for (const entry of bundleCommands) {
+    const base = sanitizeSkillCommandName(entry.rawName);
+    if (base !== entry.rawName) {
+      debugSkillCommandOnce(
+        `bundle-sanitize:${entry.rawName}:${base}`,
+        `Sanitized bundle command name "${entry.rawName}" to "/${base}".`,
+        { rawName: entry.rawName, sanitized: `/${base}` },
+      );
+    }
+    const unique = resolveUniqueSkillCommandName(base, used);
+    if (unique !== base) {
+      debugSkillCommandOnce(
+        `bundle-dedupe:${entry.rawName}:${unique}`,
+        `De-duplicated bundle command name for "${entry.rawName}" to "/${unique}".`,
+        { rawName: entry.rawName, deduped: `/${unique}` },
+      );
+    }
+    used.add(unique.toLowerCase());
+    const description =
+      entry.description.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
+        ? entry.description.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
+        : entry.description;
+    specs.push({
+      name: unique,
+      skillName: entry.rawName,
+      description,
+      promptTemplate: entry.promptTemplate,
+      sourceFilePath: entry.sourceFilePath,
     });
   }
   return specs;

@@ -1,5 +1,28 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
+import {
+  clampPercent,
+  resolveLegacyPiAgentAccessToken,
+  resolveUsageProviderId,
+  withTimeout,
+} from "./provider-usage.shared.js";
+
+async function withLegacyPiAuthFile(
+  contents: string,
+  run: (home: string) => Promise<void> | void,
+): Promise<void> {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
+  await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
+  await fs.writeFile(path.join(home, ".pi", "agent", "auth.json"), contents, "utf8");
+
+  try {
+    await run(home);
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
+}
 
 describe("provider-usage.shared", () => {
   afterEach(() => {
@@ -27,14 +50,23 @@ describe("provider-usage.shared", () => {
     expect(clampPercent(value)).toBe(expected);
   });
 
-  it("returns work result when it resolves before timeout", async () => {
-    await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
-  });
-
-  it("propagates work errors before timeout", async () => {
-    await expect(withTimeout(Promise.reject(new Error("boom")), 100, "fallback")).rejects.toThrow(
-      "boom",
-    );
+  it.each([
+    {
+      name: "returns work result when it resolves before timeout",
+      promise: () => Promise.resolve("ok"),
+      expected: "ok",
+    },
+    {
+      name: "propagates work errors before timeout",
+      promise: () => Promise.reject(new Error("boom")),
+      error: "boom",
+    },
+  ])("$name", async ({ promise, expected, error }) => {
+    if (error) {
+      await expect(withTimeout(promise(), 100, "fallback")).rejects.toThrow(error);
+      return;
+    }
+    await expect(withTimeout(promise(), 100, "fallback")).resolves.toBe(expected);
   });
 
   it("returns fallback when timeout wins", async () => {
@@ -51,5 +83,22 @@ describe("provider-usage.shared", () => {
     await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
 
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "reads legacy pi auth tokens for known provider aliases",
+      contents: `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
+      expected: "legacy-zai-key",
+    },
+    {
+      name: "returns undefined for invalid legacy pi auth files",
+      contents: "{not-json",
+      expected: undefined,
+    },
+  ])("$name", async ({ contents, expected }) => {
+    await withLegacyPiAuthFile(contents, async (home) => {
+      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBe(expected);
+    });
   });
 });

@@ -1,4 +1,4 @@
-import { enqueueSystemEvent } from "../../../../../src/infra/system-events.js";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";

@@ -1,30 +1,25 @@
 import {
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-} from "../../../src/agents/model-catalog.js";
-import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
-import { hasControlCommand } from "../../../src/auto-reply/command-detection.js";
-import {
-  recordPendingHistoryEntryIfEnabled,
-  type HistoryEntry,
-} from "../../../src/auto-reply/reply/history.js";
-import {
   buildMentionRegexes,
+  formatLocationText,
+  logInboundDrop,
   matchesMentionWithExplicit,
-} from "../../../src/auto-reply/reply/mentions.js";
-import type { MsgContext } from "../../../src/auto-reply/templating.js";
-import { resolveControlCommandGate } from "../../../src/channels/command-gating.js";
-import { formatLocationText, type NormalizedLocation } from "../../../src/channels/location.js";
-import { logInboundDrop } from "../../../src/channels/logging.js";
-import { resolveMentionGatingWithBypass } from "../../../src/channels/mention-gating.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+  resolveMentionGatingWithBypass,
+  type NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "../../../src/config/types.js";
-import { logVerbose } from "../../../src/globals.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import {
+  recordPendingHistoryEntryIfEnabled,
+  type HistoryEntry,
+} from "openclaw/plugin-sdk/reply-history";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed } from "./bot-access.js";
 import type {
@@ -34,13 +29,13 @@ import type {
 } from "./bot-message-context.types.js";
 import {
   buildSenderLabel,
-  buildTelegramGroupPeerId,
   expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
   resolveTelegramMediaPlaceholder,
-} from "./bot/helpers.js";
+} from "./bot/body-helpers.js";
+import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 
@@ -61,16 +56,8 @@ async function resolveStickerVisionSupport(params: {
   agentId?: string;
 }): Promise<boolean> {
   try {
-    const catalog = await loadModelCatalog({ config: params.cfg });
-    const defaultModel = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
-    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
-    if (!entry) {
-      return false;
-    }
-    return modelSupportsVision(entry);
+    const { resolveStickerVisionSupportRuntime } = await import("./sticker-vision.runtime.js");
+    return await resolveStickerVisionSupportRuntime(params);
   } catch {
     return false;
   }
@@ -170,6 +157,8 @@ export async function resolveTelegramInboundBody(params: {
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
+  const senderAllowedForAudioPreflight =
+    !useAccessGroups || !allowForCommands.hasEntries || senderAllowedForCommands;
 
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
@@ -178,12 +167,12 @@ export async function resolveTelegramInboundBody(params: {
     hasAudio &&
     !hasUserText &&
     mentionRegexes.length > 0 &&
-    !disableAudioPreflight;
+    !disableAudioPreflight &&
+    senderAllowedForAudioPreflight;
 
   if (needsPreflightTranscription) {
     try {
-      const { transcribeFirstAudio } =
-        await import("../../../src/media-understanding/audio-preflight.js");
+      const { transcribeFirstAudio } = await import("./media-understanding.runtime.js");
       const tempCtx: MsgContext = {
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
         MediaTypes:

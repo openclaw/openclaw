@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
   readJsonFile,
+  reconcilePendingPairingRequests,
   resolvePairingPaths,
   writeJsonAtomic,
 } from "./pairing-files.js";
@@ -85,17 +86,13 @@ export type ApproveDevicePairingResult =
   | { status: "forbidden"; missingScope: string }
   | null;
 
-type ApprovedDevicePairingResult = Extract<
-  NonNullable<ApproveDevicePairingResult>,
-  { status: "approved" }
->;
-
 type DevicePairingStateFile = {
   pendingById: Record<string, DevicePairingPendingRequest>;
   pairedByDeviceId: Record<string, PairedDevice>;
 };
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
+const OPERATOR_SCOPE_PREFIX = "operator.";
 
 const withLock = createAsyncLock();
 
@@ -156,12 +153,55 @@ function mergeRoles(...items: Array<string | string[] | undefined>): string[] | 
   return [...roles];
 }
 
+function listActiveTokenRoles(
+  tokens: Record<string, DeviceAuthToken> | undefined,
+): string[] | undefined {
+  if (!tokens) {
+    return undefined;
+  }
+  return mergeRoles(
+    Object.values(tokens)
+      .filter((entry) => !entry.revokedAtMs)
+      .map((entry) => entry.role),
+  );
+}
+
+export function listEffectivePairedDeviceRoles(
+  device: Pick<PairedDevice, "role" | "roles" | "tokens">,
+): string[] {
+  const activeTokenRoles = listActiveTokenRoles(device.tokens);
+  if (activeTokenRoles && activeTokenRoles.length > 0) {
+    return activeTokenRoles;
+  }
+  // Only fall back to legacy role fields when the tokens map is absent
+  // or has no entries at all (empty object from a fresh pairing record).
+  // When token entries exist but are all revoked, the revocation is
+  // authoritative — do not re-grant roles from sticky historical fields.
+  if (device.tokens && Object.keys(device.tokens).length > 0) {
+    return [];
+  }
+  return mergeRoles(device.roles, device.role) ?? [];
+}
+
+export function hasEffectivePairedDeviceRole(
+  device: Pick<PairedDevice, "role" | "roles" | "tokens">,
+  role: string,
+): boolean {
+  const normalized = normalizeRole(role);
+  if (!normalized) {
+    return false;
+  }
+  return listEffectivePairedDeviceRoles(device).includes(normalized);
+}
+
 function mergeScopes(...items: Array<string[] | undefined>): string[] | undefined {
   const scopes = new Set<string>();
+  let sawExplicitScopeList = false;
   for (const item of items) {
     if (!item) {
       continue;
     }
+    sawExplicitScopeList = true;
     for (const scope of item) {
       const trimmed = scope.trim();
       if (trimmed) {
@@ -170,34 +210,122 @@ function mergeScopes(...items: Array<string[] | undefined>): string[] | undefine
     }
   }
   if (scopes.size === 0) {
-    return undefined;
+    return sawExplicitScopeList ? [] : undefined;
   }
   return [...scopes];
 }
 
-function mergePendingDevicePairingRequest(
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const rightSet = new Set(right);
+  for (const value of left) {
+    if (!rightSet.has(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function resolveRequestedRoles(input: { role?: string; roles?: string[] }): string[] {
+  return mergeRoles(input.roles, input.role) ?? [];
+}
+
+function resolveRequestedScopes(input: { scopes?: string[] }): string[] {
+  return normalizeDeviceAuthScopes(input.scopes);
+}
+
+function samePendingApprovalSnapshot(
+  existing: DevicePairingPendingRequest,
+  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+): boolean {
+  if (existing.publicKey !== incoming.publicKey) {
+    return false;
+  }
+  if (normalizeRole(existing.role) !== normalizeRole(incoming.role)) {
+    return false;
+  }
+  if (
+    !sameStringSet(resolveRequestedRoles(existing), resolveRequestedRoles(incoming)) ||
+    !sameStringSet(resolveRequestedScopes(existing), resolveRequestedScopes(incoming))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function refreshPendingDevicePairingRequest(
   existing: DevicePairingPendingRequest,
   incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
   isRepair: boolean,
 ): DevicePairingPendingRequest {
-  const existingRole = normalizeRole(existing.role);
-  const incomingRole = normalizeRole(incoming.role);
   return {
     ...existing,
+    publicKey: incoming.publicKey,
     displayName: incoming.displayName ?? existing.displayName,
     platform: incoming.platform ?? existing.platform,
     deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
     clientId: incoming.clientId ?? existing.clientId,
     clientMode: incoming.clientMode ?? existing.clientMode,
-    role: existingRole ?? incomingRole ?? undefined,
-    roles: mergeRoles(existing.roles, existing.role, incoming.role),
-    scopes: mergeScopes(existing.scopes, incoming.scopes),
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
     // If either request is interactive, keep the pending request visible for approval.
     silent: Boolean(existing.silent && incoming.silent),
     isRepair: existing.isRepair || isRepair,
     ts: Date.now(),
   };
+}
+
+function resolveSupersededPendingSilent(params: {
+  existing: readonly DevicePairingPendingRequest[];
+  incomingSilent: boolean | undefined;
+}): boolean {
+  return Boolean(
+    params.incomingSilent && params.existing.every((pending) => pending.silent === true),
+  );
+}
+
+function buildPendingDevicePairingRequest(params: {
+  requestId?: string;
+  deviceId: string;
+  isRepair: boolean;
+  req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">;
+}): DevicePairingPendingRequest {
+  const role = normalizeRole(params.req.role) ?? undefined;
+  return {
+    requestId: params.requestId ?? randomUUID(),
+    deviceId: params.deviceId,
+    publicKey: params.req.publicKey,
+    displayName: params.req.displayName,
+    platform: params.req.platform,
+    deviceFamily: params.req.deviceFamily,
+    clientId: params.req.clientId,
+    clientMode: params.req.clientMode,
+    role,
+    roles: mergeRoles(params.req.roles, role),
+    scopes: mergeScopes(params.req.scopes),
+    remoteIp: params.req.remoteIp,
+    silent: params.req.silent,
+    isRepair: params.isRepair,
+    ts: Date.now(),
+  };
+}
+
+function resolvePendingApprovalRole(pending: DevicePairingPendingRequest): string | null {
+  const role = normalizeRole(pending.role);
+  if (role) {
+    return role;
+  }
+  if (!Array.isArray(pending.roles)) {
+    return null;
+  }
+  for (const candidate of pending.roles) {
+    const normalized = normalizeRole(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
 }
 
 function newToken() {
@@ -256,25 +384,6 @@ function scopesWithinApprovedDeviceBaseline(params: {
   });
 }
 
-function resolveMissingRequestedScope(params: {
-  role: string;
-  requestedScopes: readonly string[];
-  callerScopes: readonly string[];
-}): string | null {
-  for (const scope of params.requestedScopes) {
-    if (
-      !roleScopesAllow({
-        role: params.role,
-        requestedScopes: [scope],
-        allowedScopes: params.callerScopes,
-      })
-    ) {
-      return scope;
-    }
-  }
-  return null;
-}
-
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
   const state = await loadState(baseDir);
   const pending = Object.values(state.pendingById).toSorted((a, b) => b.ts - a.ts);
@@ -315,43 +424,53 @@ export async function requestDevicePairing(
       throw new Error("deviceId required");
     }
     const isRepair = Boolean(state.pairedByDeviceId[deviceId]);
-    const existing = Object.values(state.pendingById).find(
-      (pending) => pending.deviceId === deviceId,
-    );
-    if (existing) {
-      const merged = mergePendingDevicePairingRequest(existing, req, isRepair);
-      state.pendingById[existing.requestId] = merged;
-      await persistState(state, baseDir);
-      return { status: "pending" as const, request: merged, created: false };
-    }
-
-    const request: DevicePairingPendingRequest = {
-      requestId: randomUUID(),
-      deviceId,
-      publicKey: req.publicKey,
-      displayName: req.displayName,
-      platform: req.platform,
-      deviceFamily: req.deviceFamily,
-      clientId: req.clientId,
-      clientMode: req.clientMode,
-      role: req.role,
-      roles: req.role ? [req.role] : undefined,
-      scopes: req.scopes,
-      remoteIp: req.remoteIp,
-      silent: req.silent,
-      isRepair,
-      ts: Date.now(),
-    };
-    state.pendingById[request.requestId] = request;
-    await persistState(state, baseDir);
-    return { status: "pending" as const, request, created: true };
+    const pendingForDevice = Object.values(state.pendingById)
+      .filter((pending) => pending.deviceId === deviceId)
+      .toSorted((left, right) => right.ts - left.ts);
+    return await reconcilePendingPairingRequests({
+      pendingById: state.pendingById,
+      existing: pendingForDevice,
+      incoming: req,
+      canRefreshSingle: (existing, incoming) => samePendingApprovalSnapshot(existing, incoming),
+      refreshSingle: (existing, incoming) =>
+        refreshPendingDevicePairingRequest(existing, incoming, isRepair),
+      buildReplacement: ({ existing, incoming }) => {
+        const latestPending = existing[0];
+        const mergedRoles = mergeRoles(
+          ...existing.flatMap((pending) => [pending.roles, pending.role]),
+          incoming.roles,
+          incoming.role,
+        );
+        const mergedScopes = mergeScopes(
+          ...existing.map((pending) => pending.scopes),
+          incoming.scopes,
+        );
+        return buildPendingDevicePairingRequest({
+          deviceId,
+          isRepair,
+          req: {
+            ...incoming,
+            role: normalizeRole(incoming.role) ?? latestPending?.role,
+            roles: mergedRoles,
+            scopes: mergedScopes,
+            // Preserve interactive visibility when superseding pending requests:
+            // if any previous pending request was interactive, keep this one interactive.
+            silent: resolveSupersededPendingSilent({
+              existing,
+              incomingSilent: incoming.silent,
+            }),
+          },
+        });
+      },
+      persist: async () => await persistState(state, baseDir),
+    });
   });
 }
 
 export async function approveDevicePairing(
   requestId: string,
   baseDir?: string,
-): Promise<ApprovedDevicePairingResult | null>;
+): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
   options: { callerScopes?: readonly string[] },
@@ -373,11 +492,21 @@ export async function approveDevicePairing(
     if (!pending) {
       return null;
     }
-    if (pending.role && options?.callerScopes) {
+    const approvalRole = resolvePendingApprovalRole(pending);
+    if (approvalRole) {
+      const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
+        scope.startsWith(OPERATOR_SCOPE_PREFIX),
+      );
+      if (!options?.callerScopes) {
+        return {
+          status: "forbidden",
+          missingScope: requestedOperatorScopes[0] ?? "callerScopes-required",
+        };
+      }
       const missingScope = resolveMissingRequestedScope({
-        role: pending.role,
-        requestedScopes: normalizeDeviceAuthScopes(pending.scopes),
-        callerScopes: options.callerScopes,
+        role: approvalRole,
+        requestedScopes: requestedOperatorScopes,
+        allowedScopes: options.callerScopes,
       });
       if (missingScope) {
         return { status: "forbidden", missingScope };

@@ -6,7 +6,12 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import {
+  consumePendingToolMediaReply,
+  hasAssistantVisibleReply,
+} from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
 export {
@@ -50,6 +55,8 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
+    const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
+    const rawErrorConsoleSuffix = safeRawErrorPreview ? ` rawError=${safeRawErrorPreview}` : "";
     ctx.log.warn("embedded run agent end", {
       event: "embedded_run_agent_end",
       tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
@@ -60,7 +67,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       model: lastAssistant.model,
       provider: lastAssistant.provider,
       ...observedError,
-      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}`,
+      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
     });
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -94,20 +101,48 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     });
   }
 
-  ctx.flushBlockReplyBuffer();
-  // Flush the reply pipeline so the response reaches the channel before
-  // compaction wait blocks the run.  This mirrors the pattern used by
-  // handleToolExecutionStart and ensures delivery is not held hostage to
-  // long-running compaction (#35074).
-  void ctx.params.onBlockReplyFlush?.();
+  const finalizeAgentEnd = () => {
+    ctx.state.blockState.thinking = false;
+    ctx.state.blockState.final = false;
+    ctx.state.blockState.inlineCode = createInlineCodeState();
 
-  ctx.state.blockState.thinking = false;
-  ctx.state.blockState.final = false;
-  ctx.state.blockState.inlineCode = createInlineCodeState();
+    if (ctx.state.pendingCompactionRetry > 0) {
+      ctx.resolveCompactionRetry();
+    } else {
+      ctx.maybeResolveCompactionWait();
+    }
+  };
 
-  if (ctx.state.pendingCompactionRetry > 0) {
-    ctx.resolveCompactionRetry();
-  } else {
-    ctx.maybeResolveCompactionWait();
+  const flushPendingMediaAndChannel = () => {
+    const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
+    if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
+      ctx.emitBlockReply(pendingToolMediaReply);
+    }
+
+    const postMediaFlushResult = ctx.flushBlockReplyBuffer();
+    if (isPromiseLike<void>(postMediaFlushResult)) {
+      return postMediaFlushResult.then(() => {
+        const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+        if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+          return onBlockReplyFlushResult;
+        }
+      });
+    }
+
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+      return onBlockReplyFlushResult;
+    }
+  };
+
+  const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+  finalizeAgentEnd();
+  if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
+    return flushBlockReplyBufferResult.then(() => flushPendingMediaAndChannel());
+  }
+
+  const flushPendingMediaAndChannelResult = flushPendingMediaAndChannel();
+  if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
+    return flushPendingMediaAndChannelResult;
   }
 }

@@ -60,7 +60,7 @@ describe("config secret refs schema", () => {
           "openai-codex": {
             baseUrl: "https://chatgpt.com/backend-api",
             api: "openai-codex-responses",
-            models: [{ id: "gpt-5.3-codex", name: "gpt-5.3-codex" }],
+            models: [{ id: "gpt-5.4", name: "gpt-5.4" }],
           },
         },
       },

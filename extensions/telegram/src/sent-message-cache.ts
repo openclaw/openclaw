@@ -1,5 +1,3 @@
-import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
-
 /**
  * In-memory cache of sent message IDs per chat.
  * Used to identify bot's own messages for reaction filtering ("own" mode).
@@ -7,28 +5,33 @@ import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-type CacheEntry = {
-  timestamps: Map<number, number>;
-};
-
 /**
  * Keep sent-message tracking shared across bundled chunks so Telegram reaction
  * filters see the same sent-message history regardless of which chunk recorded it.
  */
 const TELEGRAM_SENT_MESSAGES_KEY = Symbol.for("openclaw.telegramSentMessages");
 
-const sentMessages = resolveGlobalMap<string, CacheEntry>(TELEGRAM_SENT_MESSAGES_KEY);
+let sentMessages: Map<string, Map<string, number>> | undefined;
 
-function getChatKey(chatId: number | string): string {
-  return String(chatId);
+function getSentMessages(): Map<string, Map<string, number>> {
+  if (!sentMessages) {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    sentMessages =
+      (globalStore[TELEGRAM_SENT_MESSAGES_KEY] as Map<string, Map<string, number>> | undefined) ??
+      new Map<string, Map<string, number>>();
+    globalStore[TELEGRAM_SENT_MESSAGES_KEY] = sentMessages;
+  }
+  return sentMessages;
 }
 
-function cleanupExpired(entry: CacheEntry): void {
-  const now = Date.now();
-  for (const [msgId, timestamp] of entry.timestamps) {
+function cleanupExpired(scopeKey: string, entry: Map<string, number>, now: number): void {
+  for (const [id, timestamp] of entry) {
     if (now - timestamp > TTL_MS) {
-      entry.timestamps.delete(msgId);
+      entry.delete(id);
     }
+  }
+  if (entry.size === 0) {
+    getSentMessages().delete(scopeKey);
   }
 }
 
@@ -36,16 +39,18 @@ function cleanupExpired(entry: CacheEntry): void {
  * Record a message ID as sent by the bot.
  */
 export function recordSentMessage(chatId: number | string, messageId: number): void {
-  const key = getChatKey(chatId);
-  let entry = sentMessages.get(key);
+  const scopeKey = String(chatId);
+  const idKey = String(messageId);
+  const now = Date.now();
+  const store = getSentMessages();
+  let entry = store.get(scopeKey);
   if (!entry) {
-    entry = { timestamps: new Map() };
-    sentMessages.set(key, entry);
+    entry = new Map<string, number>();
+    store.set(scopeKey, entry);
   }
-  entry.timestamps.set(messageId, Date.now());
-  // Periodic cleanup
-  if (entry.timestamps.size > 100) {
-    cleanupExpired(entry);
+  entry.set(idKey, now);
+  if (entry.size > 100) {
+    cleanupExpired(scopeKey, entry, now);
   }
 }
 
@@ -53,19 +58,19 @@ export function recordSentMessage(chatId: number | string, messageId: number): v
  * Check if a message was sent by the bot.
  */
 export function wasSentByBot(chatId: number | string, messageId: number): boolean {
-  const key = getChatKey(chatId);
-  const entry = sentMessages.get(key);
+  const scopeKey = String(chatId);
+  const idKey = String(messageId);
+  const entry = getSentMessages().get(scopeKey);
   if (!entry) {
     return false;
   }
-  // Clean up expired entries on read
-  cleanupExpired(entry);
-  return entry.timestamps.has(messageId);
+  cleanupExpired(scopeKey, entry, Date.now());
+  return entry.has(idKey);
 }
 
 /**
  * Clear all cached entries (for testing).
  */
 export function clearSentMessageCache(): void {
-  sentMessages.clear();
+  getSentMessages().clear();
 }

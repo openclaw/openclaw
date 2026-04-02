@@ -1,9 +1,9 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
-import { normalizeHostname } from "../../../../src/infra/net/hostname.js";
-import type { FetchLike } from "../../../../src/media/fetch.js";
-import { fetchRemoteMedia } from "../../../../src/media/fetch.js";
-import { saveMediaBuffer } from "../../../../src/media/store.js";
-import { resolveRequestUrl } from "../../../../src/plugin-sdk/request-url.js";
+import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
+import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
+import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import type { SlackAttachment, SlackFile } from "../types.js";
 
 function isSlackHostname(hostname: string): boolean {
@@ -337,6 +337,7 @@ export async function resolveSlackAttachmentContent(params: {
 export type SlackThreadStarter = {
   text: string;
   userId?: string;
+  botId?: string;
   ts?: string;
   files?: SlackFile[];
 };
@@ -391,7 +392,15 @@ export async function resolveSlackThreadStarter(params: {
       ts: params.threadTs,
       limit: 1,
       inclusive: true,
-    })) as { messages?: Array<{ text?: string; user?: string; ts?: string; files?: SlackFile[] }> };
+    })) as {
+      messages?: Array<{
+        text?: string;
+        user?: string;
+        bot_id?: string;
+        ts?: string;
+        files?: SlackFile[];
+      }>;
+    };
     const message = response?.messages?.[0];
     const text = (message?.text ?? "").trim();
     if (!message || !text) {
@@ -400,6 +409,7 @@ export async function resolveSlackThreadStarter(params: {
     const starter: SlackThreadStarter = {
       text,
       userId: message.user,
+      botId: message.bot_id,
       ts: message.ts,
       files: message.files,
     };

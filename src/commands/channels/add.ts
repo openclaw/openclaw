@@ -5,15 +5,19 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelId, ChannelPlugin, ChannelSetupInput } from "../../channels/plugins/types.js";
-import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
+import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
+import {
+  createChannelOnboardingPostWriteHookCollector,
+  runCollectedChannelOnboardingPostWriteHooks,
+} from "../onboard-channels.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
-import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
+import { channelLabel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
 export type ChannelsAddOptions = {
   channel?: string;
@@ -42,10 +46,12 @@ export async function channelsAddCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) {
+  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
+  if (!configSnapshot) {
     return;
   }
+  const cfg = (configSnapshot.sourceConfig ?? configSnapshot.config) as OpenClawConfig;
+  const baseHash = configSnapshot.hash;
   let nextConfig = cfg;
 
   const useWizard = shouldUseWizard(params);
@@ -55,6 +61,7 @@ export async function channelsAddCommand(
       import("../onboard-channels.js"),
     ]);
     const prompter = createClackPrompter();
+    const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
     let selection: ChannelChoice[] = [];
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
     const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
@@ -62,6 +69,9 @@ export async function channelsAddCommand(
     let nextConfig = await setupChannels(cfg, runtime, prompter, {
       allowDisable: false,
       allowSignalInstall: true,
+      onPostWriteHook: (hook) => {
+        postWriteHooks.collect(hook);
+      },
       promptAccountIds: true,
       onSelection: (value) => {
         selection = value;
@@ -169,7 +179,15 @@ export async function channelsAddCommand(
       }
     }
 
-    await writeConfigFile(nextConfig);
+    await replaceConfigFile({
+      nextConfig,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
+    await runCollectedChannelOnboardingPostWriteHooks({
+      hooks: postWriteHooks.drain(),
+      cfg: nextConfig,
+      runtime,
+    });
     await prompter.outro("Channels updated.");
     return;
   }
@@ -335,6 +353,30 @@ export async function channelsAddCommand(
     runtime,
   });
 
-  await writeConfigFile(nextConfig);
+  await replaceConfigFile({
+    nextConfig,
+    ...(baseHash !== undefined ? { baseHash } : {}),
+  });
   runtime.log(`Added ${channelLabel(channel)} account "${accountId}".`);
+  const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
+  if (afterAccountConfigWritten) {
+    await runCollectedChannelOnboardingPostWriteHooks({
+      hooks: [
+        {
+          channel,
+          accountId,
+          run: async ({ cfg: writtenCfg, runtime: hookRuntime }) =>
+            await afterAccountConfigWritten({
+              previousCfg: cfg,
+              cfg: writtenCfg,
+              accountId,
+              input,
+              runtime: hookRuntime,
+            }),
+        },
+      ],
+      cfg: nextConfig,
+      runtime,
+    });
+  }
 }

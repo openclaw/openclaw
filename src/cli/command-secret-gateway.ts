@@ -2,6 +2,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
+import { resolveBundledWebFetchPluginId } from "../plugins/bundled-web-fetch-provider-ids.js";
+import { resolveBundledWebSearchPluginId } from "../plugins/bundled-web-search-provider-ids.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   type UnresolvedCommandSecretAssignment,
@@ -54,14 +56,13 @@ type GatewaySecretsResolveResult = {
   inactiveRefPaths?: string[];
 };
 
-const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = [
-  "tools.web.search",
-  "tools.web.fetch.firecrawl",
-] as const;
-const WEB_RUNTIME_SECRET_PATH_PREFIXES = [
-  "tools.web.search.",
-  "tools.web.fetch.firecrawl.",
-] as const;
+const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = ["tools.web.search", "plugins.entries."] as const;
+const WEB_RUNTIME_SECRET_PATH_PREFIXES = ["tools.web.search.", "plugins.entries."] as const;
+
+function pluginIdFromRuntimeWebPath(path: string): string | undefined {
+  const match = /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path);
+  return match?.[1];
+}
 
 function normalizeCommandSecretResolutionMode(
   mode?: CommandSecretResolutionModeInput,
@@ -97,6 +98,119 @@ function targetsRuntimeWebPath(path: string): boolean {
   return WEB_RUNTIME_SECRET_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
+function classifyRuntimeWebTargetPathState(params: {
+  config: OpenClawConfig;
+  path: string;
+}): "active" | "inactive" | "unknown" {
+  if (params.path === "tools.web.search.apiKey") {
+    return params.config.tools?.web?.search?.enabled !== false ? "active" : "inactive";
+  }
+
+  const pluginId = pluginIdFromRuntimeWebPath(params.path);
+  if (pluginId) {
+    if (params.path.endsWith(".config.webFetch.apiKey")) {
+      const fetch = params.config.tools?.web?.fetch;
+      if (fetch?.enabled === false) {
+        return "inactive";
+      }
+      const configuredProvider =
+        typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
+      if (!configuredProvider) {
+        return "active";
+      }
+      return resolveBundledWebFetchPluginId(configuredProvider) === pluginId
+        ? "active"
+        : "inactive";
+    }
+    const search = params.config.tools?.web?.search;
+    if (search?.enabled === false) {
+      return "inactive";
+    }
+    const configuredProvider =
+      typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+    if (!configuredProvider) {
+      return "active";
+    }
+    return resolveBundledWebSearchPluginId(configuredProvider) === pluginId ? "active" : "inactive";
+  }
+
+  const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
+  if (!match) {
+    return "unknown";
+  }
+
+  const search = params.config.tools?.web?.search;
+  if (search?.enabled === false) {
+    return "inactive";
+  }
+
+  const configuredProvider =
+    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  if (!configuredProvider) {
+    return "active";
+  }
+
+  return configuredProvider === match[1] ? "active" : "inactive";
+}
+
+function describeInactiveRuntimeWebTargetPath(params: {
+  config: OpenClawConfig;
+  path: string;
+}): string | undefined {
+  if (params.path === "tools.web.search.apiKey") {
+    return params.config.tools?.web?.search?.enabled === false
+      ? "tools.web.search is disabled."
+      : undefined;
+  }
+
+  const pluginId = pluginIdFromRuntimeWebPath(params.path);
+  if (pluginId) {
+    if (params.path.endsWith(".config.webFetch.apiKey")) {
+      const fetch = params.config.tools?.web?.fetch;
+      if (fetch?.enabled === false) {
+        return "tools.web.fetch is disabled.";
+      }
+      const configuredProvider =
+        typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
+      if (configuredProvider) {
+        return `tools.web.fetch.provider is "${configuredProvider}".`;
+      }
+      return undefined;
+    }
+    const search = params.config.tools?.web?.search;
+    if (search?.enabled === false) {
+      return "tools.web.search is disabled.";
+    }
+    const configuredProvider =
+      typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+    const configuredPluginId = configuredProvider
+      ? resolveBundledWebSearchPluginId(configuredProvider)
+      : undefined;
+    if (configuredPluginId && configuredPluginId !== pluginId) {
+      return `tools.web.search.provider is "${configuredProvider}".`;
+    }
+    return undefined;
+  }
+
+  const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
+  if (!match) {
+    return undefined;
+  }
+
+  const search = params.config.tools?.web?.search;
+  if (search?.enabled === false) {
+    return "tools.web.search is disabled.";
+  }
+
+  const configuredProvider =
+    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  if (configuredProvider && configuredProvider !== match[1]) {
+    return `tools.web.search.provider is "${configuredProvider}".`;
+  }
+
+  return undefined;
+}
+
 function targetsRuntimeWebResolution(params: {
   targetIds: ReadonlySet<string>;
   allowedPaths?: ReadonlySet<string>;
@@ -120,10 +234,14 @@ function targetsRuntimeWebResolution(params: {
 function collectConfiguredTargetRefPaths(params: {
   config: OpenClawConfig;
   targetIds: Set<string>;
+  allowedPaths?: ReadonlySet<string>;
 }): Set<string> {
   const defaults = params.config.secrets?.defaults;
   const configuredTargetRefPaths = new Set<string>();
   for (const target of discoverConfigSecretTargetsByIds(params.config, params.targetIds)) {
+    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
+      continue;
+    }
     const { ref } = resolveSecretInputRef({
       value: target.value,
       refValue: target.refValue,
@@ -238,6 +356,13 @@ function isUnsupportedSecretsResolveError(err: unknown): boolean {
   );
 }
 
+function isDirectRuntimeWebTargetPath(path: string): boolean {
+  return (
+    /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path) ||
+    /^tools\.web\.search\.[^.]+\.apiKey$/.test(path)
+  );
+}
+
 async function resolveCommandSecretRefsLocally(params: {
   config: OpenClawConfig;
   commandName: string;
@@ -253,12 +378,22 @@ async function resolveCommandSecretRefsLocally(params: {
     env: process.env,
   });
   const localResolutionDiagnostics: string[] = [];
+  const discoveredTargets = discoverConfigSecretTargetsByIds(sourceConfig, params.targetIds).filter(
+    (target) => !params.allowedPaths || params.allowedPaths.has(target.path),
+  );
+  const runtimeWebTargets = discoveredTargets.filter((target) =>
+    targetsRuntimeWebPath(target.path),
+  );
   collectConfigAssignments({
     config: structuredClone(params.config),
     context,
   });
   if (
-    targetsRuntimeWebResolution({ targetIds: params.targetIds, allowedPaths: params.allowedPaths })
+    targetsRuntimeWebResolution({
+      targetIds: params.targetIds,
+      allowedPaths: params.allowedPaths,
+    }) &&
+    !runtimeWebTargets.every((target) => isDirectRuntimeWebTargetPath(target.path))
   ) {
     try {
       await resolveRuntimeWebTools({
@@ -281,15 +416,34 @@ async function resolveCommandSecretRefsLocally(params: {
       .filter((warning) => !params.allowedPaths || params.allowedPaths.has(warning.path))
       .map((warning) => warning.path),
   );
+  const runtimeWebActivePaths = new Set<string>();
+  const runtimeWebInactiveDiagnostics: string[] = [];
+  for (const target of runtimeWebTargets) {
+    const runtimeState = classifyRuntimeWebTargetPathState({
+      config: sourceConfig,
+      path: target.path,
+    });
+    if (runtimeState === "inactive") {
+      inactiveRefPaths.add(target.path);
+      const inactiveDetail = describeInactiveRuntimeWebTargetPath({
+        config: sourceConfig,
+        path: target.path,
+      });
+      if (inactiveDetail) {
+        runtimeWebInactiveDiagnostics.push(`${target.path}: ${inactiveDetail}`);
+      }
+      continue;
+    }
+    if (runtimeState === "active") {
+      runtimeWebActivePaths.add(target.path);
+    }
+  }
   const inactiveWarningDiagnostics = context.warnings
     .filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")
     .filter((warning) => !params.allowedPaths || params.allowedPaths.has(warning.path))
     .map((warning) => warning.message);
   const activePaths = new Set(context.assignments.map((assignment) => assignment.path));
-  for (const target of discoverConfigSecretTargetsByIds(sourceConfig, params.targetIds)) {
-    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
-      continue;
-    }
+  for (const target of discoveredTargets) {
     await resolveTargetSecretLocally({
       target,
       sourceConfig,
@@ -297,6 +451,7 @@ async function resolveCommandSecretRefsLocally(params: {
       env: context.env,
       cache: context.cache,
       activePaths,
+      runtimeWebActivePaths,
       inactiveRefPaths,
       mode: params.mode,
       commandName: params.commandName,
@@ -326,6 +481,7 @@ async function resolveCommandSecretRefsLocally(params: {
     resolvedConfig,
     diagnostics: dedupeDiagnostics([
       ...params.preflightDiagnostics,
+      ...runtimeWebInactiveDiagnostics,
       ...inactiveWarningDiagnostics,
       ...filterInactiveSurfaceDiagnostics({
         diagnostics: analyzed.diagnostics,
@@ -401,6 +557,7 @@ async function resolveTargetSecretLocally(params: {
   env: NodeJS.ProcessEnv;
   cache: ReturnType<typeof createResolverContext>["cache"];
   activePaths: ReadonlySet<string>;
+  runtimeWebActivePaths: ReadonlySet<string>;
   inactiveRefPaths: ReadonlySet<string>;
   mode: CommandSecretResolutionMode;
   commandName: string;
@@ -415,7 +572,8 @@ async function resolveTargetSecretLocally(params: {
   if (
     !ref ||
     params.inactiveRefPaths.has(params.target.path) ||
-    !params.activePaths.has(params.target.path)
+    (!params.activePaths.has(params.target.path) &&
+      !params.runtimeWebActivePaths.has(params.target.path))
   ) {
     return;
   }
@@ -449,11 +607,13 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   commandName: string;
   targetIds: Set<string>;
   mode?: CommandSecretResolutionModeInput;
+  allowedPaths?: ReadonlySet<string>;
 }): Promise<ResolveCommandSecretsResult> {
   const mode = normalizeCommandSecretResolutionMode(params.mode);
   const configuredTargetRefPaths = collectConfiguredTargetRefPaths({
     config: params.config,
     targetIds: params.targetIds,
+    allowedPaths: params.allowedPaths,
   });
   if (configuredTargetRefPaths.size === 0) {
     return {
@@ -498,6 +658,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         targetIds: params.targetIds,
         preflightDiagnostics: preflight.diagnostics,
         mode,
+        allowedPaths: params.allowedPaths,
       });
       const recoveredLocally = Object.values(fallback.targetStatesByPath).some(
         (state) => state === "resolved_local",
@@ -556,6 +717,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     resolvedConfig,
     targetIds: params.targetIds,
     inactiveRefPaths,
+    allowedPaths: params.allowedPaths,
   });
   let diagnostics = dedupeDiagnostics(parsed.diagnostics);
   const targetStatesByPath = buildTargetStatesByPath({

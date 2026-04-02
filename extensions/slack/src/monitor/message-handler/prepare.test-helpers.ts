@@ -1,7 +1,8 @@
 import type { App } from "@slack/bolt";
-import type { OpenClawConfig } from "../../../../../src/config/config.js";
-import type { RuntimeEnv } from "../../../../../src/runtime.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import type { SlackChannelConfigEntries } from "../channel-config.js";
 import { createSlackMonitorContext } from "../context.js";
 
 export function createInboundSlackTestContext(params: {
@@ -9,7 +10,7 @@ export function createInboundSlackTestContext(params: {
   appClient?: App["client"];
   defaultRequireMention?: boolean;
   replyToMode?: "off" | "all" | "first";
-  channelsConfig?: Record<string, { systemPrompt: string }>;
+  channelsConfig?: SlackChannelConfigEntries;
 }) {
   return createSlackMonitorContext({
     cfg: params.cfg,

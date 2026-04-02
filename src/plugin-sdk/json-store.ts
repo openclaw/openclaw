@@ -1,6 +1,13 @@
 import fs from "node:fs";
+import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
 import { safeParseJson } from "../utils.js";
+
+/** Read small JSON blobs synchronously for token/state caches. */
+export { loadJsonFile };
+
+/** Persist small JSON blobs synchronously with restrictive permissions. */
+export { saveJsonFile };
 
 /** Read JSON from disk and fall back cleanly when the file is missing or invalid. */
 export async function readJsonFileWithFallback<T>(

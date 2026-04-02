@@ -17,7 +17,7 @@ export function registerNodesPairingCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending } = parsePairingList(result);
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(pending, null, 2));
+            defaultRuntime.writeJson(pending);
             return;
           }
           if (pending.length === 0) {
@@ -50,7 +50,7 @@ export function registerNodesPairingCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.approve", opts, {
             requestId,
           });
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
         });
       }),
   );
@@ -65,7 +65,7 @@ export function registerNodesPairingCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.reject", opts, {
             requestId,
           });
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
         });
       }),
   );
@@ -90,7 +90,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             displayName: name,
           });
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+            defaultRuntime.writeJson(result);
             return;
           }
           const { ok } = getNodesTheme();

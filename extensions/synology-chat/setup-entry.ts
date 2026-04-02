@@ -1,5 +1,4 @@
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
 import { synologyChatPlugin } from "./src/channel.js";
 
-export default {
-  plugin: synologyChatPlugin,
-};
+export default defineSetupPluginEntry(synologyChatPlugin);

@@ -1,1 +1,1 @@
-export * from "../../../../../extensions/discord/src/actions/handle-action.js";
+export * from "../../../../plugin-sdk/discord.js";

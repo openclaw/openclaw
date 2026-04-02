@@ -9,6 +9,7 @@ export type ProviderAuthChoiceMetadata = {
   choiceId: string;
   choiceLabel: string;
   choiceHint?: string;
+  deprecatedChoiceIds?: string[];
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
@@ -16,6 +17,7 @@ export type ProviderAuthChoiceMetadata = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
+  onboardingScopes?: ("text-inference" | "image-generation")[];
 };
 
 export type ProviderOnboardAuthFlag = {
@@ -45,6 +47,7 @@ export function resolveManifestProviderAuthChoices(params?: {
       choiceId: choice.choiceId,
       choiceLabel: choice.choiceLabel ?? choice.choiceId,
       ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+      ...(choice.deprecatedChoiceIds ? { deprecatedChoiceIds: choice.deprecatedChoiceIds } : {}),
       ...(choice.groupId ? { groupId: choice.groupId } : {}),
       ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
       ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
@@ -52,6 +55,7 @@ export function resolveManifestProviderAuthChoices(params?: {
       ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
       ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
       ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
+      ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
     })),
   );
 }
@@ -90,6 +94,23 @@ export function resolveManifestProviderApiKeyChoice(params: {
     }
     return normalizeProviderIdForAuth(choice.providerId) === normalizedProviderId;
   });
+}
+
+export function resolveManifestDeprecatedProviderAuthChoice(
+  choiceId: string,
+  params?: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): ProviderAuthChoiceMetadata | undefined {
+  const normalized = choiceId.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return resolveManifestProviderAuthChoices(params).find((choice) =>
+    choice.deprecatedChoiceIds?.includes(normalized),
+  );
 }
 
 export function resolveManifestProviderOnboardAuthFlags(params?: {

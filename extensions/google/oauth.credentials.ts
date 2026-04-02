@@ -1,6 +1,26 @@
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import type { Dirent } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { CLIENT_ID_KEYS, CLIENT_SECRET_KEYS } from "./oauth.shared.js";
+
+type CredentialFs = {
+  existsSync: (path: Parameters<typeof existsSync>[0]) => ReturnType<typeof existsSync>;
+  readFileSync: (path: Parameters<typeof readFileSync>[0], encoding: "utf8") => string;
+  realpathSync: (path: Parameters<typeof realpathSync>[0]) => string;
+  readdirSync: (
+    path: Parameters<typeof readdirSync>[0],
+    options: { withFileTypes: true },
+  ) => Dirent[];
+};
+
+const defaultFs: CredentialFs = {
+  existsSync,
+  readFileSync,
+  realpathSync,
+  readdirSync,
+};
+
+let credentialFs: CredentialFs = defaultFs;
 
 function resolveEnv(keys: string[]): string | undefined {
   for (const key of keys) {
@@ -18,6 +38,10 @@ export function clearCredentialsCache(): void {
   cachedGeminiCliCredentials = null;
 }
 
+export function setOAuthCredentialsFsForTest(overrides?: Partial<CredentialFs>): void {
+  credentialFs = overrides ? { ...defaultFs, ...overrides } : defaultFs;
+}
+
 export function extractGeminiCliCredentials(): { clientId: string; clientSecret: string } | null {
   if (cachedGeminiCliCredentials) {
     return cachedGeminiCliCredentials;
@@ -29,7 +53,7 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
       return null;
     }
 
-    const resolvedPath = realpathSync(geminiPath);
+    const resolvedPath = credentialFs.realpathSync(geminiPath);
     const geminiCliDirs = resolveGeminiCliDirs(geminiPath, resolvedPath);
 
     let content: string | null = null;
@@ -55,10 +79,9 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
           "oauth2.js",
         ),
       ];
-
       for (const path of searchPaths) {
-        if (existsSync(path)) {
-          content = readFileSync(path, "utf8");
+        if (credentialFs.existsSync(path)) {
+          content = credentialFs.readFileSync(path, "utf8");
           break;
         }
       }
@@ -67,7 +90,7 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
       }
       const found = findFile(geminiCliDir, "oauth2.js", 10);
       if (found) {
-        content = readFileSync(found, "utf8");
+        content = credentialFs.readFileSync(found, "utf8");
         break;
       }
     }
@@ -116,7 +139,7 @@ function findInPath(name: string): string | null {
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     for (const ext of exts) {
       const path = join(dir, name + ext);
-      if (existsSync(path)) {
+      if (credentialFs.existsSync(path)) {
         return path;
       }
     }
@@ -129,7 +152,7 @@ function findFile(dir: string, name: string, depth: number): string | null {
     return null;
   }
   try {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    for (const entry of credentialFs.readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       if (entry.isFile() && entry.name === name) {
         return path;

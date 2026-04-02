@@ -1,6 +1,7 @@
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type {
   ProviderAuthMethod,
@@ -29,14 +30,10 @@ type ProviderApiKeyAuthMethodOptions = {
   applyConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
 
-let providerApiKeyAuthRuntimePromise:
-  | Promise<typeof import("./provider-api-key-auth.runtime.js")>
-  | undefined;
-
-function loadProviderApiKeyAuthRuntime() {
-  providerApiKeyAuthRuntimePromise ??= import("./provider-api-key-auth.runtime.js");
-  return providerApiKeyAuthRuntimePromise;
-}
+const loadProviderApiKeyAuthRuntime = createLazyRuntimeSurface(
+  () => import("./provider-api-key-auth.runtime.js"),
+  ({ providerApiKeyAuthRuntime }) => providerApiKeyAuthRuntime,
+);
 
 function resolveStringOption(opts: Record<string, unknown> | undefined, optionKey: string) {
   return normalizeOptionalSecretInput(opts?.[optionKey]);
@@ -114,6 +111,7 @@ export function createProviderApiKeyAuthMethod(
             ? (ctx.secretInputMode ?? "plaintext")
             : ctx.secretInputMode,
         config: ctx.config,
+        env: ctx.env,
         expectedProviders: params.expectedProviders ?? [params.providerId],
         provider: params.providerId,
         envLabel: params.envVar,

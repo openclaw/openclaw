@@ -1,10 +1,5 @@
-import {
-  TtsAutoSchema,
-  TtsConfigSchema,
-  TtsModeSchema,
-  TtsProviderSchema,
-} from "openclaw/plugin-sdk/voice-call";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
+import { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
 
 // -----------------------------------------------------------------------------

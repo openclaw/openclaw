@@ -1,11 +1,11 @@
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildBytePlusModelDefinition,
   BYTEPLUS_BASE_URL,
   BYTEPLUS_CODING_BASE_URL,
   BYTEPLUS_CODING_MODEL_CATALOG,
   BYTEPLUS_MODEL_CATALOG,
-} from "../../src/agents/byteplus-models.js";
-import type { ModelProviderConfig } from "../../src/config/types.models.js";
+} from "./api.js";
 
 export function buildBytePlusProvider(): ModelProviderConfig {
   return {

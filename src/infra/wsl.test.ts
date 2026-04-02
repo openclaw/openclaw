@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
@@ -14,7 +14,11 @@ vi.mock("node:fs/promises", () => ({
   },
 }));
 
-const { isWSLEnv, isWSLSync, isWSL2Sync, isWSL, resetWSLStateForTests } = await import("./wsl.js");
+let isWSLEnv: typeof import("./wsl.js").isWSLEnv;
+let isWSLSync: typeof import("./wsl.js").isWSLSync;
+let isWSL2Sync: typeof import("./wsl.js").isWSL2Sync;
+let isWSL: typeof import("./wsl.js").isWSL;
+let resetWSLStateForTests: typeof import("./wsl.js").resetWSLStateForTests;
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -28,12 +32,16 @@ function setPlatform(platform: NodeJS.Platform): void {
 describe("wsl detection", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
+  beforeAll(async () => {
+    ({ isWSLEnv, isWSLSync, isWSL2Sync, isWSL, resetWSLStateForTests } = await import("./wsl.js"));
+  });
+
   beforeEach(() => {
     envSnapshot = captureEnv(["WSL_INTEROP", "WSL_DISTRO_NAME", "WSLENV"]);
     readFileSyncMock.mockReset();
     readFileMock.mockReset();
-    resetWSLStateForTests();
     setPlatform("linux");
+    resetWSLStateForTests();
   });
 
   afterEach(() => {

@@ -44,7 +44,7 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
-} from "./providers/index.js";
+} from "./provider-registry.js";
 import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
 import {
   buildModelDecision,
@@ -75,8 +75,9 @@ export type RunCapabilityResult = {
 
 export function buildProviderRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,
+  cfg?: OpenClawConfig,
 ): ProviderRegistry {
-  return buildMediaUnderstandingRegistry(overrides);
+  return buildMediaUnderstandingRegistry(overrides, cfg);
 }
 
 export function normalizeMediaAttachments(ctx: MsgContext): MediaAttachment[] {
@@ -493,7 +494,7 @@ export async function resolveAutoImageModel(params: {
   agentDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
-  const providerRegistry = buildProviderRegistry();
+  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
     if (!entry || entry.type === "cli") {
       return null;

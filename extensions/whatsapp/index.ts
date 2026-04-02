@@ -1,17 +1,14 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { whatsappPlugin } from "./src/channel.js";
 import { setWhatsAppRuntime } from "./src/runtime.js";
 
-const plugin = {
+export { whatsappPlugin } from "./src/channel.js";
+export { setWhatsAppRuntime } from "./src/runtime.js";
+
+export default defineChannelPluginEntry({
   id: "whatsapp",
   name: "WhatsApp",
   description: "WhatsApp channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setWhatsAppRuntime(api.runtime);
-    api.registerChannel({ plugin: whatsappPlugin });
-  },
-};
-
-export default plugin;
+  plugin: whatsappPlugin,
+  setRuntime: setWhatsAppRuntime,
+});

@@ -1,14 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { waitForTransportReady } from "./transport-ready.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-let injectedSleepError: Error | null = null;
+const transportReadyMocks = vi.hoisted(() => ({
+  injectedSleepError: null as Error | null,
+}));
 
-// Perf: `sleepWithAbort` uses `node:timers/promises` which isn't controlled by fake timers.
-// Route sleeps through global `setTimeout` so tests can advance time deterministically.
+type TransportReadyModule = typeof import("./transport-ready.js");
+let waitForTransportReady: TransportReadyModule["waitForTransportReady"];
+
 vi.mock("./backoff.js", () => ({
   sleepWithAbort: async (ms: number, signal?: AbortSignal) => {
-    if (injectedSleepError) {
-      throw injectedSleepError;
+    if (transportReadyMocks.injectedSleepError) {
+      throw transportReadyMocks.injectedSleepError;
     }
     if (signal?.aborted) {
       throw new Error("aborted");
@@ -36,13 +38,17 @@ function createRuntime() {
 }
 
 describe("waitForTransportReady", () => {
+  beforeAll(async () => {
+    ({ waitForTransportReady } = await import("./transport-ready.js"));
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    injectedSleepError = null;
+    transportReadyMocks.injectedSleepError = null;
   });
 
   it("returns when the check succeeds and logs after the delay", async () => {
@@ -152,7 +158,7 @@ describe("waitForTransportReady", () => {
 
   it("rethrows non-abort sleep failures", async () => {
     const runtime = createRuntime();
-    injectedSleepError = new Error("sleep exploded");
+    transportReadyMocks.injectedSleepError = new Error("sleep exploded");
 
     await expect(
       waitForTransportReady({

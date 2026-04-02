@@ -1,94 +1,102 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const listChannelPluginsMock = vi.hoisted(() => vi.fn());
+const isDeliverableMessageChannelMock = vi.hoisted(() => vi.fn());
 const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: (...args: unknown[]) => loadConfigMock(...args),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+  };
+});
 
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-  listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
-}));
-
-vi.mock("../../extensions/discord/src/channel.js", () => ({
-  discordPlugin: {},
-}));
-
-vi.mock("../../extensions/telegram/src/channel.js", () => ({
-  telegramPlugin: {},
-}));
-
-vi.mock("../../extensions/slack/src/channel.js", () => ({
-  slackPlugin: {},
-}));
-
-vi.mock("../../extensions/whatsapp/src/channel.js", () => ({
-  whatsappPlugin: {},
-}));
-
-vi.mock("../../extensions/signal/src/channel.js", () => ({
-  signalPlugin: {},
-}));
-
-vi.mock("../../extensions/imessage/src/channel.js", () => ({
-  imessagePlugin: {},
-}));
+vi.mock("../channels/plugins/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/index.js")>(
+    "../channels/plugins/index.js",
+  );
+  return {
+    ...actual,
+    getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+    listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
+  };
+});
 
 vi.mock("../utils/message-channel.js", () => ({
   INTERNAL_MESSAGE_CHANNEL: "web",
+  isDeliverableMessageChannel: (...args: unknown[]) => isDeliverableMessageChannelMock(...args),
   normalizeMessageChannel: (...args: unknown[]) => normalizeMessageChannelMock(...args),
 }));
 
-import {
-  hasConfiguredExecApprovalDmRoute,
-  resolveExecApprovalInitiatingSurfaceState,
-} from "./exec-approval-surface.js";
+type ExecApprovalSurfaceModule = typeof import("./exec-approval-surface.js");
+
+let hasConfiguredExecApprovalDmRoute: ExecApprovalSurfaceModule["hasConfiguredExecApprovalDmRoute"];
+let resolveExecApprovalInitiatingSurfaceState: ExecApprovalSurfaceModule["resolveExecApprovalInitiatingSurfaceState"];
 
 describe("resolveExecApprovalInitiatingSurfaceState", () => {
+  beforeAll(async () => {
+    ({ hasConfiguredExecApprovalDmRoute, resolveExecApprovalInitiatingSurfaceState } =
+      await import("./exec-approval-surface.js"));
+  });
+
   beforeEach(() => {
     loadConfigMock.mockReset();
     getChannelPluginMock.mockReset();
     listChannelPluginsMock.mockReset();
+    isDeliverableMessageChannelMock.mockReset();
     normalizeMessageChannelMock.mockReset();
     normalizeMessageChannelMock.mockImplementation((value?: string | null) =>
       typeof value === "string" ? value.trim().toLowerCase() : undefined,
     );
+    isDeliverableMessageChannelMock.mockImplementation(
+      (value?: string) => value === "slack" || value === "discord" || value === "telegram",
+    );
   });
 
-  it("treats web UI, terminal UI, and missing channels as enabled", () => {
-    expect(resolveExecApprovalInitiatingSurfaceState({ channel: null })).toEqual({
-      kind: "enabled",
-      channel: undefined,
-      channelLabel: "this platform",
-    });
-    expect(resolveExecApprovalInitiatingSurfaceState({ channel: "tui" })).toEqual({
-      kind: "enabled",
+  it.each([
+    {
+      channel: null,
+      expected: {
+        kind: "enabled",
+        channel: undefined,
+        channelLabel: "this platform",
+      },
+    },
+    {
       channel: "tui",
-      channelLabel: "terminal UI",
-    });
-    expect(resolveExecApprovalInitiatingSurfaceState({ channel: "web" })).toEqual({
-      kind: "enabled",
+      expected: {
+        kind: "enabled",
+        channel: "tui",
+        channelLabel: "terminal UI",
+      },
+    },
+    {
       channel: "web",
-      channelLabel: "Web UI",
-    });
+      expected: {
+        kind: "enabled",
+        channel: "web",
+        channelLabel: "Web UI",
+      },
+    },
+  ])("treats built-in initiating surface %j", ({ channel, expected }) => {
+    expect(resolveExecApprovalInitiatingSurfaceState({ channel })).toEqual(expected);
   });
 
   it("uses the provided cfg for telegram and discord client enablement", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
-            execApprovals: {
-              getInitiatingSurfaceState: () => ({ kind: "enabled" }),
+            auth: {
+              getActionAvailabilityState: () => ({ kind: "enabled" }),
             },
           }
         : channel === "discord"
           ? {
-              execApprovals: {
-                getInitiatingSurfaceState: () => ({ kind: "disabled" }),
+              auth: {
+                getActionAvailabilityState: () => ({ kind: "disabled" }),
               },
             }
           : undefined,
@@ -121,13 +129,33 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
 
+  it("reads approval availability from approvalCapability when auth is omitted", () => {
+    getChannelPluginMock.mockReturnValue({
+      approvalCapability: {
+        getActionAvailabilityState: () => ({ kind: "disabled" }),
+      },
+    });
+
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        channel: "discord",
+        accountId: "main",
+        cfg: {} as never,
+      }),
+    ).toEqual({
+      kind: "disabled",
+      channel: "discord",
+      channelLabel: "Discord",
+    });
+  });
+
   it("loads config lazily when cfg is omitted and marks unsupported channels", () => {
     loadConfigMock.mockReturnValueOnce({ loaded: true });
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
-            execApprovals: {
-              getInitiatingSurfaceState: () => ({ kind: "disabled" }),
+            auth: {
+              getActionAvailabilityState: () => ({ kind: "disabled" }),
             },
           }
         : undefined,
@@ -151,23 +179,85 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       channelLabel: "Signal",
     });
   });
+
+  it("treats deliverable chat channels without a custom adapter as enabled", () => {
+    expect(resolveExecApprovalInitiatingSurfaceState({ channel: "slack" })).toEqual({
+      kind: "enabled",
+      channel: "slack",
+      channelLabel: "Slack",
+    });
+  });
 });
 
 describe("hasConfiguredExecApprovalDmRoute", () => {
   beforeEach(() => {
+    loadConfigMock.mockReset();
+    getChannelPluginMock.mockReset();
     listChannelPluginsMock.mockReset();
+    isDeliverableMessageChannelMock.mockReset();
+    normalizeMessageChannelMock.mockReset();
+    normalizeMessageChannelMock.mockImplementation((value?: string | null) =>
+      typeof value === "string" ? value.trim().toLowerCase() : undefined,
+    );
+    isDeliverableMessageChannelMock.mockImplementation(
+      (value?: string) => value === "slack" || value === "discord" || value === "telegram",
+    );
   });
 
-  it("returns true when any enabled account routes approvals to DM or both", () => {
+  it.each([
+    {
+      plugins: [
+        {
+          approvals: {
+            delivery: {
+              hasConfiguredDmRoute: () => false,
+            },
+          },
+        },
+        {
+          approvals: {
+            delivery: {
+              hasConfiguredDmRoute: () => true,
+            },
+          },
+        },
+      ],
+      expected: true,
+    },
+    {
+      plugins: [
+        {
+          approvals: {
+            delivery: {
+              hasConfiguredDmRoute: () => false,
+            },
+          },
+        },
+        {
+          approvals: {
+            delivery: {
+              hasConfiguredDmRoute: () => false,
+            },
+          },
+        },
+        {
+          approvals: undefined,
+        },
+      ],
+      expected: false,
+    },
+  ])("reports whether any plugin routes approvals to DM for %j", ({ plugins, expected }) => {
+    listChannelPluginsMock.mockReturnValueOnce(plugins);
+    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(expected);
+  });
+
+  it("detects DM routes exposed through approvalCapability", () => {
     listChannelPluginsMock.mockReturnValueOnce([
       {
-        execApprovals: {
-          hasConfiguredDmRoute: () => false,
-        },
-      },
-      {
-        execApprovals: {
-          hasConfiguredDmRoute: () => true,
+        approvalCapability: {
+          delivery: {
+            hasConfiguredDmRoute: () => true,
+          },
         },
       },
     ]);
@@ -175,23 +265,20 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
     expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(true);
   });
 
-  it("returns false when no plugin reports a DM route", () => {
+  it("preserves legacy DM routes when approvalCapability only defines auth", () => {
     listChannelPluginsMock.mockReturnValueOnce([
       {
-        execApprovals: {
-          hasConfiguredDmRoute: () => false,
+        approvalCapability: {
+          authorizeActorAction: () => ({ authorized: true }),
         },
-      },
-      {
-        execApprovals: {
-          hasConfiguredDmRoute: () => false,
+        approvals: {
+          delivery: {
+            hasConfiguredDmRoute: () => true,
+          },
         },
-      },
-      {
-        execApprovals: undefined,
       },
     ]);
 
-    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(false);
+    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(true);
   });
 });

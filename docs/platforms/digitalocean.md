@@ -3,7 +3,7 @@ summary: "OpenClaw on DigitalOcean (simple paid VPS option)"
 read_when:
   - Setting up OpenClaw on DigitalOcean
   - Looking for cheap VPS hosting for OpenClaw
-title: "DigitalOcean"
+title: "DigitalOcean (Platform)"
 ---
 
 # OpenClaw on DigitalOcean
@@ -231,7 +231,7 @@ For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips
 
 ## Troubleshooting
 
-### Gateway won't start
+### Gateway will not start
 
 ```bash
 openclaw gateway status

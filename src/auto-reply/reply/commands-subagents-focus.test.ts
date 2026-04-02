@@ -103,6 +103,47 @@ function createTelegramTopicCommandParams(commandBody: string) {
   return params;
 }
 
+function createMatrixThreadCommandParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "matrix",
+    Surface: "matrix",
+    OriginatingChannel: "matrix",
+    OriginatingTo: "room:!room:example.org",
+    AccountId: "default",
+    MessageThreadId: "$thread-1",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
+function createMatrixTriggerThreadCommandParams(
+  commandBody: string,
+  cfg: OpenClawConfig = baseCfg,
+) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "matrix",
+    Surface: "matrix",
+    OriginatingChannel: "matrix",
+    OriginatingTo: "room:!room:example.org",
+    AccountId: "default",
+    MessageThreadId: "$root",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
+function createMatrixRoomCommandParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "matrix",
+    Surface: "matrix",
+    OriginatingChannel: "matrix",
+    OriginatingTo: "room:!room:example.org",
+    AccountId: "default",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
 function createSessionBindingRecord(
   overrides?: Partial<SessionBindingRecord>,
 ): SessionBindingRecord {
@@ -144,7 +185,13 @@ async function focusCodexAcp(
   hoisted.sessionBindingBindMock.mockImplementation(
     async (input: {
       targetSessionKey: string;
-      conversation: { channel: string; accountId: string; conversationId: string };
+      placement: "current" | "child";
+      conversation: {
+        channel: string;
+        accountId: string;
+        conversationId: string;
+        parentConversationId?: string;
+      };
       metadata?: Record<string, unknown>;
     }) =>
       createSessionBindingRecord({
@@ -152,7 +199,11 @@ async function focusCodexAcp(
         conversation: {
           channel: input.conversation.channel,
           accountId: input.conversation.accountId,
-          conversationId: input.conversation.conversationId,
+          conversationId:
+            input.placement === "child" ? "thread-created" : input.conversation.conversationId,
+          ...(input.conversation.parentConversationId
+            ? { parentConversationId: input.conversation.parentConversationId }
+            : {}),
         },
         metadata: {
           boundBy: typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "user-1",
@@ -220,6 +271,67 @@ describe("/focus, /unfocus, /agents", () => {
     );
   });
 
+  it("/focus creates a Matrix thread from a top-level room when spawnSubagentSessions is enabled", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        matrix: {
+          threadBindings: {
+            enabled: true,
+            spawnSubagentSessions: true,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await focusCodexAcp(createMatrixRoomCommandParams("/focus codex-acp", cfg));
+
+    expect(result?.reply?.text).toContain("created thread thread-created and bound it");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          conversationId: "!room:example.org",
+        }),
+      }),
+    );
+  });
+
+  it("/focus treats the triggering Matrix always-thread turn as the current thread", async () => {
+    const result = await focusCodexAcp(createMatrixTriggerThreadCommandParams("/focus codex-acp"));
+
+    expect(result?.reply?.text).toContain("bound this thread");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          conversationId: "$root",
+          parentConversationId: "!room:example.org",
+        }),
+      }),
+    );
+  });
+
+  it("/focus rejects Matrix top-level thread creation when spawnSubagentSessions is disabled", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        matrix: {
+          threadBindings: {
+            enabled: true,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await focusCodexAcp(createMatrixRoomCommandParams("/focus codex-acp", cfg));
+
+    expect(result?.reply?.text).toContain("spawnSubagentSessions=true");
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+  });
+
   it("/focus includes ACP session identifiers in intro text when available", async () => {
     hoisted.readAcpSessionEntryMock.mockReturnValue({
       sessionKey: "agent:codex-acp:session-1",
@@ -279,6 +391,36 @@ describe("/focus, /unfocus, /agents", () => {
     expect(result?.reply?.text).toContain("Thread unfocused");
     expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith({
       bindingId: "default:thread-1",
+      reason: "manual",
+    });
+  });
+
+  it("/unfocus removes an active Matrix thread binding for the binding owner", async () => {
+    const params = createMatrixThreadCommandParams("/unfocus");
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createSessionBindingRecord({
+        bindingId: "default:matrix-thread-1",
+        conversation: {
+          channel: "matrix",
+          accountId: "default",
+          conversationId: "$thread-1",
+          parentConversationId: "!room:example.org",
+        },
+        metadata: { boundBy: "user-1" },
+      }),
+    );
+
+    const result = await handleSubagentsCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Thread unfocused");
+    expect(hoisted.sessionBindingResolveByConversationMock).toHaveBeenCalledWith({
+      channel: "matrix",
+      accountId: "default",
+      conversationId: "$thread-1",
+      parentConversationId: "!room:example.org",
+    });
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith({
+      bindingId: "default:matrix-thread-1",
       reason: "manual",
     });
   });
@@ -401,6 +543,6 @@ describe("/focus, /unfocus, /agents", () => {
   it("/focus rejects unsupported channels", async () => {
     const params = buildCommandTestParams("/focus codex-acp", baseCfg);
     const result = await handleSubagentsCommand(params, true);
-    expect(result?.reply?.text).toContain("only available on Discord and Telegram");
+    expect(result?.reply?.text).toContain("only available on Discord, Matrix, and Telegram");
   });
 });

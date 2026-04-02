@@ -11,7 +11,7 @@ import {
   summarizeDeviceTokens,
 } from "../../infra/device-pairing.js";
 import { normalizeDeviceAuthScopes } from "../../shared/device-auth.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope } from "../../shared/operator-scope-compat.js";
 import {
   ErrorCodes,
   errorShape,
@@ -35,25 +35,6 @@ function redactPairedDevice(
     ...rest,
     tokens: summarizeDeviceTokens(tokens),
   };
-}
-
-function resolveMissingRequestedScope(params: {
-  role: string;
-  requestedScopes: readonly string[];
-  callerScopes: readonly string[];
-}): string | null {
-  for (const scope of params.requestedScopes) {
-    if (
-      !roleScopesAllow({
-        role: params.role,
-        requestedScopes: [scope],
-        allowedScopes: params.callerScopes,
-      })
-    ) {
-      return scope;
-    }
-  }
-  return null;
 }
 
 function logDeviceTokenRotationDenied(params: {
@@ -192,6 +173,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     respond(true, removed, undefined);
+    queueMicrotask(() => {
+      context.disconnectClientsForDevice?.(removed.deviceId);
+    });
   },
   "device.token.rotate": async ({ params, respond, context, client }) => {
     if (!validateDeviceTokenRotateParams(params)) {
@@ -234,7 +218,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     const missingScope = resolveMissingRequestedScope({
       role,
       requestedScopes,
-      callerScopes,
+      allowedScopes: callerScopes,
     });
     if (missingScope) {
       logDeviceTokenRotationDenied({
@@ -281,6 +265,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    queueMicrotask(() => {
+      context.disconnectClientsForDevice?.(deviceId.trim(), { role: entry.role });
+    });
   },
   "device.token.revoke": async ({ params, respond, context }) => {
     if (!validateDeviceTokenRevokeParams(params)) {
@@ -302,11 +289,19 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId/role"));
       return;
     }
-    context.logGateway.info(`device token revoked device=${deviceId} role=${entry.role}`);
+    const normalizedDeviceId = deviceId.trim();
+    context.logGateway.info(`device token revoked device=${normalizedDeviceId} role=${entry.role}`);
     respond(
       true,
-      { deviceId, role: entry.role, revokedAtMs: entry.revokedAtMs ?? Date.now() },
+      {
+        deviceId: normalizedDeviceId,
+        role: entry.role,
+        revokedAtMs: entry.revokedAtMs ?? Date.now(),
+      },
       undefined,
     );
+    queueMicrotask(() => {
+      context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
+    });
   },
 };

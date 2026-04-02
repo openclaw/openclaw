@@ -7,12 +7,14 @@ import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
+import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
 import type {
+  ProviderAuthOptionBag,
   ProviderNonInteractiveApiKeyCredentialParams,
   ProviderResolveNonInteractiveApiKeyParams,
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { resolvePreferredProviderForAuthChoice } from "../../auth-choice.preferred-provider.js";
+import { createLazyRuntimeSurface } from "../../../shared/lazy-runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
@@ -21,27 +23,41 @@ async function loadPluginProviderRuntime() {
   return import("./auth-choice.plugin-providers.runtime.js");
 }
 
+const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeSurface(
+  loadPluginProviderRuntime,
+  ({ authChoicePluginProvidersRuntime }) => authChoicePluginProvidersRuntime,
+);
+
 function buildIsolatedProviderResolutionConfig(
   cfg: OpenClawConfig,
-  providerId: string | undefined,
+  ids: Iterable<string | undefined>,
 ): OpenClawConfig {
-  if (!providerId) {
+  const allow = new Set(cfg.plugins?.allow ?? []);
+  const entries = {
+    ...cfg.plugins?.entries,
+  };
+  let changed = false;
+  for (const rawId of ids) {
+    const id = rawId?.trim();
+    if (!id) {
+      continue;
+    }
+    allow.add(id);
+    entries[id] = {
+      ...cfg.plugins?.entries?.[id],
+      enabled: true,
+    };
+    changed = true;
+  }
+  if (!changed) {
     return cfg;
   }
-  const allow = new Set(cfg.plugins?.allow ?? []);
-  allow.add(providerId);
   return {
     ...cfg,
     plugins: {
       ...cfg.plugins,
       allow: Array.from(allow),
-      entries: {
-        ...cfg.plugins?.entries,
-        [providerId]: {
-          ...cfg.plugins?.entries?.[providerId],
-          enabled: true,
-        },
-      },
+      entries,
     },
   };
 }
@@ -75,19 +91,19 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       config: params.nextConfig,
       workspaceDir,
     }));
-  const resolutionConfig = buildIsolatedProviderResolutionConfig(
-    params.nextConfig,
-    preferredProviderId,
-  );
   const { resolveOwningPluginIdsForProvider, resolveProviderPluginChoice, resolvePluginProviders } =
-    await loadPluginProviderRuntime();
+    await loadAuthChoicePluginProvidersRuntime();
   const owningPluginIds = preferredProviderId
     ? resolveOwningPluginIdsForProvider({
         provider: preferredProviderId,
-        config: resolutionConfig,
+        config: params.nextConfig,
         workspaceDir,
       })
     : undefined;
+  const resolutionConfig = buildIsolatedProviderResolutionConfig(params.nextConfig, [
+    preferredProviderId,
+    ...(owningPluginIds ?? []),
+  ]);
   const providerChoice = resolveProviderPluginChoice({
     providers: resolvePluginProviders({
       config: resolutionConfig,
@@ -130,7 +146,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     authChoice: params.authChoice,
     config: enableResult.config,
     baseConfig: params.baseConfig,
-    opts: params.opts,
+    opts: params.opts as ProviderAuthOptionBag,
     runtime: params.runtime,
     agentDir,
     workspaceDir,

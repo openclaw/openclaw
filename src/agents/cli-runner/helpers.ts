@@ -4,39 +4,28 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
-import { isRecord } from "../../utils.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
+import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { sanitizeImageBlocks } from "../tool-images.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   return CLI_RUN_QUEUE.enqueue(key, task);
 }
-
-type CliUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
-
-export type CliOutput = {
-  text: string;
-  sessionId?: string;
-  usage?: CliUsage;
-};
 
 export function buildSystemPrompt(params: {
   workspaceDir: string;
@@ -48,7 +37,6 @@ export function buildSystemPrompt(params: {
   docsPath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
-  bootstrapTruncationWarningLines?: string[];
   modelDisplay: string;
   agentId?: string;
 }) {
@@ -92,7 +80,6 @@ export function buildSystemPrompt(params: {
     userTime,
     userTimeFormat,
     contextFiles: params.contextFiles,
-    bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
   });
@@ -113,137 +100,6 @@ export function normalizeCliModel(modelId: string, backend: CliBackendConfig): s
     return mapped;
   }
   return trimmed;
-}
-
-function toUsage(raw: Record<string, unknown>): CliUsage | undefined {
-  const pick = (key: string) =>
-    typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
-  const input = pick("input_tokens") ?? pick("inputTokens");
-  const output = pick("output_tokens") ?? pick("outputTokens");
-  const cacheRead =
-    pick("cache_read_input_tokens") ?? pick("cached_input_tokens") ?? pick("cacheRead");
-  const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
-  const total = pick("total_tokens") ?? pick("total");
-  if (!input && !output && !cacheRead && !cacheWrite && !total) {
-    return undefined;
-  }
-  return { input, output, cacheRead, cacheWrite, total };
-}
-
-function collectText(value: unknown): string {
-  if (!value) {
-    return "";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => collectText(entry)).join("");
-  }
-  if (!isRecord(value)) {
-    return "";
-  }
-  if (typeof value.text === "string") {
-    return value.text;
-  }
-  if (typeof value.content === "string") {
-    return value.content;
-  }
-  if (Array.isArray(value.content)) {
-    return value.content.map((entry) => collectText(entry)).join("");
-  }
-  if (isRecord(value.message)) {
-    return collectText(value.message);
-  }
-  return "";
-}
-
-function pickSessionId(
-  parsed: Record<string, unknown>,
-  backend: CliBackendConfig,
-): string | undefined {
-  const fields = backend.sessionIdFields ?? [
-    "session_id",
-    "sessionId",
-    "conversation_id",
-    "conversationId",
-  ];
-  for (const field of fields) {
-    const value = parsed[field];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
-
-export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return null;
-  }
-  if (!isRecord(parsed)) {
-    return null;
-  }
-  const sessionId = pickSessionId(parsed, backend);
-  const usage = isRecord(parsed.usage) ? toUsage(parsed.usage) : undefined;
-  const text =
-    collectText(parsed.message) ||
-    collectText(parsed.content) ||
-    collectText(parsed.result) ||
-    collectText(parsed);
-  return { text: text.trim(), sessionId, usage };
-}
-
-export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput | null {
-  const lines = raw
-    .split(/\r?\n/g)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (lines.length === 0) {
-    return null;
-  }
-  let sessionId: string | undefined;
-  let usage: CliUsage | undefined;
-  const texts: string[] = [];
-  for (const line of lines) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!isRecord(parsed)) {
-      continue;
-    }
-    if (!sessionId) {
-      sessionId = pickSessionId(parsed, backend);
-    }
-    if (!sessionId && typeof parsed.thread_id === "string") {
-      sessionId = parsed.thread_id.trim();
-    }
-    if (isRecord(parsed.usage)) {
-      usage = toUsage(parsed.usage) ?? usage;
-    }
-    const item = isRecord(parsed.item) ? parsed.item : null;
-    if (item && typeof item.text === "string") {
-      const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
-      if (!type || type.includes("message")) {
-        texts.push(item.text);
-      }
-    }
-  }
-  const text = texts.join("\n").trim();
-  if (!text) {
-    return null;
-  }
-  return { text, sessionId, usage };
 }
 
 export function resolveSystemPromptUsage(params: {
@@ -326,6 +182,43 @@ export function appendImagePathsToPrompt(prompt: string, paths: string[]): strin
   return `${trimmed}${separator}${paths.join("\n")}`;
 }
 
+export async function loadPromptRefImages(params: {
+  prompt: string;
+  workspaceDir: string;
+  maxBytes?: number;
+  workspaceOnly?: boolean;
+  sandbox?: { root: string; bridge: SandboxFsBridge };
+}): Promise<ImageContent[]> {
+  const refs = detectImageReferences(params.prompt);
+  if (refs.length === 0) {
+    return [];
+  }
+
+  const maxBytes = params.maxBytes ?? MAX_IMAGE_BYTES;
+  const seen = new Set<string>();
+  const images: ImageContent[] = [];
+  for (const ref of refs) {
+    const key = `${ref.type}:${ref.resolved}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const image = await loadImageFromRef(ref, params.workspaceDir, {
+      maxBytes,
+      workspaceOnly: params.workspaceOnly,
+      sandbox: params.sandbox,
+    });
+    if (image) {
+      images.push(image);
+    }
+  }
+
+  const { images: sanitizedImages } = await sanitizeImageBlocks(images, "prompt:images", {
+    maxBytes,
+  });
+  return sanitizedImages;
+}
+
 export async function writeCliImages(
   images: ImageContent[],
 ): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
@@ -356,7 +249,7 @@ export function buildCliArgs(params: {
   useResume: boolean;
 }): string[] {
   const args: string[] = [...params.baseArgs];
-  if (!params.useResume && params.backend.modelArg && params.modelId) {
+  if (params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {

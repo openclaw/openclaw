@@ -38,7 +38,7 @@ Healthy baseline:
 | Group messages ignored          | Check `requireMention` + mention patterns in config | Mention the bot or relax mention policy for that group. |
 | Random disconnect/relogin loops | `openclaw channels status --probe` + logs           | Re-login and verify credentials directory is healthy.   |
 
-Full troubleshooting: [/channels/whatsapp#troubleshooting-quick](/channels/whatsapp#troubleshooting-quick)
+Full troubleshooting: [/channels/whatsapp#troubleshooting](/channels/whatsapp#troubleshooting)
 
 ## Telegram
 
@@ -90,7 +90,7 @@ Full troubleshooting: [/channels/slack#troubleshooting](/channels/slack#troubles
 
 Full troubleshooting:
 
-- [/channels/imessage#troubleshooting-macos-privacy-and-security-tcc](/channels/imessage#troubleshooting-macos-privacy-and-security-tcc)
+- [/channels/imessage#troubleshooting](/channels/imessage#troubleshooting)
 - [/channels/bluebubbles#troubleshooting](/channels/bluebubbles#troubleshooting)
 
 ## Signal
@@ -105,6 +105,19 @@ Full troubleshooting:
 
 Full troubleshooting: [/channels/signal#troubleshooting](/channels/signal#troubleshooting)
 
+## QQ Bot
+
+### QQ Bot failure signatures
+
+| Symptom                         | Fastest check                               | Fix                                                             |
+| ------------------------------- | ------------------------------------------- | --------------------------------------------------------------- |
+| Bot replies "gone to Mars"      | Verify `appId` and `clientSecret` in config | Set credentials or restart the gateway.                         |
+| No inbound messages             | `openclaw channels status --probe`          | Verify credentials on the QQ Open Platform.                     |
+| Voice not transcribed           | Check STT provider config                   | Configure `channels.qqbot.stt` or `tools.media.audio`.          |
+| Proactive messages not arriving | Check QQ platform interaction requirements  | QQ may block bot-initiated messages without recent interaction. |
+
+Full troubleshooting: [/channels/qqbot#troubleshooting](/channels/qqbot#troubleshooting)
+
 ## Matrix
 
 ### Matrix failure signatures
@@ -115,4 +128,4 @@ Full troubleshooting: [/channels/signal#troubleshooting](/channels/signal#troubl
 | DMs do not process                  | `openclaw pairing list matrix`               | Approve sender or adjust DM policy.             |
 | Encrypted rooms fail                | Verify crypto module and encryption settings | Enable encryption support and rejoin/sync room. |
 
-Full troubleshooting: [/channels/matrix#troubleshooting](/channels/matrix#troubleshooting)
+Full setup and config: [Matrix](/channels/matrix)
