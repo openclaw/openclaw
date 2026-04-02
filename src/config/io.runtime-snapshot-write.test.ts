@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import {
   clearConfigCache,
+  createConfigIO,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   loadConfig,
@@ -146,6 +147,33 @@ describe("runtime config snapshot writes", () => {
     clearConfigCache();
     expect(getRuntimeConfigSnapshot()).toBeNull();
     expect(getRuntimeConfigSourceSnapshot()).toBeNull();
+  });
+
+  it("write listeners still see non-null runtime snapshots after setRuntimeConfigSnapshot + writeConfigFile(loadConfig())", async () => {
+    await withTempHome("openclaw-config-runtime-write-listener-snapshots-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const sourceConfig = createSourceConfig();
+      const runtimeConfig = createRuntimeConfig();
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf8");
+
+      let listenerCalls = 0;
+      const unsubscribe = registerConfigWriteListener(() => {
+        listenerCalls += 1;
+        expect(getRuntimeConfigSnapshot()).not.toBeNull();
+        expect(getRuntimeConfigSourceSnapshot()).not.toBeNull();
+      });
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        await writeConfigFile(loadConfig());
+        expect(listenerCalls).toBe(1);
+      } finally {
+        unsubscribe();
+        resetRuntimeConfigState();
+      }
+    });
   });
 
   it("preserves source secret refs when writeConfigFile receives runtime-resolved config", async () => {
@@ -315,6 +343,27 @@ describe("runtime config snapshot writes", () => {
         expect(seen[0]?.runtimeConfig.gateway?.port).toBe(19003);
       } finally {
         unsubscribe();
+        resetRuntimeConfigState();
+      }
+    });
+  });
+
+  it("forces a runtime reload after direct createConfigIO().writeConfigFile", async () => {
+    await withTempHome("openclaw-config-direct-io-write-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify({ gateway: { port: 18789 } }, null, 2)}\n`);
+
+      try {
+        expect(loadConfig().gateway?.port).toBe(18789);
+        const io = createConfigIO();
+        await io.writeConfigFile({
+          ...loadConfig(),
+          gateway: { port: 19003 },
+        });
+
+        expect(loadConfig().gateway?.port).toBe(19003);
+      } finally {
         resetRuntimeConfigState();
       }
     });

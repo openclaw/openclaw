@@ -222,6 +222,11 @@ export type ConfigWriteOptions = {
    * even if schema/default normalization reintroduces them.
    */
   unsetPaths?: string[][];
+  /**
+   * Internal-only flag: keep runtime snapshots live during write so a caller
+   * can refresh them explicitly after persistence succeeds.
+   */
+  preserveRuntimeSnapshot?: boolean;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -2075,8 +2080,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
   ): Promise<{ persistedHash: string }> {
-    // Drop parse cache only; full clearConfigCache() also resets runtime snapshots (breaks mid-write readers).
-    clearConfigCacheEntry();
+    if (options.preserveRuntimeSnapshot === true) {
+      // Wrapper-managed writes keep runtime snapshots until refresh succeeds.
+      clearConfigCacheEntry();
+    } else {
+      // Direct io.writeConfigFile callers should keep legacy behavior and force
+      // a fresh runtime reload on next loadConfig().
+      clearConfigCache();
+    }
     let persistCandidate: unknown = cfg;
     const { snapshot } = await readConfigFileSnapshotInternal();
     let envRefMap: Map<string, string> | null = null;
@@ -2788,6 +2799,7 @@ export async function writeConfigFile(
   const writeResult = await io.writeConfigFile(nextCfg, {
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
+    preserveRuntimeSnapshot: true,
   });
   const notifyCommittedWrite = () => {
     if (!runtimeConfigSnapshot) {
