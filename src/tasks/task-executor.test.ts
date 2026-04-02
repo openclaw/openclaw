@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   cancelDetachedTaskRunById,
@@ -57,7 +59,9 @@ describe("task-executor", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
-    resetTaskRegistryForTests();
+    resetSystemEventsForTest();
+    resetHeartbeatWakeStateForTests();
+    resetTaskRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
