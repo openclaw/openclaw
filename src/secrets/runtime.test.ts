@@ -2739,16 +2739,13 @@ describe("secrets runtime snapshot", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(
-      (snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search,
-    ).toBeUndefined();
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
     expect(snapshot.config.plugins?.entries?.xai?.config).toEqual({
       webSearch: {
         apiKey: "xai-runtime-key",
-      },
-      xSearch: {
-        enabled: true,
-        model: "grok-4-1-fast",
       },
     });
   });
@@ -2778,15 +2775,12 @@ describe("secrets runtime snapshot", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(
-      (snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search,
-    ).toBeUndefined();
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+    });
     expect(snapshot.config.plugins?.entries?.xai?.config).toEqual({
       webSearch: {
         apiKey: "xai-runtime-key-invalid-config",
-      },
-      xSearch: {
-        enabled: true,
       },
     });
   });

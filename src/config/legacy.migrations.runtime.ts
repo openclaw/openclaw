@@ -261,9 +261,9 @@ const HEARTBEAT_RULE: LegacyConfigRule = {
 };
 
 const X_SEARCH_RULE: LegacyConfigRule = {
-  path: ["tools", "web", "x_search"],
+  path: ["tools", "web", "x_search", "apiKey"],
   message:
-    "tools.web.x_search auth/settings moved to the xAI plugin; use plugins.entries.xai.config.webSearch/apiKey and plugins.entries.xai.config.xSearch instead (auto-migrated on load).",
+    "tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead (auto-migrated on load).",
 };
 
 const LEGACY_TTS_RULES: LegacyConfigRule[] = [
@@ -295,8 +295,8 @@ const LEGACY_TTS_RULES: LegacyConfigRule[] = [
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
-    id: "tools.web.x_search->plugins.entries.xai.config.*",
-    describe: "Move legacy x_search auth/settings into the xAI plugin config",
+    id: "tools.web.x_search.apiKey->plugins.entries.xai.config.webSearch.apiKey",
+    describe: "Move legacy x_search auth into the xAI plugin webSearch config",
     legacyRules: [X_SEARCH_RULE],
     apply: (raw, changes) => {
       const migrated = migrateLegacyXSearchConfig(raw);

@@ -287,7 +287,7 @@ describe("legacy migrate tts provider shape", () => {
 });
 
 describe("legacy migrate x_search auth", () => {
-  it("moves legacy x_search auth/settings into plugin-owned xai config", () => {
+  it("moves only legacy x_search auth into plugin-owned xai config", () => {
     const res = migrateLegacyConfig({
       tools: {
         web: {
@@ -300,24 +300,20 @@ describe("legacy migrate x_search auth", () => {
       },
     });
 
-    expect(
-      (res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search,
-    ).toBeUndefined();
+    expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
     expect(res.config?.plugins?.entries?.xai).toEqual({
       enabled: true,
       config: {
         webSearch: {
           apiKey: "xai-legacy-key",
         },
-        xSearch: {
-          enabled: true,
-          model: "grok-4-1-fast",
-        },
       },
     });
     expect(res.changes).toEqual([
       "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
-      "Moved tools.web.x_search → plugins.entries.xai.config.xSearch.",
     ]);
   });
 });
