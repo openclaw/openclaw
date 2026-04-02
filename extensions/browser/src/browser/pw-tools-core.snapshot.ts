@@ -1,11 +1,6 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
-import {
-  assertBrowserNavigationAllowed,
-  assertBrowserNavigationRedirectChainAllowed,
-  assertBrowserNavigationResultAllowed,
-  withBrowserNavigationPolicy,
-} from "./navigation-guard.js";
+import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
@@ -14,9 +9,11 @@ import {
   type RoleRefMap,
 } from "./pw-role-snapshot.js";
 import {
+  assertPageNavigationCompletedSafely,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
+  gotoPageWithNavigationGuard,
   storeRoleRefsForTarget,
   type WithSnapshotForAI,
 } from "./pw-session.js";
@@ -197,7 +194,15 @@ export async function navigateViaPlaywright(opts: {
   const timeout = Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000));
   let page = await getPageForTargetId(opts);
   ensurePageState(page);
-  const navigate = async () => await page.goto(url, { timeout });
+  const navigate = async () =>
+    await gotoPageWithNavigationGuard({
+      cdpUrl: opts.cdpUrl,
+      page,
+      url,
+      timeoutMs: timeout,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
   let response;
   try {
     response = await navigate();
@@ -216,15 +221,14 @@ export async function navigateViaPlaywright(opts: {
     ensurePageState(page);
     response = await navigate();
   }
-  await assertBrowserNavigationRedirectChainAllowed({
-    request: response?.request(),
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+  await assertPageNavigationCompletedSafely({
+    cdpUrl: opts.cdpUrl,
+    page,
+    response,
+    ssrfPolicy: opts.ssrfPolicy,
+    targetId: opts.targetId,
   });
   const finalUrl = page.url();
-  await assertBrowserNavigationResultAllowed({
-    url: finalUrl,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
-  });
   return { url: finalUrl };
 }
 

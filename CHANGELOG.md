@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/tools: include value-shape hints in missing-parameter tool errors so dropped, empty-string, and wrong-type write payloads are easier to diagnose from logs. (#55317) Thanks @priyansh19.
+- Plugins/browser: block SSRF redirect bypass by installing a real-time Playwright route handler before `page.goto()` so navigation to private/internal IPs is intercepted and aborted mid-redirect instead of checked post-hoc. (#58771) Thanks @pgondhi987.
 
 ## 2026.4.2-beta.1
 

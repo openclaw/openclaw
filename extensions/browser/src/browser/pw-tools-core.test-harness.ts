@@ -15,6 +15,7 @@ let pageState: {
 };
 
 const sessionMocks = vi.hoisted(() => ({
+  assertPageNavigationCompletedSafely: vi.fn(async () => {}),
   getPageForTargetId: vi.fn(async () => {
     if (!currentPage) {
       throw new Error("missing page");
@@ -23,6 +24,13 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   ensurePageState: vi.fn(() => pageState),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
+  gotoPageWithNavigationGuard: vi.fn(
+    async (opts: {
+      url: string;
+      timeoutMs: number;
+      page: { goto: (url: string, init: { timeout: number }) => Promise<unknown> };
+    }) => (await opts.page.goto(opts.url, { timeout: opts.timeoutMs })) ?? null,
+  ),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   storeRoleRefsForTarget: vi.fn(() => {}),
   refLocator: vi.fn(() => {
