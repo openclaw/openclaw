@@ -285,6 +285,15 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
     },
   },
   {
+    name: "rejects pnpm dlx invocations with unrecognized global flags that take a value before dlx",
+    binName: "pnpm",
+    tmpPrefix: "openclaw-pnpm-dlx-unknown-prefix-value-",
+    command: ["pnpm", "--future-flag", "value", "dlx", "tsx", "./run.ts"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE")\n');
+    },
+  },
+  {
     name: "rejects pnpm dlx invocations with unrecognized flags after a global option terminator",
     binName: "pnpm",
     tmpPrefix: "openclaw-pnpm-dlx-global-double-dash-",
@@ -777,6 +786,22 @@ describe("hardenApprovedExecutionPaths", () => {
         );
         try {
           expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "node"], tmp);
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("allows pnpm dlx package binaries with multi-token data-like runtime names", () => {
+    withFakeRuntimeBin({
+      binName: "pnpm",
+      run: () => {
+        const tmp = fs.mkdtempSync(
+          path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-runtime-token-multi-"),
+        );
+        try {
+          expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "node", "hello"], tmp);
         } finally {
           fs.rmSync(tmp, { recursive: true, force: true });
         }

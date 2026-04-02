@@ -865,7 +865,7 @@ function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | u
       idx += 1;
       continue;
     }
-    return pnpmDlxTailMayNeedStableBinding(argv.slice(idx + 1), cwd);
+    return true;
   }
 
   return false;
@@ -915,13 +915,7 @@ function pnpmDlxTailMayNeedStableBinding(argv: string[], cwd: string | undefined
       cwd,
       shellCommand: null,
     });
-    if (!snapshot.ok) {
-      if (candidateArgv.length > 1) {
-        return true;
-      }
-      continue;
-    }
-    if (snapshot.snapshot) {
+    if (snapshot.ok && snapshot.snapshot) {
       return true;
     }
   }
