@@ -7,6 +7,8 @@ const SRC_ROOT = path.resolve(TASK_ROOT, "..");
 
 const ALLOWED_IMPORTERS = new Set([
   "tasks/task-flow-owner-access.ts",
+  "tasks/task-flow-registry.audit.ts",
+  "tasks/task-flow-registry.maintenance.ts",
   "tasks/task-flow-runtime-internal.ts",
 ]);
 
