@@ -56,6 +56,7 @@ import { runStartupMatrixMigration } from "../gateway/server-startup-matrix-migr
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { runVersionSkewHealth } from "./doctor-version-skew.js";
 import type { FlowContribution } from "./types.js";
 
 export type DoctorFlowMode = "local" | "remote";
@@ -478,6 +479,11 @@ async function runFinalConfigValidationHealth(_ctx: DoctorHealthFlowContext): Pr
 
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
+    createDoctorHealthContribution({
+      id: "doctor:version-skew",
+      label: "Version skew",
+      run: runVersionSkewHealth,
+    }),
     createDoctorHealthContribution({
       id: "doctor:gateway-config",
       label: "Gateway config",
