@@ -2,6 +2,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
+  normalizeExecAsk,
+  normalizeExecSecurity,
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
   maxAsk,
@@ -61,14 +63,15 @@ function formatRequestedSource(params: {
 }
 
 type ExecPolicyField = "security" | "ask" | "askFallback";
+type ExecPolicyFieldEntry = {
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+  askFallback?: ExecSecurity;
+};
 
 function readExecPolicyField(params: {
   field: ExecPolicyField;
-  entry?: {
-    security?: ExecSecurity;
-    ask?: ExecAsk;
-    askFallback?: ExecSecurity;
-  };
+  entry?: ExecPolicyFieldEntry;
 }): ExecSecurity | ExecAsk | undefined {
   switch (params.field) {
     case "security":
@@ -77,6 +80,20 @@ function readExecPolicyField(params: {
       return params.entry?.ask;
     case "askFallback":
       return params.entry?.askFallback;
+  }
+}
+
+function readNormalizedExecPolicyField(params: {
+  field: ExecPolicyField;
+  entry?: ExecPolicyFieldEntry;
+}): ExecSecurity | ExecAsk | null {
+  const value = readExecPolicyField({ field: params.field, entry: params.entry });
+  switch (params.field) {
+    case "security":
+    case "askFallback":
+      return normalizeExecSecurity(value);
+    case "ask":
+      return normalizeExecAsk(value);
   }
 }
 
@@ -89,7 +106,7 @@ function resolveRequestedField<TValue extends ExecSecurity | ExecAsk>(params: {
   if (scopeValue !== undefined) {
     return {
       value: scopeValue as TValue,
-      sourcePath: params.field && "scope",
+      sourcePath: "scope",
     };
   }
   const globalValue = params.globalExecConfig?.[params.field];
@@ -114,20 +131,34 @@ function resolveHostFieldSource(params: {
 }): string {
   const agentKey = params.agentId ?? DEFAULT_AGENT_ID;
   const explicitAgentEntry = params.approvals.agents?.[agentKey];
-  if (readExecPolicyField({ field: params.field, entry: explicitAgentEntry }) !== undefined) {
-    return `${params.hostPath} agents.${agentKey}.${params.field}`;
-  }
   const wildcardEntry = params.approvals.agents?.["*"];
-  if (readExecPolicyField({ field: params.field, entry: wildcardEntry }) !== undefined) {
-    return `${params.hostPath} agents.*.${params.field}`;
-  }
-  if (
-    readExecPolicyField({
-      field: params.field,
-      entry: params.approvals.defaults,
-    }) !== undefined
-  ) {
-    return `${params.hostPath} defaults.${params.field}`;
+  const candidates = [
+    {
+      value: readNormalizedExecPolicyField({
+        field: params.field,
+        entry: explicitAgentEntry,
+      }),
+      source: `${params.hostPath} agents.${agentKey}.${params.field}`,
+    },
+    {
+      value: readNormalizedExecPolicyField({
+        field: params.field,
+        entry: wildcardEntry,
+      }),
+      source: `${params.hostPath} agents.*.${params.field}`,
+    },
+    {
+      value: readNormalizedExecPolicyField({
+        field: params.field,
+        entry: params.approvals.defaults,
+      }),
+      source: `${params.hostPath} defaults.${params.field}`,
+    },
+  ];
+  for (const candidate of candidates) {
+    if (candidate.value != null) {
+      return candidate.source;
+    }
   }
   if (params.field === "askFallback") {
     return `OpenClaw default (${DEFAULT_EXEC_APPROVAL_ASK_FALLBACK})`;
@@ -149,24 +180,17 @@ function resolveAskNote(params: {
   return "more aggressive ask wins";
 }
 
-function formatHostSource(params: {
-  hostPath: string;
-  agentId?: string;
-  field: ExecPolicyField;
-  approvals: ExecApprovalsFile;
-}): string {
-  return resolveHostFieldSource(params);
-}
-
 export function collectExecPolicyScopeSnapshots(params: {
   cfg: OpenClawConfig;
   approvals: ExecApprovalsFile;
+  hostPath?: string;
 }): ExecPolicyScopeSnapshot[] {
   const snapshots = [
     resolveExecPolicyScopeSnapshot({
       approvals: params.approvals,
       scopeExecConfig: params.cfg.tools?.exec,
       configPath: "tools.exec",
+      hostPath: params.hostPath,
       scopeLabel: "tools.exec",
     }),
   ];
@@ -188,6 +212,7 @@ export function collectExecPolicyScopeSnapshots(params: {
         scopeExecConfig: agentConfig?.tools?.exec,
         globalExecConfig,
         configPath: `agents.list.${agentId}.tools.exec`,
+        hostPath: params.hostPath,
         scopeLabel: `agent:${agentId}`,
         agentId,
       }),
@@ -256,11 +281,11 @@ export function resolveExecPolicyScopeSnapshot(params: {
         defaultValue: DEFAULT_REQUESTED_SECURITY,
       }),
       host: resolved.agent.security,
-      hostSource: formatHostSource({
+      hostSource: resolveHostFieldSource({
         hostPath,
         agentId: params.agentId,
         field: "security",
-        approvals: params.approvals,
+        approvals: resolved.file,
       }),
       effective: effectiveSecurity,
       note:
@@ -277,11 +302,11 @@ export function resolveExecPolicyScopeSnapshot(params: {
         defaultValue: DEFAULT_REQUESTED_ASK,
       }),
       host: resolved.agent.ask,
-      hostSource: formatHostSource({
+      hostSource: resolveHostFieldSource({
         hostPath,
         agentId: params.agentId,
         field: "ask",
-        approvals: params.approvals,
+        approvals: resolved.file,
       }),
       effective: effectiveAsk,
       note: resolveAskNote({
@@ -292,11 +317,11 @@ export function resolveExecPolicyScopeSnapshot(params: {
     },
     askFallback: {
       effective: resolved.agent.askFallback,
-      source: formatHostSource({
+      source: resolveHostFieldSource({
         hostPath,
         agentId: params.agentId,
         field: "askFallback",
-        approvals: params.approvals,
+        approvals: resolved.file,
       }),
     },
     allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: effectiveAsk }),
