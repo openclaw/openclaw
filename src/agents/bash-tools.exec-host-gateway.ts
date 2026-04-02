@@ -405,7 +405,11 @@ export async function processGatewayAllowlist(
     };
   }
 
-  if (hostSecurity === "allowlist" && (!analysisOk || !allowlistSatisfied)) {
+  if (
+    hostSecurity === "allowlist" &&
+    (!analysisOk || !allowlistSatisfied) &&
+    !durableApprovalSatisfied
+  ) {
     throw new Error("exec denied: allowlist miss");
   }
 
