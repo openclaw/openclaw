@@ -793,29 +793,6 @@ export class QmdMemoryManager implements MemorySearchManager {
         if (allowMissingCollectionRepair && this.isMissingCollectionSearchError(err)) {
           throw err;
         }
-        if (
-          !mcporterEnabled &&
-          qmdSearchCommand !== "query" &&
-          this.isUnsupportedQmdOptionError(err)
-        ) {
-          log.warn(
-            `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
-          );
-          try {
-            if (collectionNames.length > 1) {
-              return await this.runQueryAcrossCollections(trimmed, limit, collectionNames, "query");
-            }
-            const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
-            fallbackArgs.push(...this.buildCollectionFilterArgs(collectionNames));
-            const fallback = await this.runQmd(fallbackArgs, {
-              timeoutMs: this.qmd.limits.timeoutMs,
-            });
-            return parseQmdQueryJson(fallback.stdout, fallback.stderr);
-          } catch (fallbackErr) {
-            log.warn(`qmd query fallback failed: ${String(fallbackErr)}`);
-            throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
-          }
-        }
         const label = mcporterEnabled ? "mcporter/qmd" : `qmd ${qmdSearchCommand}`;
         log.warn(`${label} failed: ${String(err)}`);
         throw err instanceof Error ? err : new Error(String(err));
@@ -1897,18 +1874,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     const message = err instanceof Error ? err.message : String(err);
     const normalized = message.toLowerCase();
     return normalized.includes("sqlite_busy") || normalized.includes("database is locked");
-  }
-
-  private isUnsupportedQmdOptionError(err: unknown): boolean {
-    const message = err instanceof Error ? err.message : String(err);
-    const normalized = message.toLowerCase();
-    return (
-      normalized.includes("unknown flag") ||
-      normalized.includes("unknown option") ||
-      normalized.includes("unrecognized option") ||
-      normalized.includes("flag provided but not defined") ||
-      normalized.includes("unexpected argument")
-    );
   }
 
   private createQmdBusyError(err: unknown): Error {

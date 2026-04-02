@@ -255,6 +255,19 @@ describe("getMemorySearchManager caching", () => {
     expect(fallbackSearch).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to builtin search when qmd search mode rejects flags", async () => {
+    const retryAgentId = "retry-agent-unsupported-search";
+    const { manager: firstManager } = await createFailedQmdSearchHarness({
+      agentId: retryAgentId,
+      errorMessage: "qmd search failed (code 2): unknown flag: --json",
+    });
+
+    const results = await firstManager.search("hello");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toBe("MEMORY.md");
+    expect(fallbackSearch).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps original qmd error when fallback manager initialization fails", async () => {
     const retryAgentId = "retry-agent-no-fallback-auth";
     const { manager: firstManager } = await createFailedQmdSearchHarness({
