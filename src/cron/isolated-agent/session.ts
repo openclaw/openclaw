@@ -34,6 +34,7 @@ export function resolveCronSession(params: {
     const resetPolicy = resolveSessionResetPolicy({
       sessionCfg,
       resetType: "direct",
+      userTimezone: params.cfg.agents?.defaults?.userTimezone,
     });
     const freshness = evaluateSessionFreshness({
       updatedAt: entry.updatedAt,

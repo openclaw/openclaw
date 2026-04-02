@@ -75,6 +75,14 @@ export type SessionResetConfig = {
   atHour?: number;
   /** Sliding idle window (minutes). When set with daily mode, whichever expires first wins. */
   idleMinutes?: number;
+  /** IANA timezone for atHour (e.g. "Asia/Shanghai"). Defaults to host timezone. */
+  timezone?: string;
+  /**
+   * When true and mode is "daily", idleMinutes acts as an AND guard:
+   * session resets only when BOTH the daily boundary has passed AND the
+   * idle window has expired.  Default false preserves the OR behavior.
+   */
+  idleGuard?: boolean;
 };
 export type SessionResetByTypeConfig = {
   direct?: SessionResetConfig;

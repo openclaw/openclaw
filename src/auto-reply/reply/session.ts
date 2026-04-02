@@ -382,6 +382,7 @@ export async function initSessionState(params: {
     sessionCfg,
     resetType,
     resetOverride: channelReset,
+    userTimezone: cfg.agents?.defaults?.userTimezone,
   });
   // Heartbeat, cron-event, and exec-event runs should NEVER trigger session resets.
   // These are automated system events, not user interactions that should affect
