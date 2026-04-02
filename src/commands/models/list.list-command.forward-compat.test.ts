@@ -332,6 +332,52 @@ describe("modelsListCommand forward-compat", () => {
       ]);
     });
 
+    it("includes synthetic codex gpt-5.4-mini in --all output when catalog supports it", async () => {
+      mockDiscoveredCodex53Registry();
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        {
+          provider: "openai-codex",
+          id: "gpt-5.4",
+          name: "GPT-5.3 Codex",
+          input: ["text"],
+          contextWindow: 272000,
+        },
+        {
+          provider: "openai-codex",
+          id: "gpt-5.4-mini",
+          name: "gpt-5.4-mini",
+          input: ["text"],
+          contextWindow: 272000,
+        },
+      ]);
+      mocks.listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
+        provider === "openai-codex"
+          ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>)
+          : [],
+      );
+      mocks.resolveModelWithRegistry.mockImplementation(
+        ({ provider, modelId }: { provider: string; modelId: string }) => {
+          if (provider !== "openai-codex") {
+            return undefined;
+          }
+          if (modelId === "gpt-5.4") {
+            return { ...OPENAI_CODEX_53_MODEL };
+          }
+          if (modelId === "gpt-5.4-mini") {
+            return { ...OPENAI_CODEX_MODEL, id: "gpt-5.4-mini", name: "gpt-5.4-mini" };
+          }
+          return undefined;
+        },
+      );
+      await runAllOpenAiCodexCommand();
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toContainEqual(
+        expect.objectContaining({
+          key: "openai-codex/gpt-5.4-mini",
+          available: true,
+        }),
+      );
+    });
+
     it("keeps discovered rows in --all output when catalog lookup is empty", async () => {
       mockDiscoveredCodex53Registry();
       mocks.loadModelCatalog.mockResolvedValueOnce([]);

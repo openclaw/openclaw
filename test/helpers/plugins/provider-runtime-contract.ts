@@ -604,6 +604,33 @@ export function describeOpenAIProviderRuntimeContract() {
       });
     });
 
+    it("owns forward-compat codex gpt-5.4-mini resolution", () => {
+      const provider = requireProviderContractProvider("openai-codex");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4-mini",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.3-codex"
+              ? createModel({
+                  id,
+                  api: "openai-codex-responses",
+                  provider: "openai-codex",
+                  baseUrl: "https://chatgpt.com/backend-api",
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.4-mini",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+      });
+    });
+
     it("owns codex transport defaults", () => {
       const provider = requireProviderContractProvider("openai-codex");
       expect(
