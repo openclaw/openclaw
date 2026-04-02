@@ -2,18 +2,21 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { decode, encode, isSilk } from "silk-wasm";
 import { debugLog, debugError, debugWarn } from "./debug-log.js";
 import { detectFfmpeg, isWindows } from "./platform.js";
 
-/** Detect whether a file contains SILK audio payloads. */
-function isSilkFile(filePath: string): boolean {
-  try {
-    const buf = fs.readFileSync(filePath);
-    return isSilk(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
-  } catch {
-    return false;
-  }
+type SilkWasm = typeof import("silk-wasm");
+let _silkWasmPromise: Promise<SilkWasm | null> | null = null;
+
+function loadSilkWasm(): Promise<SilkWasm | null> {
+  if (_silkWasmPromise) return _silkWasmPromise;
+  _silkWasmPromise = import("silk-wasm").catch((err) => {
+    debugWarn(
+      `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${err instanceof Error ? err.message : String(err)})`,
+    );
+    return null;
+  });
+  return _silkWasmPromise;
 }
 
 /** Wrap PCM s16le bytes in a WAV container. */
@@ -82,13 +85,14 @@ export async function convertSilkToWav(
     strippedBuf.byteLength,
   );
 
-  if (!isSilk(rawData)) {
+  const silk = await loadSilkWasm();
+  if (!silk || !silk.isSilk(rawData)) {
     return null;
   }
 
   // QQ voice commonly uses 24 kHz.
   const sampleRate = 24000;
-  const result = await decode(rawData, sampleRate);
+  const result = await silk.decode(rawData, sampleRate);
 
   const wavBuffer = pcmToWav(result.data, sampleRate);
 
@@ -403,8 +407,12 @@ export async function pcmToSilk(
   pcmBuffer: Buffer,
   sampleRate: number,
 ): Promise<{ silkBuffer: Buffer; duration: number }> {
+  const silk = await loadSilkWasm();
+  if (!silk) {
+    throw new Error("silk-wasm is not available; cannot encode PCM to SILK");
+  }
   const pcmData = new Uint8Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength);
-  const result = await encode(pcmData, sampleRate);
+  const result = await silk.encode(pcmData, sampleRate);
   return {
     silkBuffer: Buffer.from(result.data.buffer, result.data.byteOffset, result.data.byteLength),
     duration: result.duration,
@@ -460,7 +468,8 @@ export async function audioFileToSilkBase64(
   if ([".slk", ".slac"].includes(ext)) {
     const stripped = stripAmrHeader(buf);
     const raw = new Uint8Array(stripped.buffer, stripped.byteOffset, stripped.byteLength);
-    if (isSilk(raw)) {
+    const silk = await loadSilkWasm();
+    if (silk?.isSilk(raw)) {
       debugLog(`[audio-convert] SILK file, direct use: ${filePath} (${buf.length} bytes)`);
       return buf.toString("base64");
     }
@@ -474,7 +483,8 @@ export async function audioFileToSilkBase64(
     strippedCheck.byteOffset,
     strippedCheck.byteLength,
   );
-  if (isSilk(rawCheck) || isSilk(strippedRaw)) {
+  const silkForCheck = await loadSilkWasm();
+  if (silkForCheck?.isSilk(rawCheck) || silkForCheck?.isSilk(strippedRaw)) {
     debugLog(`[audio-convert] SILK detected by header: ${filePath} (${buf.length} bytes)`);
     return buf.toString("base64");
   }

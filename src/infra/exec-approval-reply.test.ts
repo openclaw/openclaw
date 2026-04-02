@@ -54,12 +54,12 @@ describe("exec approval reply helpers", () => {
     );
   });
 
-  it("mentions Slack in the fallback approval-client guidance", () => {
+  it("mentions native chat approval clients in the fallback guidance", () => {
     expect(
       buildExecApprovalUnavailableReplyPayload({
         reason: "no-approval-route",
       }).text,
-    ).toContain("Discord, Slack, or Telegram exec approvals");
+    ).toContain("native chat approval client such as Discord, Slack, or Telegram");
   });
 
   it.each(invalidReplyMetadataCases)(
@@ -119,7 +119,7 @@ describe("exec approval reply helpers", () => {
             },
             {
               label: "Allow Always",
-              value: "/approve req-1 always",
+              value: "/approve req-1 allow-always",
               style: "primary",
             },
             {
@@ -136,6 +136,48 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("```sh\necho ok\n```");
     expect(payload.text).toContain("Host: gateway\nNode: node-1\nCWD: /tmp/work\nExpires in: 2s");
     expect(payload.text).toContain("Full id: `req-1`");
+  });
+
+  it("omits allow-always actions when the effective policy requires approval every time", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-ask-always",
+      approvalSlug: "slug-always",
+      ask: "always",
+      command: "echo ok",
+      host: "gateway",
+    });
+
+    expect(payload.channelData).toEqual({
+      execApproval: {
+        approvalId: "req-ask-always",
+        approvalSlug: "slug-always",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
+    expect(payload.text).toContain("```txt\n/approve slug-always allow-once\n```");
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.text).toContain(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+    expect(payload.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              value: "/approve req-ask-always allow-once",
+              style: "success",
+            },
+            {
+              label: "Deny",
+              value: "/approve req-ask-always deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("uses a longer fence for commands containing triple backticks", () => {
@@ -194,7 +236,7 @@ describe("exec approval reply helpers", () => {
         decision: "allow-always",
         label: "Allow Always",
         style: "primary",
-        command: "/approve req-1 always",
+        command: "/approve req-1 allow-always",
       },
       {
         decision: "deny",
@@ -214,7 +256,7 @@ describe("exec approval reply helpers", () => {
           type: "buttons",
           buttons: [
             { label: "Allow Once", value: "/approve req-1 allow-once", style: "success" },
-            { label: "Allow Always", value: "/approve req-1 always", style: "primary" },
+            { label: "Allow Always", value: "/approve req-1 allow-always", style: "primary" },
             { label: "Deny", value: "/approve req-1 deny", style: "danger" },
           ],
         },
@@ -228,11 +270,15 @@ describe("exec approval reply helpers", () => {
         approvalCommandId: "req-1",
         decision: "allow-always",
       }),
-    ).toBe("/approve req-1 always");
+    ).toBe("/approve req-1 allow-always");
 
     expect(parseExecApprovalCommandText("/approve req-1 deny")).toEqual({
       approvalId: "req-1",
       decision: "deny",
+    });
+    expect(parseExecApprovalCommandText("approve req-1 allow-once")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-once",
     });
     expect(parseExecApprovalCommandText("/approve@clover req-1 allow-once")).toEqual({
       approvalId: "req-1",

@@ -131,10 +131,10 @@ gc_pr_worktrees() {
         if [ "$dry_run" = "true" ]; then
           echo "would remove $dir (PR #$pr state=$state)"
         else
-          git worktree remove "$dir" --force
-          git branch -D "temp/pr-$pr" 2>/dev/null || true
-          git branch -D "pr-$pr" 2>/dev/null || true
-          git branch -D "pr-$pr-prep" 2>/dev/null || true
+          remove_worktree_if_present "$dir"
+          delete_local_branch_if_safe "temp/pr-$pr"
+          delete_local_branch_if_safe "pr-$pr"
+          delete_local_branch_if_safe "pr-$pr-prep"
           echo "removed $dir (PR #$pr state=$state)"
         fi
         removed=$((removed + 1))

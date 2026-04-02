@@ -9,7 +9,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { getFlowById, syncFlowFromTask } from "./flow-registry.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -19,11 +18,17 @@ import {
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
 } from "./task-executor-policy.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
-  getTaskRegistryHooks,
+  getTaskFlowById,
+  syncFlowFromTask,
+  updateFlowRecordByIdExpectedRevision,
+} from "./task-flow-runtime-internal.js";
+import {
+  getTaskRegistryObservers,
   getTaskRegistryStore,
   resetTaskRegistryRuntimeForTests,
-  type TaskRegistryHookEvent,
+  type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
@@ -36,6 +41,7 @@ import type {
   TaskRegistrySummary,
   TaskRegistrySnapshot,
   TaskRuntime,
+  TaskScopeKind,
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
@@ -46,7 +52,9 @@ const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const tasks = new Map<string, TaskRecord>();
 const taskDeliveryStates = new Map<string, TaskDeliveryState>();
 const taskIdsByRunId = new Map<string, Set<string>>();
-const taskIdsBySessionKey = new Map<string, Set<string>>();
+const taskIdsByOwnerKey = new Map<string, Set<string>>();
+const taskIdsByParentFlowId = new Map<string, Set<string>>();
+const taskIdsByRelatedSessionKey = new Map<string, Set<string>>();
 const tasksWithPendingDelivery = new Set<string>();
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
@@ -55,10 +63,101 @@ let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runt
   null;
 
 type TaskDeliveryOwner = {
-  sessionKey: string;
+  sessionKey?: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   flowId?: string;
 };
+
+export type ParentFlowLinkErrorCode =
+  | "scope_kind_not_session"
+  | "parent_flow_not_found"
+  | "owner_key_mismatch"
+  | "cancel_requested"
+  | "terminal";
+
+export class ParentFlowLinkError extends Error {
+  constructor(
+    public readonly code: ParentFlowLinkErrorCode,
+    message: string,
+    public readonly details?: {
+      flowId?: string;
+      status?: TaskFlowRecord["status"];
+    },
+  ) {
+    super(message);
+    this.name = "ParentFlowLinkError";
+  }
+}
+
+export function isParentFlowLinkError(error: unknown): error is ParentFlowLinkError {
+  return error instanceof ParentFlowLinkError;
+}
+
+function isActiveTaskStatus(status: TaskStatus): boolean {
+  return status === "queued" || status === "running";
+}
+
+function isTerminalFlowStatus(status: TaskFlowRecord["status"]): boolean {
+  return (
+    status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
+  );
+}
+
+function assertTaskOwner(params: { ownerKey: string; scopeKind: TaskScopeKind }) {
+  const ownerKey = params.ownerKey.trim();
+  if (!ownerKey && params.scopeKind !== "system") {
+    throw new Error("Task ownerKey is required.");
+  }
+}
+
+function normalizeOwnerKey(ownerKey?: string): string | undefined {
+  const trimmed = ownerKey?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function assertParentFlowLinkAllowed(params: {
+  ownerKey: string;
+  scopeKind: TaskScopeKind;
+  parentFlowId?: string;
+}) {
+  const flowId = params.parentFlowId?.trim();
+  if (!flowId) {
+    return;
+  }
+  if (params.scopeKind !== "session") {
+    throw new ParentFlowLinkError(
+      "scope_kind_not_session",
+      "Only session-scoped tasks can link to flows.",
+      { flowId },
+    );
+  }
+  const flow = getTaskFlowById(flowId);
+  if (!flow) {
+    throw new ParentFlowLinkError("parent_flow_not_found", `Parent flow not found: ${flowId}`, {
+      flowId,
+    });
+  }
+  if (normalizeOwnerKey(flow.ownerKey) !== normalizeOwnerKey(params.ownerKey)) {
+    throw new ParentFlowLinkError(
+      "owner_key_mismatch",
+      "Task ownerKey must match parent flow ownerKey.",
+      { flowId },
+    );
+  }
+  if (flow.cancelRequestedAt != null) {
+    throw new ParentFlowLinkError(
+      "cancel_requested",
+      "Parent flow cancellation has already been requested.",
+      { flowId, status: flow.status },
+    );
+  }
+  if (isTerminalFlowStatus(flow.status)) {
+    throw new ParentFlowLinkError("terminal", `Parent flow is already ${flow.status}.`, {
+      flowId,
+      status: flow.status,
+    });
+  }
+}
 
 function cloneTaskRecord(record: TaskRecord): TaskRecord {
   return { ...record };
@@ -75,15 +174,15 @@ function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecor
   return [...source.values()].map((record) => cloneTaskRecord(record));
 }
 
-function emitTaskRegistryHookEvent(createEvent: () => TaskRegistryHookEvent): void {
-  const hooks = getTaskRegistryHooks();
-  if (!hooks?.onEvent) {
+function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObserverEvent): void {
+  const observers = getTaskRegistryObservers();
+  if (!observers?.onEvent) {
     return;
   }
   try {
-    hooks.onEvent(createEvent());
+    observers.onEvent(createEvent());
   } catch (error) {
-    log.warn("Task registry hook failed", {
+    log.warn("Task registry observer failed", {
       event: "task-registry",
       error,
     });
@@ -99,6 +198,14 @@ function persistTaskRegistry() {
 
 function persistTaskUpsert(task: TaskRecord) {
   const store = getTaskRegistryStore();
+  const deliveryState = taskDeliveryStates.get(task.taskId);
+  if (store.upsertTaskWithDeliveryState) {
+    store.upsertTaskWithDeliveryState({
+      task,
+      ...(deliveryState ? { deliveryState } : {}),
+    });
+    return;
+  }
   if (store.upsertTask) {
     store.upsertTask(task);
     return;
@@ -111,6 +218,10 @@ function persistTaskUpsert(task: TaskRecord) {
 
 function persistTaskDelete(taskId: string) {
   const store = getTaskRegistryStore();
+  if (store.deleteTaskWithDeliveryState) {
+    store.deleteTaskWithDeliveryState(taskId);
+    return;
+  }
   if (store.deleteTask) {
     store.deleteTask(taskId);
     return;
@@ -145,20 +256,61 @@ function persistTaskDeliveryStateDelete(taskId: string) {
   });
 }
 
-function ensureDeliveryStatus(requesterSessionKey: string): TaskDeliveryStatus {
-  return requesterSessionKey.trim() ? "pending" : "parent_missing";
+function ensureDeliveryStatus(params: {
+  ownerKey: string;
+  scopeKind: TaskScopeKind;
+}): TaskDeliveryStatus {
+  if (params.scopeKind === "system") {
+    return "not_applicable";
+  }
+  return params.ownerKey.trim() ? "pending" : "parent_missing";
 }
 
 function ensureNotifyPolicy(params: {
   notifyPolicy?: TaskNotifyPolicy;
   deliveryStatus?: TaskDeliveryStatus;
-  requesterSessionKey: string;
+  ownerKey: string;
+  scopeKind: TaskScopeKind;
 }): TaskNotifyPolicy {
   if (params.notifyPolicy) {
     return params.notifyPolicy;
   }
-  const deliveryStatus = params.deliveryStatus ?? ensureDeliveryStatus(params.requesterSessionKey);
+  const deliveryStatus =
+    params.deliveryStatus ??
+    ensureDeliveryStatus({
+      ownerKey: params.ownerKey,
+      scopeKind: params.scopeKind,
+    });
   return deliveryStatus === "not_applicable" ? "silent" : "done_only";
+}
+
+function resolveTaskScopeKind(params: {
+  scopeKind?: TaskScopeKind;
+  requesterSessionKey: string;
+}): TaskScopeKind {
+  if (params.scopeKind) {
+    return params.scopeKind;
+  }
+  return params.requesterSessionKey.trim() ? "session" : "system";
+}
+
+function resolveTaskRequesterSessionKey(params: {
+  requesterSessionKey?: string;
+  ownerKey?: string;
+  scopeKind?: TaskScopeKind;
+}): string {
+  const requesterSessionKey = params.requesterSessionKey?.trim();
+  if (requesterSessionKey) {
+    return requesterSessionKey;
+  }
+  if (params.scopeKind === "system") {
+    return "";
+  }
+  return params.ownerKey?.trim() ?? "";
+}
+
+function resolveTaskOwnerKey(params: { requesterSessionKey: string; ownerKey?: string }): string {
+  return params.ownerKey?.trim() || params.requesterSessionKey.trim();
 }
 
 function normalizeTaskSummary(value: string | null | undefined): string | undefined {
@@ -231,46 +383,84 @@ function normalizeSessionIndexKey(sessionKey?: string): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function getTaskSessionIndexKeys(
-  task: Pick<TaskRecord, "requesterSessionKey" | "childSessionKey">,
-) {
+function addIndexedKey(index: Map<string, Set<string>>, key: string, taskId: string) {
+  let ids = index.get(key);
+  if (!ids) {
+    ids = new Set<string>();
+    index.set(key, ids);
+  }
+  ids.add(taskId);
+}
+
+function deleteIndexedKey(index: Map<string, Set<string>>, key: string, taskId: string) {
+  const ids = index.get(key);
+  if (!ids) {
+    return;
+  }
+  ids.delete(taskId);
+  if (ids.size === 0) {
+    index.delete(key);
+  }
+}
+
+function getTaskRelatedSessionIndexKeys(task: Pick<TaskRecord, "ownerKey" | "childSessionKey">) {
   return [
     ...new Set(
       [
-        normalizeSessionIndexKey(task.requesterSessionKey),
+        normalizeSessionIndexKey(task.ownerKey),
         normalizeSessionIndexKey(task.childSessionKey),
       ].filter(Boolean) as string[],
     ),
   ];
 }
 
-function addSessionKeyIndex(
+function addOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
+  const key = normalizeSessionIndexKey(task.ownerKey);
+  if (!key) {
+    return;
+  }
+  addIndexedKey(taskIdsByOwnerKey, key, taskId);
+}
+
+function deleteOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
+  const key = normalizeSessionIndexKey(task.ownerKey);
+  if (!key) {
+    return;
+  }
+  deleteIndexedKey(taskIdsByOwnerKey, key, taskId);
+}
+
+function addParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "parentFlowId">) {
+  const key = task.parentFlowId?.trim();
+  if (!key) {
+    return;
+  }
+  addIndexedKey(taskIdsByParentFlowId, key, taskId);
+}
+
+function deleteParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "parentFlowId">) {
+  const key = task.parentFlowId?.trim();
+  if (!key) {
+    return;
+  }
+  deleteIndexedKey(taskIdsByParentFlowId, key, taskId);
+}
+
+function addRelatedSessionKeyIndex(
   taskId: string,
-  task: Pick<TaskRecord, "requesterSessionKey" | "childSessionKey">,
+  task: Pick<TaskRecord, "ownerKey" | "childSessionKey">,
 ) {
-  for (const sessionKey of getTaskSessionIndexKeys(task)) {
-    let ids = taskIdsBySessionKey.get(sessionKey);
-    if (!ids) {
-      ids = new Set<string>();
-      taskIdsBySessionKey.set(sessionKey, ids);
-    }
-    ids.add(taskId);
+  for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
+    addIndexedKey(taskIdsByRelatedSessionKey, sessionKey, taskId);
   }
 }
 
-function deleteSessionKeyIndex(
+function deleteRelatedSessionKeyIndex(
   taskId: string,
-  task: Pick<TaskRecord, "requesterSessionKey" | "childSessionKey">,
+  task: Pick<TaskRecord, "ownerKey" | "childSessionKey">,
 ) {
-  for (const sessionKey of getTaskSessionIndexKeys(task)) {
-    const ids = taskIdsBySessionKey.get(sessionKey);
-    if (!ids) {
-      continue;
-    }
-    ids.delete(taskId);
-    if (ids.size === 0) {
-      taskIdsBySessionKey.delete(sessionKey);
-    }
+  for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
+    deleteIndexedKey(taskIdsByRelatedSessionKey, sessionKey, taskId);
   }
 }
 
@@ -281,10 +471,24 @@ function rebuildRunIdIndex() {
   }
 }
 
-function rebuildSessionKeyIndex() {
-  taskIdsBySessionKey.clear();
+function rebuildOwnerKeyIndex() {
+  taskIdsByOwnerKey.clear();
   for (const [taskId, task] of tasks.entries()) {
-    addSessionKeyIndex(taskId, task);
+    addOwnerKeyIndex(taskId, task);
+  }
+}
+
+function rebuildParentFlowIdIndex() {
+  taskIdsByParentFlowId.clear();
+  for (const [taskId, task] of tasks.entries()) {
+    addParentFlowIdIndex(taskId, task);
+  }
+}
+
+function rebuildRelatedSessionKeyIndex() {
+  taskIdsByRelatedSessionKey.clear();
+  for (const [taskId, task] of tasks.entries()) {
+    addRelatedSessionKeyIndex(taskId, task);
   }
 }
 
@@ -296,6 +500,57 @@ function getTasksByRunId(runId: string): TaskRecord[] {
   return [...ids]
     .map((taskId) => tasks.get(taskId))
     .filter((task): task is TaskRecord => Boolean(task));
+}
+
+function taskRunScopeKey(
+  task: Pick<TaskRecord, "runtime" | "scopeKind" | "ownerKey" | "childSessionKey">,
+): string {
+  return [
+    task.runtime,
+    task.scopeKind,
+    normalizeComparableText(task.ownerKey),
+    normalizeComparableText(task.childSessionKey),
+  ].join("\u0000");
+}
+
+function getTasksByRunScope(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+}): TaskRecord[] {
+  const matches = getTasksByRunId(params.runId).filter(
+    (task) => !params.runtime || task.runtime === params.runtime,
+  );
+  const sessionKey = normalizeSessionIndexKey(params.sessionKey);
+  if (sessionKey) {
+    const childMatches = matches.filter(
+      (task) => normalizeSessionIndexKey(task.childSessionKey) === sessionKey,
+    );
+    if (childMatches.length > 0) {
+      return childMatches;
+    }
+    const ownerMatches = matches.filter(
+      (task) =>
+        task.scopeKind === "session" && normalizeSessionIndexKey(task.ownerKey) === sessionKey,
+    );
+    return ownerMatches;
+  }
+  const scopeKeys = new Set(matches.map((task) => taskRunScopeKey(task)));
+  return scopeKeys.size <= 1 ? matches : [];
+}
+
+function getPeerTasksForDelivery(task: TaskRecord): TaskRecord[] {
+  if (!task.runId?.trim()) {
+    return [];
+  }
+  return getTasksByRunId(task.runId).filter(
+    (candidate) =>
+      candidate.runtime === task.runtime &&
+      candidate.scopeKind === task.scopeKind &&
+      normalizeComparableText(candidate.ownerKey) === normalizeComparableText(task.ownerKey) &&
+      normalizeComparableText(candidate.childSessionKey) ===
+        normalizeComparableText(task.childSessionKey),
+  );
 }
 
 function taskLookupPriority(task: TaskRecord): number {
@@ -330,21 +585,30 @@ function compareTasksNewestFirst(
 
 function findExistingTaskForCreate(params: {
   runtime: TaskRuntime;
-  requesterSessionKey: string;
+  ownerKey: string;
+  scopeKind: TaskScopeKind;
   childSessionKey?: string;
+  parentFlowId?: string;
   runId?: string;
   label?: string;
   task: string;
 }): TaskRecord | undefined {
   const runId = params.runId?.trim();
-  const exact = runId
-    ? getTasksByRunId(runId).find(
+  const runScopeMatches = runId
+    ? getTasksByRunId(runId).filter(
         (task) =>
           task.runtime === params.runtime &&
-          normalizeComparableText(task.requesterSessionKey) ===
-            normalizeComparableText(params.requesterSessionKey) &&
+          task.scopeKind === params.scopeKind &&
+          normalizeComparableText(task.ownerKey) === normalizeComparableText(params.ownerKey) &&
           normalizeComparableText(task.childSessionKey) ===
             normalizeComparableText(params.childSessionKey) &&
+          normalizeComparableText(task.parentFlowId) ===
+            normalizeComparableText(params.parentFlowId),
+      )
+    : [];
+  const exact = runId
+    ? runScopeMatches.find(
+        (task) =>
           normalizeComparableText(task.label) === normalizeComparableText(params.label) &&
           normalizeComparableText(task.task) === normalizeComparableText(params.task),
       )
@@ -355,18 +619,10 @@ function findExistingTaskForCreate(params: {
   if (!runId || params.runtime !== "acp") {
     return undefined;
   }
-  const siblingMatches = getTasksByRunId(runId).filter(
-    (task) =>
-      task.runtime === params.runtime &&
-      normalizeComparableText(task.requesterSessionKey) ===
-        normalizeComparableText(params.requesterSessionKey) &&
-      normalizeComparableText(task.childSessionKey) ===
-        normalizeComparableText(params.childSessionKey),
-  );
-  if (siblingMatches.length === 0) {
+  if (runScopeMatches.length === 0) {
     return undefined;
   }
-  return pickPreferredRunIdTask(siblingMatches);
+  return pickPreferredRunIdTask(runScopeMatches);
 }
 
 function mergeExistingTaskForCreate(
@@ -398,6 +654,11 @@ function mergeExistingTaskForCreate(
     patch.sourceId = params.sourceId.trim();
   }
   if (params.parentFlowId?.trim() && !existing.parentFlowId?.trim()) {
+    assertParentFlowLinkAllowed({
+      ownerKey: existing.ownerKey,
+      scopeKind: existing.scopeKind,
+      parentFlowId: params.parentFlowId,
+    });
     patch.parentFlowId = params.parentFlowId.trim();
   }
   if (params.parentTaskId?.trim() && !existing.parentTaskId?.trim()) {
@@ -424,7 +685,8 @@ function mergeExistingTaskForCreate(
   const notifyPolicy = ensureNotifyPolicy({
     notifyPolicy: params.notifyPolicy,
     deliveryStatus: params.deliveryStatus,
-    requesterSessionKey: existing.requesterSessionKey,
+    ownerKey: existing.ownerKey,
+    scopeKind: existing.scopeKind,
   });
   if (notifyPolicy !== existing.notifyPolicy && existing.notifyPolicy === "silent") {
     patch.notifyPolicy = notifyPolicy;
@@ -440,11 +702,6 @@ function taskTerminalDeliveryIdempotencyKey(task: TaskRecord): string {
   return `task-terminal:${task.taskId}:${task.status}:${outcome}`;
 }
 
-function flowTerminalDeliveryIdempotencyKey(flowId: string, task: TaskRecord): string {
-  const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
-  return `flow-terminal:${flowId}:${task.taskId}:${task.status}:${outcome}`;
-}
-
 function resolveTaskStateChangeIdempotencyKey(params: {
   task: TaskRecord;
   latestEvent: TaskEventRecord;
@@ -456,21 +713,97 @@ function resolveTaskStateChangeIdempotencyKey(params: {
   return `task-event:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
 }
 
-function resolveTaskTerminalIdempotencyKey(task: TaskRecord, owner: TaskDeliveryOwner): string {
-  return owner.flowId
-    ? flowTerminalDeliveryIdempotencyKey(owner.flowId, task)
-    : taskTerminalDeliveryIdempotencyKey(task);
+function resolveTaskTerminalIdempotencyKey(task: TaskRecord): string {
+  const owner = resolveTaskDeliveryOwner(task);
+  if (owner.flowId) {
+    const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
+    return `flow-terminal:${owner.flowId}:${task.taskId}:${task.status}:${outcome}`;
+  }
+  return taskTerminalDeliveryIdempotencyKey(task);
+}
+
+function getLinkedFlowForDelivery(task: TaskRecord) {
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId || task.scopeKind !== "session") {
+    return undefined;
+  }
+  const flow = getTaskFlowById(flowId);
+  if (!flow) {
+    return undefined;
+  }
+  if (normalizeOwnerKey(flow.ownerKey) !== normalizeOwnerKey(task.ownerKey)) {
+    return undefined;
+  }
+  return flow;
 }
 
 function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
-  const flow = task.parentFlowId?.trim() ? getFlowById(task.parentFlowId) : undefined;
+  const flow = getLinkedFlowForDelivery(task);
+  if (flow) {
+    return {
+      sessionKey: flow.ownerKey.trim(),
+      requesterOrigin: normalizeDeliveryContext(
+        flow.requesterOrigin ?? taskDeliveryStates.get(task.taskId)?.requesterOrigin,
+      ),
+      flowId: flow.flowId,
+    };
+  }
+  if (task.scopeKind !== "session") {
+    return {};
+  }
   return {
-    sessionKey: flow?.ownerSessionKey?.trim() || task.requesterSessionKey.trim(),
-    requesterOrigin: normalizeDeliveryContext(
-      flow?.requesterOrigin ?? taskDeliveryStates.get(task.taskId)?.requesterOrigin,
-    ),
-    ...(flow ? { flowId: flow.flowId } : {}),
+    sessionKey: task.ownerKey.trim(),
+    requesterOrigin: normalizeDeliveryContext(taskDeliveryStates.get(task.taskId)?.requesterOrigin),
   };
+}
+
+function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId) {
+    return;
+  }
+  let flow = getTaskFlowById(flowId);
+  if (
+    !flow ||
+    flow.syncMode !== "managed" ||
+    flow.cancelRequestedAt == null ||
+    isTerminalFlowStatus(flow.status)
+  ) {
+    return;
+  }
+  if (listTasksForFlowId(flowId).some((candidate) => isActiveTaskStatus(candidate.status))) {
+    return;
+  }
+  const endedAt = task.endedAt ?? task.lastEventAt ?? Date.now();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        status: "cancelled",
+        blockedTaskId: null,
+        blockedSummary: null,
+        waitJson: null,
+        endedAt,
+        updatedAt: endedAt,
+      },
+    });
+    if (result.applied || result.reason === "not_found") {
+      return;
+    }
+    flow = result.current;
+    if (
+      !flow ||
+      flow.syncMode !== "managed" ||
+      flow.cancelRequestedAt == null ||
+      isTerminalFlowStatus(flow.status)
+    ) {
+      return;
+    }
+    if (listTasksForFlowId(flowId).some((candidate) => isActiveTaskStatus(candidate.status))) {
+      return;
+    }
+  }
 }
 
 function restoreTaskRegistryOnce() {
@@ -490,8 +823,10 @@ function restoreTaskRegistryOnce() {
       taskDeliveryStates.set(taskId, state);
     }
     rebuildRunIdIndex();
-    rebuildSessionKeyIndex();
-    emitTaskRegistryHookEvent(() => ({
+    rebuildOwnerKeyIndex();
+    rebuildParentFlowIdIndex();
+    rebuildRelatedSessionKeyIndex();
+    emitTaskRegistryObserverEvent(() => ({
       kind: "restored",
       tasks: snapshotTaskRecords(tasks),
     }));
@@ -516,17 +851,23 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     next.cleanupAfter = terminalAt + DEFAULT_TASK_RETENTION_MS;
   }
   const sessionIndexChanged =
-    normalizeSessionIndexKey(current.requesterSessionKey) !==
-      normalizeSessionIndexKey(next.requesterSessionKey) ||
+    normalizeSessionIndexKey(current.ownerKey) !== normalizeSessionIndexKey(next.ownerKey) ||
     normalizeSessionIndexKey(current.childSessionKey) !==
       normalizeSessionIndexKey(next.childSessionKey);
+  const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
   tasks.set(taskId, next);
   if (patch.runId && patch.runId !== current.runId) {
     rebuildRunIdIndex();
   }
   if (sessionIndexChanged) {
-    deleteSessionKeyIndex(taskId, current);
-    addSessionKeyIndex(taskId, next);
+    deleteOwnerKeyIndex(taskId, current);
+    addOwnerKeyIndex(taskId, next);
+    deleteRelatedSessionKeyIndex(taskId, current);
+    addRelatedSessionKeyIndex(taskId, next);
+  }
+  if (parentFlowIndexChanged) {
+    deleteParentFlowIdIndex(taskId, current);
+    addParentFlowIdIndex(taskId, next);
   }
   persistTaskUpsert(next);
   try {
@@ -538,7 +879,16 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
       error,
     });
   }
-  emitTaskRegistryHookEvent(() => ({
+  try {
+    syncManagedFlowCancellationFromTask(next);
+  } catch (error) {
+    log.warn("Failed to finalize managed flow cancellation from task update", {
+      taskId,
+      flowId: next.parentFlowId,
+      error,
+    });
+  }
+  emitTaskRegistryObserverEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(next),
     previous: cloneTaskRecord(current),
@@ -577,20 +927,24 @@ function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
+function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
+  return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
+}
+
 function queueTaskSystemEvent(task: TaskRecord, text: string) {
   const owner = resolveTaskDeliveryOwner(task);
-  const requesterSessionKey = owner.sessionKey.trim();
-  if (!requesterSessionKey) {
+  const ownerKey = owner.sessionKey?.trim();
+  if (!ownerKey) {
     return false;
   }
   enqueueSystemEvent(text, {
-    sessionKey: requesterSessionKey,
-    contextKey: owner.flowId ? `flow:${owner.flowId}` : `task:${task.taskId}`,
+    sessionKey: ownerKey,
+    contextKey: `task:${task.taskId}`,
     deliveryContext: owner.requesterOrigin,
   });
   requestHeartbeatNow({
     reason: "background-task",
-    sessionKey: requesterSessionKey,
+    sessionKey: ownerKey,
   });
   return true;
 }
@@ -601,20 +955,18 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
     return false;
   }
   const owner = resolveTaskDeliveryOwner(task);
-  const requesterSessionKey = owner.sessionKey.trim();
-  if (!requesterSessionKey) {
+  const ownerKey = owner.sessionKey?.trim();
+  if (!ownerKey) {
     return false;
   }
   enqueueSystemEvent(followupText, {
-    sessionKey: requesterSessionKey,
-    contextKey: owner.flowId
-      ? `flow:${owner.flowId}:blocked-followup`
-      : `task:${task.taskId}:blocked-followup`,
+    sessionKey: ownerKey,
+    contextKey: `task:${task.taskId}:blocked-followup`,
     deliveryContext: owner.requesterOrigin,
   });
   requestHeartbeatNow({
     reason: "background-task-blocked",
-    sessionKey: requesterSessionKey,
+    sessionKey: ownerKey,
   });
   return true;
 }
@@ -635,7 +987,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       return latest ? cloneTaskRecord(latest) : null;
     }
     const preferred = latest.runId
-      ? pickPreferredRunIdTask(getTasksByRunId(latest.runId))
+      ? pickPreferredRunIdTask(getPeerTasksForDelivery(latest))
       : undefined;
     if (
       shouldSuppressDuplicateTerminalDelivery({ task: latest, preferredTaskId: preferred?.taskId })
@@ -646,9 +998,10 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       });
     }
     const owner = resolveTaskDeliveryOwner(latest);
-    if (!owner.sessionKey.trim()) {
+    const ownerSessionKey = owner.sessionKey?.trim();
+    if (!ownerSessionKey) {
       return updateTask(taskId, {
-        deliveryStatus: "parent_missing",
+        deliveryStatus: resolveMissingOwnerDeliveryStatus(latest),
         lastEventAt: Date.now(),
       });
     }
@@ -666,7 +1019,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       } catch (error) {
         log.warn("Failed to queue background task session delivery", {
           taskId,
-          requesterSessionKey: latest.requesterSessionKey,
+          ownerKey: latest.ownerKey,
           error,
         });
         return updateTask(taskId, {
@@ -677,8 +1030,8 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     }
     try {
       const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
-      const requesterAgentId = parseAgentSessionKey(owner.sessionKey)?.agentId;
-      const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest, owner);
+      const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
+      const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest);
       await sendMessage({
         channel: owner.requesterOrigin?.channel,
         to: owner.requesterOrigin?.to ?? "",
@@ -688,7 +1041,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         agentId: requesterAgentId,
         idempotencyKey,
         mirror: {
-          sessionKey: owner.sessionKey,
+          sessionKey: ownerSessionKey,
           agentId: requesterAgentId,
           idempotencyKey,
         },
@@ -703,7 +1056,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     } catch (error) {
       log.warn("Failed to deliver background task update", {
         taskId,
-        requesterSessionKey: owner.sessionKey,
+        ownerKey: ownerSessionKey,
         requesterOrigin: owner.requesterOrigin,
         error,
       });
@@ -715,7 +1068,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       } catch (fallbackError) {
         log.warn("Failed to queue background task fallback event", {
           taskId,
-          requesterSessionKey: latest.requesterSessionKey,
+          ownerKey: latest.ownerKey,
           error: fallbackError,
         });
       }
@@ -748,6 +1101,13 @@ export async function maybeDeliverTaskStateChangeUpdate(
   }
   try {
     const owner = resolveTaskDeliveryOwner(current);
+    const ownerSessionKey = owner.sessionKey?.trim();
+    if (!ownerSessionKey) {
+      return updateTask(taskId, {
+        deliveryStatus: resolveMissingOwnerDeliveryStatus(current),
+        lastEventAt: Date.now(),
+      });
+    }
     if (!canDeliverTaskToRequesterOrigin(current)) {
       queueTaskSystemEvent(current, eventText);
       upsertTaskDeliveryState({
@@ -760,7 +1120,7 @@ export async function maybeDeliverTaskStateChangeUpdate(
       });
     }
     const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
-    const requesterAgentId = parseAgentSessionKey(owner.sessionKey)?.agentId;
+    const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
     const idempotencyKey = resolveTaskStateChangeIdempotencyKey({
       task: current,
       latestEvent,
@@ -775,7 +1135,7 @@ export async function maybeDeliverTaskStateChangeUpdate(
       agentId: requesterAgentId,
       idempotencyKey,
       mirror: {
-        sessionKey: owner.sessionKey,
+        sessionKey: ownerSessionKey,
         agentId: requesterAgentId,
         idempotencyKey,
       },
@@ -791,7 +1151,7 @@ export async function maybeDeliverTaskStateChangeUpdate(
   } catch (error) {
     log.warn("Failed to deliver background task state change", {
       taskId,
-      requesterSessionKey: current.requesterSessionKey,
+      ownerKey: current.ownerKey,
       error,
     });
     return cloneTaskRecord(current);
@@ -890,14 +1250,19 @@ export function markTaskLostById(params: {
   });
 }
 
-function updateTasksByRunId(runId: string, patch: Partial<TaskRecord>): TaskRecord[] {
-  const ids = taskIdsByRunId.get(runId.trim());
-  if (!ids || ids.size === 0) {
+function updateTasksByRunId(params: {
+  runId: string;
+  patch: Partial<TaskRecord>;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+}): TaskRecord[] {
+  const matches = getTasksByRunScope(params);
+  if (matches.length === 0) {
     return [];
   }
   const updated: TaskRecord[] = [];
-  for (const taskId of ids) {
-    const task = updateTask(taskId, patch);
+  for (const match of matches) {
+    const task = updateTask(match.taskId, params.patch);
     if (task) {
       updated.push(task);
     }
@@ -912,16 +1277,15 @@ function ensureListener() {
   listenerStarted = true;
   listenerStop = onAgentEvent((evt) => {
     restoreTaskRegistryOnce();
-    const ids = taskIdsByRunId.get(evt.runId);
-    if (!ids || ids.size === 0) {
+    const scopedTasks = getTasksByRunScope({
+      runId: evt.runId,
+      sessionKey: evt.sessionKey,
+    });
+    if (scopedTasks.length === 0) {
       return;
     }
     const now = evt.ts || Date.now();
-    for (const taskId of ids) {
-      const current = tasks.get(taskId);
-      if (!current) {
-        continue;
-      }
+    for (const current of scopedTasks) {
       const patch: Partial<TaskRecord> = {
         lastEventAt: now,
       };
@@ -959,10 +1323,10 @@ function ensureListener() {
                     : undefined,
             })
           : undefined;
-      const updated = updateTask(taskId, patch);
+      const updated = updateTask(current.taskId, patch);
       if (updated) {
-        void maybeDeliverTaskStateChangeUpdate(taskId, stateChangeEvent);
-        void maybeDeliverTaskTerminalUpdate(taskId);
+        void maybeDeliverTaskStateChangeUpdate(current.taskId, stateChangeEvent);
+        void maybeDeliverTaskTerminalUpdate(current.taskId);
       }
     }
   });
@@ -971,10 +1335,12 @@ function ensureListener() {
 export function createTaskRecord(params: {
   runtime: TaskRuntime;
   sourceId?: string;
-  requesterSessionKey: string;
+  requesterSessionKey?: string;
+  ownerKey?: string;
+  scopeKind?: TaskScopeKind;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  parentFlowId?: string;
   childSessionKey?: string;
+  parentFlowId?: string;
   parentTaskId?: string;
   agentId?: string;
   runId?: string;
@@ -992,27 +1358,62 @@ export function createTaskRecord(params: {
   terminalOutcome?: TaskTerminalOutcome | null;
 }): TaskRecord {
   ensureTaskRegistryReady();
-  const existing = findExistingTaskForCreate(params);
+  const requesterSessionKey = resolveTaskRequesterSessionKey(params);
+  const scopeKind = resolveTaskScopeKind({
+    scopeKind: params.scopeKind,
+    requesterSessionKey,
+  });
+  const ownerKey = resolveTaskOwnerKey({
+    requesterSessionKey,
+    ownerKey: params.ownerKey,
+  });
+  assertTaskOwner({
+    ownerKey,
+    scopeKind,
+  });
+  assertParentFlowLinkAllowed({
+    ownerKey,
+    scopeKind,
+    parentFlowId: params.parentFlowId,
+  });
+  const existing = findExistingTaskForCreate({
+    runtime: params.runtime,
+    ownerKey,
+    scopeKind,
+    childSessionKey: params.childSessionKey,
+    parentFlowId: params.parentFlowId,
+    runId: params.runId,
+    label: params.label,
+    task: params.task,
+  });
   if (existing) {
     return mergeExistingTaskForCreate(existing, params);
   }
   const now = Date.now();
   const taskId = crypto.randomUUID();
   const status = normalizeTaskStatus(params.status);
-  const deliveryStatus = params.deliveryStatus ?? ensureDeliveryStatus(params.requesterSessionKey);
+  const deliveryStatus =
+    params.deliveryStatus ??
+    ensureDeliveryStatus({
+      ownerKey,
+      scopeKind,
+    });
   const notifyPolicy = ensureNotifyPolicy({
     notifyPolicy: params.notifyPolicy,
     deliveryStatus,
-    requesterSessionKey: params.requesterSessionKey,
+    ownerKey,
+    scopeKind,
   });
   const lastEventAt = params.lastEventAt ?? params.startedAt ?? now;
   const record: TaskRecord = {
     taskId,
     runtime: params.runtime,
     sourceId: params.sourceId?.trim() || undefined,
-    requesterSessionKey: params.requesterSessionKey,
-    parentFlowId: params.parentFlowId?.trim() || undefined,
+    requesterSessionKey,
+    ownerKey,
+    scopeKind,
     childSessionKey: params.childSessionKey,
+    parentFlowId: params.parentFlowId?.trim() || undefined,
     parentTaskId: params.parentTaskId?.trim() || undefined,
     agentId: params.agentId?.trim() || undefined,
     runId: params.runId?.trim() || undefined,
@@ -1042,23 +1443,23 @@ export function createTaskRecord(params: {
     requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
   });
   addRunIdIndex(taskId, record.runId);
-  addSessionKeyIndex(taskId, record);
+  addOwnerKeyIndex(taskId, record);
+  addParentFlowIdIndex(taskId, record);
+  addRelatedSessionKeyIndex(taskId, record);
   persistTaskUpsert(record);
-  emitTaskRegistryHookEvent(() => ({
+  try {
+    syncFlowFromTask(record);
+  } catch (error) {
+    log.warn("Failed to sync parent flow from task create", {
+      taskId: record.taskId,
+      flowId: record.parentFlowId,
+      error,
+    });
+  }
+  emitTaskRegistryObserverEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(record),
   }));
-  if (record.parentFlowId?.trim()) {
-    try {
-      syncFlowFromTask(record);
-    } catch (error) {
-      log.warn("Failed to sync parent flow from task create", {
-        taskId: record.taskId,
-        flowId: record.parentFlowId,
-        error,
-      });
-    }
-  }
   if (isTerminalTaskStatus(record.status)) {
     void maybeDeliverTaskTerminalUpdate(taskId);
   }
@@ -1067,6 +1468,8 @@ export function createTaskRecord(params: {
 
 function updateTaskStateByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   status?: TaskStatus;
   startedAt?: number;
   endedAt?: number;
@@ -1078,16 +1481,12 @@ function updateTaskStateByRunId(params: {
   eventSummary?: string | null;
 }) {
   ensureTaskRegistryReady();
-  const ids = taskIdsByRunId.get(params.runId.trim());
-  if (!ids || ids.size === 0) {
+  const matches = getTasksByRunScope(params);
+  if (matches.length === 0) {
     return [];
   }
   const updated: TaskRecord[] = [];
-  for (const taskId of ids) {
-    const current = tasks.get(taskId);
-    if (!current) {
-      continue;
-    }
+  for (const current of matches) {
     const patch: Partial<TaskRecord> = {};
     const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
     const eventAt = params.lastEventAt ?? params.endedAt ?? Date.now();
@@ -1138,7 +1537,7 @@ function updateTaskStateByRunId(params: {
           summary: eventSummary,
         })
       : undefined;
-    const task = updateTask(taskId, patch);
+    const task = updateTask(current.taskId, patch);
     if (task) {
       updated.push(task);
       void maybeDeliverTaskStateChangeUpdate(task.taskId, nextEvent);
@@ -1148,15 +1547,27 @@ function updateTaskStateByRunId(params: {
   return updated;
 }
 
-function updateTaskDeliveryByRunId(params: { runId: string; deliveryStatus: TaskDeliveryStatus }) {
+function updateTaskDeliveryByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  deliveryStatus: TaskDeliveryStatus;
+}) {
   ensureTaskRegistryReady();
-  return updateTasksByRunId(params.runId, {
-    deliveryStatus: params.deliveryStatus,
+  return updateTasksByRunId({
+    runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
+    patch: {
+      deliveryStatus: params.deliveryStatus,
+    },
   });
 }
 
 export function markTaskRunningByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   startedAt?: number;
   lastEventAt?: number;
   progressSummary?: string | null;
@@ -1164,6 +1575,8 @@ export function markTaskRunningByRunId(params: {
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
     status: "running",
     startedAt: params.startedAt,
     lastEventAt: params.lastEventAt,
@@ -1174,12 +1587,16 @@ export function markTaskRunningByRunId(params: {
 
 export function recordTaskProgressByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
     lastEventAt: params.lastEventAt,
     progressSummary: params.progressSummary,
     eventSummary: params.eventSummary,
@@ -1188,6 +1605,8 @@ export function recordTaskProgressByRunId(params: {
 
 export function markTaskTerminalByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
   startedAt?: number;
   endedAt: number;
@@ -1199,6 +1618,8 @@ export function markTaskTerminalByRunId(params: {
 }) {
   return updateTaskStateByRunId({
     runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
     status: params.status,
     startedAt: params.startedAt,
     endedAt: params.endedAt,
@@ -1212,6 +1633,8 @@ export function markTaskTerminalByRunId(params: {
 
 export function setTaskRunDeliveryStatusByRunId(params: {
   runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
 }) {
   return updateTaskDeliveryByRunId(params);
@@ -1241,6 +1664,11 @@ export function linkTaskToFlowById(params: { taskId: string; flowId: string }): 
   if (current.parentFlowId?.trim()) {
     return cloneTaskRecord(current);
   }
+  assertParentFlowLinkAllowed({
+    ownerKey: current.ownerKey,
+    scopeKind: current.scopeKind,
+    parentFlowId: flowId,
+  });
   return updateTask(params.taskId, {
     parentFlowId: flowId,
   });
@@ -1362,46 +1790,8 @@ export function findTaskByRunId(runId: string): TaskRecord | undefined {
   return task ? cloneTaskRecord(task) : undefined;
 }
 
-export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | undefined {
-  const task = listTasksForSessionKey(sessionKey)[0];
-  return task ? cloneTaskRecord(task) : undefined;
-}
-
-export function listTasksForFlowId(flowId: string): TaskRecord[] {
-  ensureTaskRegistryReady();
-  const normalizedFlowId = flowId.trim();
-  if (!normalizedFlowId) {
-    return [];
-  }
-  return [...tasks.values()]
-    .map((task, insertionIndex) =>
-      task.parentFlowId?.trim() === normalizedFlowId
-        ? { ...cloneTaskRecord(task), insertionIndex }
-        : null,
-    )
-    .filter(
-      (
-        task,
-      ): task is TaskRecord & {
-        insertionIndex: number;
-      } => Boolean(task),
-    )
-    .toSorted(compareTasksNewestFirst)
-    .map(({ insertionIndex: _, ...task }) => task);
-}
-
-export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {
-  const task = listTasksForFlowId(flowId)[0];
-  return task ? cloneTaskRecord(task) : undefined;
-}
-
-export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
-  ensureTaskRegistryReady();
-  const key = normalizeSessionIndexKey(sessionKey);
-  if (!key) {
-    return [];
-  }
-  const ids = taskIdsBySessionKey.get(key);
+function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskRecord[] {
+  const ids = index.get(key);
   if (!ids || ids.size === 0) {
     return [];
   }
@@ -1421,12 +1811,81 @@ export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
     .map(({ insertionIndex: _, ...task }) => task);
 }
 
+export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | undefined {
+  const task = listTasksForSessionKey(sessionKey)[0];
+  return task ? cloneTaskRecord(task) : undefined;
+}
+
+export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeSessionIndexKey(sessionKey);
+  if (!key) {
+    return [];
+  }
+  return listTasksFromIndex(taskIdsByRelatedSessionKey, key);
+}
+
+export function listTasksForAgentId(agentId: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const lookup = agentId.trim();
+  if (!lookup) {
+    return [];
+  }
+  return snapshotTaskRecords(tasks)
+    .filter((task) => task.agentId?.trim() === lookup)
+    .toSorted(compareTasksNewestFirst);
+}
+
+export function findLatestTaskForOwnerKey(ownerKey: string): TaskRecord | undefined {
+  const task = listTasksForOwnerKey(ownerKey)[0];
+  return task ? cloneTaskRecord(task) : undefined;
+}
+
+export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {
+  const task = listTasksForFlowId(flowId)[0];
+  return task ? cloneTaskRecord(task) : undefined;
+}
+
+export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeSessionIndexKey(ownerKey);
+  if (!key) {
+    return [];
+  }
+  return listTasksFromIndex(taskIdsByOwnerKey, key);
+}
+
+export function listTasksForFlowId(flowId: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = flowId.trim();
+  if (!key) {
+    return [];
+  }
+  return listTasksFromIndex(taskIdsByParentFlowId, key);
+}
+
+export function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | undefined {
+  const task = listTasksForRelatedSessionKey(sessionKey)[0];
+  return task ? cloneTaskRecord(task) : undefined;
+}
+
+export function listTasksForRelatedSessionKey(sessionKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeSessionIndexKey(sessionKey);
+  if (!key) {
+    return [];
+  }
+  return listTasksFromIndex(taskIdsByRelatedSessionKey, key);
+}
+
 export function resolveTaskForLookupToken(token: string): TaskRecord | undefined {
   const lookup = token.trim();
   if (!lookup) {
     return undefined;
   }
-  return getTaskById(lookup) ?? findTaskByRunId(lookup) ?? findLatestTaskForSessionKey(lookup);
+  return (
+    getTaskById(lookup) ?? findTaskByRunId(lookup) ?? findLatestTaskForRelatedSessionKey(lookup)
+  );
 }
 
 export function deleteTaskRecordById(taskId: string): boolean {
@@ -1435,13 +1894,15 @@ export function deleteTaskRecordById(taskId: string): boolean {
   if (!current) {
     return false;
   }
-  deleteSessionKeyIndex(taskId, current);
+  deleteOwnerKeyIndex(taskId, current);
+  deleteParentFlowIdIndex(taskId, current);
+  deleteRelatedSessionKeyIndex(taskId, current);
   tasks.delete(taskId);
   taskDeliveryStates.delete(taskId);
   rebuildRunIdIndex();
   persistTaskDelete(taskId);
   persistTaskDeliveryStateDelete(taskId);
-  emitTaskRegistryHookEvent(() => ({
+  emitTaskRegistryObserverEvent(() => ({
     kind: "deleted",
     taskId: current.taskId,
     previous: cloneTaskRecord(current),
@@ -1453,7 +1914,9 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   tasks.clear();
   taskDeliveryStates.clear();
   taskIdsByRunId.clear();
-  taskIdsBySessionKey.clear();
+  taskIdsByOwnerKey.clear();
+  taskIdsByParentFlowId.clear();
+  taskIdsByRelatedSessionKey.clear();
   tasksWithPendingDelivery.clear();
   restoreAttempted = false;
   resetTaskRegistryRuntimeForTests();
@@ -1464,8 +1927,12 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   listenerStarted = false;
   if (opts?.persist !== false) {
     persistTaskRegistry();
-    // Close the sqlite handle after persisting the empty snapshot so Windows temp-dir
-    // cleanup can remove the state directory without hitting runs.sqlite EBUSY errors.
-    getTaskRegistryStore().close?.();
   }
+  // Always close the sqlite handle so Windows temp-dir cleanup can remove the
+  // state directory even when a test intentionally skips persisting the reset.
+  getTaskRegistryStore().close?.();
+}
+
+export function resetTaskRegistryDeliveryRuntimeForTests() {
+  deliveryRuntimePromise = null;
 }

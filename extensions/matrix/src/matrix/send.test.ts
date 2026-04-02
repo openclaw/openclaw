@@ -2,8 +2,15 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
 import { voteMatrixPoll } from "./actions/polls.js";
-import { sendMessageMatrix, sendSingleTextMessageMatrix, sendTypingMatrix } from "./send.js";
+import {
+  editMessageMatrix,
+  sendMessageMatrix,
+  sendPollMatrix,
+  sendSingleTextMessageMatrix,
+  sendTypingMatrix,
+} from "./send.js";
 
+const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
   fileName: "photo.png",
@@ -22,6 +29,10 @@ const resolveTextChunkLimitMock = vi.fn<
 >(() => 4000);
 const resolveMarkdownTableModeMock = vi.fn(() => "code");
 const convertMarkdownTablesMock = vi.fn((text: string) => text);
+
+vi.mock("./outbound-media-runtime.js", () => ({
+  loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
+}));
 
 const runtimeStub = {
   config: {
@@ -74,11 +85,13 @@ const makeClient = () => {
   const sendMessage = vi.fn().mockResolvedValue("evt1");
   const sendEvent = vi.fn().mockResolvedValue("evt-poll-vote");
   const getEvent = vi.fn();
+  const getJoinedRoomMembers = vi.fn().mockResolvedValue([]);
   const uploadContent = vi.fn().mockResolvedValue("mxc://example/file");
   const client = {
     sendMessage,
     sendEvent,
     getEvent,
+    getJoinedRoomMembers,
     uploadContent,
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
     prepareForOneOff: vi.fn(async () => undefined),
@@ -86,7 +99,7 @@ const makeClient = () => {
     stop: vi.fn(() => undefined),
     stopAndPersist: vi.fn(async () => undefined),
   } as unknown as import("./sdk.js").MatrixClient;
-  return { client, sendMessage, sendEvent, getEvent, uploadContent };
+  return { client, sendMessage, sendEvent, getEvent, getJoinedRoomMembers, uploadContent };
 };
 
 function makeEncryptedMediaClient() {
@@ -100,6 +113,22 @@ function makeEncryptedMediaClient() {
 
 function resetMatrixSendRuntimeMocks() {
   setMatrixRuntime(runtimeStub);
+  loadOutboundMediaFromUrlMock.mockReset().mockImplementation(
+    async (
+      mediaUrl: string,
+      options?: {
+        maxBytes?: number;
+        mediaLocalRoots?: readonly string[];
+        mediaReadFile?: (filePath: string) => Promise<Buffer>;
+      },
+    ) =>
+      await loadWebMediaMock(mediaUrl, {
+        maxBytes: options?.maxBytes,
+        localRoots: options?.mediaLocalRoots,
+        hostReadCapability: false,
+        readFile: options?.mediaReadFile,
+      }),
+  );
   loadWebMediaMock.mockReset().mockResolvedValue({
     buffer: Buffer.from("media"),
     fileName: "photo.png",
@@ -334,10 +363,13 @@ describe("sendMessageMatrix media", () => {
     });
 
     expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/photo.png", {
-      maxBytes: 1024 * 1024,
-      localRoots: undefined,
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "file:///tmp/photo.png",
+      expect.objectContaining({
+        maxBytes: 1024 * 1024,
+        localRoots: undefined,
+      }),
+    );
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
 
@@ -350,10 +382,139 @@ describe("sendMessageMatrix media", () => {
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/photo.png", {
-      maxBytes: undefined,
-      localRoots: ["/tmp/openclaw-matrix-test"],
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "file:///tmp/photo.png",
+      expect.objectContaining({
+        maxBytes: undefined,
+        localRoots: ["/tmp/openclaw-matrix-test"],
+      }),
+    );
+  });
+});
+
+describe("sendMessageMatrix mentions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetMatrixSendRuntimeMocks();
+  });
+
+  it("adds an empty m.mentions object for plain messages without mentions", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "hello", {
+      client,
     });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "hello",
+      "m.mentions": {},
+    });
+  });
+
+  it("emits m.mentions and matrix.to anchors for qualified user mentions", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "hello @alice:example.org", {
+      client,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "hello @alice:example.org",
+      "m.mentions": { user_ids: ["@alice:example.org"] },
+    });
+    expect(
+      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+    ).toContain('href="https://matrix.to/#/%40alice%3Aexample.org"');
+  });
+
+  it("keeps bare localpart text as plain text", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "hello @alice", {
+      client,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": {},
+    });
+    expect(
+      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+    ).not.toContain("matrix.to/#/@alice:example.org");
+  });
+
+  it("does not emit mentions for escaped qualified users", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "\\@alice:example.org", {
+      client,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": {},
+    });
+    expect(
+      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+    ).not.toContain("matrix.to/#/@alice:example.org");
+  });
+
+  it("does not emit mentions for escaped room mentions", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "\\@room please review", {
+      client,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": {},
+    });
+  });
+
+  it("marks room mentions via m.mentions.room", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "@room please review", {
+      client,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": { room: true },
+    });
+  });
+
+  it("adds mention metadata to media captions", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "caption @alice:example.org", {
+      client,
+      mediaUrl: "file:///tmp/photo.png",
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": { user_ids: ["@alice:example.org"] },
+    });
+  });
+
+  it("does not emit mentions from fallback filenames when there is no caption", async () => {
+    const { client, sendMessage } = makeClient();
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("media"),
+      fileName: "@room.png",
+      contentType: "image/png",
+      kind: "image",
+    });
+
+    await sendMessageMatrix("room:!room:example", "", {
+      client,
+      mediaUrl: "file:///tmp/room.png",
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "@room.png",
+      "m.mentions": {},
+    });
+    expect(
+      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+    ).toBeUndefined();
   });
 });
 
@@ -416,6 +577,114 @@ describe("sendSingleTextMessageMatrix", () => {
     ).rejects.toThrow("Matrix single-message text exceeds limit");
 
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("editMessageMatrix mentions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetMatrixSendRuntimeMocks();
+  });
+
+  it("stores full mentions in m.new_content and only newly-added mentions in the edit event", async () => {
+    const { client, sendMessage, getEvent } = makeClient();
+    getEvent.mockResolvedValue({
+      content: {
+        body: "hello @alice:example.org",
+        "m.mentions": { user_ids: ["@alice:example.org"] },
+      },
+    });
+
+    await editMessageMatrix(
+      "room:!room:example",
+      "$original",
+      "hello @alice:example.org and @bob:example.org",
+      {
+        client,
+      },
+    );
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": { user_ids: ["@bob:example.org"] },
+      "m.new_content": {
+        "m.mentions": { user_ids: ["@alice:example.org", "@bob:example.org"] },
+      },
+    });
+  });
+
+  it("does not re-notify legacy mentions when the prior event body already mentioned the user", async () => {
+    const { client, sendMessage, getEvent } = makeClient();
+    getEvent.mockResolvedValue({
+      content: {
+        body: "hello @alice:example.org",
+      },
+    });
+
+    await editMessageMatrix("room:!room:example", "$original", "hello again @alice:example.org", {
+      client,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": {},
+      "m.new_content": {
+        body: "hello again @alice:example.org",
+        "m.mentions": { user_ids: ["@alice:example.org"] },
+      },
+    });
+  });
+
+  it("keeps explicit empty prior m.mentions authoritative", async () => {
+    const { client, sendMessage, getEvent } = makeClient();
+    getEvent.mockResolvedValue({
+      content: {
+        body: "`@alice:example.org`",
+        "m.mentions": {},
+      },
+    });
+
+    await editMessageMatrix("room:!room:example", "$original", "@alice:example.org", {
+      client,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": { user_ids: ["@alice:example.org"] },
+      "m.new_content": {
+        "m.mentions": { user_ids: ["@alice:example.org"] },
+      },
+    });
+  });
+});
+
+describe("sendPollMatrix mentions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetMatrixSendRuntimeMocks();
+  });
+
+  it("adds m.mentions for poll fallback text", async () => {
+    const { client, sendEvent } = makeClient();
+
+    await sendPollMatrix(
+      "room:!room:example",
+      {
+        question: "@room lunch with @alice:example.org?",
+        options: ["yes", "no"],
+      },
+      {
+        client,
+      },
+    );
+
+    expect(sendEvent).toHaveBeenCalledWith(
+      "!room:example",
+      "m.poll.start",
+      expect.objectContaining({
+        "m.mentions": {
+          room: true,
+          user_ids: ["@alice:example.org"],
+        },
+      }),
+    );
   });
 });
 

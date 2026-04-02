@@ -245,6 +245,44 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it("passes dangerous force unsafe install through to marketplace path installs", async () => {
+    await withTempDir(async (rootDir) => {
+      const pluginDir = path.join(rootDir, "plugins", "frontend-design");
+      const manifestPath = await writeLocalMarketplaceFixture({
+        rootDir,
+        pluginDir,
+        manifest: {
+          plugins: [
+            {
+              name: "frontend-design",
+              source: "./plugins/frontend-design",
+            },
+          ],
+        },
+      });
+      installPluginFromPathMock.mockResolvedValue({
+        ok: true,
+        pluginId: "frontend-design",
+        targetDir: "/tmp/frontend-design",
+        version: "0.1.0",
+        extensions: ["index.ts"],
+      });
+
+      await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+        dangerouslyForceUnsafeInstall: true,
+      });
+
+      expect(installPluginFromPathMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: pluginDir,
+          dangerouslyForceUnsafeInstall: true,
+        }),
+      );
+    });
+  });
+
   it("resolves Claude-style plugin@marketplace shortcuts from known_marketplaces.json", async () => {
     await withTempDir(async (homeDir) => {
       const openClawHome = path.join(homeDir, "openclaw-home");

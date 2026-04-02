@@ -9,6 +9,25 @@ export type TimedDoctorContribution<TContext> = {
   run: (ctx: TContext) => Promise<void>;
 };
 
+type DoctorContributionTimeoutScheduler = (
+  onTimeout: () => void,
+  timeoutMs: number,
+) => () => void;
+
+type RunDoctorContributionWithTimeoutOptions = {
+  timeoutMs?: number;
+  scheduleTimeout?: DoctorContributionTimeoutScheduler;
+};
+
+function scheduleDoctorContributionTimeout(
+  onTimeout: () => void,
+  timeoutMs: number,
+): () => void {
+  const timer = setTimeout(onTimeout, timeoutMs);
+  timer.unref?.();
+  return () => clearTimeout(timer);
+}
+
 export function resolveDoctorContributionTimeoutMs(id: string): number {
   const override = Number.parseInt(
     process.env.OPENCLAW_DOCTOR_CONTRIBUTION_TIMEOUT_MS ?? "",
@@ -49,18 +68,19 @@ export async function runDoctorContributionWithTimeout<TContext>(
   contribution: TimedDoctorContribution<TContext>,
   ctx: TContext,
   onDebug?: (message: string) => void,
+  options?: RunDoctorContributionWithTimeoutOptions,
 ): Promise<void> {
-  const timeoutMs = resolveDoctorContributionTimeoutMs(contribution.id);
+  const timeoutMs = options?.timeoutMs ?? resolveDoctorContributionTimeoutMs(contribution.id);
+  const scheduleTimeout = options?.scheduleTimeout ?? scheduleDoctorContributionTimeout;
   onDebug?.(`contribution:start:${contribution.id}`);
-  let timer: NodeJS.Timeout | undefined;
+  let cancelTimeout = () => {};
 
   await Promise.race([
     contribution.run(ctx),
     new Promise((_, reject) => {
-      timer = setTimeout(() => {
+      cancelTimeout = scheduleTimeout(() => {
         reject(new DoctorContributionTimeoutError(contribution.id, timeoutMs));
       }, timeoutMs);
-      timer.unref?.();
     }),
   ])
     .then(() => {
@@ -81,8 +101,6 @@ export async function runDoctorContributionWithTimeout<TContext>(
       );
     })
     .finally(() => {
-      if (timer) {
-        clearTimeout(timer);
-      }
+      cancelTimeout();
     });
 }

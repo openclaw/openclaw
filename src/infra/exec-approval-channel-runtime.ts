@@ -41,10 +41,7 @@ export type ExecApprovalChannelRuntimeAdapter<
     resolved: TResolved;
     entries: TPending[];
   }) => Promise<void>;
-  finalizeExpired?: (params: {
-    request: TRequest;
-    entries: TPending[];
-  }) => Promise<void>;
+  finalizeExpired?: (params: { request: TRequest; entries: TPending[] }) => Promise<void>;
   nowMs?: () => number;
 };
 

@@ -24,10 +24,8 @@ describe("runDoctorContributionWithTimeout", () => {
   });
 
   it("notes owned timeout failures without swallowing generic errors", async () => {
-    // This suite runs in non-isolated workers in CI; force real timers so
-    // leftover fake-timer state from earlier files cannot suppress the timeout.
-    vi.useRealTimers();
-    process.env.OPENCLAW_DOCTOR_CONTRIBUTION_TIMEOUT_MS = "10";
+    // This suite runs in non-isolated workers in CI, so inject the timeout
+    // signal directly instead of depending on ambient timer state.
 
     await expect(
       runDoctorContributionWithTimeout(
@@ -39,6 +37,14 @@ describe("runDoctorContributionWithTimeout", () => {
           },
         },
         {},
+        undefined,
+        {
+          timeoutMs: 10,
+          scheduleTimeout: (onTimeout) => {
+            queueMicrotask(onTimeout);
+            return () => {};
+          },
+        },
       ),
     ).resolves.toBeUndefined();
 

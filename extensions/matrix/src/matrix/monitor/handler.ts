@@ -1,5 +1,7 @@
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { createMatrixDraftStream } from "../draft-stream.js";
 import {
@@ -25,6 +27,7 @@ import {
 } from "../send.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
+import { resolveMatrixAllowListMatch } from "./allowlist.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
@@ -44,6 +47,7 @@ import {
   getAgentScopedMediaLocalRoots,
   logInboundDrop,
   logTypingFailure,
+  type BlockReplyContext,
   type PluginRuntime,
   type ReplyPayload,
   type RuntimeEnv,
@@ -83,6 +87,7 @@ export type MatrixMonitorHandlerParams = {
   /** DM-specific threadReplies override. Falls back to threadReplies when absent. */
   dmThreadReplies?: "off" | "inbound" | "always";
   streaming: "partial" | "off";
+  blockStreamingEnabled: boolean;
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   textLimit: number;
@@ -200,6 +205,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     threadReplies,
     dmThreadReplies,
     streaming,
+    blockStreamingEnabled,
     dmEnabled,
     dmPolicy,
     textLimit,
@@ -214,6 +220,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     getMemberDisplayName,
     needsRoomAliasesForConfig,
   } = params;
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg,
+    channel: "matrix",
+    accountId,
+  });
   let cachedStoreAllowFrom: {
     value: string[];
     expiresAtMs: number;
@@ -471,6 +482,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           isRoom,
         });
         const {
+          effectiveGroupAllowFrom,
           effectiveRoomUsers,
           groupAllowConfigured,
           directAllowMatch,
@@ -860,6 +872,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           triggerSnapshot,
           threadRootId: _threadRootId,
           thread,
+          effectiveGroupAllowFrom,
+          effectiveRoomUsers,
         };
       };
       const ingressResult =
@@ -910,24 +924,78 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         triggerSnapshot,
         threadRootId: _threadRootId,
         thread,
+        effectiveGroupAllowFrom,
+        effectiveRoomUsers,
       } = resolvedIngressResult;
 
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
       const replyToEventId = resolveMatrixReplyToEventId(event.content as RoomMessageEventContent);
       const threadTarget = thread.threadId;
-      const threadContext = _threadRootId
+      const isRoomContextSenderAllowed = (contextSenderId?: string): boolean => {
+        if (!isRoom || !contextSenderId) {
+          return true;
+        }
+        if (effectiveRoomUsers.length > 0) {
+          return resolveMatrixAllowListMatch({
+            allowList: effectiveRoomUsers,
+            userId: contextSenderId,
+          }).allowed;
+        }
+        if (groupPolicy === "allowlist" && effectiveGroupAllowFrom.length > 0) {
+          return resolveMatrixAllowListMatch({
+            allowList: effectiveGroupAllowFrom,
+            userId: contextSenderId,
+          }).allowed;
+        }
+        return true;
+      };
+      const shouldIncludeRoomContextSender = (
+        kind: "thread" | "quote" | "history",
+        contextSenderId?: string,
+      ): boolean =>
+        evaluateSupplementalContextVisibility({
+          mode: contextVisibilityMode,
+          kind,
+          senderAllowed: isRoomContextSenderAllowed(contextSenderId),
+        }).include;
+      let threadContext = _threadRootId
         ? await resolveThreadContext({ roomId, threadRootId: _threadRootId })
         : undefined;
-      const replyContext =
-        replyToEventId && replyToEventId === _threadRootId && threadContext?.summary
-          ? {
-              replyToBody: threadContext.summary,
-              replyToSender: threadContext.senderLabel,
-            }
-          : replyToEventId
-            ? await resolveReplyContext({ roomId, eventId: replyToEventId })
-            : undefined;
+      let threadContextBlockedByPolicy = false;
+      if (
+        threadContext?.senderId &&
+        !shouldIncludeRoomContextSender("thread", threadContext.senderId)
+      ) {
+        logVerboseMessage(`matrix: drop thread root context (mode=${contextVisibilityMode})`);
+        threadContextBlockedByPolicy = true;
+        threadContext = undefined;
+      }
+      let replyContext: Awaited<ReturnType<typeof resolveReplyContext>> | undefined;
+      if (replyToEventId && replyToEventId === _threadRootId && threadContext?.summary) {
+        replyContext = {
+          replyToBody: threadContext.summary,
+          replyToSender: threadContext.senderLabel,
+          replyToSenderId: threadContext.senderId,
+        };
+      } else if (
+        replyToEventId &&
+        replyToEventId === _threadRootId &&
+        threadContextBlockedByPolicy
+      ) {
+        replyContext = await resolveReplyContext({ roomId, eventId: replyToEventId });
+      } else {
+        replyContext = replyToEventId
+          ? await resolveReplyContext({ roomId, eventId: replyToEventId })
+          : undefined;
+      }
+      if (
+        replyContext?.replyToSenderId &&
+        !shouldIncludeRoomContextSender("quote", replyContext.replyToSenderId)
+      ) {
+        logVerboseMessage(`matrix: drop reply context (mode=${contextVisibilityMode})`);
+        replyContext = undefined;
+      }
       const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
       const roomName = roomInfo?.name;
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
@@ -1085,10 +1153,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
         },
       });
-      const streamingEnabled = streaming === "partial";
+      const draftStreamingEnabled = streaming === "partial";
       const draftReplyToId = replyToMode !== "off" && !threadTarget ? _messageId : undefined;
       let currentDraftReplyToId = draftReplyToId;
-      const draftStream = streamingEnabled
+      const draftStream = draftStreamingEnabled
         ? createMatrixDraftStream({
             roomId,
             client,
@@ -1101,13 +1169,80 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           })
         : undefined;
       draftStreamRef = draftStream;
-      // Track how much of the full accumulated text has been materialized
-      // (delivered) so each new block only streams the new portion.
-      let materializedTextLength = 0;
-      let lastPartialFullTextLength = 0;
+      type PendingDraftBoundary = {
+        messageGeneration: number;
+        endOffset: number;
+      };
+      // Track the current draft block start plus any queued block-end offsets
+      // inside the model's cumulative partial text so multiple block
+      // boundaries can drain in order even when Matrix delivery lags behind.
+      let currentDraftMessageGeneration = 0;
+      let currentDraftBlockOffset = 0;
+      let latestDraftFullText = "";
+      const pendingDraftBoundaries: PendingDraftBoundary[] = [];
+      const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
       // Set after the first final payload consumes the draft event so
       // subsequent finals go through normal delivery.
       let draftConsumed = false;
+
+      const getDisplayableDraftText = () => {
+        const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
+          (boundary) => boundary.messageGeneration === currentDraftMessageGeneration,
+        )?.endOffset;
+        if (nextDraftBoundaryOffset === undefined) {
+          return latestDraftFullText.slice(currentDraftBlockOffset);
+        }
+        return latestDraftFullText.slice(currentDraftBlockOffset, nextDraftBoundaryOffset);
+      };
+
+      const updateDraftFromLatestFullText = () => {
+        const blockText = getDisplayableDraftText();
+        if (blockText) {
+          draftStream?.update(blockText);
+        }
+      };
+
+      const queueDraftBlockBoundary = (payload: ReplyPayload, context?: BlockReplyContext) => {
+        const payloadTextLength = payload.text?.length ?? 0;
+        const messageGeneration = context?.assistantMessageIndex ?? currentDraftMessageGeneration;
+        const lastQueuedDraftBoundaryOffset =
+          latestQueuedDraftBoundaryOffsets.get(messageGeneration) ?? 0;
+        // Logical block boundaries must follow emitted block text, not whichever
+        // later partial preview has already arrived by the time the async
+        // boundary callback drains.
+        const nextDraftBoundaryOffset = lastQueuedDraftBoundaryOffset + payloadTextLength;
+        latestQueuedDraftBoundaryOffsets.set(messageGeneration, nextDraftBoundaryOffset);
+        pendingDraftBoundaries.push({
+          messageGeneration,
+          endOffset: nextDraftBoundaryOffset,
+        });
+      };
+
+      const advanceDraftBlockBoundary = (options?: { fallbackToLatestEnd?: boolean }) => {
+        const completedBoundary = pendingDraftBoundaries.shift();
+        if (completedBoundary) {
+          if (
+            !pendingDraftBoundaries.some(
+              (entry) => entry.messageGeneration === completedBoundary.messageGeneration,
+            )
+          ) {
+            latestQueuedDraftBoundaryOffsets.delete(completedBoundary.messageGeneration);
+          }
+          if (completedBoundary.messageGeneration === currentDraftMessageGeneration) {
+            currentDraftBlockOffset = completedBoundary.endOffset;
+          }
+          return;
+        }
+        if (options?.fallbackToLatestEnd) {
+          currentDraftBlockOffset = latestDraftFullText.length;
+        }
+      };
+
+      const resetDraftBlockOffsets = () => {
+        currentDraftMessageGeneration += 1;
+        currentDraftBlockOffset = 0;
+        latestDraftFullText = "";
+      };
 
       const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
         core.channel.reply.createReplyDispatcherWithTyping({
@@ -1257,10 +1392,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               // the stream must stay stopped so late async callbacks cannot
               // create ghost messages.
               if (info.kind === "block") {
-                materializedTextLength = lastPartialFullTextLength;
                 draftConsumed = false;
+                advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
                 draftStream.reset();
                 currentDraftReplyToId = replyToMode === "all" ? draftReplyToId : undefined;
+                updateDraftFromLatestFullText();
 
                 // Re-assert typing so the user still sees the indicator while
                 // the next block generates.
@@ -1288,6 +1424,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             } else {
               nonFinalReplyDeliveryFailed = true;
             }
+            if (info.kind === "block") {
+              advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
+            }
             runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
           },
           onReplyStart: typingCallbacks.onReplyStart,
@@ -1308,26 +1447,31 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               replyOptions: {
                 ...replyOptions,
                 skillFilter: roomConfig?.skills,
-                // When streaming is active, disable block streaming — draft
-                // streaming replaces it with edit-in-place updates.
-                disableBlockStreaming: streamingEnabled ? true : undefined,
+                // Keep block streaming enabled when explicitly requested, even
+                // with draft previews on. The draft remains the live preview
+                // for the current assistant block, while block deliveries
+                // finalize completed blocks into their own preserved events.
+                disableBlockStreaming: !blockStreamingEnabled,
                 onPartialReply: draftStream
                   ? (payload) => {
-                      const fullText = payload.text ?? "";
-                      lastPartialFullTextLength = fullText.length;
-                      const blockText = fullText.slice(materializedTextLength);
-                      if (blockText) {
-                        draftStream.update(blockText);
-                      }
+                      latestDraftFullText = payload.text ?? "";
+                      updateDraftFromLatestFullText();
                     }
                   : undefined,
-                // Reset text offset on assistant message boundaries so
-                // post-tool blocks stream correctly (payload.text resets
-                // per assistant message upstream).
+                onBlockReplyQueued: draftStream
+                  ? (payload, context) => {
+                      if (payload.isCompactionNotice === true) {
+                        return;
+                      }
+                      queueDraftBlockBoundary(payload, context);
+                    }
+                  : undefined,
+                // Reset draft boundary bookkeeping on assistant message
+                // boundaries so post-tool blocks stream from a fresh
+                // cumulative payload (payload.text resets upstream).
                 onAssistantMessageStart: draftStream
                   ? () => {
-                      materializedTextLength = 0;
-                      lastPartialFullTextLength = 0;
+                      resetDraftBlockOffsets();
                     }
                   : undefined,
                 onModelSelected,

@@ -15,6 +15,7 @@ import {
 } from "../commands/doctor-auth.js";
 import { noteBootstrapFileSize } from "../commands/doctor-bootstrap-size.js";
 import { noteChromeMcpBrowserReadiness } from "../commands/doctor-browser.js";
+import { maybeRepairBundledPluginRuntimeDeps } from "../commands/doctor-bundled-plugin-runtime-deps.js";
 import { doctorShellCompletion } from "../commands/doctor-completion.js";
 import { maybeRepairLegacyCronStore } from "../commands/doctor-cron.js";
 import { maybeRepairGatewayDaemon } from "../commands/doctor-gateway-daemon-flow.js";
@@ -260,6 +261,13 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
 async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await maybeRepairLegacyPluginManifestContracts({
     env: process.env,
+    runtime: ctx.runtime,
+    prompter: ctx.prompter,
+  });
+}
+
+async function runBundledPluginRuntimeDepsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await maybeRepairBundledPluginRuntimeDeps({
     runtime: ctx.runtime,
     prompter: ctx.prompter,
   });
@@ -517,6 +525,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:legacy-plugin-manifests",
       label: "Legacy plugin manifests",
       run: runLegacyPluginManifestHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:bundled-plugin-runtime-deps",
+      label: "Bundled plugin runtime deps",
+      run: runBundledPluginRuntimeDepsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",

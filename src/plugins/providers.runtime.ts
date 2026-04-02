@@ -4,7 +4,7 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import {
   resolveEnabledProviderPluginIds,
@@ -38,14 +38,15 @@ export function resolvePluginProviders(params: {
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   debugDoctor("providers.runtime:applyPluginAutoEnable:start");
-  const autoEnabledConfig =
+  const autoEnabled =
     params.config !== undefined
       ? applyPluginAutoEnable({
           config: params.config,
           env,
-        }).config
+        })
       : undefined;
   debugDoctor("providers.runtime:applyPluginAutoEnable:done");
+  const autoEnabledConfig = autoEnabled?.config;
   debugDoctor("providers.runtime:resolveBundledProviderCompatPluginIds:start");
   const bundledProviderCompatPluginIds =
     params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
@@ -85,8 +86,10 @@ export function resolvePluginProviders(params: {
   });
   debugDoctor("providers.runtime:resolveEnabledProviderPluginIds:done");
   debugDoctor("providers.runtime:loadOpenClawPlugins:start");
-  const registry = loadOpenClawPlugins({
+  const registry = resolveRuntimePluginRegistry({
     config,
+    activationSourceConfig: params.config,
+    autoEnabledReasons: autoEnabled?.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     env,
     onlyPluginIds: providerPluginIds,
@@ -95,6 +98,9 @@ export function resolvePluginProviders(params: {
     activate: params.activate ?? false,
     logger: createPluginLoaderLogger(log),
   });
+  if (!registry) {
+    return [];
+  }
 
   debugDoctor("providers.runtime:loadOpenClawPlugins:done");
   return registry.providers.map((entry) => ({
@@ -102,4 +108,3 @@ export function resolvePluginProviders(params: {
     pluginId: entry.pluginId,
   }));
 }
-

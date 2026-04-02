@@ -16,6 +16,8 @@ import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
+import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
+import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("./runtime-tts.runtime.js"));
@@ -183,6 +185,10 @@ export type CreatePluginRuntimeOptions = {
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
+  const taskFlow = createRuntimeTaskFlow();
+  const tasks = createRuntimeTasks({
+    legacyTaskFlow: taskFlow,
+  });
   const runtime = {
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
@@ -203,6 +209,8 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
+    tasks,
+    taskFlow,
   } satisfies Omit<
     PluginRuntime,
     "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration"

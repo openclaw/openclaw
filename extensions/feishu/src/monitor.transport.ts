@@ -1,6 +1,7 @@
 import * as http from "http";
 import crypto from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
 import {
   applyBasicWebhookRequestGuards,
   isRequestBodyLimitError,
@@ -32,15 +33,6 @@ export type MonitorTransportParams = {
 
 function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function timingSafeEqualString(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, "utf8");
-  const rightBuffer = Buffer.from(right, "utf8");
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 function buildFeishuWebhookEnvelope(
@@ -83,7 +75,7 @@ function isFeishuWebhookSignatureValid(params: {
     .createHash("sha256")
     .update(timestamp + nonce + encryptKey + params.rawBody)
     .digest("hex");
-  return timingSafeEqualString(computedSignature, signature);
+  return safeEqualSecret(computedSignature, signature);
 }
 
 function respondText(res: http.ServerResponse, statusCode: number, body: string): void {

@@ -58,22 +58,27 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
     runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
   }));
-  vi.doMock("../plugins/provider-runtime.js", () => ({
-    prepareProviderRuntimeAuth: async (params: {
-      provider: string;
-      context: { apiKey: string };
-    }) => {
-      if (params.provider !== "github-copilot") {
-        return undefined;
-      }
-      const token = await resolveCopilotApiTokenMock(params.context.apiKey);
-      return {
-        apiKey: token.token,
-        baseUrl: token.baseUrl,
-        expiresAt: token.expiresAt,
-      };
-    },
-  }));
+  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+    return {
+      ...actual,
+      prepareProviderRuntimeAuth: async (params: {
+        provider: string;
+        context: { apiKey: string };
+      }) => {
+        if (params.provider !== "github-copilot") {
+          return undefined;
+        }
+        const token = await resolveCopilotApiTokenMock(params.context.apiKey);
+        return {
+          apiKey: token.token,
+          baseUrl: token.baseUrl,
+          expiresAt: token.expiresAt,
+        };
+      },
+      resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
+    };
+  });
   vi.doMock("../infra/backoff.js", () => ({
     computeBackoff: (
       policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
@@ -188,8 +193,26 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   ...overrides,
 });
 
-const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawConfig =>
+const makeConfig = (opts?: {
+  fallbacks?: string[];
+  apiKey?: string;
+  overloadedBackoffMs?: number;
+  overloadedProfileRotations?: number;
+}): OpenClawConfig =>
   ({
+    auth:
+      opts?.overloadedBackoffMs != null || opts?.overloadedProfileRotations != null
+        ? {
+            cooldowns: {
+              ...(opts?.overloadedBackoffMs != null
+                ? { overloadedBackoffMs: opts.overloadedBackoffMs }
+                : {}),
+              ...(opts?.overloadedProfileRotations != null
+                ? { overloadedProfileRotations: opts.overloadedProfileRotations }
+                : {}),
+            },
+          }
+        : undefined,
     agents: {
       defaults: {
         model: {
@@ -379,6 +402,7 @@ async function runAutoPinnedOpenAiTurn(params: {
   sessionKey: string;
   runId: string;
   authProfileId?: string;
+  config?: OpenClawConfig;
 }) {
   await runEmbeddedPiAgentInline({
     sessionId: "session:test",
@@ -386,7 +410,7 @@ async function runAutoPinnedOpenAiTurn(params: {
     sessionFile: path.join(params.workspaceDir, "session.jsonl"),
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
-    config: makeConfig(),
+    config: params.config ?? makeConfig(),
     prompt: "hello",
     provider: "openai",
     model: "mock-1",
@@ -423,6 +447,7 @@ async function runAutoPinnedRotationCase(params: {
   errorMessage: string;
   sessionKey: string;
   runId: string;
+  config?: OpenClawConfig;
 }) {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
@@ -433,6 +458,7 @@ async function runAutoPinnedRotationCase(params: {
       workspaceDir,
       sessionKey: params.sessionKey,
       runId: params.runId,
+      config: params.config,
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
@@ -445,6 +471,7 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
   errorMessage: string;
   sessionKey: string;
   runId: string;
+  config?: OpenClawConfig;
 }) {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
@@ -455,6 +482,7 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
       workspaceDir,
       sessionKey: params.sessionKey,
       runId: params.runId,
+      config: params.config,
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
@@ -786,18 +814,8 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-    expect(computeBackoffMock).toHaveBeenCalledTimes(1);
-    expect(computeBackoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialMs: 250,
-        maxMs: 1500,
-        factor: 2,
-        jitter: 0.2,
-      }),
-      1,
-    );
-    expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
-    expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
+    expect(computeBackoffMock).not.toHaveBeenCalled();
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
   });
 
   it("logs structured failover decision metadata for overloaded assistant rotation", async () => {
@@ -863,16 +881,19 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-    expect(computeBackoffMock).toHaveBeenCalledTimes(1);
-    expect(computeBackoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialMs: 250,
-        maxMs: 1500,
-        factor: 2,
-        jitter: 0.2,
-      }),
-      1,
-    );
+    expect(computeBackoffMock).not.toHaveBeenCalled();
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+  });
+
+  it("uses configured overload backoff before rotating profiles", async () => {
+    const { usageStats } = await runAutoPinnedRotationCase({
+      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      sessionKey: "agent:test:overloaded-configured-backoff",
+      runId: "run:overloaded-configured-backoff",
+      config: makeConfig({ overloadedBackoffMs: 321 }),
+    });
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(computeBackoffMock).not.toHaveBeenCalled();
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
   });

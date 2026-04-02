@@ -1,4 +1,30 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const { recordInboundSessionMock } = vi.hoisted(() => ({
+  recordInboundSessionMock: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  };
+});
+
+vi.mock("./bot-message-context.body.js", () => ({
+  resolveTelegramInboundBody: async () => ({
+    bodyText: "hello",
+    rawBody: "hello",
+    historyKey: undefined,
+    commandAuthorized: false,
+    effectiveWasMentioned: true,
+    canDetectMention: false,
+    shouldBypassMention: false,
+    stickerCacheHit: false,
+    locationData: undefined,
+  }),
+}));
+
 const { buildTelegramMessageContextForTest } =
   await import("./bot-message-context.test-harness.js");
 const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
@@ -10,6 +36,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  recordInboundSessionMock.mockClear();
 });
 
 describe("buildTelegramMessageContext dm thread sessions", () => {

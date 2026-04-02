@@ -93,6 +93,8 @@ For London/Vienna style setups, Bonjour won’t help. The recommended “direct�
 
 If the gateway can detect it is running under Tailscale, it publishes `tailnetDns` as an optional hint for clients (including wide-area beacons).
 
+The macOS app now prefers MagicDNS names over raw Tailscale IPs for gateway discovery. This improves reliability when tailnet IPs change (for example after node restarts or CGNAT reassignment), because MagicDNS names resolve to the current IP automatically.
+
 ### 3) Manual / SSH target
 
 When there is no direct route (or direct is disabled), clients can always connect via SSH by forwarding the loopback gateway port.

@@ -135,7 +135,13 @@ export function resolveTrustedHttpOperatorScopes(
     return [];
   }
 
-  const raw = getHeader(req, "x-openclaw-scopes")?.trim();
+  const headerValue = getHeader(req, "x-openclaw-scopes");
+  if (headerValue === undefined) {
+    // No scope header present — trusted clients without an explicit header
+    // get the default operator scopes (matching pre-#57783 behavior).
+    return [...CLI_DEFAULT_OPERATOR_SCOPES];
+  }
+  const raw = headerValue.trim();
   if (!raw) {
     return [];
   }
@@ -150,9 +156,10 @@ export function resolveOpenAiCompatibleHttpOperatorScopes(
   requestAuth: AuthorizedGatewayHttpRequest,
 ): string[] {
   if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
-    // OpenAI-compatible HTTP bearer auth is documented as a trusted-operator
-    // surface. Shared-secret auth does not carry a narrower per-request scope
-    // identity, so restore the normal operator defaults for this surface.
+    // Shared-secret HTTP bearer auth is a documented trusted-operator surface
+    // for the compat APIs and direct /tools/invoke. This is designed-as-is:
+    // token/password auth proves possession of the gateway operator secret, not
+    // a narrower per-request scope identity, so restore the normal defaults.
     return [...CLI_DEFAULT_OPERATOR_SCOPES];
   }
   return resolveTrustedHttpOperatorScopes(req, requestAuth);
@@ -172,10 +179,10 @@ export function resolveOpenAiCompatibleHttpSenderIsOwner(
   requestAuth: AuthorizedGatewayHttpRequest,
 ): boolean {
   if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
-    // The OpenAI-compatible HTTP surface treats shared-secret bearer auth as
-    // trusted operator access for the whole gateway. There is no separate owner
-    // authentication primitive on that path, so owner-only tools remain
-    // available to those compat requests.
+    // Shared-secret HTTP bearer auth also carries owner semantics on the compat
+    // APIs and direct /tools/invoke. This is intentional: there is no separate
+    // per-request owner primitive on that shared-secret path, so owner-only
+    // tool policy follows the documented trusted-operator contract.
     return true;
   }
   return resolveHttpSenderIsOwner(req, requestAuth);

@@ -56,6 +56,7 @@ export default defineChannelPluginEntry({
                 : rawMsgType === "dm"
                   ? "dm"
                   : "c2c";
+          const account = resolveQQBotAccount(ctx.config, ctx.accountId ?? undefined);
 
           // Build a minimal SlashCommandContext from the framework PluginCommandContext.
           // commandAuthorized is always true here because the framework has already
@@ -68,10 +69,11 @@ export default defineChannelPluginEntry({
             receivedAt: Date.now(),
             rawContent: `/${cmd.name}${ctx.args ? ` ${ctx.args}` : ""}`,
             args: ctx.args ?? "",
-            accountId: ctx.accountId ?? "default",
+            accountId: account.accountId,
             // appId is not available from PluginCommandContext directly; handlers
             // that need it should call resolveQQBotAccount(ctx.config, ctx.accountId).
-            appId: "",
+            appId: account.appId,
+            accountConfig: account.config,
             commandAuthorized: true,
             queueSnapshot: {
               totalPending: 0,
@@ -91,7 +93,6 @@ export default defineChannelPluginEntry({
           // File result: send the file attachment via QQ API, return text summary.
           if (result && "filePath" in result) {
             try {
-              const account = resolveQQBotAccount(ctx.config, ctx.accountId ?? undefined);
               const mediaCtx: MediaTargetContext = {
                 targetType,
                 targetId,

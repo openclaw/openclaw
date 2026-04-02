@@ -5,9 +5,6 @@ import { registerStatusHealthSessionsCommands } from "./register.status-health-s
 const mocks = vi.hoisted(() => ({
   statusCommand: vi.fn(),
   healthCommand: vi.fn(),
-  flowsListCommand: vi.fn(),
-  flowsShowCommand: vi.fn(),
-  flowsCancelCommand: vi.fn(),
   sessionsCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
   tasksListCommand: vi.fn(),
@@ -16,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   tasksShowCommand: vi.fn(),
   tasksNotifyCommand: vi.fn(),
   tasksCancelCommand: vi.fn(),
+  flowsListCommand: vi.fn(),
+  flowsShowCommand: vi.fn(),
+  flowsCancelCommand: vi.fn(),
   setVerbose: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -26,9 +26,6 @@ const mocks = vi.hoisted(() => ({
 
 const statusCommand = mocks.statusCommand;
 const healthCommand = mocks.healthCommand;
-const flowsListCommand = mocks.flowsListCommand;
-const flowsShowCommand = mocks.flowsShowCommand;
-const flowsCancelCommand = mocks.flowsCancelCommand;
 const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const tasksListCommand = mocks.tasksListCommand;
@@ -37,6 +34,9 @@ const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
 const tasksShowCommand = mocks.tasksShowCommand;
 const tasksNotifyCommand = mocks.tasksNotifyCommand;
 const tasksCancelCommand = mocks.tasksCancelCommand;
+const flowsListCommand = mocks.flowsListCommand;
+const flowsShowCommand = mocks.flowsShowCommand;
+const flowsCancelCommand = mocks.flowsCancelCommand;
 const setVerbose = mocks.setVerbose;
 const runtime = mocks.runtime;
 
@@ -46,12 +46,6 @@ vi.mock("../../commands/status.js", () => ({
 
 vi.mock("../../commands/health.js", () => ({
   healthCommand: mocks.healthCommand,
-}));
-
-vi.mock("../../commands/flows.js", () => ({
-  flowsListCommand: mocks.flowsListCommand,
-  flowsShowCommand: mocks.flowsShowCommand,
-  flowsCancelCommand: mocks.flowsCancelCommand,
 }));
 
 vi.mock("../../commands/sessions.js", () => ({
@@ -69,6 +63,12 @@ vi.mock("../../commands/tasks.js", () => ({
   tasksShowCommand: mocks.tasksShowCommand,
   tasksNotifyCommand: mocks.tasksNotifyCommand,
   tasksCancelCommand: mocks.tasksCancelCommand,
+}));
+
+vi.mock("../../commands/flows.js", () => ({
+  flowsListCommand: mocks.flowsListCommand,
+  flowsShowCommand: mocks.flowsShowCommand,
+  flowsCancelCommand: mocks.flowsCancelCommand,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -91,9 +91,6 @@ describe("registerStatusHealthSessionsCommands", () => {
     runtime.exit.mockImplementation(() => {});
     statusCommand.mockResolvedValue(undefined);
     healthCommand.mockResolvedValue(undefined);
-    flowsListCommand.mockResolvedValue(undefined);
-    flowsShowCommand.mockResolvedValue(undefined);
-    flowsCancelCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
     tasksListCommand.mockResolvedValue(undefined);
@@ -102,6 +99,9 @@ describe("registerStatusHealthSessionsCommands", () => {
     tasksShowCommand.mockResolvedValue(undefined);
     tasksNotifyCommand.mockResolvedValue(undefined);
     tasksCancelCommand.mockResolvedValue(undefined);
+    flowsListCommand.mockResolvedValue(undefined);
+    flowsShowCommand.mockResolvedValue(undefined);
+    flowsCancelCommand.mockResolvedValue(undefined);
   });
 
   it("runs status command with timeout and debug-derived verbose", async () => {
@@ -310,6 +310,27 @@ describe("registerStatusHealthSessionsCommands", () => {
     );
   });
 
+  it("routes tasks flow commands through the TaskFlow handlers", async () => {
+    await runCli(["tasks", "flow", "list", "--json", "--status", "blocked"]);
+    expect(flowsListCommand).toHaveBeenCalledWith(expect.any(Object), runtime);
+
+    await runCli(["tasks", "flow", "show", "flow-123", "--json"]);
+    expect(flowsShowCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "flow-123",
+      }),
+      runtime,
+    );
+
+    await runCli(["tasks", "flow", "cancel", "flow-123"]);
+    expect(flowsCancelCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: "flow-123",
+      }),
+      runtime,
+    );
+  });
+
   it("runs tasks notify subcommand with lookup and policy forwarding", async () => {
     await runCli(["tasks", "notify", "run-123", "state_changes"]);
 
@@ -333,38 +354,10 @@ describe("registerStatusHealthSessionsCommands", () => {
     );
   });
 
-  it("runs flows list from the parent command", async () => {
-    await runCli(["flows", "--json", "--status", "blocked"]);
+  it("does not register the legacy top-level flows command", () => {
+    const program = new Command();
+    registerStatusHealthSessionsCommands(program);
 
-    expect(flowsListCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: true,
-        status: "blocked",
-      }),
-      runtime,
-    );
-  });
-
-  it("runs flows show subcommand with lookup forwarding", async () => {
-    await runCli(["flows", "show", "flow-123", "--json"]);
-
-    expect(flowsShowCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lookup: "flow-123",
-        json: true,
-      }),
-      runtime,
-    );
-  });
-
-  it("runs flows cancel subcommand with lookup forwarding", async () => {
-    await runCli(["flows", "cancel", "flow-123"]);
-
-    expect(flowsCancelCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lookup: "flow-123",
-      }),
-      runtime,
-    );
+    expect(program.commands.find((command) => command.name() === "flows")).toBeUndefined();
   });
 });

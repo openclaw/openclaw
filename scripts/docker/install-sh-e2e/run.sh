@@ -410,14 +410,10 @@ run_profile() {
   else
     agent_model="$(set_agent_model "$profile" \
       "anthropic/claude-opus-4-6" \
-      "claude-opus-4-6" \
-      "anthropic/claude-opus-4-5" \
-      "claude-opus-4-5")"
+      "claude-opus-4-6")"
     image_model="$(set_image_model "$profile" \
       "anthropic/claude-opus-4-6" \
-      "claude-opus-4-6" \
-      "anthropic/claude-opus-4-5" \
-      "claude-opus-4-5")"
+      "claude-opus-4-6")"
   fi
   echo "model=$agent_model"
   echo "imageModel=$image_model"

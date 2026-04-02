@@ -4,11 +4,11 @@ type FacadeEntry = PluginSdkFacadeTypeMap["memory-core-engine-runtime"];
 type FacadeModule = FacadeEntry["module"];
 import {
   createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "memory-core",
     artifactBasename: "runtime-api.js",
   });

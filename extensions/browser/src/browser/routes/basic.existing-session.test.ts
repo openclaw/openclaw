@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 vi.mock("../chrome-mcp.js", () => ({
@@ -52,8 +52,7 @@ async function callBasicRouteWithState(params: {
   return response;
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ BrowserProfileUnavailableError } = await import("../errors.js"));
   ({ registerBrowserBasicRoutes } = await import("./basic.js"));
 });

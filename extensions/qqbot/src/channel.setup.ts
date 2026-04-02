@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   applyAccountNameToChannelSection,
@@ -5,6 +6,7 @@ import {
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk/core";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { qqbotChannelConfigSchema } from "./config-schema.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -15,6 +17,79 @@ import {
 } from "./config.js";
 import { qqbotSetupWizard } from "./setup-surface.js";
 import type { ResolvedQQBotAccount } from "./types.js";
+
+function parseQQBotInlineToken(token: string): { appId: string; clientSecret: string } | null {
+  const colonIdx = token.indexOf(":");
+  if (colonIdx <= 0 || colonIdx === token.length - 1) {
+    return null;
+  }
+
+  const appId = token.slice(0, colonIdx).trim();
+  const clientSecret = token.slice(colonIdx + 1).trim();
+  if (!appId || !clientSecret) {
+    return null;
+  }
+
+  return { appId, clientSecret };
+}
+
+export function validateQQBotSetupInput(params: {
+  accountId: string;
+  input: ChannelSetupInput;
+}): string | null {
+  const { accountId, input } = params;
+
+  if (!input.token && !input.tokenFile && !input.useEnv) {
+    return "QQBot requires --token (format: appId:clientSecret) or --use-env";
+  }
+
+  if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+    return "QQBot --use-env only supports the default account";
+  }
+
+  if (input.token && !parseQQBotInlineToken(input.token)) {
+    return "QQBot --token must be in appId:clientSecret format";
+  }
+
+  return null;
+}
+
+export function applyQQBotSetupAccountConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  input: ChannelSetupInput;
+}): OpenClawConfig {
+  if (params.input.useEnv && params.accountId !== DEFAULT_ACCOUNT_ID) {
+    return params.cfg;
+  }
+
+  let appId = "";
+  let clientSecret = "";
+
+  if (params.input.token) {
+    const parsed = parseQQBotInlineToken(params.input.token);
+    if (!parsed) {
+      return params.cfg;
+    }
+    appId = parsed.appId;
+    clientSecret = parsed.clientSecret;
+  }
+
+  if (!appId && !params.input.tokenFile && !params.input.useEnv) {
+    return params.cfg;
+  }
+
+  // When only --token-file is provided, appId will be empty here.
+  // This is by design: --token-file supplies the clientSecret only,
+  // not the appId. The appId is expected to come from the env var
+  // QQBOT_APP_ID or be set separately in the config file.
+  return applyQQBotAccountConfig(params.cfg, params.accountId, {
+    appId,
+    clientSecret,
+    clientSecretFile: params.input.tokenFile,
+    name: params.input.name,
+  });
+}
 
 /**
  * Setup-only QQBot plugin — lightweight subset used during `openclaw onboard`
@@ -89,42 +164,8 @@ export const qqbotSetupPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         accountId,
         name,
       }),
-    validateInput: ({ input }) => {
-      if (!input.token && !input.tokenFile && !input.useEnv) {
-        return "QQBot requires --token (format: appId:clientSecret) or --use-env";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      let appId = "";
-      let clientSecret = "";
-
-      if (input.token) {
-        const colonIdx = input.token.indexOf(":");
-        if (colonIdx > 0) {
-          appId = input.token.slice(0, colonIdx);
-          clientSecret = input.token.slice(colonIdx + 1);
-        } else {
-          // Token must be in appId:clientSecret format; skip config write if malformed.
-          return cfg;
-        }
-      }
-
-      if (!appId && !input.tokenFile) {
-        // No valid credentials provided; skip config write.
-        return cfg;
-      }
-
-      // When only --token-file is provided, appId will be empty here.
-      // This is by design: --token-file supplies the clientSecret only,
-      // not the appId. The appId is expected to come from the env var
-      // QQBOT_APP_ID or be set separately in the config file.
-      return applyQQBotAccountConfig(cfg, accountId, {
-        appId,
-        clientSecret,
-        clientSecretFile: input.tokenFile,
-        name: input.name,
-      });
-    },
+    validateInput: ({ accountId, input }) => validateQQBotSetupInput({ accountId, input }),
+    applyAccountConfig: ({ cfg, accountId, input }) =>
+      applyQQBotSetupAccountConfig({ cfg, accountId, input }),
   },
 };
