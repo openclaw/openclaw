@@ -70,6 +70,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Volcengine (Doubao)](/providers/volcengine)
 - [xAI](/providers/xai)
 - [Xiaomi](/providers/xiaomi)
+- [Yandex](/providers/yandex)
 - [Z.AI](/providers/zai)
 
 ## Shared overview pages

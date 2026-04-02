@@ -1290,6 +1290,7 @@
                   "providers/vydra",
                   "providers/xai",
                   "providers/xiaomi",
+                  "providers/yandex",
                   "providers/zai"
                 ]
               }
