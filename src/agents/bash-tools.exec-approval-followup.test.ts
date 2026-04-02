@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(async () => ({ ok: true })),
@@ -8,18 +8,12 @@ vi.mock("../infra/outbound/message.js", () => ({
   sendMessage: vi.fn(async () => ({ ok: true })),
 }));
 
-let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
-let sendMessage: typeof import("../infra/outbound/message.js").sendMessage;
-let buildExecApprovalFollowupPrompt: typeof import("./bash-tools.exec-approval-followup.js").buildExecApprovalFollowupPrompt;
-let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup.js").sendExecApprovalFollowup;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ callGatewayTool } = await import("./tools/gateway.js"));
-  ({ sendMessage } = await import("../infra/outbound/message.js"));
-  ({ buildExecApprovalFollowupPrompt, sendExecApprovalFollowup } =
-    await import("./bash-tools.exec-approval-followup.js"));
-});
+import { sendMessage } from "../infra/outbound/message.js";
+import {
+  buildExecApprovalFollowupPrompt,
+  sendExecApprovalFollowup,
+} from "./bash-tools.exec-approval-followup.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -138,6 +132,28 @@ describe("exec approval followup", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("falls back to sanitized direct delivery when session resume fails", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
+
+    await sendExecApprovalFollowup({
+      approvalId: "req-session-resume-failed",
+      sessionKey: "agent:main:discord:channel:123",
+      turnSourceChannel: "discord",
+      turnSourceTo: "123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+      resultText:
+        "Exec finished (gateway id=req-session-resume-failed, session=sess_1, code 0)\nall good",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Automatic session resume failed, so sending the status directly.\n\nall good",
+        idempotencyKey: "exec-approval-followup:req-session-resume-failed",
+      }),
+    );
+  });
+
   it("uses a generic summary when a no-session completion has no user-visible output", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-no-session-empty",
@@ -152,6 +168,28 @@ describe("exec approval followup", () => {
       expect.objectContaining({
         content: "Background command finished.",
         idempotencyKey: "exec-approval-followup:req-no-session-empty",
+      }),
+    );
+  });
+
+  it("uses safe denied copy when session resume fails", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
+
+    await sendExecApprovalFollowup({
+      approvalId: "req-denied-resume-failed",
+      sessionKey: "agent:main:telegram:-100123",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-100123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "789",
+      resultText: "Exec denied (gateway id=req-denied-resume-failed, approval-timeout): uname -a",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "Automatic session resume failed, so sending the status directly.\n\nCommand did not run: approval timed out.",
+        idempotencyKey: "exec-approval-followup:req-denied-resume-failed",
       }),
     );
   });

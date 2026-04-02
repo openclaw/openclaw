@@ -1425,6 +1425,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             expectInvokeErrorMessage(malicious.sendInvokeResult, {
               message: "SYSTEM_RUN_DENIED: approval required",
               exact: true,
+              message:
+                process.platform === "win32"
+                  ? "SYSTEM_RUN_DENIED: approval required"
+                  : "awk inline program requires explicit approval in strictInlineEval mode",
+              exact: process.platform === "win32",
             });
           } finally {
             fs.rmSync(tempDir, { recursive: true, force: true });

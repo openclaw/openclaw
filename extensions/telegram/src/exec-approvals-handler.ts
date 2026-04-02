@@ -21,8 +21,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { telegramNativeApprovalAdapter } from "./approval-native.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
-  getTelegramExecApprovalApprovers,
-  resolveTelegramExecApprovalConfig,
+  isTelegramExecApprovalHandlerConfigured,
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
 import { editMessageReplyMarkupTelegram, sendMessageTelegram, sendTypingTelegram } from "./send.js";
@@ -56,19 +55,7 @@ export type TelegramExecApprovalHandlerDeps = {
 };
 
 function isHandlerConfigured(params: { cfg: OpenClawConfig; accountId: string }): boolean {
-  const config = resolveTelegramExecApprovalConfig({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  if (!config?.enabled) {
-    return false;
-  }
-  return (
-    getTelegramExecApprovalApprovers({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }).length > 0
-  );
+  return isTelegramExecApprovalHandlerConfigured(params);
 }
 
 export class TelegramExecApprovalHandler {

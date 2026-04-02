@@ -12,6 +12,7 @@ import {
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
+import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import {
   createTaskRecord,
   findLatestTaskForOwnerKey,
@@ -175,9 +176,36 @@ async function withTaskRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
     try {
       return await run(root);
     } finally {
-      // Close the sqlite-backed registry before Windows temp-dir cleanup tries to remove it.
+      // Close both sqlite-backed registries before Windows temp-dir cleanup tries to remove them.
       resetTaskRegistryForTests();
+      resetTaskFlowRegistryForTests();
     }
+  });
+}
+
+function configureInMemoryTaskStoresForLinkValidationTests() {
+  configureTaskRegistryRuntime({
+    store: {
+      loadSnapshot: () => ({
+        tasks: new Map(),
+        deliveryStates: new Map(),
+      }),
+      saveSnapshot: () => {},
+      upsertTask: () => {},
+      deleteTask: () => {},
+      close: () => {},
+    },
+  });
+  configureTaskFlowRegistryRuntime({
+    store: {
+      loadSnapshot: () => ({
+        flows: new Map(),
+      }),
+      saveSnapshot: () => {},
+      upsertFlow: () => {},
+      deleteFlow: () => {},
+      close: () => {},
+    },
   });
 }
 
@@ -300,8 +328,9 @@ describe("task-registry", () => {
   it("rejects cross-owner parent flow links during task creation", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
 
       const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
@@ -325,8 +354,9 @@ describe("task-registry", () => {
   it("rejects system-scoped parent flow links during task creation", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
 
       const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
@@ -351,8 +381,9 @@ describe("task-registry", () => {
   it("rejects cross-owner flow links for existing tasks", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
 
       const task = createTaskRecord({
         runtime: "acp",
@@ -383,8 +414,9 @@ describe("task-registry", () => {
   it("rejects parent flow links once cancellation has been requested", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
 
       const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
@@ -416,8 +448,9 @@ describe("task-registry", () => {
   it("rejects parent flow links for terminal flows", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
 
       const flow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
