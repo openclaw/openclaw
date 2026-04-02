@@ -359,6 +359,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
     },
     tasks: {
+      runs: {
+        bindSession: vi.fn(),
+        fromToolContext: vi.fn(),
+      } as PluginRuntime["tasks"]["runs"],
+      flows: {
+        bindSession: vi.fn(),
+        fromToolContext: vi.fn(),
+      } as PluginRuntime["tasks"]["flows"],
       flow: taskFlow,
     },
     taskFlow,
