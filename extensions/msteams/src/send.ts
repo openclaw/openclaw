@@ -396,9 +396,22 @@ async function sendProactiveActivityRaw({
   activity,
 }: ProactiveActivityRawParams): Promise<string> {
   const baseRef = buildConversationReference(ref);
+  // Thread-aware proactive send: for channel threads, set activityId and
+  // append ;messageid= so files land in the correct thread.
+  const isChannel = ref.conversation?.conversationType?.toLowerCase() === "channel";
+  const threadActivityId =
+    isChannel && ref.threadRootMessageId ? ref.threadRootMessageId : undefined;
   const proactiveRef = {
     ...baseRef,
-    activityId: undefined,
+    activityId: threadActivityId,
+    ...(threadActivityId && baseRef.conversation
+      ? {
+          conversation: {
+            ...baseRef.conversation,
+            id: `${baseRef.conversation.id};messageid=${threadActivityId}`,
+          },
+        }
+      : {}),
   };
 
   let messageId = "unknown";
