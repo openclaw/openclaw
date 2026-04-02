@@ -25,6 +25,16 @@ const CORRECTION_VERSION_REGEX =
  */
 
 /**
+ * @typedef {object} NpmDistTagMirrorAuth
+ * @property {boolean} hasAuth
+ * @property {"node-auth-token" | "npm-token" | "none"} source
+ */
+
+/**
+ * @typedef {"--dry-run" | "--publish"} NpmPublishMode
+ */
+
+/**
  * @param {string} version
  * @param {Record<string, string | undefined>} groups
  * @param {"stable" | "beta"} channel
@@ -173,4 +183,41 @@ export function resolveNpmPublishPlan(version, currentBetaVersion) {
     publishTag: "latest",
     mirrorDistTags: ["beta"],
   };
+}
+
+/**
+ * @param {{
+ *   nodeAuthToken?: string | null | undefined;
+ *   npmToken?: string | null | undefined;
+ * }} [params]
+ * @returns {NpmDistTagMirrorAuth}
+ */
+export function resolveNpmDistTagMirrorAuth(params = {}) {
+  const nodeAuthToken = params.nodeAuthToken?.trim();
+  if (nodeAuthToken) {
+    return { hasAuth: true, source: "node-auth-token" };
+  }
+
+  const npmToken = params.npmToken?.trim();
+  if (npmToken) {
+    return { hasAuth: true, source: "npm-token" };
+  }
+
+  return { hasAuth: false, source: "none" };
+}
+
+/**
+ * @param {{
+ *   mode: NpmPublishMode;
+ *   mirrorDistTags: string[] | readonly string[];
+ *   hasAuth: boolean;
+ * }} params
+ * @returns {boolean}
+ */
+export function shouldRequireNpmDistTagMirrorAuth(params) {
+  return (
+    params.mode === "--publish" &&
+    params.mirrorDistTags.some((distTag) => distTag.trim().length > 0) &&
+    !params.hasAuth
+  );
 }

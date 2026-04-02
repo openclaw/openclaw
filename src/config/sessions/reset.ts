@@ -1,4 +1,4 @@
-import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
+import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
@@ -24,7 +24,7 @@ export const DEFAULT_RESET_AT_HOUR = 4;
 const GROUP_SESSION_MARKERS = [":group:", ":channel:"];
 
 export function isThreadSessionKey(sessionKey?: string | null): boolean {
-  return Boolean(parseThreadSessionSuffix(sessionKey).threadId);
+  return Boolean(resolveSessionThreadInfo(sessionKey).threadId);
 }
 
 export function resolveSessionResetType(params: {

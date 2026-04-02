@@ -138,6 +138,48 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("Full id: `req-1`");
   });
 
+  it("omits allow-always actions when the effective policy requires approval every time", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-ask-always",
+      approvalSlug: "slug-always",
+      ask: "always",
+      command: "echo ok",
+      host: "gateway",
+    });
+
+    expect(payload.channelData).toEqual({
+      execApproval: {
+        approvalId: "req-ask-always",
+        approvalSlug: "slug-always",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
+    expect(payload.text).toContain("```txt\n/approve slug-always allow-once\n```");
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.text).toContain(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+    expect(payload.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              value: "/approve req-ask-always allow-once",
+              style: "success",
+            },
+            {
+              label: "Deny",
+              value: "/approve req-ask-always deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("uses a longer fence for commands containing triple backticks", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-2",
@@ -233,6 +275,10 @@ describe("exec approval reply helpers", () => {
     expect(parseExecApprovalCommandText("/approve req-1 deny")).toEqual({
       approvalId: "req-1",
       decision: "deny",
+    });
+    expect(parseExecApprovalCommandText("approve req-1 allow-once")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-once",
     });
     expect(parseExecApprovalCommandText("/approve@clover req-1 allow-once")).toEqual({
       approvalId: "req-1",

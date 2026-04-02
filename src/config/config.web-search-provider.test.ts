@@ -7,13 +7,21 @@ vi.mock("../runtime.js", () => ({
 
 const getScopedWebSearchCredential = (key: string) => (search?: Record<string, unknown>) =>
   (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
-const getConfiguredPluginWebSearchCredential =
+const getConfiguredPluginWebSearchConfig =
   (pluginId: string) => (config?: Record<string, unknown>) =>
     (
       config?.plugins as
-        | { entries?: Record<string, { config?: { webSearch?: { apiKey?: unknown } } }> }
+        | {
+            entries?: Record<
+              string,
+              { config?: { webSearch?: { apiKey?: unknown; baseUrl?: unknown } } }
+            >;
+          }
         | undefined
-    )?.entries?.[pluginId]?.config?.webSearch?.apiKey;
+    )?.entries?.[pluginId]?.config?.webSearch;
+const getConfiguredPluginWebSearchCredential =
+  (pluginId: string) => (config?: Record<string, unknown>) =>
+    getConfiguredPluginWebSearchConfig(pluginId)(config)?.apiKey;
 
 const mockWebSearchProviders = [
   {
@@ -59,6 +67,15 @@ const mockWebSearchProviders = [
     getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("perplexity"),
   },
   {
+    id: "searxng",
+    envVars: ["SEARXNG_BASE_URL"],
+    credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
+    getCredentialValue: (search?: Record<string, unknown>) =>
+      (search?.searxng as { baseUrl?: unknown } | undefined)?.baseUrl,
+    getConfiguredCredentialValue: (config?: Record<string, unknown>) =>
+      getConfiguredPluginWebSearchConfig("searxng")(config)?.baseUrl,
+  },
+  {
     id: "tavily",
     envVars: ["TAVILY_API_KEY"],
     credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
@@ -83,17 +100,6 @@ beforeAll(async () => {
     __testing: { resolveSearchProvider },
   } = await import("../agents/tools/web-search.js"));
 });
-
-function pluginWebSearchApiKey(
-  config: Record<string, unknown> | undefined,
-  pluginId: string,
-): unknown {
-  return (
-    config?.plugins as
-      | { entries?: Record<string, { config?: { webSearch?: { apiKey?: unknown } } }> }
-      | undefined
-  )?.entries?.[pluginId]?.config?.webSearch?.apiKey;
-}
 
 describe("web search provider config", () => {
   it("does not warn for legacy brave config when bundled web search allowlist compat applies", () => {
@@ -190,7 +196,25 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("does not migrate the nonexistent legacy Tavily scoped config", () => {
+  it("accepts searxng provider config on the plugin-owned path", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "searxng",
+        providerConfig: {
+          baseUrl: {
+            source: "env",
+            provider: "default",
+            id: "SEARXNG_BASE_URL",
+          },
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects legacy scoped Tavily config", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
         web: {
@@ -204,15 +228,24 @@ describe("web search provider config", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.config.tools?.web?.search?.provider).toBe("tavily");
-    expect((res.config.tools?.web?.search as Record<string, unknown> | undefined)?.tavily).toBe(
-      undefined,
-    );
-    expect(pluginWebSearchApiKey(res.config as Record<string, unknown>, "tavily")).toBe(undefined);
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects legacy scoped provider config for bundled providers", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "gemini",
+            gemini: {
+              apiKey: "legacy-key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
   });
 
   it("accepts gemini provider with no extra config", () => {
@@ -263,6 +296,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.MOONSHOT_API_KEY;
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.SEARXNG_BASE_URL;
     delete process.env.TAVILY_API_KEY;
     delete process.env.XAI_API_KEY;
     delete process.env.KIMI_API_KEY;
@@ -296,6 +330,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects firecrawl when only FIRECRAWL_API_KEY is set", () => {
     process.env.FIRECRAWL_API_KEY = "fc-test-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("firecrawl");
+  });
+
+  it("auto-detects searxng when only SEARXNG_BASE_URL is set", () => {
+    process.env.SEARXNG_BASE_URL = "http://localhost:8080";
+    expect(resolveSearchProvider({})).toBe("searxng");
   });
 
   it("auto-detects kimi when only KIMI_API_KEY is set", () => {

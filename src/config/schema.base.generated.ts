@@ -789,6 +789,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "number",
                 exclusiveMinimum: 0,
               },
+              overloadedProfileRotations: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              overloadedBackoffMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              rateLimitedProfileRotations: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
             },
             additionalProperties: false,
           },
@@ -1363,6 +1378,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           defaults: {
             type: "object",
             properties: {
+              params: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {},
+              },
               model: {
                 anyOf: [
                   {
@@ -2468,6 +2490,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                  },
+                  notifyUser: {
+                    type: "boolean",
                   },
                 },
                 additionalProperties: false,
@@ -5131,477 +5156,42 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
-                  brave: {
+                  openaiCodex: {
                     type: "object",
                     properties: {
-                      apiKey: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
-                          },
-                        ],
-                      },
-                      baseUrl: {
-                        type: "string",
-                      },
-                      model: {
-                        type: "string",
-                      },
-                      mode: {
-                        type: "string",
-                      },
-                    },
-                    additionalProperties: false,
-                  },
-                  firecrawl: {
-                    type: "object",
-                    properties: {
-                      apiKey: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
-                          },
-                        ],
-                      },
-                      baseUrl: {
-                        type: "string",
-                      },
-                      model: {
-                        type: "string",
-                      },
-                    },
-                    additionalProperties: false,
-                  },
-                  gemini: {
-                    type: "object",
-                    properties: {
-                      apiKey: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
-                          },
-                        ],
-                      },
-                      baseUrl: {
-                        type: "string",
-                      },
-                      model: {
-                        type: "string",
-                      },
-                    },
-                    additionalProperties: false,
-                  },
-                  grok: {
-                    type: "object",
-                    properties: {
-                      apiKey: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
-                          },
-                        ],
-                      },
-                      baseUrl: {
-                        type: "string",
-                      },
-                      model: {
-                        type: "string",
-                      },
-                      inlineCitations: {
+                      enabled: {
                         type: "boolean",
                       },
-                    },
-                    additionalProperties: false,
-                  },
-                  kimi: {
-                    type: "object",
-                    properties: {
-                      apiKey: {
+                      mode: {
                         anyOf: [
                           {
                             type: "string",
+                            const: "cached",
                           },
                           {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
+                            type: "string",
+                            const: "live",
                           },
                         ],
                       },
-                      baseUrl: {
-                        type: "string",
-                      },
-                      model: {
-                        type: "string",
-                      },
-                    },
-                    additionalProperties: false,
-                  },
-                  perplexity: {
-                    type: "object",
-                    properties: {
-                      apiKey: {
+                      allowedDomains: {},
+                      contextSize: {
                         anyOf: [
                           {
                             type: "string",
+                            const: "low",
                           },
                           {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
+                            type: "string",
+                            const: "medium",
+                          },
+                          {
+                            type: "string",
+                            const: "high",
                           },
                         ],
                       },
-                      baseUrl: {
-                        type: "string",
-                      },
-                      model: {
-                        type: "string",
-                      },
+                      userLocation: {},
                     },
                     additionalProperties: false,
                   },
@@ -10340,6 +9930,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          webchat: {
+            type: "object",
+            properties: {
+              chatHistoryMaxChars: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 500000,
+              },
+            },
+            additionalProperties: false,
+          },
           channelHealthCheckMinutes: {
             type: "integer",
             minimum: 0,
@@ -12934,7 +12535,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "tools.web.search.enabled": {
       label: "Enable Web Search Tool",
-      help: "Enable the web_search tool (requires a provider API key).",
+      help: "Enable managed web_search and optional Codex-native search for eligible models.",
       tags: ["tools"],
     },
     "tools.web.search.provider": {
@@ -12956,6 +12557,51 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Web Search Cache TTL (min)",
       help: "Cache TTL in minutes for web_search results.",
       tags: ["performance", "storage", "tools"],
+    },
+    "tools.web.search.openaiCodex.enabled": {
+      label: "Enable Native Codex Web Search",
+      help: "Enable native Codex web search for Codex-capable models.",
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.mode": {
+      label: "Codex Web Search Mode",
+      help: 'Native Codex web search mode: "cached" (default) or "live".',
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.allowedDomains": {
+      label: "Codex Allowed Domains",
+      help: "Optional domain allowlist passed to the native Codex web_search tool.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.search.openaiCodex.contextSize": {
+      label: "Codex Search Context Size",
+      help: 'Native Codex search context size hint: "low", "medium", or "high".',
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.userLocation.country": {
+      label: "Codex User Country",
+      help: "Approximate country sent to native Codex web search.",
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.userLocation.region": {
+      label: "Codex User Region",
+      help: "Approximate region/state sent to native Codex web search.",
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.userLocation.city": {
+      label: "Codex User City",
+      help: "Approximate city sent to native Codex web search.",
+      tags: ["tools"],
+    },
+    "tools.web.search.openaiCodex.userLocation.timezone": {
+      label: "Codex User Timezone",
+      help: "Approximate timezone sent to native Codex web search.",
+      tags: ["tools"],
+    },
+    "tools.web.search.brave.mode": {
+      label: "Brave Search Mode",
+      help: 'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
+      tags: ["tools"],
     },
     "tools.web.fetch.enabled": {
       label: "Enable Web Fetch Tool",
@@ -13217,6 +12863,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Gateway Node Denylist",
       help: "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
       tags: ["access", "network"],
+    },
+    "gateway.webchat.chatHistoryMaxChars": {
+      label: "WebChat History Max Chars",
+      help: "Max characters per text field in chat.history responses before truncation (default: 12000).",
+      tags: ["network", "performance"],
     },
     "nodeHost.browserProxy": {
       label: "Node Browser Proxy",
@@ -14035,6 +13686,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Failure window (hours) for backoff counters (default: 24).",
       tags: ["auth", "access"],
     },
+    "auth.cooldowns.overloadedProfileRotations": {
+      label: "Overloaded Profile Rotations",
+      help: "Maximum same-provider auth-profile rotations allowed for overloaded errors before switching to model fallback (default: 1).",
+      tags: ["auth", "access", "storage"],
+    },
+    "auth.cooldowns.overloadedBackoffMs": {
+      label: "Overloaded Backoff (ms)",
+      help: "Fixed delay in milliseconds before retrying an overloaded provider/profile rotation (default: 0).",
+      tags: ["auth", "access", "reliability", "storage"],
+    },
+    "auth.cooldowns.rateLimitedProfileRotations": {
+      label: "Rate-Limited Profile Rotations",
+      help: "Maximum same-provider auth-profile rotations allowed for rate-limit errors before switching to model fallback (default: 1).",
+      tags: ["auth", "access", "performance", "storage"],
+    },
     "agents.defaults.models": {
       label: "Models",
       help: "Configured model catalog (keys are full provider/model IDs).",
@@ -14198,6 +13864,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "agents.defaults.compaction.truncateAfterCompaction": {
       label: "Truncate After Compaction",
       help: "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.compaction.notifyUser": {
+      label: "Compaction Notify User",
+      help: "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.memoryFlush": {
@@ -15605,30 +15276,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
-    "tools.web.search.brave.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.firecrawl.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.gemini.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.grok.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.kimi.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.perplexity.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
     "mcp.servers.*.headers.*": {
       sensitive: true,
       tags: ["security"],
@@ -15639,24 +15286,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.list[].memorySearch.remote.baseUrl": {
       tags: ["advanced", "url-secret"],
-    },
-    "tools.web.search.brave.baseUrl": {
-      tags: ["tools", "url-secret"],
-    },
-    "tools.web.search.firecrawl.baseUrl": {
-      tags: ["tools", "url-secret"],
-    },
-    "tools.web.search.gemini.baseUrl": {
-      tags: ["tools", "url-secret"],
-    },
-    "tools.web.search.grok.baseUrl": {
-      tags: ["tools", "url-secret"],
-    },
-    "tools.web.search.kimi.baseUrl": {
-      tags: ["tools", "url-secret"],
-    },
-    "tools.web.search.perplexity.baseUrl": {
-      tags: ["tools", "url-secret"],
     },
     "tools.media.models[].baseUrl": {
       tags: ["media", "tools", "url-secret"],
@@ -15683,6 +15312,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.3.31",
+  version: "2026.4.2",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

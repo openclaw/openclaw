@@ -13,6 +13,8 @@ import type {
   PluginHookAfterToolsResolvedEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
+  PluginHookBeforeAgentReplyEvent,
+  PluginHookBeforeAgentReplyResult,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeDispatchContext,
@@ -57,11 +59,16 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookBeforeInstallContext,
+  PluginHookBeforeInstallEvent,
+  PluginHookBeforeInstallResult,
 } from "./types.js";
 
 // Re-export types for consumers
 export type {
   PluginHookAgentContext,
+  PluginHookBeforeAgentReplyEvent,
+  PluginHookBeforeAgentReplyResult,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeDispatchContext,
@@ -108,6 +115,9 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookBeforeInstallContext,
+  PluginHookBeforeInstallEvent,
+  PluginHookBeforeInstallResult,
 };
 
 export type HookRunnerLogger = {
@@ -506,6 +516,22 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           ...mergeBeforeModelResolve(acc, next),
         }),
       },
+    );
+  }
+
+  /**
+   * Run before_agent_reply hook.
+   * Allows plugins to intercept messages and return a synthetic reply,
+   * short-circuiting the LLM agent. First handler to return { handled: true } wins.
+   */
+  async function runBeforeAgentReply(
+    event: PluginHookBeforeAgentReplyEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeAgentReplyResult | undefined> {
+    return runClaimingHook<"before_agent_reply", PluginHookBeforeAgentReplyResult>(
+      "before_agent_reply",
+      event,
+      ctx,
     );
   }
 
@@ -993,6 +1019,41 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Skill Install Hooks
+  // =========================================================================
+
+  /**
+   * Run before_install hook.
+   * Allows plugins to augment scan findings or block installs.
+   * Runs sequentially so higher-priority hooks can block before lower ones run.
+   */
+  async function runBeforeInstall(
+    event: PluginHookBeforeInstallEvent,
+    ctx: PluginHookBeforeInstallContext,
+  ): Promise<PluginHookBeforeInstallResult | undefined> {
+    return runModifyingHook<"before_install", PluginHookBeforeInstallResult>(
+      "before_install",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => {
+          if (acc?.block === true) {
+            return acc;
+          }
+          const mergedFindings = [...(acc?.findings ?? []), ...(next.findings ?? [])];
+          return {
+            findings: mergedFindings.length > 0 ? mergedFindings : undefined,
+            block: stickyTrue(acc?.block, next.block),
+            blockReason: lastDefined(acc?.blockReason, next.blockReason),
+          };
+        },
+        shouldStop: (result) => result.block === true,
+        terminalLabel: "block=true",
+      },
+    );
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -1015,6 +1076,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeModelResolve,
     runBeforePromptBuild,
     runBeforeAgentStart,
+    runBeforeAgentReply,
     runLlmInput,
     runLlmOutput,
     runAgentEnd,
@@ -1046,6 +1108,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Install hooks
+    runBeforeInstall,
     // Utility
     hasHooks,
     getHookCount,

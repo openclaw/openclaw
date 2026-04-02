@@ -41,7 +41,7 @@ import {
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
-import { telegramNativeApprovalAdapter } from "./approval-native.js";
+import { telegramApprovalCapability } from "./approval-native.js";
 import * as auditModule from "./audit.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
@@ -72,6 +72,7 @@ import type { TelegramProbe } from "./probe.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { sendMessageTelegram, sendPollTelegram, sendTypingTelegram } from "./send.js";
+import { resolveTelegramSessionConversation } from "./session-conversation.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import {
@@ -87,6 +88,7 @@ import {
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
+import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 import { resolveTelegramToken } from "./token.js";
 
 type TelegramSendFn = typeof sendMessageTelegram;
@@ -530,6 +532,8 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     messaging: {
       normalizeTarget: normalizeTelegramMessagingTarget,
+      resolveSessionConversation: ({ kind, rawId }) =>
+        resolveTelegramSessionConversation({ kind, rawId }),
       parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
       inferTargetChatType: ({ to }) => parseTelegramExplicitTarget(to).chatType,
       formatTargetDisplay: ({ target, display, kind }) => {
@@ -574,10 +578,8 @@ export const telegramPlugin = createChatChannelPlugin({
         await deleteTelegramUpdateOffset({ accountId });
       },
     },
-    auth: telegramNativeApprovalAdapter.auth,
-    approvals: {
-      delivery: telegramNativeApprovalAdapter.delivery,
-      native: telegramNativeApprovalAdapter.native,
+    approvalCapability: {
+      ...telegramApprovalCapability,
       render: {
         exec: {
           buildPendingPayload: ({ request, nowMs }) =>
@@ -822,6 +824,7 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   threading: {
     topLevelReplyToMode: "telegram",
+    buildToolContext: (params) => buildTelegramThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext, replyToId }) =>
       replyToId ? undefined : resolveTelegramAutoThreadId({ to, toolContext }),
   },
