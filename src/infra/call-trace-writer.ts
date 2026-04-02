@@ -2,9 +2,10 @@
  * call-trace-writer.ts
  *
  * Subscribes to `model.call` and `tool.call` diagnostic events and appends them
- * to JSONL files under `diagnostics.callTrace.dir` (default: ~/.openclaw/call-traces/).
+ * to a single JSONL file per day under `diagnostics.callTrace.dir`.
  *
- * One file per day: calls/YYYY-MM-DD.jsonl, tools/YYYY-MM-DD.jsonl
+ * File pattern: <dir>/YYYY-MM-DD.jsonl
+ * Each line is a JSON object with a `type` field ("model.call" | "tool.call").
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -26,13 +27,8 @@ function dateStamp(): string {
   return `${y}-${m}-${d}`;
 }
 
-function ensureDir(dir: string): void {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
 function appendJsonl(filePath: string, record: unknown): void {
-  const line = JSON.stringify(record) + "\n";
-  fs.appendFileSync(filePath, line, "utf8");
+  fs.appendFileSync(filePath, JSON.stringify(record) + "\n", "utf8");
 }
 
 function purgeOldFiles(dir: string, retainDays: number): void {
@@ -55,8 +51,8 @@ function purgeOldFiles(dir: string, retainDays: number): void {
 }
 
 /**
- * Start listening for call-trace diagnostic events and writing them to JSONL files.
- * Returns an unsubscribe function.
+ * Start listening for call-trace diagnostic events and writing them to a
+ * single JSONL file per day. Returns an unsubscribe function.
  */
 export function startCallTraceWriter(config: OpenClawConfig): (() => void) | undefined {
   if (!isDiagnosticsEnabled(config)) {
@@ -76,38 +72,22 @@ export function startCallTraceWriter(config: OpenClawConfig): (() => void) | und
   const baseDir = ct.dir ?? DEFAULT_DIR;
   const retainDays = ct.retainDays ?? DEFAULT_RETAIN_DAYS;
 
-  const llmDir = path.join(baseDir, "calls");
-  const toolDir = path.join(baseDir, "tools");
-
-  if (logLlmCalls) {
-    ensureDir(llmDir);
-  }
-  if (logToolCalls) {
-    ensureDir(toolDir);
-  }
-
-  // Purge stale files on startup (best-effort).
-  if (logLlmCalls) {
-    purgeOldFiles(llmDir, retainDays);
-  }
-  if (logToolCalls) {
-    purgeOldFiles(toolDir, retainDays);
-  }
+  fs.mkdirSync(baseDir, { recursive: true });
+  purgeOldFiles(baseDir, retainDays);
 
   const unsub = onDiagnosticEvent((evt: DiagnosticEventPayload) => {
-    const stamp = dateStamp();
-
-    if (evt.type === "model.call" && logLlmCalls) {
-      const filePath = path.join(llmDir, `${stamp}.jsonl`);
-      appendJsonl(filePath, evt);
+    if (evt.type === "model.call" && !logLlmCalls) {
+      return;
+    }
+    if (evt.type === "tool.call" && !logToolCalls) {
+      return;
+    }
+    if (evt.type !== "model.call" && evt.type !== "tool.call") {
       return;
     }
 
-    if (evt.type === "tool.call" && logToolCalls) {
-      const filePath = path.join(toolDir, `${stamp}.jsonl`);
-      appendJsonl(filePath, evt);
-      return;
-    }
+    const filePath = path.join(baseDir, `${dateStamp()}.jsonl`);
+    appendJsonl(filePath, evt);
   });
 
   return unsub;
