@@ -415,7 +415,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1881,
+            "line": 1886,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3846,7 +3846,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1881,
+            "line": 1886,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4424,7 +4424,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1881,
+            "line": 1886,
             "path": "src/plugins/types.ts"
           }
         },

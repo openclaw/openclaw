@@ -373,7 +373,7 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.coreGatewayHandlers !== undefined ||
     options.includeSetupOnlyChannelPlugins === true ||
     options.preferSetupRuntimeForChannelPlugins === true ||
-    options.loadModules === false,
+    options.loadModules === false ||
     options.providerOnly === true,
   );
 }
