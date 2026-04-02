@@ -377,4 +377,56 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     // Must pass: "research" is in allowAgents even though not in agents.list
     expect(details.status).toBe("accepted");
   });
+
+  // ---------------------------------------------------------------------------
+  // allowAgents from agents.defaults.subagents (#59938)
+  // ---------------------------------------------------------------------------
+
+  it("sessions_spawn reads allowAgents from agents.defaults.subagents", async () => {
+    // setAllowAgents sets per-agent subagents.allowAgents; here we use defaults instead
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          subagents: { allowAgents: ["worker"] },
+        },
+        list: [{ id: "main" }, { id: "worker" }],
+      },
+    });
+
+    const getChildSessionKey = mockAcceptedSpawn(5500);
+    const result = await executeSpawn("call-defaults-allow", "worker");
+    expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });
+    expect(getChildSessionKey()?.startsWith("agent:worker:subagent:")).toBe(true);
+  });
+
+  it("sessions_spawn per-agent allowAgents overrides agents.defaults.subagents", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          subagents: { allowAgents: ["alpha"] },
+        },
+        list: [
+          { id: "main", subagents: { allowAgents: ["beta"] } },
+          { id: "alpha" },
+          { id: "beta" },
+        ],
+      },
+    });
+    const tool = await getSessionsSpawnTool({ agentSessionKey: "main", agentChannel: "whatsapp" });
+
+    // alpha is allowed by defaults but NOT by the per-agent config
+    const resultAlpha = await tool.execute("call-override-1", {
+      task: "do thing",
+      agentId: "alpha",
+    });
+    expect(resultAlpha.details).toMatchObject({ status: "forbidden" });
+
+    // beta is allowed by the per-agent config
+    const getChildSessionKey = mockAcceptedSpawn(5600);
+    const resultBeta = await tool.execute("call-override-2", { task: "do thing", agentId: "beta" });
+    expect(resultBeta.details).toMatchObject({ status: "accepted" });
+    expect(getChildSessionKey()?.startsWith("agent:beta:subagent:")).toBe(true);
+  });
 });

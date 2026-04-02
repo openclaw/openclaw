@@ -460,7 +460,10 @@ export async function spawnSubagentDirect(
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
-    const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+    const allowAgents =
+      resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
+      cfg.agents?.defaults?.subagents?.allowAgents ??
+      [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");
     const normalizedTargetId = targetAgentId.toLowerCase();
     const allowSet = new Set(
