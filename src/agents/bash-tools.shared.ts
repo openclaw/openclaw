@@ -2,7 +2,6 @@ import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { buildSafeShellCommand } from "../infra/exec-approvals-analysis.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxBackendExecSpec } from "./sandbox/backend.js";
@@ -67,10 +66,6 @@ export function buildDockerExecArgs(params: {
   env: Record<string, string>;
   tty: boolean;
 }) {
-  const plannedCommand = buildDockerShellCommand({
-    command: params.command,
-  });
-
   const args = ["exec", "-i"];
   if (params.tty) {
     args.push("-t");
@@ -102,32 +97,16 @@ export function buildDockerExecArgs(params: {
   // Run a login shell first (`sh -lc`) to source profile state, then execute an inner
   // `sh -c "$1"` where ARG1 carries the full command string. This keeps command data
   // out of the bootstrap script body and avoids string concatenation injection.
-  // `openclaw-docker-exec` is argv[0] for the inner shell and `plannedCommand` is `$1`.
+  // `openclaw-docker-exec` is argv[0] for the inner shell and the original command is `$1`.
   args.push(
     params.containerName,
     "/bin/sh",
     "-lc",
     bootstrapScript,
     "openclaw-docker-exec",
-    plannedCommand,
+    params.command,
   );
   return args;
-}
-
-function buildDockerShellCommand(params: { command: string }): string {
-  // Keep argv[0] as written by the caller: Docker commands run inside the container
-  // and must not be rewritten to host-resolved executable paths.
-  const planned = buildSafeShellCommand({
-    command: params.command,
-    // Docker runtime command execution uses `/bin/sh` inside Linux containers.
-    platform: "linux",
-  });
-  if (!planned.ok || !planned.command) {
-    throw new Error(
-      `Security Violation: unsupported sandbox shell syntax (${planned.reason ?? "unable to parse command"}).`,
-    );
-  }
-  return planned.command;
 }
 
 export async function resolveSandboxWorkdir(params: {

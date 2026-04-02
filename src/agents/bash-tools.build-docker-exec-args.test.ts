@@ -18,7 +18,7 @@ describe("buildDockerExecArgs", () => {
     expect(args).toContain("OPENCLAW_PREPEND_PATH=/custom/bin:/usr/local/bin:/usr/bin");
     expect(bootstrapArg).toContain('export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"');
     expect(bootstrapArg).toContain('exec /bin/sh -c "$1"');
-    expect(commandArg).toBe("'echo' 'hello'");
+    expect(commandArg).toBe("echo hello");
   });
 
   it("does not interpolate PATH into the shell bootstrap script", () => {
@@ -52,7 +52,7 @@ describe("buildDockerExecArgs", () => {
     const bootstrapArg = args[args.length - 3];
     const commandArg = args[args.length - 1];
     expect(bootstrapArg).toBe('exec /bin/sh -c "$1"');
-    expect(commandArg).toBe("'echo' 'hello'");
+    expect(commandArg).toBe("echo hello");
     expect(bootstrapArg).not.toContain("export PATH");
   });
 
@@ -92,7 +92,7 @@ describe("buildDockerExecArgs", () => {
     expect(args).toContain("-t");
   });
 
-  it("quotes variable-expansion payloads as literal arguments", () => {
+  it("preserves variable-expansion syntax for full-security shell execution", () => {
     const args = buildDockerExecArgs({
       containerName: "test-container",
       command: "echo $HOME",
@@ -101,9 +101,7 @@ describe("buildDockerExecArgs", () => {
     });
 
     const commandArg = args[args.length - 1];
-    expect(commandArg).toMatch(/'[^']*echo'/);
-    expect(commandArg).toContain("'$HOME'");
-    expect(commandArg).not.toContain("echo $HOME");
+    expect(commandArg).toBe("echo $HOME");
   });
 
   it("preserves inline env assignments before the executable", () => {
@@ -115,9 +113,7 @@ describe("buildDockerExecArgs", () => {
     });
 
     const commandArg = args[args.length - 1];
-    expect(commandArg).toContain("FOO='bar'");
-    expect(commandArg).toMatch(/'[^']*echo'/);
-    expect(commandArg).toContain("'hi'");
+    expect(commandArg).toBe("FOO=bar echo hi");
   });
 
   it("does not rewrite executable names to host-resolved absolute paths", () => {
@@ -129,7 +125,7 @@ describe("buildDockerExecArgs", () => {
     });
 
     const commandArg = args[args.length - 1];
-    expect(commandArg).toBe("'echo' 'host-portable'");
+    expect(commandArg).toBe("echo host-portable");
     expect(commandArg).not.toContain("/echo");
   });
 
@@ -146,22 +142,15 @@ describe("buildDockerExecArgs", () => {
     expect(commandArg).toBe(canonicalCommand);
   });
 
-  it("rejects unsupported shell token commands", () => {
-    expect(() =>
-      buildDockerExecArgs({
-        containerName: "test-container",
-        command: "$(id)",
-        env: { HOME: "/home/user" },
-        tty: false,
-      }),
-    ).toThrow(/Security Violation: unsupported sandbox shell syntax/);
-    expect(() =>
-      buildDockerExecArgs({
-        containerName: "test-container",
-        command: "echo $(id)",
-        env: { HOME: "/home/user" },
-        tty: false,
-      }),
-    ).toThrow(/Security Violation: unsupported sandbox shell syntax/);
+  it("preserves full shell syntax in docker command payload", () => {
+    const command = "echo hi > out.txt && cat < out.txt";
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command,
+      env: { HOME: "/home/user" },
+      tty: false,
+    });
+    const commandArg = args[args.length - 1];
+    expect(commandArg).toBe(command);
   });
 });
