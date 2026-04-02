@@ -2,7 +2,7 @@ import { listPotentialConfiguredChannelIds } from "../../../channels/config-pres
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   normalizePluginsConfig,
-  resolveEffectiveEnableState,
+  resolveEffectivePluginActivationState,
 } from "../../../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
@@ -36,7 +36,7 @@ export function scanConfiguredChannelPluginBlockers(
       continue;
     }
 
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: plugin.id,
       origin: plugin.origin,
       config: pluginsConfig,
@@ -44,9 +44,10 @@ export function scanConfiguredChannelPluginBlockers(
       enabledByDefault: plugin.enabledByDefault,
     });
     if (
-      enableState.enabled ||
-      !enableState.reason ||
-      (enableState.reason !== "disabled in config" && enableState.reason !== "plugins disabled")
+      activationState.activated ||
+      !activationState.reason ||
+      (activationState.reason !== "disabled in config" &&
+        activationState.reason !== "plugins disabled")
     ) {
       continue;
     }
@@ -58,7 +59,7 @@ export function scanConfiguredChannelPluginBlockers(
       hits.push({
         channelId,
         pluginId: plugin.id,
-        reason: enableState.reason,
+        reason: activationState.reason,
       });
     }
   }

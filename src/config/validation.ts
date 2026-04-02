@@ -5,7 +5,7 @@ import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
 import {
   normalizePluginsConfig,
-  resolveEffectiveEnableState,
+  resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -914,14 +914,14 @@ function validateConfigObjectWithPluginsBase(
     const entry = normalizedPlugins.entries[pluginId];
     const entryHasConfig = Boolean(entry?.config);
 
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: pluginId,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: config,
     });
-    let enabled = enableState.enabled;
-    let reason = enableState.reason;
+    let enabled = activationState.activated;
+    let reason = activationState.reason;
 
     if (enabled) {
       const memoryDecision = resolveMemorySlotDecision({

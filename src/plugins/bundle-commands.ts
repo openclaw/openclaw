@@ -9,7 +9,7 @@ import {
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
 export type ClaudeBundleCommandSpec = {
@@ -179,13 +179,13 @@ export function loadEnabledClaudeBundleCommands(params: {
     ) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });
-    if (!enableState.enabled) {
+    if (!activationState.activated) {
       continue;
     }
     for (const relativeRoot of resolveClaudeCommandRootDirs(record.rootDir)) {

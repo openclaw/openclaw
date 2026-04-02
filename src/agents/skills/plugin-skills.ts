@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   normalizePluginsConfig,
-  resolveEffectiveEnableState,
+  resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
@@ -39,13 +39,13 @@ export function resolvePluginSkillDirs(params: {
     if (!record.skills || record.skills.length === 0) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.config,
     });
-    if (!enableState.enabled) {
+    if (!activationState.activated) {
       continue;
     }
     // ACP router skills should not be attached when ACP is explicitly disabled.
