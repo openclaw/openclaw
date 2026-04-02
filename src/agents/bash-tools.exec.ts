@@ -233,11 +233,15 @@ function extractScriptTargetFromCommand(
   };
   const findFirstNodeScriptArg = (tokens: string[]): string | null => {
     const optionsWithSeparateValue = new Set(["-r", "--require", "--import"]);
+    let preloadScript: string | null = null;
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
       if (token === "--") {
         const next = tokens[i + 1];
-        return next?.toLowerCase().endsWith(".js") ? next : null;
+        if (next?.toLowerCase().endsWith(".js")) {
+          return next;
+        }
+        return preloadScript;
       }
       if (
         token === "-e" ||
@@ -251,6 +255,10 @@ function extractScriptTargetFromCommand(
         return null;
       }
       if (optionsWithSeparateValue.has(token)) {
+        const next = tokens[i + 1];
+        if (!preloadScript && next?.toLowerCase().endsWith(".js")) {
+          preloadScript = next;
+        }
         i += 1;
         continue;
       }
@@ -259,14 +267,20 @@ function extractScriptTargetFromCommand(
         token.startsWith("--require=") ||
         token.startsWith("--import=")
       ) {
+        const inlineValue = token.startsWith("-r")
+          ? token.slice(2)
+          : token.slice(token.indexOf("=") + 1);
+        if (!preloadScript && inlineValue.toLowerCase().endsWith(".js")) {
+          preloadScript = inlineValue;
+        }
         continue;
       }
       if (token.startsWith("-")) {
         continue;
       }
-      return token.toLowerCase().endsWith(".js") ? token : null;
+      return token.toLowerCase().endsWith(".js") ? token : preloadScript;
     }
-    return null;
+    return preloadScript;
   };
   const extractTargetFromArgv = (
     argv: string[] | null,
