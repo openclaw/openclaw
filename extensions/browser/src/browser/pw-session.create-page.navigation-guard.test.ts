@@ -8,6 +8,7 @@ import {
   BlockedBrowserTargetError,
   closePlaywrightBrowserConnection,
   createPageViaPlaywright,
+  forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   listPagesViaPlaywright,
 } from "./pw-session.js";
@@ -392,5 +393,52 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       }),
     ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
     expect(pageClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves blocked-target quarantine across forced reconnects", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    pageClose.mockRejectedValueOnce(new Error("close failed"));
+    pageGoto.mockImplementationOnce(async () => {
+      const handler = getRouteHandler();
+      if (!handler) {
+        throw new Error("missing route handler");
+      }
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "https://93.184.216.34/start",
+        },
+      );
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "http://127.0.0.1:18080/internal-hop",
+        },
+      );
+      throw new Error("Navigation aborted");
+    });
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    await forceDisconnectPlaywrightForTarget({
+      cdpUrl: "http://127.0.0.1:18792",
+      reason: "test forced reconnect",
+    });
+
+    await expect(
+      getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "TARGET_1",
+      }),
+    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
   });
 });

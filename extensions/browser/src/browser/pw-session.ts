@@ -898,7 +898,6 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   if (!cur) {
     return;
   }
-  clearBlockedTargetsForCdpUrl(normalized);
   cachedByCdpUrl.delete(normalized);
   // Also clear the per-url in-flight connect so the next call does a fresh connectOverCDP
   // rather than awaiting a stale promise.
