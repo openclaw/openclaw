@@ -498,7 +498,15 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 
 These Docker runners split into two buckets:
 
-- Live-model runners: `test:docker:live-models` and `test:docker:live-gateway` run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted).
+- Live-model runners: `test:docker:live-models` and `test:docker:live-gateway` run only their matching profile-key live file inside the repo Docker image (`src/agents/models.profiles.live.test.ts` and `src/gateway/gateway-models.profiles.live.test.ts`), mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). The matching local entrypoints are `test:live:models-profiles` and `test:live:gateway-profiles`.
+- Docker live runners default to a smaller smoke cap so a full Docker sweep stays practical:
+  `test:docker:live-models` defaults to `OPENCLAW_LIVE_MAX_MODELS=12`, and
+  `test:docker:live-gateway` defaults to `OPENCLAW_LIVE_GATEWAY_SMOKE=1`,
+  `OPENCLAW_LIVE_GATEWAY_MAX_MODELS=8`,
+  `OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=45000`, and
+  `OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=90000`. Override those env vars when you
+  explicitly want the larger exhaustive scan.
+- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, then reuses it for the two live Docker lanes.
 - Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:gateway-network`, `test:docker:mcp-channels`, and `test:docker:plugins` boot one or more real containers and verify higher-level integration paths.
 
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
