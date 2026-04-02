@@ -2,7 +2,11 @@ import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-
 import { sendMessage } from "../infra/outbound/message.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
-import { isExecDeniedResultText, parseExecApprovalResultText } from "./exec-approval-result.js";
+import {
+  formatExecDeniedUserMessage,
+  isExecDeniedResultText,
+  parseExecApprovalResultText,
+} from "./exec-approval-result.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers/errors.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -32,6 +36,20 @@ function buildExecDeniedFollowupPrompt(resultText: string): string {
   ].join("\n");
 }
 
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "unknown error";
+  }
+}
+
 export function buildExecApprovalFollowupPrompt(resultText: string): string {
   const trimmed = resultText.trim();
   if (isExecDeniedResultText(trimmed)) {
@@ -56,13 +74,16 @@ function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boole
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey);
 }
 
-function formatDirectExecApprovalFollowupText(resultText: string): string | null {
+function formatDirectExecApprovalFollowupText(
+  resultText: string,
+  opts: { allowDenied?: boolean } = {},
+): string | null {
   const parsed = parseExecApprovalResultText(resultText);
   if (parsed.kind === "other" && !parsed.raw) {
     return null;
   }
   if (parsed.kind === "denied") {
-    return null;
+    return opts.allowDenied ? formatExecDeniedUserMessage(parsed.raw) : null;
   }
 
   if (parsed.kind === "finished") {
@@ -91,6 +112,10 @@ function formatDirectExecApprovalFollowupText(resultText: string): string | null
   return sanitizeUserFacingText(parsed.raw, { errorContext: true }).trim() || null;
 }
 
+function buildSessionResumeFallbackPrefix(): string {
+  return "Automatic session resume failed, so sending the status directly.\n\n";
+}
+
 export async function sendExecApprovalFollowup(
   params: ExecApprovalFollowupParams,
 ): Promise<boolean> {
@@ -116,55 +141,66 @@ export async function sendExecApprovalFollowup(
       ? normalizedTurnSourceChannel
       : undefined;
 
+  let sessionError: unknown = null;
+
   if (sessionKey) {
-    await callGatewayTool(
-      "agent",
-      { timeoutMs: 60_000 },
-      {
-        sessionKey,
-        message: buildExecApprovalFollowupPrompt(resultText),
-        deliver: deliveryTarget.deliver,
-        ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
-        channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
-        to: deliveryTarget.deliver
-          ? deliveryTarget.to
-          : sessionOnlyOriginChannel
-            ? params.turnSourceTo
-            : undefined,
-        accountId: deliveryTarget.deliver
-          ? deliveryTarget.accountId
-          : sessionOnlyOriginChannel
-            ? params.turnSourceAccountId
-            : undefined,
-        threadId: deliveryTarget.deliver
-          ? deliveryTarget.threadId
-          : sessionOnlyOriginChannel
-            ? params.turnSourceThreadId
-            : undefined,
-        idempotencyKey: `exec-approval-followup:${params.approvalId}`,
-      },
-      { expectFinal: true },
-    );
-    return true;
+    try {
+      await callGatewayTool(
+        "agent",
+        { timeoutMs: 60_000 },
+        {
+          sessionKey,
+          message: buildExecApprovalFollowupPrompt(resultText),
+          deliver: deliveryTarget.deliver,
+          ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
+          channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
+          to: deliveryTarget.deliver
+            ? deliveryTarget.to
+            : sessionOnlyOriginChannel
+              ? params.turnSourceTo
+              : undefined,
+          accountId: deliveryTarget.deliver
+            ? deliveryTarget.accountId
+            : sessionOnlyOriginChannel
+              ? params.turnSourceAccountId
+              : undefined,
+          threadId: deliveryTarget.deliver
+            ? deliveryTarget.threadId
+            : sessionOnlyOriginChannel
+              ? params.turnSourceThreadId
+              : undefined,
+          idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+        },
+        { expectFinal: true },
+      );
+      return true;
+    } catch (err) {
+      sessionError = err;
+    }
   }
 
-  const directText = formatDirectExecApprovalFollowupText(resultText);
+  const directText = formatDirectExecApprovalFollowupText(resultText, {
+    allowDenied: sessionError !== null,
+  });
   if (deliveryTarget.deliver && directText) {
+    const prefix = sessionError ? buildSessionResumeFallbackPrefix() : "";
     await sendMessage({
       channel: deliveryTarget.channel,
       to: deliveryTarget.to ?? "",
       accountId: deliveryTarget.accountId,
       threadId: deliveryTarget.threadId,
-      content: directText,
+      content: `${prefix}${directText}`,
       agentId: undefined,
       idempotencyKey: `exec-approval-followup:${params.approvalId}`,
     });
     return true;
   }
 
+  if (sessionError) {
+    throw new Error(`Session followup failed: ${formatUnknownError(sessionError)}`);
+  }
   if (isDenied) {
     return false;
   }
-
   throw new Error("Session key or deliverable origin route is required");
 }
