@@ -12,6 +12,7 @@ export type FollowupQueueState = {
   dropPolicy: QueueDropPolicy;
   droppedCount: number;
   summaryLines: string[];
+  collectForceIndividual: boolean;
   lastRun?: FollowupRun["run"];
 };
 
@@ -61,6 +62,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     dropPolicy: settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
     droppedCount: 0,
     summaryLines: [],
+    collectForceIndividual: false,
   };
   applyQueueRuntimeSettings({
     target: created,
@@ -82,6 +84,7 @@ export function clearFollowupQueue(key: string): number {
   queue.summaryLines = [];
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
+  queue.collectForceIndividual = false;
   FOLLOWUP_QUEUES.delete(cleaned);
   return cleared;
 }

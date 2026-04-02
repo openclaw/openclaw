@@ -89,7 +89,7 @@ export function scheduleFollowupDrain(
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
   void (async () => {
     try {
-      const collectState = { forceIndividualCollect: false };
+      const collectState = { forceIndividualCollect: queue.collectForceIndividual };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
@@ -130,6 +130,7 @@ export function scheduleFollowupDrain(
 
           if (!canBatchRender) {
             collectState.forceIndividualCollect = true;
+            queue.collectForceIndividual = true;
             if (summary) {
               const summaryTarget = items[0];
               if (!summaryTarget) {
@@ -186,6 +187,7 @@ export function scheduleFollowupDrain(
               clearQueueSummaryState(queue);
             }
             collectState.forceIndividualCollect = true;
+            queue.collectForceIndividual = true;
             continue;
           }
 
@@ -239,6 +241,7 @@ export function scheduleFollowupDrain(
     } finally {
       queue.draining = false;
       if (queue.items.length === 0 && queue.droppedCount === 0) {
+        queue.collectForceIndividual = false;
         FOLLOWUP_QUEUES.delete(key);
         clearFollowupDrainCallback(key);
       } else {

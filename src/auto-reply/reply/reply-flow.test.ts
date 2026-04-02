@@ -1613,7 +1613,20 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).toContain("Queued #2\ntwo");
   });
 
-  it("keeps mixed collect retries on individual drain semantics", async () => {
+  it.each([
+    {
+      name: "display-first mixed collect retries",
+      first: createRun({ prompt: "display item", displayText: "visible item" }),
+      second: createRun({ prompt: "hidden item" }),
+      expected: ["display item", "hidden item", "hidden item"],
+    },
+    {
+      name: "hidden-first mixed collect retries",
+      first: createRun({ prompt: "hidden item" }),
+      second: createRun({ prompt: "display item", displayText: "visible item" }),
+      expected: ["hidden item", "display item", "display item"],
+    },
+  ])("keeps individual drain semantics for $name", async ({ first, second, expected }) => {
     const key = `test-mixed-collect-retry-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const done = createDeferred<void>();
@@ -1635,22 +1648,14 @@ describe("followup queue collect routing", () => {
       dropPolicy: "summarize",
     };
 
-    enqueueFollowupRun(
-      key,
-      createRun({ prompt: "display item", displayText: "visible item" }),
-      settings,
-    );
-    enqueueFollowupRun(key, createRun({ prompt: "hidden item" }), settings);
+    enqueueFollowupRun(key, first, settings);
+    enqueueFollowupRun(key, second, settings);
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
-    expect(calls.map((call) => call.execution.agentPrompt)).toEqual([
-      "display item",
-      "hidden item",
-      "hidden item",
-    ]);
-    expect(calls[2]?.display).toBeUndefined();
+    expect(calls.map((call) => call.execution.agentPrompt)).toEqual(expected);
+    expect(calls[2]?.display).toEqual(second.display);
   });
 
   it("emits collect overflow summary before falling back from an invalid display batch", async () => {
