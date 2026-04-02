@@ -119,6 +119,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - Stable npm promotion from `beta` to `latest` also uses GitHub Actions OIDC by
   exchanging the workflow token for a short-lived npm registry token; it should
   not depend on a stored `NPM_TOKEN`.
+- Keep that promotion inside `.github/workflows/openclaw-npm-release.yml`.
+  npm trusted publishing is bound to the trusted workflow file identity, so a
+  separate promotion workflow needs its own npm trust configuration.
 - The publish run must be started manually with `workflow_dispatch`.
 - The npm workflow and the private mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
@@ -243,9 +246,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     preflight run, and pass the successful npm `preflight_run_id`.
 15. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
 16. If the stable release was published to `beta`, start
-    `.github/workflows/openclaw-npm-promote-beta.yml` with the exact stable
-    version after beta validation passes, then verify `latest` now points at
-    that version.
+    `.github/workflows/openclaw-npm-release.yml` again after beta validation
+    passes with the same stable tag, `promote_beta_to_latest=true`,
+    `preflight_only=false`, empty `preflight_run_id`, and `npm_dist_tag=beta`,
+    then verify `latest` now points at that version.
 17. Start
     `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
     for the real publish with the successful private mac `preflight_run_id` and
