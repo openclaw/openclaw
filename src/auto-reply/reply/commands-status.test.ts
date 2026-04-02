@@ -262,6 +262,27 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("approval denied");
   });
 
+  it("does not surface completed task output in the /status task line", async () => {
+    createRunningTaskRun({
+      runtime: "cron",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:status-task-completed-output",
+      runId: "run-status-task-completed-output",
+      task: "daily briefing",
+    });
+    completeTaskRunByRunId({
+      runId: "run-status-task-completed-output",
+      endedAt: Date.now(),
+      terminalSummary:
+        "Daily briefing output: this is already delivered to chat and should not be replayed in /status.",
+    });
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).not.toContain("recently finished");
+    expect(reply?.text).not.toContain("Daily briefing output");
+  });
+
   it("does not leak internal runtime context through the task status line", async () => {
     createRunningTaskRun({
       runtime: "subagent",

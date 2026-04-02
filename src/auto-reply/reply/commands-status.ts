@@ -69,12 +69,17 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
   if (!task) {
     return undefined;
   }
+  // /status should reflect actionable state. Completed-success output is already delivered
+  // through task-specific channels and should not be replayed in the status card.
+  if (snapshot.activeCount === 0 && snapshot.recentFailureCount === 0) {
+    return undefined;
+  }
   const headline =
     snapshot.activeCount > 0
       ? `${snapshot.activeCount} active · ${snapshot.totalCount} total`
       : snapshot.recentFailureCount > 0
         ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
-        : "recently finished";
+        : undefined;
   const title = formatTaskStatusTitle(task);
   const detail = formatTaskStatusDetail(task);
   const parts = [headline, task.runtime, title, detail].filter(Boolean);
@@ -83,7 +88,7 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
 
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
-  if (snapshot.totalCount === 0) {
+  if (snapshot.activeCount === 0) {
     return undefined;
   }
   return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
