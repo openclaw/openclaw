@@ -22,7 +22,7 @@ import {
   resolveBrowserConfig,
   resolveBrowserControlAuth,
   resolveProfile,
-} from "../plugin-sdk/browser-runtime.js";
+} from "../plugin-sdk/browser-config.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   formatPermissionDetail,
