@@ -512,6 +512,21 @@ describe("failover-error", () => {
     );
   });
 
+  it("403 OpenRouter 'Key limit exceeded' returns billing (model fallback trigger)", () => {
+    // GitHub: openclaw/openclaw#53849 — OpenRouter returns 403 with "Key limit exceeded"
+    // when the monthly key spending limit is reached. This must trigger billing failover
+    // (model fallback), not generic auth.
+    expect(resolveFailoverReasonFromError({ status: 403, message: "Key limit exceeded" })).toBe(
+      "billing",
+    );
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message: "403 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("billing");
+  });
+
   it("resolveFailoverStatus maps auth_permanent to 403", () => {
     expect(resolveFailoverStatus("auth_permanent")).toBe(403);
   });
