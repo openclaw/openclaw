@@ -33,6 +33,7 @@ export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "o
 
 export type ProviderEndpointClass =
   | "default"
+  | "anthropic-public"
   | "openai-public"
   | "openai-codex"
   | "azure-openai"
@@ -131,6 +132,9 @@ export function resolveProviderEndpoint(
   }
   if (host === "api.openai.com") {
     return { endpointClass: "openai-public", hostname: host };
+  }
+  if (host === "api.anthropic.com") {
+    return { endpointClass: "anthropic-public", hostname: host };
   }
   if (host === "chatgpt.com") {
     return { endpointClass: "openai-codex", hostname: host };
