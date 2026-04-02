@@ -249,27 +249,17 @@ export function resolveSubagentConfiguredModelSelection(params: {
 }
 
 /**
- * Resolve a normalized model string through the alias index, returning a fully
- * qualified `provider/model` string.  If the value is already qualified or not
- * an alias, returns it unchanged.  Returns `undefined` for empty input.
+ * Resolve a normalized model string through a pre-built alias index, returning
+ * a fully qualified `provider/model` string.  If the value is already qualified
+ * or not a known alias, returns it unchanged.
  */
-function resolveModelThroughAliases(
-  value: string | undefined,
-  cfg: OpenClawConfig,
-): string | undefined {
-  if (!value) {
-    return undefined;
-  }
+function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
   // Already a provider/model ref — no alias resolution needed.
   if (value.includes("/")) {
     return value;
   }
   // Check if the value is a known alias; if so, resolve to provider/model.
   // Unknown bare strings are returned as-is (don't guess the provider).
-  const aliasIndex = buildModelAliasIndex({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-  });
   const aliasKey = normalizeAliasKey(value);
   const aliasMatch = aliasIndex.byAlias.get(aliasKey);
   if (aliasMatch) {
@@ -295,7 +285,11 @@ export function resolveSubagentSpawnModelSelection(params: {
     }) ??
     normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
     `${runtimeDefault.provider}/${runtimeDefault.model}`;
-  return resolveModelThroughAliases(raw, params.cfg) ?? raw;
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+  });
+  return resolveModelThroughAliases(raw, aliasIndex);
 }
 
 export function buildAllowedModelSet(params: {
