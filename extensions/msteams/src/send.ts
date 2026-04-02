@@ -329,13 +329,28 @@ async function sendTextWithMedia(
     mediaMaxBytes,
   } = ctx;
 
+  // For channel conversations with a stored thread root, send proactively into
+  // the thread instead of creating a new top-level channel post.
+  const isChannel = ref.conversation?.conversationType?.toLowerCase() === "channel";
+  const proactiveReplyStyle = isChannel && ref.threadRootMessageId ? "thread" : "top-level";
+  const proactiveRef =
+    isChannel && ref.threadRootMessageId
+      ? {
+          ...ref,
+          conversation: {
+            ...ref.conversation!,
+            id: `${ref.conversation!.id};messageid=${ref.threadRootMessageId}`,
+          },
+        }
+      : ref;
+
   let messageIds: string[];
   try {
     messageIds = await sendMSTeamsMessages({
-      replyStyle: "top-level",
+      replyStyle: proactiveReplyStyle,
       adapter,
       appId,
-      conversationRef: ref,
+      conversationRef: proactiveRef,
       messages: [{ text: text || undefined, mediaUrl }],
       retry: {},
       onRetry: (event) => {

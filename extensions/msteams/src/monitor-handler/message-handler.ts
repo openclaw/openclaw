@@ -329,6 +329,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       locale: activity.locale,
       // Only set timezone if present (preserve previously stored value on next upsert)
       ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
+      // Carry the thread root message ID so proactive fallback sends reply
+      // into the correct channel thread instead of posting top-level.
+      ...(conversationMessageId ? { threadRootMessageId: conversationMessageId } : {}),
     };
     conversationStore.upsert(conversationId, conversationRef).catch((err) => {
       log.debug?.("failed to save conversation reference", {

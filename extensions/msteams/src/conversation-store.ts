@@ -36,6 +36,13 @@ export type StoredConversationReference = {
   graphChatId?: string;
   /** IANA timezone from Teams clientInfo entity (e.g. "America/New_York") */
   timezone?: string;
+  /**
+   * Thread root message ID extracted from a channel conversation's
+   * `;messageid=THREAD_ROOT_ID` suffix.  Used by `sendProactively()` so that
+   * the proactive fallback replies into the correct channel thread instead of
+   * posting a new top-level message.
+   */
+  threadRootMessageId?: string;
 };
 
 export type MSTeamsConversationStoreEntry = {

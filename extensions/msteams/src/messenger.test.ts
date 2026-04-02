@@ -504,6 +504,176 @@ describe("msteams messenger", () => {
       expect(ref.activityId).toBeUndefined();
     });
 
+
+    it("proactive fallback in channel thread uses stored threadRootMessageId", async () => {
+      const proactiveSent: string[] = [];
+      let capturedRef: { activityId?: string; conversation?: { id?: string } } | undefined;
+      const ctx = createRevokedThreadContext();
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedRef = reference as typeof capturedRef;
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      const channelRef: StoredConversationReference = {
+        ...baseRef,
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "channel",
+        },
+        threadRootMessageId: "1711234567890",
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: channelRef,
+        context: ctx,
+        messages: [{ text: "thread reply" }],
+      });
+
+      expect(proactiveSent).toEqual(["thread reply"]);
+      // The proactive ref should carry the thread root as activityId
+      expect(capturedRef?.activityId).toBe("1711234567890");
+      // Conversation ID should include ;messageid suffix for thread routing
+      expect(capturedRef?.conversation?.id).toContain(";messageid=1711234567890");
+    });
+
+    it("proactive fallback in DM does NOT set activityId even with threadRootMessageId", async () => {
+      const proactiveSent: string[] = [];
+      let capturedRef: { activityId?: string } | undefined;
+      const ctx = createRevokedThreadContext();
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedRef = reference as typeof capturedRef;
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      const dmRef: StoredConversationReference = {
+        ...baseRef,
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+        },
+        threadRootMessageId: "should-be-ignored",
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: dmRef,
+        context: ctx,
+        messages: [{ text: "dm reply" }],
+      });
+
+      expect(proactiveSent).toEqual(["dm reply"]);
+      // DMs should NOT carry threadRootMessageId as activityId
+      expect(capturedRef?.activityId).toBeUndefined();
+    });
+
+    it("multiple channel threads don't cross-contaminate via proactive fallback", async () => {
+      const capturedRefs: Array<{ activityId?: string }> = [];
+
+      const createThreadTest = (threadRootId: string) => {
+        const ctx = createRevokedThreadContext();
+        const adapter: MSTeamsAdapter = {
+          continueConversation: async (_appId, reference, logic) => {
+            capturedRefs.push(reference as { activityId?: string });
+            await logic({
+              sendActivity: async () => ({ id: "sent" }),
+              updateActivity: noopUpdateActivity,
+              deleteActivity: noopDeleteActivity,
+            });
+          },
+          process: async () => {},
+          updateActivity: noopUpdateActivity,
+          deleteActivity: noopDeleteActivity,
+        };
+
+        const ref: StoredConversationReference = {
+          ...baseRef,
+          conversation: {
+            id: "19:samechannel@thread.tacv2",
+            conversationType: "channel",
+          },
+          threadRootMessageId: threadRootId,
+        };
+
+        return { ctx, adapter, ref };
+      };
+
+      const thread1 = createThreadTest("thread-root-AAA");
+      const thread2 = createThreadTest("thread-root-BBB");
+
+      await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter: thread1.adapter,
+        appId: "app123",
+        conversationRef: thread1.ref,
+        context: thread1.ctx,
+        messages: [{ text: "msg in thread 1" }],
+      });
+
+      await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter: thread2.adapter,
+        appId: "app123",
+        conversationRef: thread2.ref,
+        context: thread2.ctx,
+        messages: [{ text: "msg in thread 2" }],
+      });
+
+      expect(capturedRefs).toHaveLength(2);
+      expect(capturedRefs[0]?.activityId).toBe("thread-root-AAA");
+      expect(capturedRefs[1]?.activityId).toBe("thread-root-BBB");
+    });
+
+    it("replyStyle=thread with no context falls through to sendProactively", async () => {
+      const proactiveSent: string[] = [];
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, _reference, logic) => {
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: baseRef,
+        context: undefined,
+        messages: [{ text: "proactive thread" }],
+      });
+
+      expect(proactiveSent).toEqual(["proactive thread"]);
+      expect(ids.length).toBe(1);
+    });
+
     it("retries top-level sends on transient (5xx)", async () => {
       const attempts: string[] = [];
 
