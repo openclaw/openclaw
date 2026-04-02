@@ -12,8 +12,8 @@ import {
   type ExecSecurity,
 } from "./exec-approvals.js";
 
-const DEFAULT_REQUESTED_SECURITY: ExecSecurity = "allowlist";
-const DEFAULT_REQUESTED_ASK: ExecAsk = "on-miss";
+const DEFAULT_REQUESTED_SECURITY: ExecSecurity = "full";
+const DEFAULT_REQUESTED_ASK: ExecAsk = "off";
 const DEFAULT_HOST_PATH = "~/.openclaw/exec-approvals.json";
 const REQUESTED_DEFAULT_LABEL = {
   security: DEFAULT_REQUESTED_SECURITY,
