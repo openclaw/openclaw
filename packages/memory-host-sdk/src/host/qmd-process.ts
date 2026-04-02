@@ -112,7 +112,9 @@ export async function runCliCommand(params: {
       cwd: params.cwd,
       shell: params.spawnInvocation.shell,
       windowsHide: params.spawnInvocation.windowsHide,
+      detached: process.platform !== "win32",
     });
+    let settled = false;
     let stdout = "";
     let stderr = "";
     let stdoutTruncated = false;
@@ -120,7 +122,8 @@ export async function runCliCommand(params: {
     const discardStdout = params.discardStdout === true;
     const timer = params.timeoutMs
       ? setTimeout(() => {
-          child.kill("SIGKILL");
+          killCliChild(child);
+          settled = true;
           reject(new Error(`${params.commandSummary} timed out after ${params.timeoutMs}ms`));
         }, params.timeoutMs)
       : null;
@@ -141,12 +144,20 @@ export async function runCliCommand(params: {
       if (timer) {
         clearTimeout(timer);
       }
+      if (settled) {
+        return;
+      }
+      settled = true;
       reject(err);
     });
     child.on("close", (code) => {
       if (timer) {
         clearTimeout(timer);
       }
+      if (settled) {
+        return;
+      }
+      settled = true;
       if (!discardStdout && (stdoutTruncated || stderrTruncated)) {
         reject(
           new Error(
@@ -162,6 +173,18 @@ export async function runCliCommand(params: {
       }
     });
   });
+}
+
+function killCliChild(child: { pid?: number; kill: (signal?: NodeJS.Signals) => void }): void {
+  if (process.platform !== "win32" && typeof child.pid === "number" && child.pid > 0) {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+      return;
+    } catch {
+      // Fall back to direct kill if the process group is already gone.
+    }
+  }
+  child.kill("SIGKILL");
 }
 
 function appendOutputWithCap(

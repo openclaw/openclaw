@@ -962,35 +962,13 @@ export class QmdMemoryManager implements MemorySearchManager {
         const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
         args.push(...this.buildCollectionFilterArgs(collectionNames));
         // Always scope to managed collections (default + custom). Even for `search`/`vsearch`,
-        // pass collection filters; if a given QMD build rejects these flags, we fall back to `query`.
+        // pass collection filters; if a given QMD build rejects these flags, let the caller
+        // decide whether to fall back to the builtin manager.
         const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
         return parseQmdQueryJson(result.stdout, result.stderr);
       } catch (err) {
         if (allowMissingCollectionRepair && this.isMissingCollectionSearchError(err)) {
           throw err;
-        }
-        if (
-          !mcporterEnabled &&
-          qmdSearchCommand !== "query" &&
-          this.isUnsupportedQmdOptionError(err)
-        ) {
-          log.warn(
-            `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
-          );
-          try {
-            if (collectionNames.length > 1) {
-              return await this.runQueryAcrossCollections(trimmed, limit, collectionNames, "query");
-            }
-            const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
-            fallbackArgs.push(...this.buildCollectionFilterArgs(collectionNames));
-            const fallback = await this.runQmd(fallbackArgs, {
-              timeoutMs: this.qmd.limits.timeoutMs,
-            });
-            return parseQmdQueryJson(fallback.stdout, fallback.stderr);
-          } catch (fallbackErr) {
-            log.warn(`qmd query fallback failed: ${String(fallbackErr)}`);
-            throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
-          }
         }
         const label = mcporterEnabled ? "mcporter/qmd" : `qmd ${qmdSearchCommand}`;
         log.warn(`${label} failed: ${String(err)}`);

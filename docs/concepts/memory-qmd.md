@@ -51,7 +51,7 @@ automatically -- collections, updates, and embedding runs are handled for you.
   and periodically (default every 5 minutes).
 - Boot refresh runs in the background so chat startup is not blocked.
 - Searches use the configured `searchMode` (default: `search`; also supports
-  `vsearch` and `query`). If a mode fails, OpenClaw retries with `qmd query`.
+  `vsearch` and `query`).
 - If QMD fails entirely, OpenClaw falls back to the builtin SQLite engine.
 
 <Info>

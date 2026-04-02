@@ -1661,7 +1661,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("retries search with qmd query when configured mode rejects flags", async () => {
+  it("surfaces unsupported search flags without retrying qmd query", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -1688,25 +1688,15 @@ describe("QmdMemoryManager", () => {
       return createMockChild();
     });
 
-    const { manager, resolved } = await createManager();
-    const maxResults = resolved.qmd?.limits.maxResults;
-    if (!maxResults) {
-      throw new Error("qmd maxResults missing");
-    }
+    const { manager } = await createManager();
 
     await expect(
       manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("unknown flag: --json");
 
-    const searchAndQueryCalls = spawnMock.mock.calls
-      .map((call: unknown[]) => call[1])
-      .filter(
-        (args): args is string[] => Array.isArray(args) && ["search", "query"].includes(args[0]),
-      );
-    expect(searchAndQueryCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-    ]);
+    const commands = spawnMock.mock.calls.map((call: unknown[]) => (call[1] as string[])[0]);
+    expect(commands.filter((command: string) => command === "search")).toHaveLength(1);
+    expect(commands).not.toContain("query");
     await manager.close();
   });
 
@@ -1958,7 +1948,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("uses per-collection query fallback when search mode rejects flags", async () => {
+  it("surfaces multi-collection search flag errors without retrying qmd query", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -1989,24 +1979,19 @@ describe("QmdMemoryManager", () => {
       return createMockChild();
     });
 
-    const { manager, resolved } = await createManager();
-    const maxResults = resolved.qmd?.limits.maxResults;
-    if (!maxResults) {
-      throw new Error("qmd maxResults missing");
-    }
+    const { manager } = await createManager();
 
     await expect(
       manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("unknown flag: --json");
 
     const searchAndQueryCalls = spawnMock.mock.calls
       .map((call: unknown[]) => call[1] as string[])
       .filter((args: string[]) => args[0] === "search" || args[0] === "query");
-    expect(searchAndQueryCalls).toEqual([
-      ["search", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "workspace-main"],
-      ["query", "test", "--json", "-n", String(maxResults), "-c", "notes-main"],
-    ]);
+    expect(searchAndQueryCalls).toHaveLength(1);
+    expect(searchAndQueryCalls[0]?.[0]).toBe("search");
+    expect(searchAndQueryCalls[0]).toContain("workspace-main");
+    expect(searchAndQueryCalls.flat()).not.toContain("query");
     await manager.close();
   });
 
