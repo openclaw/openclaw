@@ -260,10 +260,27 @@ export function matchAllowlist(
   if (bareWild && resolution) {
     return bareWild;
   }
-  if (!resolution?.resolvedPath) {
+  if (!resolution) {
     return null;
   }
-  const resolvedPath = resolution.resolvedPath;
+  const allowlistCandidatePath =
+    resolution.resolvedPath ??
+    (() => {
+      const rawExecutable = resolution.rawExecutable.trim();
+      if (!rawExecutable) {
+        return undefined;
+      }
+      const expanded = rawExecutable.startsWith("~")
+        ? expandHomePrefix(rawExecutable)
+        : rawExecutable;
+      if (!path.isAbsolute(expanded)) {
+        return undefined;
+      }
+      return expanded;
+    })();
+  if (!allowlistCandidatePath) {
+    return null;
+  }
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
     if (!pattern) {
@@ -273,7 +290,7 @@ export function matchAllowlist(
     if (!hasPath) {
       continue;
     }
-    if (matchesExecAllowlistPattern(pattern, resolvedPath)) {
+    if (matchesExecAllowlistPattern(pattern, allowlistCandidatePath)) {
       return entry;
     }
   }

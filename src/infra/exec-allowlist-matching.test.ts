@@ -34,6 +34,23 @@ describe("exec allowlist matching", () => {
     }
   });
 
+  it("matches unresolved absolute raw executable paths", () => {
+    const pattern = "/usr/bin/python3";
+    const unresolvedAbsolute = {
+      rawExecutable: pattern,
+      resolvedPath: undefined,
+      executableName: "python3",
+    };
+    expect(matchAllowlist([{ pattern }], unresolvedAbsolute)?.pattern).toBe(pattern);
+
+    const unresolvedBare = {
+      rawExecutable: "python3",
+      resolvedPath: undefined,
+      executableName: "python3",
+    };
+    expect(matchAllowlist([{ pattern }], unresolvedBare)).toBeNull();
+  });
+
   it("matches absolute paths containing regex metacharacters literally", () => {
     const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"] as const;
     for (const candidatePath of plusPathCases) {
