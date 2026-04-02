@@ -8,13 +8,14 @@
  *  - Per-session `OpenAIWebSocketManager` (keyed by sessionId)
  *  - Tracks `previous_response_id` to send only incremental tool-result inputs
  *  - Falls back to `streamSimple` (HTTP) if the WebSocket connection fails
+ *  - Applies a short auto-mode cooldown after upstream WS handshake 5xx failures
  *  - Cleanup helpers for releasing sessions after the run completes
  *
  * Complexity budget & risk mitigation:
  *  - **Transport aware**: respects `transport` (`auto` | `websocket` | `sse`)
  *  - **Transparent fallback in `auto` mode**: connect/send failures fall back to
  *    the existing HTTP `streamSimple`; forced `websocket` mode surfaces WS errors
- *  - **Zero shared state**: per-session registry; session cleanup on dispose prevents leaks
+ *  - **Narrow shared state**: per-session registry plus a short model-scoped WS cooldown cache
  *  - **Full parity**: all generation options (temperature, top_p, max_output_tokens,
  *    tool_choice, reasoning) forwarded identically to the HTTP path
  *
@@ -64,8 +65,19 @@ interface WsSession {
   broken: boolean;
 }
 
+interface WsCooldownEntry {
+  untilMs: number;
+  statusCode: number;
+  reason: string;
+}
+
+const WS_CONNECT_5XX_COOLDOWN_MS = 5 * 60_000;
+
 /** Module-level registry: sessionId → WsSession */
 const wsRegistry = new Map<string, WsSession>();
+
+/** Module-level cooldowns: model fingerprint → cooldown entry */
+const wsCooldownRegistry = new Map<string, WsCooldownEntry>();
 
 type OpenAIWsStreamDeps = {
   createManager: (options?: OpenAIWebSocketManagerOptions) => OpenAIWebSocketManager;
@@ -187,6 +199,85 @@ export function hasWsSession(sessionId: string): boolean {
   return !!(s && !s.broken && s.manager.isConnected());
 }
 
+export function resetWsTransportCooldownsForTests(): void {
+  wsCooldownRegistry.clear();
+}
+
+function buildWsCooldownKey(model: {
+  api?: string;
+  provider?: string;
+  id?: string;
+  baseUrl?: string;
+}): string {
+  return [model.api ?? "", model.provider ?? "", model.id ?? "", model.baseUrl ?? ""]
+    .map((part) => String(part).trim())
+    .join("|");
+}
+
+function parseUnexpectedWebSocketStatusCode(error: unknown): number | null {
+  const text = error instanceof Error ? error.message : String(error);
+  const match = text.match(/Unexpected server response:\s*(\d{3})/i);
+  if (!match) {
+    return null;
+  }
+  const parsed = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function shouldApplyWsConnectCooldown(error: unknown): number | null {
+  const statusCode = parseUnexpectedWebSocketStatusCode(error);
+  if (!statusCode) {
+    return null;
+  }
+  return statusCode >= 500 && statusCode <= 599 ? statusCode : null;
+}
+
+function getActiveWsCooldown(model: {
+  api?: string;
+  provider?: string;
+  id?: string;
+  baseUrl?: string;
+}): WsCooldownEntry | null {
+  const key = buildWsCooldownKey(model);
+  const entry = wsCooldownRegistry.get(key);
+  if (!entry) {
+    return null;
+  }
+  if (entry.untilMs <= Date.now()) {
+    wsCooldownRegistry.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function recordWsConnectCooldown(
+  model: {
+    api?: string;
+    provider?: string;
+    id?: string;
+    baseUrl?: string;
+  },
+  statusCode: number,
+  reason: string,
+): WsCooldownEntry {
+  const entry: WsCooldownEntry = {
+    untilMs: Date.now() + WS_CONNECT_5XX_COOLDOWN_MS,
+    statusCode,
+    reason,
+  };
+  wsCooldownRegistry.set(buildWsCooldownKey(model), entry);
+  return entry;
+}
+
+function clearExpiredWsCooldowns(): void {
+  const now = Date.now();
+  for (const [key, entry] of wsCooldownRegistry.entries()) {
+    if (entry.untilMs <= now) {
+      wsCooldownRegistry.delete(key);
+    }
+  }
+}
+
 export {
   buildAssistantMessageFromResponse,
   convertMessagesToInputItems,
@@ -304,6 +395,17 @@ export function createOpenAIWebSocketStreamFn(
         return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
       }
 
+      clearExpiredWsCooldowns();
+      const activeCooldown = transport === "auto" ? getActiveWsCooldown(model) : null;
+      if (activeCooldown) {
+        releaseWsSession(sessionId);
+        log.debug(
+          `[ws-stream] session=${sessionId} skipping WebSocket during upstream cooldown; ` +
+            `status=${activeCooldown.statusCode} retryInMs=${Math.max(0, activeCooldown.untilMs - Date.now())}`,
+        );
+        return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
+      }
+
       // ── 1. Get or create session state ──────────────────────────────────
       let session = wsRegistry.get(sessionId);
 
@@ -337,9 +439,19 @@ export function createOpenAIWebSocketStreamFn(
           if (transport === "websocket") {
             throw connErr instanceof Error ? connErr : new Error(String(connErr));
           }
-          log.warn(
-            `[ws-stream] WebSocket connect failed for session=${sessionId}; falling back to HTTP. error=${String(connErr)}`,
-          );
+          const cooldownStatus = shouldApplyWsConnectCooldown(connErr);
+          if (cooldownStatus) {
+            const cooldown = recordWsConnectCooldown(model, cooldownStatus, String(connErr));
+            log.warn(
+              `[ws-stream] WebSocket connect failed for session=${sessionId}; ` +
+                `applying ${Math.round(WS_CONNECT_5XX_COOLDOWN_MS / 1000)}s HTTP cooldown ` +
+                `for upstream ${cooldown.statusCode}. error=${cooldown.reason}`,
+            );
+          } else {
+            log.warn(
+              `[ws-stream] WebSocket connect failed for session=${sessionId}; falling back to HTTP. error=${String(connErr)}`,
+            );
+          }
           // Fall back to HTTP immediately
           return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
         }
@@ -400,9 +512,19 @@ export function createOpenAIWebSocketStreamFn(
             if (transport === "websocket") {
               throw reconnectErr instanceof Error ? reconnectErr : new Error(String(reconnectErr));
             }
-            log.warn(
-              `[ws-stream] reconnect after warm-up failed for session=${sessionId}; falling back to HTTP. error=${String(reconnectErr)}`,
-            );
+            const cooldownStatus = shouldApplyWsConnectCooldown(reconnectErr);
+            if (cooldownStatus) {
+              const cooldown = recordWsConnectCooldown(model, cooldownStatus, String(reconnectErr));
+              log.warn(
+                `[ws-stream] reconnect after warm-up failed for session=${sessionId}; ` +
+                  `applying ${Math.round(WS_CONNECT_5XX_COOLDOWN_MS / 1000)}s HTTP cooldown ` +
+                  `for upstream ${cooldown.statusCode}. error=${cooldown.reason}`,
+              );
+            } else {
+              log.warn(
+                `[ws-stream] reconnect after warm-up failed for session=${sessionId}; falling back to HTTP. error=${String(reconnectErr)}`,
+              );
+            }
             return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
           }
         }

@@ -20,6 +20,7 @@ import {
   hasWsSession,
   planTurnInput,
   releaseWsSession,
+  resetWsTransportCooldownsForTests,
 } from "./openai-ws-stream.js";
 import { log } from "./pi-embedded-runner/logger.js";
 
@@ -33,8 +34,9 @@ const { MockManager } = vi.hoisted(() => {
   const { EventEmitter } = require("node:events") as typeof import("node:events");
   type AnyFn = (...args: unknown[]) => void;
 
-  // Shared mutable flag so inner class can see it
+  // Shared mutable flags so inner class can see them
   let _globalConnectShouldFail = false;
+  let _globalConnectErrorMessage = "Mock connect failure";
 
   class MockManager extends EventEmitter {
     private _listeners: AnyFn[] = [];
@@ -57,7 +59,7 @@ const { MockManager } = vi.hoisted(() => {
     async connect(_apiKey: string): Promise<void> {
       this.connectCallCount++;
       if (this.connectShouldFail || _globalConnectShouldFail) {
-        throw new Error("Mock connect failure");
+        throw new Error(_globalConnectErrorMessage);
       }
       this._connected = true;
     }
@@ -162,10 +164,18 @@ const { MockManager } = vi.hoisted(() => {
       _globalConnectShouldFail = v;
     }
 
+    static get globalConnectErrorMessage(): string {
+      return _globalConnectErrorMessage;
+    }
+    static set globalConnectErrorMessage(v: string) {
+      _globalConnectErrorMessage = v;
+    }
+
     static reset(): void {
       TrackedMockManager.lastInstance = null;
       TrackedMockManager.instances = [];
       _globalConnectShouldFail = false;
+      _globalConnectErrorMessage = "Mock connect failure";
     }
   }
 
@@ -1119,6 +1129,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
   beforeEach(() => {
     MockManager.reset();
+    resetWsTransportCooldownsForTests();
     streamSimpleCalls.length = 0;
     openAIWsStreamTesting.setDepsForTest({
       createManager: (() => new MockManager()) as never,
@@ -1142,6 +1153,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
     releaseWsSession("sess-max-tokens-zero");
+    resetWsTransportCooldownsForTests();
     openAIWsStreamTesting.setDepsForTest();
   });
 
@@ -1397,6 +1409,38 @@ describe("createOpenAIWebSocketStreamFn", () => {
     } finally {
       MockManager.globalConnectShouldFail = false;
     }
+  });
+
+  it("skips repeated upstream WebSocket 5xx handshakes during auto-mode cooldown", async () => {
+    MockManager.globalConnectShouldFail = true;
+    MockManager.globalConnectErrorMessage = "Unexpected server response: 500";
+
+    const firstStreamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-fallback");
+    const firstStream = firstStreamFn(
+      modelStub as Parameters<typeof firstStreamFn>[0],
+      contextStub as Parameters<typeof firstStreamFn>[1],
+    );
+    for await (const _ev of await resolveStream(firstStream)) {
+      // consume fallback stream
+    }
+
+    expect(MockManager.instances).toHaveLength(1);
+    expect(streamSimpleCalls).toHaveLength(1);
+
+    MockManager.globalConnectShouldFail = false;
+    MockManager.globalConnectErrorMessage = "Mock connect failure";
+
+    const secondStreamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-fallback-2");
+    const secondStream = secondStreamFn(
+      modelStub as Parameters<typeof secondStreamFn>[0],
+      contextStub as Parameters<typeof secondStreamFn>[1],
+    );
+    for await (const _ev of await resolveStream(secondStream)) {
+      // consume cooldown fallback stream
+    }
+
+    expect(streamSimpleCalls).toHaveLength(2);
+    expect(MockManager.instances).toHaveLength(1);
   });
 
   it("tracks previous_response_id across turns (incremental send)", async () => {
@@ -1998,6 +2042,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
 describe("releaseWsSession / hasWsSession", () => {
   beforeEach(() => {
     MockManager.reset();
+    resetWsTransportCooldownsForTests();
     openAIWsStreamTesting.setDepsForTest({
       createManager: (() => new MockManager()) as never,
       streamSimple: mockStreamSimple,
@@ -2006,6 +2051,7 @@ describe("releaseWsSession / hasWsSession", () => {
 
   afterEach(() => {
     releaseWsSession("registry-test");
+    resetWsTransportCooldownsForTests();
     openAIWsStreamTesting.setDepsForTest();
   });
 
