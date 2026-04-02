@@ -7,8 +7,8 @@ import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-detection";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { recordSessionMetaFromInbound } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildHistoryContextFromEntries,
@@ -33,6 +33,12 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "../../accounts.js";
+import {
+  buildWhatsAppErrorScopeKey,
+  isSilentErrorPolicy,
+  resolveWhatsAppErrorPolicy,
+  shouldSuppressWhatsAppError,
+} from "../../error-policy.js";
 import {
   getPrimaryIdentityId,
   getReplyContext,
@@ -399,6 +405,19 @@ export async function processMessage(params: {
   });
   trackBackgroundTask(params.backgroundTasks, metaTask);
 
+  // Resolve WhatsApp account config once for error policy checks in both deliver and onError callbacks.
+  const whatsAppAccountForErrorPolicy = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.msg.accountId,
+  });
+  const errorPolicyResolved = resolveWhatsAppErrorPolicy({
+    accountConfig: whatsAppAccountForErrorPolicy,
+  });
+  const errorScopeKey = buildWhatsAppErrorScopeKey({
+    accountId: params.msg.accountId,
+    chatId: conversationId ?? params.msg.from,
+  });
+
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: params.cfg,
@@ -418,6 +437,24 @@ export async function processMessage(params: {
           // Block (reasoning/thinking) and tool updates are meant for the internal
           // web UI only; sending them here leaks chain-of-thought to end users.
           return;
+        }
+        // Suppress error payloads based on errorPolicy config.
+        if (payload.isError === true) {
+          if (isSilentErrorPolicy(errorPolicyResolved.policy)) {
+            logVerbose("Suppressed error reply (errorPolicy: silent)");
+            return;
+          }
+          if (
+            errorPolicyResolved.policy === "once" &&
+            shouldSuppressWhatsAppError({
+              scopeKey: errorScopeKey,
+              cooldownMs: errorPolicyResolved.cooldownMs,
+              errorMessage: payload.text,
+            })
+          ) {
+            logVerbose("Suppressed error reply (errorPolicy: once, within cooldown)");
+            return;
+          }
         }
         await deliverWebReply({
           replyResult: payload,
@@ -449,6 +486,8 @@ export async function processMessage(params: {
         }
       },
       onError: (err, info) => {
+        // Always log delivery failures regardless of errorPolicy — suppressing logs
+        // would hide real send outages and make operational debugging much harder.
         const label =
           info.kind === "tool"
             ? "tool update"

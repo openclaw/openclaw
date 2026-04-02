@@ -37751,6 +37751,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.whatsapp.accounts.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.accounts.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.whatsapp.accounts.*.groupAllowFrom",
       "kind": "channel",
       "type": "array",
@@ -38459,6 +38484,31 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
