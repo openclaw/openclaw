@@ -175,6 +175,82 @@ describe("subagent-announce-queue", () => {
     expect(sender.prompts[0]).not.toContain("internal trigger two");
   });
 
+  it("falls back to individual collect drain after invalid display batch render failure", async () => {
+    const send = vi.fn(async () => {});
+
+    enqueueAnnounce({
+      key: "announce:test:collect-invalid-display",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "first internal" },
+        display: { visibility: "user-visible", text: "first visible" },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "collect", debounceMs: 0 },
+      send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:collect-invalid-display",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "second internal" },
+        display: { visibility: "summary-only" },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "collect", debounceMs: 0 },
+      send,
+    });
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalledTimes(2);
+    });
+    expect(send.mock.calls[0]?.[0].display.text).toBe("first visible");
+    expect(send.mock.calls[1]?.[0].display.summaryLine).toBeUndefined();
+    expect(send.mock.calls[1]?.[0].execution.agentPrompt).toBe("second internal");
+  });
+
+  it("safely summarizes dropped summary-only announce items without summaryLine", async () => {
+    const send = vi.fn(async () => {});
+
+    expect(() =>
+      enqueueAnnounce({
+        key: "announce:test:summary-only-drop-fallback",
+        item: {
+          execution: { visibility: "internal", agentPrompt: "hidden fallback prompt" },
+          display: { visibility: "summary-only" },
+          enqueuedAt: Date.now(),
+          sessionKey: "agent:main:telegram:dm:u1",
+        },
+        settings: { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+        send,
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      enqueueAnnounce({
+        key: "announce:test:summary-only-drop-fallback",
+        item: {
+          execution: { visibility: "internal", agentPrompt: "second internal" },
+          display: {
+            visibility: "user-visible",
+            text: "second visible",
+            summaryLine: "second visible",
+          },
+          enqueuedAt: Date.now(),
+          sessionKey: "agent:main:telegram:dm:u1",
+        },
+        settings: { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+        send,
+      }),
+    ).not.toThrow();
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+    expect(send.mock.calls[0]?.[0].display.text).toContain("[Queue overflow]");
+    expect(send.mock.calls[0]?.[0].display.text).toContain("hidden fallback prompt");
+  });
+
   it("uses debounce floor for retries when debounce exceeds backoff", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));

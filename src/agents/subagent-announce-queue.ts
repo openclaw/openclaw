@@ -150,11 +150,33 @@ function scheduleAnnounceDrain(key: string) {
           }
           const items = queue.items.slice();
           const summary = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
-          const prompt = renderDeferredBatch({
-            title: "[Queued announce messages while agent was busy]",
-            items: items.map((item) => item.display),
-            summary,
-          });
+          let prompt: string;
+          try {
+            prompt = renderDeferredBatch({
+              title: "[Queued announce messages while agent was busy]",
+              items: items.map((item) => item.display),
+              summary,
+            });
+          } catch (err) {
+            defaultRuntime.error?.(
+              `collect-mode announce batch render failed for ${key}; falling back to individual drain: ${String(err)}`,
+            );
+            if (summary) {
+              const summaryTarget = items[0];
+              if (!summaryTarget) {
+                break;
+              }
+              await queue.send({
+                ...summaryTarget,
+                execution: { visibility: "internal", agentPrompt: summary },
+                display: { visibility: "user-visible", text: summary },
+                internalEvents: summaryTarget.internalEvents,
+              });
+              clearQueueSummaryState(queue);
+            }
+            collectState.forceIndividualCollect = true;
+            continue;
+          }
           const internalEvents = items.flatMap((item) => item.internalEvents ?? []);
           const last = items.at(-1);
           if (!last) {
@@ -233,7 +255,7 @@ export function enqueueAnnounce(params: {
     summarize: (item) => {
       const display = item.display;
       if (display.visibility === "summary-only") {
-        return display.summaryLine.trim();
+        return display.summaryLine?.trim() || item.execution.agentPrompt.trim();
       }
       return (
         display.summaryLine?.trim() || display.text?.trim() || item.execution.agentPrompt.trim()
