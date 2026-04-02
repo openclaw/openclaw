@@ -148,6 +148,44 @@ describe("matrix message actions", () => {
     );
   });
 
+  it("does not re-notify legacy mentions when action edits target pre-m.mentions messages", async () => {
+    installMatrixActionTestRuntime();
+    const sendMessage = vi.fn().mockResolvedValue("evt-edit");
+    const client = {
+      getEvent: vi.fn().mockResolvedValue({
+        content: {
+          body: "hello @alice:example.org",
+        },
+      }),
+      getJoinedRoomMembers: vi.fn().mockResolvedValue([]),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+      sendMessage,
+      prepareForOneOff: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(() => undefined),
+      stopAndPersist: vi.fn(async () => undefined),
+    } as unknown as MatrixClient;
+
+    const result = await editMatrixMessage(
+      "!room:example.org",
+      "$original",
+      "hello again @alice:example.org",
+      { client },
+    );
+
+    expect(result).toEqual({ eventId: "evt-edit" });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "!room:example.org",
+      expect.objectContaining({
+        "m.mentions": {},
+        "m.new_content": expect.objectContaining({
+          body: "hello again @alice:example.org",
+          "m.mentions": { user_ids: ["@alice:example.org"] },
+        }),
+      }),
+    );
+  });
+
   it("includes poll snapshots when reading message history", async () => {
     const { client, doRequest, getEvent, getRelations } = createMessagesClient({
       chunk: [

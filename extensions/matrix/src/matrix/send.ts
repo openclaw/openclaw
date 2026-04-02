@@ -98,6 +98,27 @@ function resolvePreviousEditContent(previousEvent: unknown): Record<string, unkn
     : content;
 }
 
+function hasMatrixMentionsMetadata(content: Record<string, unknown> | undefined): boolean {
+  return Boolean(content && Object.hasOwn(content, "m.mentions"));
+}
+
+async function resolvePreviousEditMentions(params: {
+  client: MatrixClient;
+  content: Record<string, unknown> | undefined;
+}) {
+  if (hasMatrixMentionsMetadata(params.content)) {
+    return extractMatrixMentions(params.content);
+  }
+  const body = typeof params.content?.body === "string" ? params.content.body : "";
+  if (!body) {
+    return {};
+  }
+  return await resolveMatrixMentionsForBody({
+    client: params.client,
+    body,
+  });
+}
+
 export function prepareMatrixSingleText(
   text: string,
   opts: {
@@ -459,9 +480,13 @@ export async function editMessageMatrix(
       });
       const previousEvent = await getPreviousMatrixEvent(client, resolvedRoom, originalEventId);
       const previousContent = resolvePreviousEditContent(previousEvent);
+      const previousMentions = await resolvePreviousEditMentions({
+        client,
+        content: previousContent,
+      });
       const replaceMentions = diffMatrixMentions(
         extractMatrixMentions(newContent),
-        extractMatrixMentions(previousContent),
+        previousMentions,
       );
 
       const replaceRelation: Record<string, unknown> = {

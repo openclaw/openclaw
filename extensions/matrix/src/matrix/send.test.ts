@@ -611,6 +611,48 @@ describe("editMessageMatrix mentions", () => {
       },
     });
   });
+
+  it("does not re-notify legacy mentions when the prior event body already mentioned the user", async () => {
+    const { client, sendMessage, getEvent } = makeClient();
+    getEvent.mockResolvedValue({
+      content: {
+        body: "hello @alice:example.org",
+      },
+    });
+
+    await editMessageMatrix("room:!room:example", "$original", "hello again @alice:example.org", {
+      client,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": {},
+      "m.new_content": {
+        body: "hello again @alice:example.org",
+        "m.mentions": { user_ids: ["@alice:example.org"] },
+      },
+    });
+  });
+
+  it("keeps explicit empty prior m.mentions authoritative", async () => {
+    const { client, sendMessage, getEvent } = makeClient();
+    getEvent.mockResolvedValue({
+      content: {
+        body: "`@alice:example.org`",
+        "m.mentions": {},
+      },
+    });
+
+    await editMessageMatrix("room:!room:example", "$original", "@alice:example.org", {
+      client,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": { user_ids: ["@alice:example.org"] },
+      "m.new_content": {
+        "m.mentions": { user_ids: ["@alice:example.org"] },
+      },
+    });
+  });
 });
 
 describe("sendPollMatrix mentions", () => {
