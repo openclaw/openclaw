@@ -139,6 +139,14 @@ describe("registerPreActionHooks", () => {
     program.command("onboard").action(() => {});
     const channels = program.command("channels");
     channels.command("add").action(() => {});
+    channels
+      .command("login")
+      .option("--channel <channel>")
+      .action(() => {});
+    channels
+      .command("logout")
+      .option("--channel <channel>")
+      .action(() => {});
     program
       .command("plugins")
       .command("install")
@@ -246,6 +254,83 @@ describe("registerPreActionHooks", () => {
       commandPath: ["channels", "add"],
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("skips plugin preload for channels login/logout when --channel is explicit", async () => {
+    // space-separated form: --channel whatsapp
+    await runPreAction({
+      parseArgv: ["channels", "login"],
+      processArgv: ["node", "openclaw", "channels", "login", "--channel", "whatsapp"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["channels", "login"],
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    // equals form: --channel=whatsapp
+    await runPreAction({
+      parseArgv: ["channels", "login"],
+      processArgv: ["node", "openclaw", "channels", "login", "--channel=whatsapp"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["channels", "login"],
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["channels", "logout"],
+      processArgv: ["node", "openclaw", "channels", "logout", "--channel", "whatsapp"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["channels", "logout"],
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    // equals form: --channel=whatsapp
+    await runPreAction({
+      parseArgv: ["channels", "logout"],
+      processArgv: ["node", "openclaw", "channels", "logout", "--channel=whatsapp"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["channels", "logout"],
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps full plugin preload for channels login/logout without --channel", async () => {
+    await runPreAction({
+      parseArgv: ["channels", "login"],
+      processArgv: ["node", "openclaw", "channels", "login"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["channels", "login"],
+    });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["channels", "logout"],
+      processArgv: ["node", "openclaw", "channels", "logout"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["channels", "logout"],
+    });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
   });
 
   it("only allows invalid config for explicit Matrix reinstall requests", async () => {

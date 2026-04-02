@@ -77,8 +77,18 @@ function shouldLoadPluginsForCommand(commandPath: string[], jsonOutputMode: bool
   if ((primary === "status" || primary === "health") && jsonOutputMode) {
     return false;
   }
-  // Setup wizard and channels add should stay manifest-first and load selected plugins on demand.
+  // Setup wizard and channels add stay manifest-first (plugin loaded on demand).
   if (primary === "onboard" || (primary === "channels" && secondary === "add")) {
+    return false;
+  }
+  // channels login/logout with an explicit --channel skip the preload: the target plugin is loaded
+  // on demand by resolveInstallableChannelPlugin. Without --channel the auto-detection path needs
+  // listChannelPlugins(), so fall through to the normal full preload.
+  if (
+    primary === "channels" &&
+    (secondary === "login" || secondary === "logout") &&
+    process.argv.some((arg) => arg === "--channel" || arg.startsWith("--channel="))
+  ) {
     return false;
   }
   return true;
