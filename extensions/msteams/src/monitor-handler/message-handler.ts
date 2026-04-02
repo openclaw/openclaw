@@ -719,7 +719,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       if (entry.attachments.length > 0) {
         return false;
       }
-      return !core.channel.text.hasControlCommand(entry.text, cfg);
+      // Use commandText (all mentions stripped) so that mention-prefixed slash
+      // commands like "@Alice /status" still bypass debounce.
+      return !core.channel.text.hasControlCommand(entry.commandText, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
