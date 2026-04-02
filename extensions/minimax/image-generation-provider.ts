@@ -89,7 +89,12 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
 
       const baseUrl = resolveMinimaxImageBaseUrl(req.cfg, providerId);
       const configuredBaseUrl = req.cfg?.models?.providers?.[providerId]?.baseUrl?.trim();
-      const { allowPrivateNetwork, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+      const {
+        baseUrl: resolvedBaseUrl,
+        allowPrivateNetwork,
+        headers,
+        dispatcherPolicy,
+      } = resolveProviderHttpRequestConfig({
         baseUrl,
         defaultBaseUrl: DEFAULT_MINIMAX_IMAGE_BASE_URL,
         allowPrivateNetwork: Boolean(configuredBaseUrl),
@@ -121,7 +126,7 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         body.subject_reference = [{ type: "character", image_file: dataUrl }];
       }
       const { response, release } = await postJsonRequest({
-        url: `${baseUrl}/v1/image_generation`,
+        url: `${resolvedBaseUrl}/v1/image_generation`,
         headers,
         body,
         timeoutMs: req.timeoutMs,
