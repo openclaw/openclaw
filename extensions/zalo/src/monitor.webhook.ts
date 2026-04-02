@@ -1,5 +1,5 @@
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.js";
@@ -72,20 +72,7 @@ export function getZaloWebhookStatusCounterSizeForTest(): number {
 }
 
 function timingSafeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-
-  if (leftBuffer.length !== rightBuffer.length) {
-    const length = Math.max(1, leftBuffer.length, rightBuffer.length);
-    const paddedLeft = Buffer.alloc(length);
-    const paddedRight = Buffer.alloc(length);
-    leftBuffer.copy(paddedLeft);
-    rightBuffer.copy(paddedRight);
-    timingSafeEqual(paddedLeft, paddedRight);
-    return false;
-  }
-
-  return timingSafeEqual(leftBuffer, rightBuffer);
+  return safeEqualSecret(left, right);
 }
 
 function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: number): boolean {
