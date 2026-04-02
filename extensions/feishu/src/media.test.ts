@@ -187,6 +187,37 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
+  it("uses msg_type=audio for mp3 when audioAsVoice is true (#59588)", async () => {
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("tts-audio"),
+      fileName: "tts.mp3",
+      audioAsVoice: true,
+    });
+
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "audio" }),
+      }),
+    );
+  });
+
+  it("uses msg_type=file for mp3 without audioAsVoice", async () => {
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("music"),
+      fileName: "song.mp3",
+    });
+
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "file" }),
+      }),
+    );
+  });
+
   it("uses msg_type=file for documents", async () => {
     await sendMediaFeishu({
       cfg: emptyConfig,
