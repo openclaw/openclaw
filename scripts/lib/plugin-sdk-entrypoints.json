@@ -164,6 +164,7 @@
   "mistral",
   "msteams",
   "models-provider-runtime",
+  "skill-commands-runtime",
   "native-command-registry",
   "nextcloud-talk",
   "nvidia",

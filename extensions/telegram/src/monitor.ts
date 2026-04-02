@@ -8,16 +8,12 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
-import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import {
   isRecoverableTelegramNetworkError,
   isTelegramPollingNetworkError,
 } from "./network-errors.js";
-import { TelegramPollingSession } from "./polling-session.js";
 import { makeProxyFetch } from "./proxy.js";
-import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
-import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
   token?: string;
@@ -75,10 +71,36 @@ const isGrammyHttpError = (err: unknown): boolean => {
   return (err as { name?: string }).name === "HttpError";
 };
 
+type TelegramMonitorPollingRuntime = typeof import("./monitor-polling.runtime.js");
+type TelegramPollingSessionInstance = InstanceType<
+  TelegramMonitorPollingRuntime["TelegramPollingSession"]
+>;
+type TelegramExecApprovalHandlerInstance = InstanceType<
+  TelegramMonitorPollingRuntime["TelegramExecApprovalHandler"]
+>;
+
+let telegramMonitorPollingRuntimePromise:
+  | Promise<typeof import("./monitor-polling.runtime.js")>
+  | undefined;
+
+async function loadTelegramMonitorPollingRuntime() {
+  telegramMonitorPollingRuntimePromise ??= import("./monitor-polling.runtime.js");
+  return await telegramMonitorPollingRuntimePromise;
+}
+
+let telegramMonitorWebhookRuntimePromise:
+  | Promise<typeof import("./monitor-webhook.runtime.js")>
+  | undefined;
+
+async function loadTelegramMonitorWebhookRuntime() {
+  telegramMonitorWebhookRuntimePromise ??= import("./monitor-webhook.runtime.js");
+  return await telegramMonitorWebhookRuntimePromise;
+}
+
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
-  let pollingSession: TelegramPollingSession | undefined;
-  let execApprovalsHandler: TelegramExecApprovalHandler | undefined;
+  let pollingSession: TelegramPollingSessionInstance | undefined;
+  let execApprovalsHandler: TelegramExecApprovalHandlerInstance | undefined;
 
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
     const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
@@ -119,6 +141,41 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     const proxyFetch =
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
+
+    if (opts.useWebhook) {
+      const { TelegramExecApprovalHandler, startTelegramWebhook } =
+        await loadTelegramMonitorWebhookRuntime();
+      execApprovalsHandler = new TelegramExecApprovalHandler({
+        token,
+        accountId: account.accountId,
+        cfg,
+        runtime: opts.runtime,
+      });
+      await execApprovalsHandler.start();
+      await startTelegramWebhook({
+        token,
+        accountId: account.accountId,
+        config: cfg,
+        path: opts.webhookPath,
+        port: opts.webhookPort,
+        secret: opts.webhookSecret ?? account.config.webhookSecret,
+        host: opts.webhookHost ?? account.config.webhookHost,
+        runtime: opts.runtime as RuntimeEnv,
+        fetch: proxyFetch,
+        abortSignal: opts.abortSignal,
+        publicUrl: opts.webhookUrl,
+        webhookCertPath: opts.webhookCertPath,
+      });
+      await waitForAbortSignal(opts.abortSignal);
+      return;
+    }
+
+    const {
+      TelegramExecApprovalHandler,
+      TelegramPollingSession,
+      readTelegramUpdateOffset,
+      writeTelegramUpdateOffset,
+    } = await loadTelegramMonitorPollingRuntime();
 
     execApprovalsHandler = new TelegramExecApprovalHandler({
       token,
@@ -161,25 +218,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         );
       }
     };
-
-    if (opts.useWebhook) {
-      await startTelegramWebhook({
-        token,
-        accountId: account.accountId,
-        config: cfg,
-        path: opts.webhookPath,
-        port: opts.webhookPort,
-        secret: opts.webhookSecret ?? account.config.webhookSecret,
-        host: opts.webhookHost ?? account.config.webhookHost,
-        runtime: opts.runtime as RuntimeEnv,
-        fetch: proxyFetch,
-        abortSignal: opts.abortSignal,
-        publicUrl: opts.webhookUrl,
-        webhookCertPath: opts.webhookCertPath,
-      });
-      await waitForAbortSignal(opts.abortSignal);
-      return;
-    }
 
     // Preserve sticky IPv4 fallback state across clean/conflict restarts.
     // Dirty polling cycles rebuild transport inside TelegramPollingSession.
