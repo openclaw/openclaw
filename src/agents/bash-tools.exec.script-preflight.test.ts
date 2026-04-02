@@ -567,6 +567,20 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("does not fail closed when shell keyword-like text appears only as echo arguments", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-echo-keyword-like-text", {
+        command: "echo time python bad.py; cat",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).toContain("time python bad.py");
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
   it("does not fail closed for pipelines that only contain interpreter words as plain text", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });

@@ -621,7 +621,7 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   };
   const hasInterpreterInvocationInSegment = (rawSegment: string): boolean => {
     const segment = extractUnquotedShellText(rawSegment) ?? rawSegment;
-    return /(?:^\s*|\b(?:if|then|do|elif|else|while|until|time)\s+)\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
+    return /^\s*(?:(?:if|then|do|elif|else|while|until|time)\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
       segment,
     );
   };
@@ -661,16 +661,9 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   const hasShellWrappedInterpreterInvocation =
     (nested.hasPython || nested.hasNode) &&
     (nested.hasScriptHint || nested.hasComplexSyntax || nested.hasProcessSubstitution);
-  const interpreterLead = String.raw`(?:^|(?<!\\)[|&;()]|(?:^|\s+)(?:if|then|do|elif|else|while|until|time)\b)`;
-  const hasTopLevelInterpreterInvocation =
-    new RegExp(
-      String.raw`${interpreterLead}\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*python(?:3(?:\.\d+)?)?(?=$|[\s|&;()<>\n\r\`$])`,
-      "i",
-    ).test(unquotedRaw) ||
-    new RegExp(
-      String.raw`${interpreterLead}\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*node(?=$|[\s|&;()<>\n\r\`$])`,
-      "i",
-    ).test(unquotedRaw);
+  const hasTopLevelInterpreterInvocation = splitShellSegmentsOutsideQuotes(raw, {
+    splitPipes: true,
+  }).some((segment) => hasInterpreterInvocationInSegment(segment));
   const hasInterpreterInvocation =
     isDirectInterpreterCommand ||
     hasShellWrappedInterpreterInvocation ||
