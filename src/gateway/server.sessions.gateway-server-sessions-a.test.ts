@@ -1278,6 +1278,60 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset rewrites sessionFile to match new sessionId", async () => {
+    const { dir, storePath } = await createSessionStoreDir();
+    const oldSessionId = "a0000000-0000-4000-8000-000000000001";
+    const oldSessionFile = path.join(dir, `${oldSessionId}.jsonl`);
+
+    await fs.writeFile(
+      oldSessionFile,
+      `${JSON.stringify({ role: "user", content: "old message" })}\n`,
+      "utf-8",
+    );
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: oldSessionId,
+          sessionFile: oldSessionFile,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: {
+        sessionId: string;
+        sessionFile?: string;
+      };
+    }>(ws, "sessions.reset", { key: "main" });
+
+    expect(reset.ok).toBe(true);
+
+    const newSessionId = reset.payload?.entry.sessionId;
+    const newSessionFile = reset.payload?.entry.sessionFile;
+
+    expect(newSessionId).not.toBe(oldSessionId);
+    expect(newSessionId).toBeTruthy();
+    expect(newSessionFile).toBeTruthy();
+
+    // The new sessionFile basename must contain the new sessionId, not the old one.
+    expect(path.basename(newSessionFile as string)).toBe(`${newSessionId}.jsonl`);
+    expect(newSessionFile).not.toContain(oldSessionId);
+
+    await expect(fs.stat(newSessionFile as string)).resolves.toBeTruthy();
+
+    // Verify persisted store also has the correct sessionFile.
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(store["agent:main:main"]?.sessionFile).toBe(newSessionFile);
+    expect(store["agent:main:main"]?.sessionId).toBe(newSessionId);
+
+    ws.close();
+  });
+
   test("sessions.reset preserves spawned session ownership metadata", async () => {
     const { storePath } = await createSessionStoreDir();
     const customSessionFile = path.join(

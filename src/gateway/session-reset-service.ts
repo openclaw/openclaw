@@ -8,6 +8,10 @@ import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue.js";
+import {
+  canonicalizeAbsoluteSessionFilePath,
+  rewriteSessionFileForNewSessionId,
+} from "../auto-reply/reply/session-updates.js";
 import { loadConfig } from "../config/config.js";
 import {
   snapshotSessionOrigin,
@@ -362,9 +366,19 @@ export async function performGatewaySessionReset(params: {
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
+    const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
+      sessionFile: currentEntry?.sessionFile,
+      previousSessionId: oldSessionId ?? "",
+      nextSessionId,
+    });
+    const effectiveSessionFile = rewrittenSessionFile ?? currentEntry?.sessionFile;
+    const normalizedSessionFile =
+      effectiveSessionFile && path.isAbsolute(effectiveSessionFile)
+        ? canonicalizeAbsoluteSessionFilePath(effectiveSessionFile)
+        : effectiveSessionFile;
     const sessionFile = resolveSessionFilePath(
       nextSessionId,
-      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
+      normalizedSessionFile ? { sessionFile: normalizedSessionFile } : undefined,
       resolveSessionFilePathOptions({
         storePath,
         agentId: sessionAgentId,
