@@ -35,6 +35,10 @@ import type {
 } from "./control-plane-runtime.js";
 import { installSkillPackageFromRegistryDownload } from "./control-plane-skill-install.js";
 import {
+  recommendSkillsFromControlPlane,
+  type ControlPlaneSkillSearchResult,
+} from "./control-plane-skill-registry.js";
+import {
   getGlobalExecApprovalBroadcast,
   getGlobalExecApprovalForwarder,
   getGlobalExecApprovalManager,
@@ -127,6 +131,92 @@ function extractToolResultDetails(value: unknown): JsonObject | undefined {
     return undefined;
   }
   return asJsonObject(record.details) ?? record;
+}
+
+function buildPortalApprovalSummaryFromRecord(record: ExecApprovalRecord): PortalApprovalSummary {
+  return {
+    id: record.id,
+    kind: "exec",
+    command: record.request.command,
+    host: record.request.host ?? undefined,
+    cwd: record.request.cwd ?? undefined,
+    expiresAt: new Date(record.expiresAtMs).toISOString(),
+  };
+}
+
+function mergePortalApprovalSummary(
+  current: PortalApprovalSummary | undefined,
+  next: PortalApprovalSummary | undefined,
+): PortalApprovalSummary | undefined {
+  if (!current) {
+    return next;
+  }
+  if (!next) {
+    return current;
+  }
+  if (current.id !== next.id) {
+    return next;
+  }
+  return {
+    id: current.id,
+    kind: next.kind ?? current.kind,
+    command: next.command || current.command,
+    host: next.host ?? current.host,
+    cwd: next.cwd ?? current.cwd,
+    expiresAt: next.expiresAt ?? current.expiresAt,
+  };
+}
+
+function buildPortalApprovalSummaryFromAgentEvent(
+  evt: AgentEventPayload,
+): PortalApprovalSummary | undefined {
+  if (evt.stream !== "tool") {
+    return undefined;
+  }
+  const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+  if (phase !== "result") {
+    return undefined;
+  }
+  const toolResult = extractToolResultDetails(evt.data?.result);
+  if (!toolResult || readOptionalString(toolResult, "status") !== "approval-pending") {
+    return undefined;
+  }
+  const approvalId = readOptionalString(toolResult, "approvalId");
+  const command = readOptionalString(toolResult, "command");
+  if (!approvalId || !command) {
+    return undefined;
+  }
+  const expiresAtMs = readFiniteNumber(toolResult.expiresAtMs);
+  return {
+    id: approvalId,
+    kind: "exec",
+    command,
+    host: readOptionalString(toolResult, "host"),
+    cwd: readOptionalString(toolResult, "cwd"),
+    expiresAt: typeof expiresAtMs === "number" ? new Date(expiresAtMs).toISOString() : undefined,
+  };
+}
+
+function buildPortalApprovalRequiredEvent(params: {
+  runId: string;
+  approval: PortalApprovalSummary;
+  createdAt?: string;
+}): PortalRuntimeEventWire {
+  return buildPortalRuntimeEvent({
+    eventType: "approval.required",
+    level: "warn",
+    message: "Exec approval required before continuing",
+    payload: {
+      runId: params.runId,
+      approvalId: params.approval.id,
+      kind: params.approval.kind,
+      command: params.approval.command,
+      host: params.approval.host ?? null,
+      cwd: params.approval.cwd ?? null,
+      expiresAt: params.approval.expiresAt ?? null,
+    },
+    createdAt: params.createdAt,
+  });
 }
 
 function buildPortalRuntimeEventFromAgentEvent(
@@ -331,9 +421,14 @@ type PortalSessionRecord = {
   lastRunId?: string;
   agentVersionId?: string;
   skillSnapshotId?: string;
+  externalSkillLookupAllowed?: boolean;
   releaseId?: string;
   releaseVersion?: string;
   releaseStatus?: string;
+};
+
+type PortalSkillSearchPrefetch = ControlPlaneSkillSearchResult & {
+  externalLookupAllowed: boolean;
 };
 
 type PortalRunTimelineItem = {
@@ -388,12 +483,85 @@ const PORTAL_HISTORY_SUMMARY_MAX_CHARS = 2_400;
 const PORTAL_USER_CONTEXT_MAX_CHARS = 600;
 const PORTAL_SESSION_ROLLOVER_TURN_LIMIT = 6;
 const PORTAL_SESSION_ROLLOVER_TOKEN_LIMIT = 24_000;
+const PLATFORM_DEFAULT_FIND_SKILL_NAME = "find-base-skills";
 
 const portalSessions = new Map<string, PortalSessionRecord>();
 const portalRuns = new Map<string, PortalRunRecord>();
 
 function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function buildPlatformDefaultSkillFiles(): Array<{ name: string; content: string }> {
+  return [
+    {
+      name: `skills/${PLATFORM_DEFAULT_FIND_SKILL_NAME}/SKILL.md`,
+      content: `---
+name: find-base-skills
+description: 优先从当前基座 Skill 仓库中搜索、推荐并安装 Skill；内部无结果时，先征求用户是否允许外部查询。
+---
+
+# Find Base Skills
+
+优先使用 \`skill_registry_search\` 搜索当前基座 Skill 仓库。
+
+- 找到内部 Skill 时：先推荐候选版本与用途，得到确认后再调用 \`skill_registry_install\`
+- 内部 Skill 无结果时：先询问用户是否允许外部查询
+- 未获得用户授权前：不要建议 ClawHub、skills.sh、GitHub 等外部 Skill 来源
+`,
+    },
+  ];
+}
+
+function looksLikeSkillDiscoveryRequest(message: string): boolean {
+  const text = message.trim();
+  if (!text) {
+    return false;
+  }
+  return /(skill|技能|技能仓库|skill仓库|查找.*skill|搜索.*skill|推荐.*skill|安装.*skill|下载.*skill|现成.*技能|复用.*技能|find[- ]?skills)/i.test(
+    text,
+  );
+}
+
+function looksLikeExternalSkillLookupApproval(message: string): boolean {
+  return /(允许.*外部|可以.*外部|允许.*clawhub|可以.*clawhub|allow.*external|yes.*external|可以去外部查|可以去clawhub查)/i.test(
+    message,
+  );
+}
+
+function looksLikeExternalSkillLookupRevocation(message: string): boolean {
+  return /(不要.*外部|不允许.*外部|只查内部|仅查内部|仅从内部|不要去clawhub|不要外部查询)/i.test(
+    message,
+  );
+}
+
+async function prefetchPortalSkillSearch(params: {
+  session: PortalSessionRecord;
+  message: string;
+}): Promise<PortalSkillSearchPrefetch | undefined> {
+  if (params.session.mode !== "training" || !looksLikeSkillDiscoveryRequest(params.message)) {
+    return undefined;
+  }
+  try {
+    const result = await recommendSkillsFromControlPlane({
+      query: params.message,
+      limit: 5,
+      agentContext: {
+        portalSessionId: params.session.portalSessionId ?? null,
+        remoteAgentId: params.session.remoteAgentId,
+        agentId: params.session.agentId,
+        runtimeRole: params.session.runtimeRole ?? null,
+        agentVersionId: params.session.agentVersionId ?? null,
+        skillSnapshotId: params.session.skillSnapshotId ?? null,
+      },
+    });
+    return {
+      ...result,
+      externalLookupAllowed: params.session.externalSkillLookupAllowed === true,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function readOptionalString(body: JsonObject, ...keys: string[]): string | undefined {
@@ -602,6 +770,7 @@ function buildPortalExtraSystemPrompt(params: {
   session: PortalSessionRecord;
   traceId?: string;
   portalSessionId?: string;
+  skillSearchPrefetch?: PortalSkillSearchPrefetch;
 }): string {
   const userContext = truncateText(
     stringifyJson(params.session.userContext),
@@ -645,9 +814,49 @@ function buildPortalExtraSystemPrompt(params: {
     lines.push(
       "",
       "Training view is enabled. Candidate changes may be proposed as draft runtime state, but nothing is published until the control-plane explicitly approves and releases it.",
+      `The workspace already includes the platform skill ${PLATFORM_DEFAULT_FIND_SKILL_NAME}.`,
       "When the user asks for existing capabilities, integrations, or reusable automation, search the skill registry first with skill_registry_search.",
       "Before calling skill_registry_install, summarize the candidate skill and get explicit user confirmation in chat.",
+      params.session.externalSkillLookupAllowed === true
+        ? "The user has explicitly allowed external skill lookup if the internal registry has no match."
+        : "Do not use ClawHub, skills.sh, GitHub skill lists, or any external skill source unless the user explicitly authorizes external lookup in this session.",
     );
+    if (params.skillSearchPrefetch) {
+      lines.push(
+        "",
+        "## Internal Skill Registry Prefetch",
+        `- query: ${params.skillSearchPrefetch.query}`,
+        `- internalMatches: ${params.skillSearchPrefetch.count}`,
+        `- externalLookupAllowed: ${params.skillSearchPrefetch.externalLookupAllowed ? "yes" : "no"}`,
+      );
+      if (params.skillSearchPrefetch.items.length > 0) {
+        lines.push(
+          ...params.skillSearchPrefetch.items.slice(0, 5).map((item, index) => {
+            const parts = [
+              `${index + 1}. ${item.name || item.skillKey || "skill"}`,
+              item.skillKey ? `skillKey=${item.skillKey}` : undefined,
+              item.currentPublishedVersion?.version
+                ? `version=${item.currentPublishedVersion.version}`
+                : undefined,
+              item.summary || item.currentPublishedVersion?.description || undefined,
+              item.recommendationReason || undefined,
+            ].filter(Boolean);
+            return `- ${parts.join(" | ")}`;
+          }),
+        );
+        lines.push(
+          "Use these internal results first. Recommend the best 1-3 candidates and ask the user to confirm a specific skill/version before installation.",
+        );
+      } else if (params.skillSearchPrefetch.externalLookupAllowed) {
+        lines.push(
+          "The internal registry returned no match. Tell the user that no internal skill was found; external skill lookup is now allowed if it helps.",
+        );
+      } else {
+        lines.push(
+          "The internal registry returned no match. Do not query external skill sources yet. Reply that no internal skill was found and ask whether the user allows external skill lookup.",
+        );
+      }
+    }
   } else {
     lines.push(
       "",
@@ -995,6 +1204,7 @@ function buildDefaultWorkspaceFiles(params: {
     { name: DEFAULT_IDENTITY_FILENAME, content: identityLines.join("\n") },
     { name: DEFAULT_AGENTS_FILENAME, content: promptLines.join("\n") },
     { name: DEFAULT_PINNED_MEMORY_FILENAME, content: pinnedMemoryLines.join("\n") },
+    ...buildPlatformDefaultSkillFiles(),
   ];
 }
 
@@ -1887,6 +2097,7 @@ export async function handleControlPlaneHttpRequest(
       updatedAt: now,
       agentVersionId: resolvedTarget.runtimeAgent?.agentVersionId,
       skillSnapshotId: resolvedTarget.runtimeAgent?.skillSnapshotId,
+      externalSkillLookupAllowed: false,
       releaseId: resolvedTarget.runtimeAgent?.releaseId,
       releaseVersion: resolvedTarget.runtimeAgent?.releaseVersion,
       releaseStatus: resolvedTarget.runtimeAgent?.releaseStatus,
@@ -1967,14 +2178,25 @@ export async function handleControlPlaneHttpRequest(
       },
       createdAt: runStartedAt,
     });
-    const nextSession: PortalSessionRecord = {
+    let nextSession: PortalSessionRecord = {
       ...session,
       portalSessionId: portalSessionId ?? session.portalSessionId,
       traceId: traceId ?? session.traceId,
       updatedAt: new Date().toISOString(),
       lastRunId: runId,
     };
+    if (nextSession.mode === "training") {
+      if (looksLikeExternalSkillLookupApproval(message)) {
+        nextSession = { ...nextSession, externalSkillLookupAllowed: true };
+      } else if (looksLikeExternalSkillLookupRevocation(message)) {
+        nextSession = { ...nextSession, externalSkillLookupAllowed: false };
+      }
+    }
     portalSessions.set(remoteSessionId, nextSession);
+    const skillSearchPrefetch = await prefetchPortalSkillSearch({
+      session: nextSession,
+      message,
+    });
     savePortalRun({
       runId,
       remoteSessionId,
@@ -1988,6 +2210,8 @@ export async function handleControlPlaneHttpRequest(
       setSseHeaders(res);
       let streamClosed = false;
       let sawAssistantDelta = false;
+      let streamedApproval: PortalApprovalSummary | undefined;
+      let streamedApprovalRequiredEvent: PortalRuntimeEventWire | undefined;
       let unsubscribe = () => {};
       const closeStream = () => {
         if (streamClosed) {
@@ -2016,6 +2240,18 @@ export async function handleControlPlaneHttpRequest(
             createdAt: new Date(evt.ts).toISOString(),
           });
           return;
+        }
+        if (nextSession.mode === "training") {
+          const approvalFromTool = buildPortalApprovalSummaryFromAgentEvent(evt);
+          if (approvalFromTool && streamedApproval?.id !== approvalFromTool.id) {
+            streamedApproval = approvalFromTool;
+            streamedApprovalRequiredEvent = buildPortalApprovalRequiredEvent({
+              runId,
+              approval: approvalFromTool,
+              createdAt: new Date(evt.ts).toISOString(),
+            });
+            writePortalStreamEvent(res, "runtime.event", streamedApprovalRequiredEvent);
+          }
         }
         const runtimeEvent = buildPortalRuntimeEventFromAgentEvent(evt);
         if (!runtimeEvent) {
@@ -2066,6 +2302,7 @@ export async function handleControlPlaneHttpRequest(
                 session: nextSession,
                 traceId,
                 portalSessionId,
+                skillSearchPrefetch,
               }),
             },
             defaultRuntime,
@@ -2078,7 +2315,7 @@ export async function handleControlPlaneHttpRequest(
               `[control-plane] portal session produced no visible reply (runId=${runId}, traceId=${traceId}, remoteSessionId=${remoteSessionId}, agentId=${nextSession.agentId})`,
             );
           }
-          let approval: PortalApprovalSummary | undefined;
+          let approval: PortalApprovalSummary | undefined = streamedApproval;
           if (nextSession.mode === "training") {
             const manager = getGlobalExecApprovalManager();
             if (manager) {
@@ -2098,14 +2335,10 @@ export async function handleControlPlaneHttpRequest(
                     latest = current;
                   }
                 }
-                approval = {
-                  id: latest.id,
-                  kind: "exec",
-                  command: latest.request.command,
-                  host: latest.request.host ?? undefined,
-                  cwd: latest.request.cwd ?? undefined,
-                  expiresAt: new Date(latest.expiresAtMs).toISOString(),
-                };
+                approval = mergePortalApprovalSummary(
+                  approval,
+                  buildPortalApprovalSummaryFromRecord(latest),
+                );
               }
             }
           }
@@ -2159,23 +2392,18 @@ export async function handleControlPlaneHttpRequest(
                 at: approvalTime,
               }),
             });
-            const approvalRequiredEvent = buildPortalRuntimeEvent({
-              eventType: "approval.required",
-              level: "warn",
-              message: "Exec approval required before continuing",
-              payload: {
+            const approvalRequiredEvent =
+              streamedApprovalRequiredEvent ??
+              buildPortalApprovalRequiredEvent({
                 runId,
-                approvalId: approval.id,
-                kind: approval.kind,
-                command: approval.command,
-                host: approval.host ?? null,
-                cwd: approval.cwd ?? null,
-                expiresAt: approval.expiresAt ?? null,
-              },
-              createdAt: approvalTime,
-            });
-            if (!streamClosed) {
+                approval,
+                createdAt: approvalTime,
+              });
+            streamedApprovalRequiredEvent = approvalRequiredEvent;
+            if (!streamClosed && !streamedApproval) {
               writePortalStreamEvent(res, "runtime.event", approvalRequiredEvent);
+            }
+            if (!streamClosed) {
               writePortalStreamEvent(res, "message.complete", {
                 ok: true,
                 status: "requires_approval",
@@ -2357,6 +2585,7 @@ export async function handleControlPlaneHttpRequest(
             session: nextSession,
             traceId,
             portalSessionId,
+            skillSearchPrefetch,
           }),
         },
         defaultRuntime,

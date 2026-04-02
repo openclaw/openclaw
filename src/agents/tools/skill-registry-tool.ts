@@ -1,11 +1,13 @@
 import { Type } from "@sinclair/typebox";
 import { loadControlPlaneRuntimeState } from "../../gateway/control-plane-runtime.js";
 import { installSkillPackageFromRegistryDownload } from "../../gateway/control-plane-skill-install.js";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import {
+  buildRuntimeAgentContext,
+  recommendSkillsFromControlPlane,
+  requestControlPlaneJson,
+} from "../../gateway/control-plane-skill-registry.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam, ToolInputError } from "./common.js";
-
-type JsonObject = Record<string, unknown>;
 
 const SkillRegistrySearchToolSchema = Type.Object({
   query: Type.String({ minLength: 1 }),
@@ -18,106 +20,8 @@ const SkillRegistryInstallToolSchema = Type.Object({
   versionId: Type.Optional(Type.String({ minLength: 1 })),
 });
 
-function isJsonObject(value: unknown): value is JsonObject {
+function isJsonObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readControlPlaneBaseUrl(): string {
-  const candidates = [
-    process.env.AGENT_BOT_API_BASE_URL,
-    process.env.CONTROL_PLANE_BASE_URL,
-    process.env.AGENT_BOT_BASE_URL,
-  ];
-  for (const candidate of candidates) {
-    const value = candidate?.trim();
-    if (value) {
-      return value.endsWith("/") ? value : `${value}/`;
-    }
-  }
-  throw new Error(
-    "Missing AGENT_BOT_API_BASE_URL (or CONTROL_PLANE_BASE_URL) for skill registry access.",
-  );
-}
-
-function buildRuntimeHeaders(): HeadersInit {
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    "content-type": "application/json",
-  };
-  const bridgeToken = process.env.OPENCLAW_BRIDGE_TOKEN?.trim();
-  if (bridgeToken) {
-    headers["x-openclaw-bridge-token"] = bridgeToken;
-  }
-  return headers;
-}
-
-function readErrorMessage(payload: unknown): string | undefined {
-  if (!isJsonObject(payload)) {
-    return undefined;
-  }
-  const errorValue = payload.error;
-  if (typeof errorValue === "string" && errorValue.trim()) {
-    return errorValue.trim();
-  }
-  if (isJsonObject(errorValue)) {
-    const code = typeof errorValue.code === "string" ? errorValue.code.trim() : "";
-    const message = typeof errorValue.message === "string" ? errorValue.message.trim() : "";
-    if (code && message) {
-      return `${code}: ${message}`;
-    }
-    if (message) {
-      return message;
-    }
-  }
-  const messageValue = payload.message;
-  return typeof messageValue === "string" && messageValue.trim() ? messageValue.trim() : undefined;
-}
-
-async function requestControlPlaneJson(pathname: string, body: JsonObject): Promise<JsonObject> {
-  const baseUrl = readControlPlaneBaseUrl();
-  const requestUrl = new URL(pathname, baseUrl).toString();
-  const { response, release } = await fetchWithSsrFGuard({
-    url: requestUrl,
-    timeoutMs: 45_000,
-    auditContext: "skill-registry-runtime-tool",
-    init: {
-      method: "POST",
-      headers: buildRuntimeHeaders(),
-      body: JSON.stringify(body),
-    },
-  });
-
-  try {
-    const payload = (await response.json().catch(() => ({}))) as unknown;
-    if (!response.ok) {
-      throw new Error(
-        readErrorMessage(payload) ??
-          `control plane request failed (${response.status} ${response.statusText})`,
-      );
-    }
-    if (!isJsonObject(payload)) {
-      throw new Error("control plane returned a non-object payload");
-    }
-    if (payload.success === false) {
-      throw new Error(readErrorMessage(payload) ?? "control plane reported failure");
-    }
-    const data = isJsonObject(payload.data) ? payload.data : undefined;
-    return data ?? payload;
-  } finally {
-    await release();
-  }
-}
-
-function buildRuntimeAgentContext(): JsonObject {
-  const runtimeState = loadControlPlaneRuntimeState();
-  return {
-    runtimeRole: runtimeState.runtimeRole ?? null,
-    remoteAgentId: runtimeState.remoteAgentId ?? null,
-    machineName: runtimeState.machineName ?? null,
-    instanceId: runtimeState.instanceId ?? null,
-    instanceKey: runtimeState.instanceKey ?? null,
-    skillSnapshotId: runtimeState.skillSnapshotId ?? null,
-  };
 }
 
 export function createSkillRegistrySearchTool(): AnyAgentTool {
@@ -131,9 +35,9 @@ export function createSkillRegistrySearchTool(): AnyAgentTool {
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
       const limit = readNumberParam(params, "limit", { integer: true }) ?? 5;
-      const data = await requestControlPlaneJson("/api/skill-registry/runtime/recommend", {
+      const data = await recommendSkillsFromControlPlane({
         query,
-        limit: Math.max(1, Math.min(10, limit)),
+        limit,
         agentContext: buildRuntimeAgentContext(),
       });
 
