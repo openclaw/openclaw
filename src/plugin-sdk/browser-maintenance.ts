@@ -14,6 +14,10 @@ function createTrashCollisionSuffix(): string {
 
 export const closeTrackedBrowserTabsForSessions: BrowserRuntimeModule["closeTrackedBrowserTabsForSessions"] =
   (async (...args) => {
+    const [params] = args;
+    if (!Array.isArray(params?.sessionKeys) || params.sessionKeys.length === 0) {
+      return 0;
+    }
     // Session reset always attempts browser cleanup, even when browser is disabled.
     // Keep that path a no-op unless the browser runtime is actually active.
     const closeTrackedTabs = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<
