@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
-import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  seedSessionStore,
+  type HeartbeatReplySpy,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 
 vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
@@ -18,7 +22,7 @@ async function withHeartbeatFixture(
   run: (ctx: {
     tmpDir: string;
     storePath: string;
-    replySpy: ReturnType<typeof vi.fn>;
+    replySpy: HeartbeatReplySpy;
     seedSession: (sessionKey: string, input: SeedSessionInput) => Promise<void>;
   }) => Promise<unknown>,
 ): Promise<unknown> {
@@ -47,7 +51,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     seedSession: (sessionKey: string, input: SeedSessionInput) => Promise<void>;
     cfg: OpenClawConfig;
     sessionKey: string;
-    replySpy: ReturnType<typeof vi.fn>;
+    replySpy: HeartbeatReplySpy;
     agentId?: string;
   }) {
     await params.seedSession(params.sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
