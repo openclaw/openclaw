@@ -48,6 +48,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+internal fun resolvePendingAssistantAutoSend(
+  pendingPrompt: String?,
+  healthOk: Boolean,
+  pendingRunCount: Int,
+): String? {
+  val prompt = pendingPrompt?.trim()?.ifEmpty { null } ?: return null
+  if (!healthOk || pendingRunCount > 0) return null
+  return prompt
+}
+
 @Composable
 fun ChatSheetContent(viewModel: MainViewModel) {
   val messages by viewModel.chatMessages.collectAsState()
@@ -61,9 +71,21 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
+  val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
 
   LaunchedEffect(Unit) {
     viewModel.loadChat(mainSessionKey)
+  }
+
+  LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
+    val prompt =
+      resolvePendingAssistantAutoSend(
+        pendingPrompt = pendingAssistantAutoSend,
+        healthOk = healthOk,
+        pendingRunCount = pendingRunCount,
+      ) ?: return@LaunchedEffect
+    viewModel.sendChat(message = prompt, thinking = thinkingLevel, attachments = emptyList())
+    viewModel.clearPendingAssistantAutoSend()
   }
 
   val context = LocalContext.current
