@@ -172,10 +172,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "ms",
         description: "Agent run duration",
       });
-      const contextHistogram = meter.createHistogram("openclaw.context.tokens", {
-        unit: "1",
-        description: "Context window size and usage",
-      });
       const webhookReceivedCounter = meter.createCounter("openclaw.webhook.received", {
         unit: "1",
         description: "Webhook requests received",
@@ -404,18 +400,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         if (evt.durationMs) {
           durationHistogram.record(evt.durationMs, attrs);
-        }
-        if (evt.context?.limit) {
-          contextHistogram.record(evt.context.limit, {
-            ...attrs,
-            "openclaw.context": "limit",
-          });
-        }
-        if (evt.context?.used) {
-          contextHistogram.record(evt.context.used, {
-            ...attrs,
-            "openclaw.context": "used",
-          });
         }
 
         if (!tracesEnabled) {
