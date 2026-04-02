@@ -129,6 +129,7 @@ export function scheduleFollowupDrain(
           const canBatchRender = renderableItems.length === items.length;
 
           if (!canBatchRender) {
+            collectState.forceIndividualCollect = true;
             if (summary) {
               const summaryTarget = items[0];
               if (!summaryTarget) {

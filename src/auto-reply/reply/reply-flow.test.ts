@@ -1613,6 +1613,46 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).toContain("Queued #2\ntwo");
   });
 
+  it("keeps mixed collect retries on individual drain semantics", async () => {
+    const key = `test-mixed-collect-retry-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    let attempt = 0;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      attempt += 1;
+      if (attempt === 2) {
+        throw new Error("transient failure");
+      }
+      if (attempt === 3) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "display item", displayText: "visible item" }),
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "hidden item" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls.map((call) => call.execution.agentPrompt)).toEqual([
+      "display item",
+      "hidden item",
+      "hidden item",
+    ]);
+    expect(calls[2]?.display).toBeUndefined();
+  });
+
   it("emits collect overflow summary before falling back from an invalid display batch", async () => {
     const key = `test-collect-render-fallback-summary-${Date.now()}`;
     const calls: FollowupRun[] = [];
