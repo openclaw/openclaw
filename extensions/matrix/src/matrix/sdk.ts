@@ -465,8 +465,13 @@ export class MatrixClient {
         );
       } else if (this.password?.trim()) {
         try {
+          // The repair path already force-resets cross-signing; allow secret storage
+          // recreation so the new keys can be persisted. Without this, a device that
+          // lost its recovery key enters a permanent failure loop because the new
+          // cross-signing keys have nowhere to be stored.
           const repaired = await cryptoBootstrapper.bootstrap(crypto, {
             forceResetCrossSigning: true,
+            allowSecretStorageRecreateWithoutRecoveryKey: true,
             strict: true,
           });
           if (repaired.crossSigningPublished && repaired.ownDeviceVerified !== false) {
