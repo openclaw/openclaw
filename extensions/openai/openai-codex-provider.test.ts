@@ -86,4 +86,113 @@ describe("openai codex provider", () => {
       "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.",
     );
   });
+
+  it("resolves gpt-5.4-mini from template model", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const registry = {
+      find(providerId: string, id: string) {
+        if (providerId !== "openai-codex") {
+          return null;
+        }
+        if (id === "gpt-5.3-codex") {
+          return {
+            id,
+            name: "GPT-5.3 Codex",
+            provider: "openai-codex",
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 200_000,
+            maxTokens: 64_000,
+          };
+        }
+        return null;
+      },
+    };
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4-mini",
+      modelRegistry: registry as never,
+    });
+
+    expect(resolved).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4-mini",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      // inherits contextWindow/maxTokens from template
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    });
+  });
+
+  it("falls back to defaults when no template is found for gpt-5.4-mini", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const registry = {
+      find() {
+        return null;
+      },
+    };
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4-mini",
+      modelRegistry: registry as never,
+    });
+
+    expect(resolved).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4-mini",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+    });
+  });
+
+  it("surfaces gpt-5.4-mini in augmented catalog", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const entries = provider.augmentModelCatalog?.({
+      env: process.env,
+      entries: [
+        {
+          provider: "openai-codex",
+          id: "gpt-5.3-codex",
+          name: "GPT-5.3 Codex",
+        },
+      ],
+    } as never);
+
+    expect(entries).toContainEqual({
+      provider: "openai-codex",
+      id: "gpt-5.4-mini",
+      name: "gpt-5.4-mini",
+    });
+  });
+
+  it("recognizes gpt-5.4-mini in supportsXHighThinking", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.supportsXHighThinking?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4-mini",
+      } as never),
+    ).toBe(true);
+  });
+
+  it("recognizes gpt-5.4-mini in isModernModelRef", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4-mini",
+      } as never),
+    ).toBe(true);
+  });
 });
