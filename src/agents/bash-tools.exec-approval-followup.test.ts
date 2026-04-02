@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(async () => ({ ok: true })),
@@ -8,18 +8,12 @@ vi.mock("../infra/outbound/message.js", () => ({
   sendMessage: vi.fn(async () => ({ ok: true })),
 }));
 
-let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
-let sendMessage: typeof import("../infra/outbound/message.js").sendMessage;
-let buildExecApprovalFollowupPrompt: typeof import("./bash-tools.exec-approval-followup.js").buildExecApprovalFollowupPrompt;
-let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup.js").sendExecApprovalFollowup;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ callGatewayTool } = await import("./tools/gateway.js"));
-  ({ sendMessage } = await import("../infra/outbound/message.js"));
-  ({ buildExecApprovalFollowupPrompt, sendExecApprovalFollowup } =
-    await import("./bash-tools.exec-approval-followup.js"));
-});
+import { sendMessage } from "../infra/outbound/message.js";
+import {
+  buildExecApprovalFollowupPrompt,
+  sendExecApprovalFollowup,
+} from "./bash-tools.exec-approval-followup.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
 afterEach(() => {
   vi.resetAllMocks();
