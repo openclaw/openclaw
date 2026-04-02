@@ -81,12 +81,9 @@ export function normalizeMessageActionInput(params: {
     applyTargetToParams({ action, args: comparableArgs });
     const normalizedTarget = normalizeCurrentTargetComparable(comparableArgs.target);
     const normalizedCurrentTarget = normalizeCurrentTargetComparable(toolContext?.currentChannelId);
-    const hasAnyExplicitTarget =
-      explicitTarget.length > 0 ||
-      hasLegacyTarget ||
-      actionHasTarget(action, normalizedArgs, {
-        channel: inferredChannel,
-      });
+    const hasAnyExplicitTarget = actionHasTarget(action, comparableArgs, {
+      channel: inferredChannel,
+    });
     const sameTargetAsContext =
       !!normalizedTarget &&
       !!normalizedCurrentTarget &&
