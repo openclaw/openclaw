@@ -4,8 +4,8 @@ import type {
 } from "openclaw/plugin-sdk/media-understanding";
 import {
   assertOkOrThrowHttpError,
-  normalizeBaseUrl,
   postTranscriptionRequest,
+  resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
 
@@ -31,9 +31,19 @@ export async function transcribeDeepgramAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const baseUrl = normalizeBaseUrl(params.baseUrl, DEFAULT_DEEPGRAM_AUDIO_BASE_URL);
-  const allowPrivate = Boolean(params.baseUrl?.trim());
   const model = resolveModel(params.model);
+  const { baseUrl, allowPrivateNetwork, headers } = resolveProviderHttpRequestConfig({
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: DEFAULT_DEEPGRAM_AUDIO_BASE_URL,
+    headers: params.headers,
+    defaultHeaders: {
+      authorization: `Token ${params.apiKey}`,
+      "content-type": params.mime ?? "application/octet-stream",
+    },
+    provider: "deepgram",
+    capability: "audio",
+    transport: "media-understanding",
+  });
 
   const url = new URL(`${baseUrl}/listen`);
   url.searchParams.set("model", model);
@@ -49,14 +59,6 @@ export async function transcribeDeepgramAudio(
     }
   }
 
-  const headers = new Headers(params.headers);
-  if (!headers.has("authorization")) {
-    headers.set("authorization", `Token ${params.apiKey}`);
-  }
-  if (!headers.has("content-type")) {
-    headers.set("content-type", params.mime ?? "application/octet-stream");
-  }
-
   const body = new Uint8Array(params.buffer);
   const { response: res, release } = await postTranscriptionRequest({
     url: url.toString(),
@@ -64,7 +66,7 @@ export async function transcribeDeepgramAudio(
     body,
     timeoutMs: params.timeoutMs,
     fetchFn,
-    allowPrivateNetwork: allowPrivate,
+    allowPrivateNetwork,
   });
 
   try {
