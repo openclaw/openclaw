@@ -1,0 +1,28 @@
+{
+  "id": "chuizi",
+  "enabledByDefault": true,
+  "providers": ["chuizi"],
+  "providerAuthEnvVars": {
+    "chuizi": ["CHUIZI_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "chuizi",
+      "method": "api-key",
+      "choiceId": "chuizi-api-key",
+      "choiceLabel": "Chuizi.AI API key",
+      "groupId": "chuizi",
+      "groupLabel": "Chuizi.AI",
+      "groupHint": "API key",
+      "optionKey": "chuiziApiKey",
+      "cliFlag": "--chuizi-api-key",
+      "cliOption": "--chuizi-api-key <key>",
+      "cliDescription": "Chuizi.AI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
