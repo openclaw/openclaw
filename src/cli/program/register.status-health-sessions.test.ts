@@ -238,34 +238,6 @@ describe("registerStatusHealthSessionsCommands", () => {
     );
   });
 
-  it("runs flows subcommands with forwarded options", async () => {
-    await runCli(["flows", "list", "--json", "--status", "blocked"]);
-    expect(flowsListCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: true,
-        status: "blocked",
-      }),
-      runtime,
-    );
-
-    await runCli(["flows", "show", "flow-123", "--json"]);
-    expect(flowsShowCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lookup: "flow-123",
-        json: true,
-      }),
-      runtime,
-    );
-
-    await runCli(["flows", "cancel", "flow-123"]);
-    expect(flowsCancelCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lookup: "flow-123",
-      }),
-      runtime,
-    );
-  });
-
   it("forwards parent-level all-agents to cleanup subcommand", async () => {
     await runCli(["sessions", "--all-agents", "cleanup", "--dry-run"]);
 
@@ -382,20 +354,10 @@ describe("registerStatusHealthSessionsCommands", () => {
     );
   });
 
-  it("uses TaskFlow wording for the alias command help", () => {
+  it("does not register the legacy top-level flows command", () => {
     const program = new Command();
     registerStatusHealthSessionsCommands(program);
 
-    const flowsCommand = program.commands.find((command) => command.name() === "flows");
-    expect(flowsCommand?.description()).toContain("TaskFlow");
-    expect(flowsCommand?.commands.find((command) => command.name() === "list")?.description()).toBe(
-      "List tracked TaskFlows",
-    );
-    expect(flowsCommand?.commands.find((command) => command.name() === "show")?.description()).toBe(
-      "Show one TaskFlow by flow id or owner key",
-    );
-    expect(
-      flowsCommand?.commands.find((command) => command.name() === "cancel")?.description(),
-    ).toBe("Cancel a running TaskFlow");
+    expect(program.commands.find((command) => command.name() === "flows")).toBeUndefined();
   });
 });
