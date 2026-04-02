@@ -1,9 +1,0 @@
-{
-  "id": "my-plugin",
-  "name": "My Plugin",
-  "description": "Adds a custom tool to OpenClaw",
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false
-  }
-}
