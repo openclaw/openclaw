@@ -219,6 +219,10 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
+function shouldEnableAnthropicThinkingRecovery(api: string | null | undefined): boolean {
+  return api === "anthropic-messages" || api === "bedrock-converse-stream";
+}
+
 export function resolveEmbeddedAgentStreamFn(params: {
   currentStreamFn: StreamFn | undefined;
   providerStreamFn?: StreamFn;
@@ -1095,10 +1099,7 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      if (
-        params.model.api === "anthropic-messages" ||
-        params.model.api === "bedrock-converse-stream"
-      ) {
+      if (shouldEnableAnthropicThinkingRecovery(params.model.api)) {
         activeSession.agent.streamFn = wrapAnthropicStreamWithRecovery(
           activeSession.agent.streamFn,
           { id: activeSession.sessionId },
@@ -1130,10 +1131,7 @@ export async function runEmbeddedAttempt(
       }
 
       try {
-        if (
-          params.model.api === "anthropic-messages" ||
-          params.model.api === "bedrock-converse-stream"
-        ) {
+        if (shouldEnableAnthropicThinkingRecovery(params.model.api)) {
           const originalMessageCount = activeSession.messages.length;
           const { messages, prefill } = sanitizeThinkingForRecovery(activeSession.messages);
           if (messages !== activeSession.messages) {
