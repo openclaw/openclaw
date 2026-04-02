@@ -14,6 +14,12 @@ commands on a real host (`gateway` or `node`). Think of it like a safety interlo
 commands are allowed only when policy + allowlist + (optional) user approval all agree.
 Exec approvals are **in addition** to tool policy and elevated gating (unless elevated is set to `full`, which skips approvals).
 Effective policy is the **stricter** of `tools.exec.*` and approvals defaults; if an approvals field is omitted, the `tools.exec` value is used.
+Host exec also uses the local approvals state on that machine. A host-local
+`ask: "always"` in `~/.openclaw/exec-approvals.json` keeps prompting even if
+session or config defaults request `ask: "on-miss"`.
+Use `openclaw approvals get`, `openclaw approvals get --gateway`, or
+`openclaw approvals get --node <id|name|ip>` to inspect the requested policy,
+host policy sources, and the effective result.
 
 If the companion app UI is **not available**, any request that requires a prompt is
 resolved by the **ask fallback** (default: deny).
@@ -98,6 +104,7 @@ Example schema:
 - **off**: never prompt.
 - **on-miss**: prompt only when allowlist does not match.
 - **always**: prompt on every command.
+- `allow-always` durable trust does not suppress prompts when effective ask mode is `always`
 
 ### Ask fallback (`askFallback`)
 
@@ -132,6 +139,7 @@ Allowlists are **per agent**. If multiple agents exist, switch which agent you�
 editing in the macOS app. Patterns are **case-insensitive glob matches**.
 Patterns should resolve to **binary paths** (basename-only entries are ignored).
 Legacy `agents.default` entries are migrated to `agents.main` on load.
+Shell chains such as `echo ok && pwd` still need every top-level segment to satisfy allowlist rules.
 
 Examples:
 
@@ -213,7 +221,7 @@ For allow-always decisions in allowlist mode, known dispatch wrappers
 paths. Shell multiplexers (`busybox`, `toybox`) are also unwrapped for shell applets (`sh`, `ash`,
 etc.) so inner executables are persisted instead of multiplexer binaries. If a wrapper or
 multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
-If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval.
+If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval. In strict mode, `allow-always` can still persist benign interpreter/script invocations, but inline-eval carriers are not persisted automatically.
 
 Default safe bins:
 
@@ -415,9 +423,10 @@ resolved approver list for authorization even when native approval delivery is d
 
 ### Native approval delivery
 
-Discord and Telegram can also act as native approval-delivery adapters with channel-specific config.
+Discord, Slack, and Telegram can also act as native approval-delivery adapters with channel-specific config.
 
 - Discord: `channels.discord.execApprovals.*`
+- Slack: uses shared `approvals.exec.targets` with `channel: "slack"` and renders Block Kit approval buttons when interactivity is enabled
 - Telegram: `channels.telegram.execApprovals.*`
 
 These native delivery adapters are opt-in. They add DM routing and channel fanout on top of the
@@ -493,3 +502,10 @@ Related:
 - [Exec tool](/tools/exec)
 - [Elevated mode](/tools/elevated)
 - [Skills](/tools/skills)
+
+## Related
+
+- [Exec](/tools/exec) — shell command execution tool
+- [Sandboxing](/gateway/sandboxing) — sandbox modes and workspace access
+- [Security](/gateway/security) — security model and hardening
+- [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) — when to use each

@@ -8,12 +8,13 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../../test/helpers/plugins/env.js";
-
-let LocalMediaAccessError: typeof import("./media.js").LocalMediaAccessError;
-let loadWebMedia: typeof import("./media.js").loadWebMedia;
-let loadWebMediaRaw: typeof import("./media.js").loadWebMediaRaw;
-let optimizeImageToJpeg: typeof import("./media.js").optimizeImageToJpeg;
-let sendVoiceMessageDiscord: typeof import("../../discord/src/send.js").sendVoiceMessageDiscord;
+import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
+import {
+  LocalMediaAccessError,
+  loadWebMedia,
+  loadWebMediaRaw,
+  optimizeImageToJpeg,
+} from "./media.js";
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;
@@ -54,9 +55,6 @@ function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: numb
 }
 
 beforeAll(async () => {
-  ({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
-    await import("./media.js"));
-  ({ sendVoiceMessageDiscord } = await import("../../discord/src/send.js"));
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
   );

@@ -11,7 +11,7 @@ export {
   readStringArrayParam,
   readStringParam,
 } from "../agents/tools/common.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { BlockReplyContext, ReplyPayload } from "../auto-reply/types.js";
 export { resolveAckReaction } from "../agents/identity.js";
 export {
   compileAllowlist,
@@ -88,6 +88,7 @@ export {
 } from "./matrix-thread-bindings.js";
 export { createTypingCallbacks } from "../channels/typing.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export type { OpenClawConfig } from "../config/config.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,

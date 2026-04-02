@@ -741,12 +741,27 @@ export function registerPluginsCli(program: Command) {
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
+      "--dangerously-force-unsafe-install",
+      "Bypass built-in dangerous-code install blocking (plugin hooks may still block)",
+      false,
+    )
+    .option(
       "--marketplace <source>",
       "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
     )
-    .action(async (raw: string, opts: { link?: boolean; pin?: boolean; marketplace?: string }) => {
-      await runPluginInstallCommand({ raw, opts });
-    });
+    .action(
+      async (
+        raw: string,
+        opts: {
+          dangerouslyForceUnsafeInstall?: boolean;
+          link?: boolean;
+          pin?: boolean;
+          marketplace?: string;
+        },
+      ) => {
+        await runPluginInstallCommand({ raw, opts });
+      },
+    );
 
   plugins
     .command("update")

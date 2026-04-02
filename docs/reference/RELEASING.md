@@ -37,8 +37,9 @@ OpenClaw has three public release lanes:
 
 ## Release preflight
 
-- Run `pnpm build` before `pnpm release:check` so the expected `dist/*` release
-  artifacts exist for the pack validation step
+- Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected
+  `dist/*` release artifacts and Control UI bundle exist for the pack
+  validation step
 - Run `pnpm release:check` before every tagged release
 - Run `RELEASE_TAG=vYYYY.M.D node --import tsx scripts/openclaw-npm-release-check.ts`
   (or the matching beta/correction tag) before approval
@@ -46,6 +47,13 @@ OpenClaw has three public release lanes:
   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.D`
   (or the matching beta/correction version) to verify the published registry
   install path in a fresh temp prefix
+- Maintainer release automation now uses preflight-then-promote:
+  - real npm publish must pass a successful npm `preflight_run_id`
+  - public `macOS Release` is validation-only
+  - real private mac publish must pass successful private mac
+    `preflight_run_id` and `validate_run_id`
+  - the real publish paths promote prepared artifacts instead of rebuilding
+    them again
 - For stable correction releases like `YYYY.M.D-N`, the post-publish verifier
   also checks the same temp-prefix upgrade path from `YYYY.M.D` to `YYYY.M.D-N`
   so release corrections cannot silently leave older global installs on the
@@ -53,6 +61,10 @@ OpenClaw has three public release lanes:
 - npm release preflight fails closed unless the tarball includes both
   `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload
   so we do not ship an empty browser dashboard again
+- If the release work touched CI planning, extension timing manifests, or fast
+  test matrices, regenerate and review the planner-owned `checks-fast-extensions`
+  shard plan via `node scripts/ci-write-manifest-outputs.mjs --workflow ci`
+  before approval so release notes do not describe a stale CI layout
 - Stable macOS release readiness also includes the updater surfaces:
   - the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`
   - `appcast.xml` on `main` must point at the new stable zip after publish

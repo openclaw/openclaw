@@ -354,6 +354,87 @@ describe("convertTools", () => {
     const result = convertTools(tools as Parameters<typeof convertTools>[0]);
     expect(result[0]?.name).toBe("ping");
   });
+
+  it("injects properties:{} for type:object schemas missing properties (MCP no-param tools)", () => {
+    const tools = [
+      { name: "list_regions", description: "List AWS regions", parameters: { type: "object" } },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      type: "function",
+      name: "list_regions",
+      description: "List AWS regions",
+      parameters: { type: "object", properties: {} },
+    });
+  });
+
+  it("adds missing top-level type for raw object-ish MCP schemas", () => {
+    const tools = [
+      {
+        name: "query",
+        description: "Run a query",
+        parameters: { properties: { q: { type: "string" } }, required: ["q"] },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      type: "object",
+      properties: { q: { type: "string" } },
+      required: ["q"],
+    });
+  });
+
+  it("flattens raw top-level anyOf MCP schemas into one object schema", () => {
+    const tools = [
+      {
+        name: "dispatch",
+        description: "Dispatch an action",
+        parameters: {
+          anyOf: [
+            {
+              type: "object",
+              properties: { action: { const: "ping" } },
+              required: ["action"],
+            },
+            {
+              type: "object",
+              properties: {
+                action: { const: "echo" },
+                text: { type: "string" },
+              },
+              required: ["action", "text"],
+            },
+          ],
+        },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["ping", "echo"] },
+        text: { type: "string" },
+      },
+      required: ["action"],
+      additionalProperties: true,
+    });
+  });
+
+  it("preserves existing properties on type:object schemas", () => {
+    const tools = [
+      {
+        name: "exec",
+        description: "Run a command",
+        parameters: { type: "object", properties: { cmd: { type: "string" } } },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      type: "object",
+      properties: { cmd: { type: "string" } },
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1683,6 +1764,36 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
+  it("omits response.create reasoning when reasoningEffort is none", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-none");
+    const opts = { reasoningEffort: "none" };
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      opts as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-reason-none", "Short answer"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent).not.toHaveProperty("reasoning");
+  });
+
   it("applies onPayload mutations before sending response.create", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-onpayload");
     const stream = streamFn(
@@ -1721,7 +1832,6 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.text).toEqual({ verbosity: "low" });
     expect(sent.service_tier).toBe("priority");
   });
-
   it("forwards topP and toolChoice to response.create", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-topp");
     const opts = { topP: 0.9, toolChoice: "auto" };

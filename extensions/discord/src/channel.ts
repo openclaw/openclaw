@@ -4,7 +4,6 @@ import {
   createAccountScopedAllowlistNameResolver,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createApproverRestrictedNativeApprovalAdapter } from "openclaw/plugin-sdk/approval-runtime";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
@@ -28,17 +27,13 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { discordApprovalCapability } from "./approval-native.js";
 import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
 } from "./directory-config.js";
-import {
-  getDiscordExecApprovalApprovers,
-  isDiscordExecApprovalApprover,
-  isDiscordExecApprovalClientEnabled,
-  shouldSuppressLocalDiscordExecApprovalPrompt,
-} from "./exec-approvals.js";
+import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
@@ -150,20 +145,6 @@ function buildDiscordCrossContextComponents(params: {
   components.push(new TextDisplay(`*From ${params.originLabel}*`));
   return [new DiscordUiContainer({ cfg: params.cfg, accountId: params.accountId, components })];
 }
-
-const discordNativeApprovalAdapter = createApproverRestrictedNativeApprovalAdapter({
-  channel: "discord",
-  channelLabel: "Discord",
-  listAccountIds: listDiscordAccountIds,
-  hasApprovers: ({ cfg, accountId }) =>
-    getDiscordExecApprovalApprovers({ cfg, accountId }).length > 0,
-  isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
-    isDiscordExecApprovalApprover({ cfg, accountId, senderId }),
-  isNativeDeliveryEnabled: ({ cfg, accountId }) =>
-    isDiscordExecApprovalClientEnabled({ cfg, accountId }),
-  resolveNativeDeliveryMode: ({ cfg, accountId }) =>
-    resolveDiscordAccount({ cfg, accountId }).config.execApprovals?.target ?? "dm",
-});
 
 const resolveDiscordAllowlistGroupOverrides = createNestedAllowlistOverrideResolver({
   resolveRecord: (account: ResolvedDiscordAccount) => account.config.guilds,
@@ -344,10 +325,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           hint: "<channelId|user:ID|channel:ID>",
         },
       },
-      auth: discordNativeApprovalAdapter.auth,
-      approvals: {
-        delivery: discordNativeApprovalAdapter.delivery,
-      },
+      approvalCapability: discordApprovalCapability,
       directory: createChannelDirectoryAdapter({
         listPeers: async (params) => listDiscordDirectoryPeersFromConfig(params),
         listGroups: async (params) => listDiscordDirectoryGroupsFromConfig(params),

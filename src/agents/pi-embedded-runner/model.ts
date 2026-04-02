@@ -22,6 +22,7 @@ import {
   shouldSuppressBuiltInModel,
 } from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
+import { resolveProviderRequestConfig } from "../provider-request-config.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
 type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
@@ -35,6 +36,7 @@ type InlineProviderConfig = {
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
   headers?: unknown;
+  authHeader?: boolean;
 };
 
 type ProviderRuntimeHooks = {
@@ -99,6 +101,7 @@ function normalizeResolvedTransportApi(api: unknown): ModelDefinitionConfig["api
     case "openai-codex-responses":
     case "openai-completions":
     case "openai-responses":
+    case "azure-openai-responses":
       return api;
     default:
       return undefined;
@@ -326,26 +329,30 @@ function applyConfiguredProviderOverrides(params: {
     cfg: params.cfg,
     runtimeHooks: params.runtimeHooks,
   });
-  return {
-    ...discoveredModel,
+  const requestConfig = resolveProviderRequestConfig({
+    provider: params.provider,
     api:
       resolvedTransport.api ??
       normalizeResolvedTransportApi(discoveredModel.api) ??
       "openai-responses",
     baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
+    discoveredHeaders,
+    providerHeaders,
+    modelHeaders: configuredHeaders,
+    authHeader: providerConfig.authHeader,
+    capability: "llm",
+    transport: "stream",
+  });
+  return {
+    ...discoveredModel,
+    api: requestConfig.api ?? "openai-responses",
+    baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
     input: normalizedInput,
     cost: configuredModel?.cost ?? discoveredModel.cost,
     contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
     maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
-    headers:
-      discoveredHeaders || providerHeaders || configuredHeaders
-        ? {
-            ...discoveredHeaders,
-            ...providerHeaders,
-            ...configuredHeaders,
-          }
-        : undefined,
+    headers: requestConfig.headers,
     compat: configuredModel?.compat ?? discoveredModel.compat,
   };
 }
@@ -367,23 +374,25 @@ export function buildInlineProviderModels(
         api: model.api ?? entry?.api,
         baseUrl: entry?.baseUrl,
       });
+      const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
+        stripSecretRefMarkers: true,
+      });
+      const requestConfig = resolveProviderRequestConfig({
+        provider: trimmed,
+        api: transport.api ?? model.api,
+        baseUrl: transport.baseUrl,
+        providerHeaders,
+        modelHeaders,
+        authHeader: entry?.authHeader,
+        capability: "llm",
+        transport: "stream",
+      });
       return {
         ...model,
         provider: trimmed,
-        baseUrl: transport.baseUrl,
-        api: transport.api ?? model.api,
-        headers: (() => {
-          const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
-            stripSecretRefMarkers: true,
-          });
-          if (!providerHeaders && !modelHeaders) {
-            return undefined;
-          }
-          return {
-            ...providerHeaders,
-            ...modelHeaders,
-          };
-        })(),
+        baseUrl: requestConfig.baseUrl,
+        api: requestConfig.api ?? model.api,
+        headers: requestConfig.headers,
       };
     });
   });
@@ -532,6 +541,16 @@ function resolveConfiguredFallbackModel(params: {
     cfg,
     runtimeHooks,
   });
+  const requestConfig = resolveProviderRequestConfig({
+    provider,
+    api: fallbackTransport.api ?? "openai-responses",
+    baseUrl: fallbackTransport.baseUrl,
+    providerHeaders,
+    modelHeaders,
+    authHeader: providerConfig?.authHeader,
+    capability: "llm",
+    transport: "stream",
+  });
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -539,9 +558,9 @@ function resolveConfiguredFallbackModel(params: {
     model: {
       id: modelId,
       name: modelId,
-      api: fallbackTransport.api ?? "openai-responses",
+      api: requestConfig.api ?? "openai-responses",
       provider,
-      baseUrl: fallbackTransport.baseUrl,
+      baseUrl: requestConfig.baseUrl,
       reasoning: configuredModel?.reasoning ?? false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -553,8 +572,7 @@ function resolveConfiguredFallbackModel(params: {
         configuredModel?.maxTokens ??
         providerConfig?.models?.[0]?.maxTokens ??
         DEFAULT_CONTEXT_TOKENS,
-      headers:
-        providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
+      headers: requestConfig.headers,
     } as Model<Api>,
     runtimeHooks,
   });
