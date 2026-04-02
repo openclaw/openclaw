@@ -1,0 +1,17 @@
+export {
+  createFlowForTask,
+  createFlowRecord,
+  createManagedFlow,
+  deleteFlowRecordById,
+  findLatestFlowForOwnerKey,
+  getFlowById,
+  listFlowRecords,
+  listFlowsForOwnerKey,
+  requestFlowCancel,
+  resolveFlowForLookupToken,
+  resetFlowRegistryForTests,
+  resumeFlow,
+  setFlowWaiting,
+  syncFlowFromTask,
+  updateFlowRecordByIdExpectedRevision,
+} from "./flow-registry.js";
