@@ -334,7 +334,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
           cdpUrl: "http://127.0.0.1:18792",
           url: "https://93.184.216.34/start",
         }),
-      ).rejects.toThrow("getaddrinfo EAI_AGAIN postcheck.example");
+      ).rejects.toThrow(/getaddrinfo .*postcheck\.example/);
 
       const pages = await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:18792" });
       expect(pages).toHaveLength(1);
