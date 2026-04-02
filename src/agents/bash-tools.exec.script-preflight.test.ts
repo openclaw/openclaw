@@ -269,6 +269,38 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("fails closed for top-level interpreter invocations inside shell control-flow", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      await expect(
+        tool.execute("call-top-level-control-flow", {
+          command: "if true; then python bad.py; fi",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
+    });
+  });
+
+  it("fails closed for multiline top-level control-flow interpreter invocations", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      await expect(
+        tool.execute("call-top-level-control-flow-multiline", {
+          command: "if true; then\npython bad.py\nfi",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
+    });
+  });
+
   it("fails closed for shell-wrapped interpreter invocations", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");
