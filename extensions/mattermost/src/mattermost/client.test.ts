@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createMattermostClient,
   createMattermostPost,
+  fetchMattermostPost,
   normalizeMattermostBaseUrl,
   updateMattermostPost,
 } from "./client.js";
@@ -141,6 +142,20 @@ describe("createMattermostClient", () => {
     });
     const result = await client.request<unknown>("/anything", { method: "DELETE" });
     expect(result).toBeUndefined();
+  });
+});
+
+// ── fetchMattermostPost ──────────────────────────────────────────────
+
+describe("fetchMattermostPost", () => {
+  it("fetches a post by id with correct URL", async () => {
+    const postData = { id: "post123", message: "hello", file_ids: ["f1", "f2"] };
+    const { client, calls } = createTestClient({ body: postData });
+
+    const result = await fetchMattermostPost(client, "post123");
+
+    expect(calls[0].url).toContain("/api/v4/posts/post123");
+    expect(result).toEqual(postData);
   });
 });
 

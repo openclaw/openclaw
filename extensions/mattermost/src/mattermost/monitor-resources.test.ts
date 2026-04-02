@@ -1,6 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMattermostChannel = vi.hoisted(() => vi.fn());
+const fetchMattermostPost = vi.hoisted(() => vi.fn());
 const fetchMattermostUser = vi.hoisted(() => vi.fn());
 const sendMattermostTyping = vi.hoisted(() => vi.fn());
 const updateMattermostPost = vi.hoisted(() => vi.fn());
@@ -8,6 +9,7 @@ const buildButtonProps = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
   fetchMattermostChannel,
+  fetchMattermostPost,
   fetchMattermostUser,
   sendMattermostTyping,
   updateMattermostPost,
@@ -17,19 +19,31 @@ vi.mock("./interactions.js", () => ({
   buildButtonProps,
 }));
 
+const defaultResourceParams = {
+  accountId: "default",
+  callbackUrl: "https://openclaw.test/callback",
+  client: {} as never,
+  logger: {},
+  mediaMaxBytes: 1024,
+  fetchRemoteMedia: vi.fn(),
+  saveMediaBuffer: vi.fn(),
+  mediaKindFromMime: () => "document" as const,
+};
+
 describe("mattermost monitor resources", () => {
-  let createMattermostMonitorResources: typeof import("./monitor-resources.js").createMattermostMonitorResources;
-
-  beforeAll(async () => {
-    ({ createMattermostMonitorResources } = await import("./monitor-resources.js"));
-  });
-
   beforeEach(() => {
+    vi.resetModules();
     fetchMattermostChannel.mockReset();
+    fetchMattermostPost.mockReset();
     fetchMattermostUser.mockReset();
     sendMattermostTyping.mockReset();
     updateMattermostPost.mockReset();
     buildButtonProps.mockReset();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("downloads media, preserves auth headers, and infers media kind", async () => {
@@ -41,17 +55,15 @@ describe("mattermost monitor resources", () => {
       path: "/tmp/file.png",
       contentType: "image/png",
     }));
+    const { createMattermostMonitorResources } = await import("./monitor-resources.js");
 
     const resources = createMattermostMonitorResources({
-      accountId: "default",
-      callbackUrl: "https://openclaw.test/callback",
+      ...defaultResourceParams,
       client: {
         apiBaseUrl: "https://chat.example.com/api/v4",
         baseUrl: "https://chat.example.com",
         token: "bot-token",
       } as never,
-      logger: {},
-      mediaMaxBytes: 1024,
       fetchRemoteMedia,
       saveMediaBuffer,
       mediaKindFromMime: () => "image",
@@ -82,17 +94,9 @@ describe("mattermost monitor resources", () => {
     fetchMattermostChannel.mockResolvedValue({ id: "chan-1", name: "town-square" });
     fetchMattermostUser.mockResolvedValue({ id: "user-1", username: "alice" });
     buildButtonProps.mockReturnValue(undefined);
+    const { createMattermostMonitorResources } = await import("./monitor-resources.js");
 
-    const resources = createMattermostMonitorResources({
-      accountId: "default",
-      callbackUrl: "https://openclaw.test/callback",
-      client: {} as never,
-      logger: {},
-      mediaMaxBytes: 1024,
-      fetchRemoteMedia: vi.fn(),
-      saveMediaBuffer: vi.fn(),
-      mediaKindFromMime: () => "document",
-    });
+    const resources = createMattermostMonitorResources({ ...defaultResourceParams });
 
     await expect(resources.resolveChannelInfo("chan-1")).resolves.toEqual({
       id: "chan-1",
@@ -130,18 +134,91 @@ describe("mattermost monitor resources", () => {
     );
   });
 
-  it("proxies typing indicators to the mattermost client helper", async () => {
-    const client = {} as never;
+  // These tests use fake timers to control `node:timers/promises` sleep().
+  // vi.advanceTimersByTimeAsync must advance past each delay in the retry
+  // sequence (500ms, then 1500ms) for the promise to resolve.
+
+  it("refetchPostFileIds returns file_ids on first retry when REST has them", async () => {
+    fetchMattermostPost.mockResolvedValue({
+      id: "post-1",
+      file_ids: ["f1", "f2"],
+      message: "hello",
+    });
+    const { createMattermostMonitorResources } = await import("./monitor-resources.js");
+
+    const resources = createMattermostMonitorResources({ ...defaultResourceParams });
+
+    const promise = resources.refetchPostFileIds("post-1");
+    // first attempt fires at 500ms
+    await vi.advanceTimersByTimeAsync(500);
+    const result = await promise;
+
+    expect(result).toEqual(["f1", "f2"]);
+    expect(fetchMattermostPost).toHaveBeenCalledTimes(1);
+  });
+
+  it("refetchPostFileIds retries when first attempt returns empty file_ids", async () => {
+    fetchMattermostPost
+      .mockResolvedValueOnce({ id: "post-1", file_ids: [], message: "hello" })
+      .mockResolvedValueOnce({ id: "post-1", file_ids: ["f1"], message: "hello" });
+    const { createMattermostMonitorResources } = await import("./monitor-resources.js");
+
+    const resources = createMattermostMonitorResources({ ...defaultResourceParams });
+
+    const promise = resources.refetchPostFileIds("post-1");
+    // first attempt at 500ms returns empty, second at 500+1500=2000ms
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await promise;
+
+    expect(result).toEqual(["f1"]);
+    expect(fetchMattermostPost).toHaveBeenCalledTimes(2);
+  });
+
+  it("refetchPostFileIds returns empty array when REST fetch fails", async () => {
+    fetchMattermostPost.mockRejectedValue(new Error("network error"));
+    const debugSpy = vi.fn();
+    const { createMattermostMonitorResources } = await import("./monitor-resources.js");
 
     const resources = createMattermostMonitorResources({
-      accountId: "default",
-      callbackUrl: "https://openclaw.test/callback",
+      ...defaultResourceParams,
+      logger: { debug: debugSpy },
+    });
+
+    const promise = resources.refetchPostFileIds("post-1");
+    await vi.advanceTimersByTimeAsync(500);
+    const result = await promise;
+
+    expect(result).toEqual([]);
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining("failed to re-fetch post post-1"),
+    );
+  });
+
+  it("refetchPostFileIds returns empty array after all retries exhausted", async () => {
+    fetchMattermostPost.mockResolvedValue({
+      id: "post-1",
+      file_ids: null,
+      message: "text only",
+    });
+    const { createMattermostMonitorResources } = await import("./monitor-resources.js");
+
+    const resources = createMattermostMonitorResources({ ...defaultResourceParams });
+
+    const promise = resources.refetchPostFileIds("post-1");
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await promise;
+
+    expect(result).toEqual([]);
+    expect(fetchMattermostPost).toHaveBeenCalledTimes(2);
+  });
+
+  it("proxies typing indicators to the mattermost client helper", async () => {
+    const client = {} as never;
+    const { createMattermostMonitorResources } = await import("./monitor-resources.js");
+
+    const resources = createMattermostMonitorResources({
+      ...defaultResourceParams,
       client,
-      logger: {},
-      mediaMaxBytes: 1024,
-      fetchRemoteMedia: vi.fn(),
-      saveMediaBuffer: vi.fn(),
-      mediaKindFromMime: () => "document",
     });
 
     await resources.sendTypingIndicator("chan-1", "root-1");

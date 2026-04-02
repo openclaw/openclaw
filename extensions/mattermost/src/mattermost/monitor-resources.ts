@@ -1,5 +1,7 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   fetchMattermostChannel,
+  fetchMattermostPost,
   fetchMattermostUser,
   sendMattermostTyping,
   updateMattermostPost,
@@ -19,6 +21,7 @@ export type MattermostMediaInfo = {
 
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
+const FILE_IDS_REFETCH_DELAYS_MS = [500, 1500];
 
 type FetchRemoteMedia = (params: {
   url: string;
@@ -173,8 +176,31 @@ export function createMattermostMonitorResources(params: {
     return {};
   };
 
+  // Mattermost broadcasts the WebSocket `posted` event before file attachment
+  // linkage is finalized, so `file_ids` is often empty.  Re-fetch the post via
+  // REST with progressive back-off: a short first attempt (500ms) keeps latency
+  // low for text-only messages that genuinely have no files, while a second
+  // attempt (1500ms) gives large uploads time to finalize.
+  const refetchPostFileIds = async (postId: string): Promise<string[]> => {
+    for (const delayMs of FILE_IDS_REFETCH_DELAYS_MS) {
+      await sleep(delayMs);
+      try {
+        const post = await fetchMattermostPost(client, postId);
+        const ids = (post.file_ids ?? []).filter(Boolean);
+        if (ids.length > 0) return ids;
+      } catch (err) {
+        logger.debug?.(
+          `mattermost: failed to re-fetch post ${postId} for file_ids: ${String(err)}`,
+        );
+        return [];
+      }
+    }
+    return [];
+  };
+
   return {
     resolveMattermostMedia,
+    refetchPostFileIds,
     sendTypingIndicator,
     resolveChannelInfo,
     resolveUserInfo,

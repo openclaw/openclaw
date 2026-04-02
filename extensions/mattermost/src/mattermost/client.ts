@@ -160,6 +160,13 @@ export function createMattermostClient(params: {
   return { baseUrl, apiBaseUrl, token, request, fetchImpl };
 }
 
+export async function fetchMattermostPost(
+  client: MattermostClient,
+  postId: string,
+): Promise<MattermostPost> {
+  return await client.request<MattermostPost>(`/posts/${postId}`);
+}
+
 export async function fetchMattermostMe(client: MattermostClient): Promise<MattermostUser> {
   return await client.request<MattermostUser>("/users/me");
 }
