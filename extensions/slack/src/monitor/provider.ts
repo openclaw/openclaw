@@ -16,26 +16,31 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
-import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/infra-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
-import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  computeBackoff,
+  createNonExitingRuntime,
+  sleepWithAbort,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
+import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
-import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
-import { resolveSlackUserAllowlist } from "../resolve-users.js";
+import { resolveSlackChannelAllowlist, type SlackChannelResolution } from "../resolve-channels.js";
+import { resolveSlackUserAllowlist, type SlackUserResolution } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
+import { SlackExecApprovalHandler } from "./exec-approvals.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import {
   formatUnknownError,
@@ -162,6 +167,38 @@ function publishSlackDisconnectedStatus(
     connected: false,
     lastDisconnect: message ? { at, error: message } : { at },
     lastError: message ?? null,
+  });
+}
+
+function formatSlackResolvedLabel(params: {
+  input: string;
+  id: string;
+  name?: string;
+  extra?: string[];
+}): string {
+  const extras = params.extra?.filter(Boolean) ?? [];
+  const suffix =
+    extras.length > 0 ? ` (id:${params.id}, ${extras.join(", ")})` : ` (id:${params.id})`;
+  return `${params.input}→${params.name ?? params.id}${suffix}`;
+}
+
+function formatSlackChannelResolved(entry: SlackChannelResolution): string {
+  const id = entry.id ?? entry.input;
+  return formatSlackResolvedLabel({
+    input: entry.input,
+    id,
+    name: entry.name,
+    extra: entry.archived ? ["archived"] : [],
+  });
+}
+
+function formatSlackUserResolved(entry: SlackUserResolution): string {
+  const id = entry.id ?? entry.input;
+  return formatSlackResolvedLabel({
+    input: entry.input,
+    id,
+    name: entry.name,
+    extra: entry.note ? [entry.note] : [],
   });
 }
 
@@ -369,9 +406,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     : undefined;
 
   const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
+  const execApprovalsHandler = slackCfg.execApprovals?.enabled
+    ? new SlackExecApprovalHandler({
+        app,
+        accountId: account.accountId,
+        config: slackCfg.execApprovals,
+        cfg,
+      })
+    : null;
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage, trackEvent });
   await registerSlackMonitorSlashCommands({ ctx, account });
+  await execApprovalsHandler?.start();
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
@@ -407,7 +453,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
                 unresolved.push(entry.input);
                 continue;
               }
-              mapping.push(`${entry.input}→${entry.id}${entry.archived ? " (archived)" : ""}`);
+              mapping.push(formatSlackChannelResolved(entry));
               const existing = nextChannels[entry.id] ?? {};
               nextChannels[entry.id] = { ...source, ...existing };
             }
@@ -430,12 +476,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(
             resolvedUsers,
             {
-              formatResolved: (entry) => {
-                const note = (entry as { note?: string }).note
-                  ? ` (${(entry as { note?: string }).note})`
-                  : "";
-                return `${entry.input}→${entry.id}${note}`;
-              },
+              formatResolved: formatSlackUserResolved,
             },
           );
           allowFrom = mergeAllowlist({ existing: allowFrom, additions });
@@ -458,8 +499,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
               token: resolveToken,
               entries: Array.from(userEntries),
             });
-            const { resolvedMap, mapping, unresolved } =
-              buildAllowlistResolutionSummary(resolvedUsers);
+            const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(
+              resolvedUsers,
+              {
+                formatResolved: formatSlackUserResolved,
+              },
+            );
 
             const nextChannels = patchAllowlistUsersInConfigEntries({
               entries: channelsConfig,
@@ -578,13 +623,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   } finally {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
+    await execApprovalsHandler?.stop().catch(() => undefined);
     await app.stop().catch(() => undefined);
   }
 }
 
 export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
+export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
+
 export const __testing = {
+  formatSlackChannelResolved,
+  formatSlackUserResolved,
   publishSlackConnectedStatus,
   publishSlackDisconnectedStatus,
   resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,

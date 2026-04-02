@@ -2,9 +2,10 @@ import "./test-helpers.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
+import { createPinnedLookup } from "openclaw/plugin-sdk/fetch-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
@@ -145,7 +146,7 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
           return {
             hostname: normalized,
             addresses,
-            lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+            lookup: createPinnedLookup({ hostname: normalized, addresses }),
           };
         });
     }

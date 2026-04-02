@@ -1,22 +1,41 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+
+const { resolveRuntimePluginRegistryMock } = vi.hoisted(() => ({
+  resolveRuntimePluginRegistryMock: vi.fn<
+    (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
+  >(() => undefined),
+}));
+
+vi.mock("../plugins/loader.js", () => ({
+  resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
+}));
 
 let generateImage: typeof import("./runtime.js").generateImage;
 let listRuntimeImageGenerationProviders: typeof import("./runtime.js").listRuntimeImageGenerationProviders;
 
+function setCompatibleActiveImageGenerationRegistry(
+  pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+  _cfg: OpenClawConfig,
+) {
+  setActivePluginRegistry(pluginRegistry);
+}
+
 describe("image-generation runtime helpers", () => {
+  beforeAll(async () => {
+    ({ generateImage, listRuntimeImageGenerationProviders } = await import("./runtime.js"));
+  });
+
   afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resolveRuntimePluginRegistryMock.mockReset();
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+    resetPluginRuntimeStateForTest();
   });
 
   beforeEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
-  beforeAll(async () => {
-    ({ generateImage, listRuntimeImageGenerationProviders } = await import("./runtime.js"));
+    resetPluginRuntimeStateForTest();
   });
 
   it("generates images through the active image-generation registry", async () => {
@@ -48,7 +67,7 @@ describe("image-generation runtime helpers", () => {
         },
       },
     });
-    setActivePluginRegistry(pluginRegistry);
+    resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
 
     const cfg = {
       agents: {
@@ -59,6 +78,7 @@ describe("image-generation runtime helpers", () => {
         },
       },
     } as OpenClawConfig;
+    setCompatibleActiveImageGenerationRegistry(pluginRegistry, cfg);
 
     const result = await generateImage({
       cfg,
@@ -107,7 +127,8 @@ describe("image-generation runtime helpers", () => {
         }),
       },
     });
-    setActivePluginRegistry(pluginRegistry);
+    resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
+    setCompatibleActiveImageGenerationRegistry(pluginRegistry, {} as OpenClawConfig);
 
     expect(listRuntimeImageGenerationProviders()).toMatchObject([
       {
@@ -166,19 +187,17 @@ describe("image-generation runtime helpers", () => {
         },
       },
     );
-    setActivePluginRegistry(pluginRegistry);
+    resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
+    setCompatibleActiveImageGenerationRegistry(pluginRegistry, {} as OpenClawConfig);
 
-    await expect(
-      generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
-    ).rejects.toThrow(
-      'Set agents.defaults.imageGenerationModel.primary to a provider/model like "google/gemini-3-pro-image-preview".',
+    const promise = generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" });
+
+    await expect(promise).rejects.toThrow("No image-generation model configured.");
+    await expect(promise).rejects.toThrow(
+      'Set agents.defaults.imageGenerationModel.primary to a provider/model like "',
     );
-    await expect(
-      generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
-    ).rejects.toThrow("google: GEMINI_API_KEY / GOOGLE_API_KEY");
-    await expect(
-      generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
-    ).rejects.toThrow("openai: OPENAI_API_KEY");
+    await expect(promise).rejects.toThrow("google: GEMINI_API_KEY / GOOGLE_API_KEY");
+    await expect(promise).rejects.toThrow("openai: OPENAI_API_KEY");
   });
 
   it("does not crash on prototype-like provider ids in auth hints", async () => {
@@ -199,7 +218,8 @@ describe("image-generation runtime helpers", () => {
         }),
       },
     });
-    setActivePluginRegistry(pluginRegistry);
+    resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
+    setCompatibleActiveImageGenerationRegistry(pluginRegistry, {} as OpenClawConfig);
 
     await expect(
       generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),

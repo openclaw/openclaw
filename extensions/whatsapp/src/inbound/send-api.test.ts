@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const recordChannelActivity = vi.hoisted(() => vi.fn());
 let createWebSendApi: typeof import("./send-api.js").createWebSendApi;
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
   return {
     ...actual,
     recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
@@ -161,5 +161,25 @@ describe("createWebSendApi", () => {
   it("sends composing presence updates to the recipient JID", async () => {
     await api.sendComposingTo("+1555");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
+  });
+
+  it("sends media as document when mediaType is undefined", async () => {
+    const mediaBuffer = Buffer.from("test");
+
+    await api.sendMessage("123", "hello", mediaBuffer, undefined);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123@s.whatsapp.net",
+      expect.objectContaining({
+        document: mediaBuffer,
+        mimetype: "application/octet-stream",
+      }),
+    );
+  });
+
+  it("does not set mediaType when mediaBuffer is absent", async () => {
+    await api.sendMessage("123", "hello");
+
+    expect(sendMessage).toHaveBeenCalledWith("123@s.whatsapp.net", { text: "hello" });
   });
 });

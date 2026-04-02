@@ -16,14 +16,8 @@ import {
 import {
   createRuntimeOutboundDelegates,
   resolveOutboundSendDep,
-} from "openclaw/plugin-sdk/infra-runtime";
-import {
-  buildOutboundBaseSessionKey,
-  normalizeMessageChannel,
-  normalizeOutboundThreadId,
-  resolveThreadSessionKeys,
-  type RoutePeer,
-} from "openclaw/plugin-sdk/routing";
+} from "openclaw/plugin-sdk/outbound-runtime";
+import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -33,15 +27,13 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { discordApprovalCapability } from "./approval-native.js";
 import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
 } from "./directory-config.js";
-import {
-  isDiscordExecApprovalClientEnabled,
-  shouldSuppressLocalDiscordExecApprovalPrompt,
-} from "./exec-approvals.js";
+import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
@@ -51,7 +43,8 @@ import {
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
 } from "./normalize.js";
-import { probeDiscord, type DiscordProbe } from "./probe.js";
+import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
+import type { DiscordProbe } from "./probe.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import {
   buildTokenChannelStatusSummary,
@@ -79,10 +72,16 @@ type DiscordSendFn = ReturnType<
 let discordProviderRuntimePromise:
   | Promise<typeof import("./monitor/provider.runtime.js")>
   | undefined;
+let discordProbeRuntimePromise: Promise<typeof import("./probe.runtime.js")> | undefined;
 
 async function loadDiscordProviderRuntime() {
   discordProviderRuntimePromise ??= import("./monitor/provider.runtime.js");
   return await discordProviderRuntimePromise;
+}
+
+async function loadDiscordProbeRuntime() {
+  discordProbeRuntimePromise ??= import("./probe.runtime.js");
+  return await discordProbeRuntimePromise;
 }
 
 const meta = getChatChannelMeta("discord");
@@ -147,17 +146,6 @@ function buildDiscordCrossContextComponents(params: {
   return [new DiscordUiContainer({ cfg: params.cfg, accountId: params.accountId, components })];
 }
 
-function hasDiscordExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
-  return listDiscordAccountIds(cfg).some((accountId) => {
-    const execApprovals = resolveDiscordAccount({ cfg, accountId }).config.execApprovals;
-    if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
-      return false;
-    }
-    const target = execApprovals.target ?? "dm";
-    return target === "dm" || target === "both";
-  });
-}
-
 const resolveDiscordAllowlistGroupOverrides = createNestedAllowlistOverrideResolver({
   resolveRecord: (account: ResolvedDiscordAccount) => account.config.guilds,
   outerLabel: (guildKey) => `guild ${guildKey}`,
@@ -219,6 +207,66 @@ function matchDiscordAcpConversation(params: {
   return null;
 }
 
+function resolveDiscordConversationIdFromTargets(
+  targets: Array<string | undefined>,
+): string | undefined {
+  for (const raw of targets) {
+    const trimmed = raw?.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const target = parseDiscordTarget(trimmed, { defaultKind: "channel" });
+      if (target?.normalized) {
+        return target.normalized;
+      }
+    } catch {
+      const mentionMatch = trimmed.match(/^<#(\d+)>$/);
+      if (mentionMatch?.[1]) {
+        return `channel:${mentionMatch[1]}`;
+      }
+      if (/^\d{6,}$/.test(trimmed)) {
+        return normalizeDiscordMessagingTarget(trimmed);
+      }
+    }
+  }
+  return undefined;
+}
+
+function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
+  const sessionKey = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (!sessionKey) {
+    return undefined;
+  }
+  const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
+  return match?.[1] ? `channel:${match[1]}` : undefined;
+}
+
+function resolveDiscordCommandConversation(params: {
+  threadId?: string;
+  threadParentId?: string;
+  parentSessionKey?: string;
+  originatingTo?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+}) {
+  const targets = [params.originatingTo, params.commandTo, params.fallbackTo];
+  if (params.threadId) {
+    const parentConversationId =
+      normalizeDiscordMessagingTarget(params.threadParentId?.trim() ?? "") ||
+      parseDiscordParentChannelFromSessionKey(params.parentSessionKey) ||
+      resolveDiscordConversationIdFromTargets(targets);
+    return {
+      conversationId: params.threadId,
+      ...(parentConversationId && parentConversationId !== params.threadId
+        ? { parentConversationId }
+        : {}),
+    };
+  }
+  const conversationId = resolveDiscordConversationIdFromTargets(targets);
+  return conversationId ? { conversationId } : null;
+}
+
 function parseDiscordExplicitTarget(raw: string) {
   try {
     const target = parseDiscordTarget(raw, { defaultKind: "channel" });
@@ -232,81 +280,6 @@ function parseDiscordExplicitTarget(raw: string) {
   } catch {
     return null;
   }
-}
-
-function buildDiscordBaseSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  accountId?: string | null;
-  peer: RoutePeer;
-}) {
-  return buildOutboundBaseSessionKey({ ...params, channel: "discord" });
-}
-
-function resolveDiscordOutboundTargetKindHint(params: {
-  target: string;
-  resolvedTarget?: { kind: string };
-}): "user" | "channel" | undefined {
-  const resolvedKind = params.resolvedTarget?.kind;
-  if (resolvedKind === "user") {
-    return "user";
-  }
-  if (resolvedKind === "group" || resolvedKind === "channel") {
-    return "channel";
-  }
-
-  const target = params.target.trim();
-  if (/^channel:/i.test(target)) {
-    return "channel";
-  }
-  if (/^(user:|discord:|@|<@!?)/i.test(target)) {
-    return "user";
-  }
-  return undefined;
-}
-
-function resolveDiscordOutboundSessionRoute(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  accountId?: string | null;
-  target: string;
-  resolvedTarget?: { kind: string };
-  replyToId?: string | null;
-  threadId?: string | number | null;
-}) {
-  const parsed = parseDiscordTarget(params.target, {
-    defaultKind: resolveDiscordOutboundTargetKindHint(params),
-  });
-  if (!parsed) {
-    return null;
-  }
-  const isDm = parsed.kind === "user";
-  const peer: RoutePeer = {
-    kind: isDm ? "direct" : "channel",
-    id: parsed.id,
-  };
-  const baseSessionKey = buildDiscordBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    accountId: params.accountId,
-    peer,
-  });
-  const explicitThreadId = normalizeOutboundThreadId(params.threadId);
-  const threadCandidate = explicitThreadId ?? normalizeOutboundThreadId(params.replyToId);
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey,
-    threadId: threadCandidate,
-    useSuffix: false,
-  });
-  return {
-    sessionKey: threadKeys.sessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isDm ? ("direct" as const) : ("channel" as const),
-    from: isDm ? `discord:${parsed.id}` : `discord:channel:${parsed.id}`,
-    to: isDm ? `user:${parsed.id}` : `channel:${parsed.id}`,
-    threadId: explicitThreadId ?? undefined,
-  };
 }
 
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> =
@@ -352,22 +325,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           hint: "<channelId|user:ID|channel:ID>",
         },
       },
-      execApprovals: {
-        getInitiatingSurfaceState: ({ cfg, accountId }) =>
-          isDiscordExecApprovalClientEnabled({ cfg, accountId })
-            ? { kind: "enabled" }
-            : { kind: "disabled" },
-        shouldSuppressLocalPrompt: ({ cfg, accountId, payload }) =>
-          shouldSuppressLocalDiscordExecApprovalPrompt({
-            cfg,
-            accountId,
-            payload,
-          }),
-        hasConfiguredDmRoute: ({ cfg }) => hasDiscordExecApprovalDmRoute(cfg),
-        shouldSuppressForwardingFallback: ({ cfg, target }) =>
-          (normalizeMessageChannel(target.channel) ?? target.channel) === "discord" &&
-          isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
-      },
+      approvalCapability: discordApprovalCapability,
       directory: createChannelDirectoryAdapter({
         listPeers: async (params) => listDiscordDirectoryPeersFromConfig(params),
         listGroups: async (params) => listDiscordDirectoryGroupsFromConfig(params),
@@ -431,6 +389,22 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             conversationId,
             parentConversationId,
           }),
+        resolveCommandConversation: ({
+          threadId,
+          threadParentId,
+          parentSessionKey,
+          originatingTo,
+          commandTo,
+          fallbackTo,
+        }) =>
+          resolveDiscordCommandConversation({
+            threadId,
+            threadParentId,
+            parentSessionKey,
+            originatingTo,
+            commandTo,
+            fallbackTo,
+          }),
       },
       status: createComputedAccountStatusAdapter<ResolvedDiscordAccount, DiscordProbe, unknown>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
@@ -444,7 +418,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         buildChannelSummary: ({ snapshot }) =>
           buildTokenChannelStatusSummary(snapshot, { includeMode: false }),
         probeAccount: async ({ account, timeoutMs }) =>
-          probeDiscord(account.token, timeoutMs, {
+          (await loadDiscordProbeRuntime()).probeDiscord(account.token, timeoutMs, {
             includeApplication: true,
           }),
         formatCapabilitiesProbe: ({ probe }) => {
@@ -590,7 +564,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           const token = account.token.trim();
           let discordBotLabel = "";
           try {
-            const probe = await probeDiscord(token, 2500, {
+            const probe = await (
+              await loadDiscordProbeRuntime()
+            ).probeDiscord(token, 2500, {
               includeApplication: true,
             });
             const username = probe.ok ? probe.bot?.username?.trim() : null;
@@ -654,6 +630,12 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         chunker: null,
         textChunkLimit: 2000,
         pollMaxOptions: 10,
+        shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+          shouldSuppressLocalDiscordExecApprovalPrompt({
+            cfg,
+            accountId,
+            payload,
+          }),
         resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
       },
       attachedResults: {

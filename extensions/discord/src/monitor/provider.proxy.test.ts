@@ -82,6 +82,11 @@ vi.mock("@buape/carbon/gateway", () => ({
   GatewayPlugin,
 }));
 
+vi.mock("@buape/carbon/dist/src/plugins/gateway/index.js", () => ({
+  GatewayIntents,
+  GatewayPlugin,
+}));
+
 vi.mock("https-proxy-agent", () => ({
   HttpsProxyAgent,
 }));
@@ -123,13 +128,43 @@ describe("createDiscordGatewayPlugin", () => {
     };
   }
 
+  function createProxyTestingOverrides() {
+    return {
+      HttpsProxyAgentCtor:
+        HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
+      ProxyAgentCtor: class {
+        proxyUrl: string;
+        constructor(proxyUrl: string) {
+          this.proxyUrl = proxyUrl;
+          undiciProxyAgentSpy(proxyUrl);
+          restProxyAgentSpy(proxyUrl);
+        }
+      } as unknown as typeof import("undici").ProxyAgent,
+      undiciFetch: undiciFetchMock,
+      webSocketCtor: class {
+        constructor(url: string, options?: { agent?: unknown }) {
+          webSocketSpy(url, options);
+        }
+      } as unknown as new (url: string, options?: { agent?: unknown }) => import("ws").WebSocket,
+      registerClient: async (_plugin: unknown, client: unknown) => {
+        baseRegisterClientSpy(client);
+      },
+    };
+  }
+
   async function registerGatewayClient(plugin: unknown) {
     await (
       plugin as {
-        registerClient: (client: { options: { token: string } }) => Promise<void>;
+        registerClient: (client: {
+          options: { token: string };
+          registerListener: typeof baseRegisterClientSpy;
+          unregisterListener: ReturnType<typeof vi.fn>;
+        }) => Promise<void>;
       }
     ).registerClient({
       options: { token: "token-123" },
+      registerListener: baseRegisterClientSpy,
+      unregisterListener: vi.fn(),
     });
   }
 
@@ -232,6 +267,7 @@ describe("createDiscordGatewayPlugin", () => {
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
+      __testing: createProxyTestingOverrides(),
     });
 
     expect(Object.getPrototypeOf(plugin)).not.toBe(GatewayPlugin.prototype);
@@ -267,6 +303,7 @@ describe("createDiscordGatewayPlugin", () => {
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
+      __testing: createProxyTestingOverrides(),
     });
 
     await registerGatewayClientWithMetadata({ plugin, fetchMock: undiciFetchMock });

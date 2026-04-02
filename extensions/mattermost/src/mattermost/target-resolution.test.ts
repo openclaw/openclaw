@@ -17,6 +17,7 @@ vi.mock("./client.js", () => ({
 
 describe("mattermost target resolution", () => {
   beforeEach(() => {
+    vi.resetModules();
     resolveMattermostAccount.mockReset();
     createMattermostClient.mockReset();
     fetchMattermostUser.mockReset();
