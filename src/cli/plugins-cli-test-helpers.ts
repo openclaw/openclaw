@@ -20,7 +20,6 @@ export const recordPluginInstall = vi.fn();
 export const clearPluginManifestRegistryCache = vi.fn();
 export const buildPluginSnapshotReport = vi.fn();
 export const buildPluginDiagnosticsReport = vi.fn();
-export const buildPluginStatusReport = buildPluginDiagnosticsReport;
 export const buildPluginCompatibilityNotices = vi.fn();
 export const applyExclusiveSlotSelection = vi.fn();
 export const uninstallPlugin = vi.fn();

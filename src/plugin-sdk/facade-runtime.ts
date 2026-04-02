@@ -135,7 +135,8 @@ function getJiti(modulePath: string) {
 
 function readFacadeBoundaryConfigSafely(): OpenClawConfig {
   try {
-    return loadConfig();
+    const config = loadConfig();
+    return config && typeof config === "object" ? config : EMPTY_FACADE_BOUNDARY_CONFIG;
   } catch {
     return EMPTY_FACADE_BOUNDARY_CONFIG;
   }
@@ -155,8 +156,8 @@ function getFacadeBoundaryResolvedConfig() {
   const resolved = {
     rawConfig,
     config,
-    normalizedPluginsConfig: normalizePluginsConfig(config.plugins),
-    sourceNormalizedPluginsConfig: normalizePluginsConfig(rawConfig.plugins),
+    normalizedPluginsConfig: normalizePluginsConfig(config?.plugins),
+    sourceNormalizedPluginsConfig: normalizePluginsConfig(rawConfig?.plugins),
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
   };
   cachedBoundaryRawConfig = rawConfig;
@@ -337,9 +338,11 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
 
   let loaded: T;
   try {
+    // Track the owning plugin once module evaluation begins. Facade top-level
+    // code may have already executed even if the module later throws.
+    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params.dirName));
     loaded = getJiti(location.modulePath)(location.modulePath) as T;
     Object.assign(sentinel, loaded);
-    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params.dirName));
   } catch (err) {
     loadedFacadeModules.delete(location.modulePath);
     throw err;

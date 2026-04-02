@@ -143,6 +143,8 @@ describe("plugin-sdk facade runtime", () => {
       }),
     ).toThrow("plugin load failure");
 
+    expect(listImportedBundledPluginFacadeIds()).toEqual(["bad"]);
+
     // A second call must also throw (not return a stale empty sentinel).
     expect(() =>
       loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
