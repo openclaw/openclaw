@@ -37,7 +37,12 @@ function hasOwnKey(target: JsonRecord, key: string): boolean {
 
 function copyLegacyFirecrawlFetchConfig(fetch: JsonRecord): JsonRecord | undefined {
   const current = fetch.firecrawl;
-  return isRecord(current) ? cloneRecord(current) : undefined;
+  if (!isRecord(current)) {
+    return undefined;
+  }
+  const next = cloneRecord(current);
+  delete next.enabled;
+  return next;
 }
 
 function hasMappedLegacyWebFetchConfig(raw: unknown): boolean {

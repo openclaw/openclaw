@@ -39,6 +39,31 @@ describe("legacy web fetch config", () => {
     ]);
   });
 
+  it("drops legacy firecrawl.enabled when migrating plugin-owned config", () => {
+    const res = migrateLegacyWebFetchConfig<OpenClawConfig>({
+      tools: {
+        web: {
+          fetch: {
+            provider: "firecrawl",
+            firecrawl: {
+              enabled: false,
+              apiKey: "firecrawl-key",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(res.config.plugins?.entries?.firecrawl).toEqual({
+      enabled: true,
+      config: {
+        webFetch: {
+          apiKey: "firecrawl-key",
+        },
+      },
+    });
+  });
+
   it("lists legacy Firecrawl fetch config paths", () => {
     expect(
       listLegacyWebFetchConfigPaths({

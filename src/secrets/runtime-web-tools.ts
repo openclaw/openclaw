@@ -152,6 +152,7 @@ async function resolveSecretInputWithEnvFallback(params: {
   value: unknown;
   path: string;
   envVars: string[];
+  restrictEnvRefsToEnvVars?: boolean;
 }): Promise<SecretResolutionResult> {
   const { ref } = resolveSecretInputRef({
     value: params.value,
@@ -189,35 +190,43 @@ async function resolveSecretInputWithEnvFallback(params: {
   let resolvedFromRef: string | undefined;
   let unresolvedRefReason: string | undefined;
 
-  try {
-    const resolved = await resolveSecretRefValues([ref], {
-      config: params.sourceConfig,
-      env: params.context.env,
-      cache: params.context.cache,
-    });
-    const resolvedValue = resolved.get(secretRefKey(ref));
-    if (typeof resolvedValue !== "string") {
-      unresolvedRefReason = buildUnresolvedReason({
-        path: params.path,
-        kind: "non-string",
-        refLabel,
+  if (
+    params.restrictEnvRefsToEnvVars === true &&
+    ref.source === "env" &&
+    !params.envVars.includes(ref.id)
+  ) {
+    unresolvedRefReason = `${params.path} SecretRef env var "${ref.id}" is not allowed.`;
+  } else {
+    try {
+      const resolved = await resolveSecretRefValues([ref], {
+        config: params.sourceConfig,
+        env: params.context.env,
+        cache: params.context.cache,
       });
-    } else {
-      resolvedFromRef = normalizeSecretInput(resolvedValue);
-      if (!resolvedFromRef) {
+      const resolvedValue = resolved.get(secretRefKey(ref));
+      if (typeof resolvedValue !== "string") {
         unresolvedRefReason = buildUnresolvedReason({
           path: params.path,
-          kind: "empty",
+          kind: "non-string",
           refLabel,
         });
+      } else {
+        resolvedFromRef = normalizeSecretInput(resolvedValue);
+        if (!resolvedFromRef) {
+          unresolvedRefReason = buildUnresolvedReason({
+            path: params.path,
+            kind: "empty",
+            refLabel,
+          });
+        }
       }
+    } catch {
+      unresolvedRefReason = buildUnresolvedReason({
+        path: params.path,
+        kind: "unresolved",
+        refLabel,
+      });
     }
-  } catch {
-    unresolvedRefReason = buildUnresolvedReason({
-      path: params.path,
-      kind: "unresolved",
-      refLabel,
-    });
   }
 
   if (resolvedFromRef) {
@@ -830,6 +839,7 @@ export async function resolveRuntimeWebTools(params: {
         value,
         path,
         envVars: provider.envVars,
+        restrictEnvRefsToEnvVars: true,
       });
 
       if (resolution.secretRefConfigured && resolution.fallbackUsedAfterRefFailure) {

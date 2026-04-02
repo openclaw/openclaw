@@ -878,6 +878,55 @@ describe("runtime web tools resolution", () => {
     );
   });
 
+  it("rejects env SecretRefs for web fetch provider keys outside provider allowlists", async () => {
+    const sourceConfig = asConfig({
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webFetch: {
+                apiKey: { source: "env", provider: "default", id: "AWS_SECRET_ACCESS_KEY" },
+              },
+            },
+          },
+        },
+      },
+      tools: {
+        web: {
+          fetch: {
+            provider: "firecrawl",
+          },
+        },
+      },
+    });
+    const resolvedConfig = structuredClone(sourceConfig);
+    const context = createResolverContext({
+      sourceConfig,
+      env: {
+        AWS_SECRET_ACCESS_KEY: "not-allowed",
+      },
+    });
+
+    await expect(
+      resolveRuntimeWebTools({
+        sourceConfig,
+        resolvedConfig,
+        context,
+      }),
+    ).rejects.toThrow("[WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK]");
+    expect(context.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",
+          path: "plugins.entries.firecrawl.config.webFetch.apiKey",
+          message: expect.stringContaining(
+            'SecretRef env var "AWS_SECRET_ACCESS_KEY" is not allowed.',
+          ),
+        }),
+      ]),
+    );
+  });
+
   it("keeps web fetch provider discovery bundled-only during runtime secret resolution", async () => {
     const bundledSpy = vi.mocked(bundledWebFetchProviders.resolveBundledPluginWebFetchProviders);
     const runtimeSpy = vi.mocked(runtimeWebFetchProviders.resolvePluginWebFetchProviders);

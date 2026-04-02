@@ -323,6 +323,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function normalizeProviderFinalUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  for (const char of trimmed) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x20 || code === 0x7f) {
+      return undefined;
+    }
+  }
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeProviderWebFetchPayload(params: {
   providerId: string;
   payload: unknown;
@@ -334,9 +359,8 @@ function normalizeProviderWebFetchPayload(params: {
   const payload = isRecord(params.payload) ? params.payload : {};
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const wrapped = wrapWebFetchContent(rawText, params.maxChars);
-  const url = typeof payload.url === "string" && payload.url ? payload.url : params.requestedUrl;
-  const finalUrl =
-    typeof payload.finalUrl === "string" && payload.finalUrl ? payload.finalUrl : url;
+  const url = params.requestedUrl;
+  const finalUrl = normalizeProviderFinalUrl(payload.finalUrl) ?? url;
   const status =
     typeof payload.status === "number" && Number.isFinite(payload.status)
       ? Math.max(0, Math.floor(payload.status))

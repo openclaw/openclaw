@@ -88,4 +88,40 @@ describe("web_fetch provider fallback normalization", () => {
       provider: "firecrawl",
     });
   });
+
+  it("keeps requested url and only accepts safe provider finalUrl values", async () => {
+    global.fetch = withFetchPreconnect(
+      vi.fn(async () => {
+        throw new Error("network failed");
+      }),
+    );
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "firecrawl" },
+      definition: {
+        description: "firecrawl",
+        parameters: {},
+        execute: async () => ({
+          url: "javascript:alert(1)",
+          finalUrl: "file:///etc/passwd",
+          text: "provider body",
+        }),
+      },
+    });
+
+    const tool = createWebFetchTool({
+      config: {} as OpenClawConfig,
+      sandboxed: false,
+    });
+
+    const result = await tool?.execute?.("call-provider-fallback", {
+      url: "https://example.com/fallback",
+    });
+    const details = result?.details as {
+      url?: string;
+      finalUrl?: string;
+    };
+
+    expect(details.url).toBe("https://example.com/fallback");
+    expect(details.finalUrl).toBe("https://example.com/fallback");
+  });
 });

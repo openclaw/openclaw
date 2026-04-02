@@ -4,6 +4,7 @@ import {
   markdownToText,
   normalizeCacheKey,
   readCache,
+  readResponseText,
   resolveCacheTtlMs,
   truncateText,
   withStrictWebToolsEndpoint,
@@ -104,8 +105,9 @@ async function postFirecrawlJson<T>(
     async ({ response }) => {
       if (!response.ok) {
         let detail = response.statusText;
+        const errorBody = await readResponseText(response, { maxBytes: 64_000 });
         try {
-          const payload = (await response.json()) as Record<string, unknown>;
+          const payload = JSON.parse(errorBody.text) as Record<string, unknown>;
           detail =
             typeof payload.error === "string"
               ? payload.error
@@ -113,9 +115,12 @@ async function postFirecrawlJson<T>(
                 ? payload.message
                 : detail;
         } catch {
-          // Keep the HTTP status text when the response is not JSON.
+          if (errorBody.text) {
+            detail = errorBody.text;
+          }
         }
-        throw new Error(`${params.errorLabel} API error (${response.status}): ${detail}`);
+        const safeDetail = wrapWebContent(detail.slice(0, 1_000), "web_fetch");
+        throw new Error(`${params.errorLabel} API error (${response.status}): ${safeDetail}`);
       }
       return await parse(response);
     },
@@ -470,6 +475,7 @@ export async function runFirecrawlScrape(
 
 export const __testing = {
   parseFirecrawlScrapePayload,
+  postFirecrawlJson,
   resolveEndpoint,
   resolveSearchItems,
 };
