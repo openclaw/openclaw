@@ -283,9 +283,9 @@ describe("exec approvals store helpers", () => {
   });
 
   it("builds approval socket payloads and accepts decision responses only", async () => {
-    requestJsonlSocketMock.mockImplementationOnce(async ({ payload, accept, timeoutMs }) => {
+    requestJsonlSocketMock.mockImplementationOnce(async ({ requestLine, accept, timeoutMs }) => {
       expect(timeoutMs).toBe(15_000);
-      const parsed = JSON.parse(payload) as {
+      const parsed = JSON.parse(requestLine) as {
         type: string;
         token: string;
         id: string;
