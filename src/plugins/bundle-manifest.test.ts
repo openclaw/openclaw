@@ -375,6 +375,39 @@ describe("bundle manifest parsing", () => {
 
   it.each([
     {
+      name: "rejects JSON5 Codex bundle manifests that parse to non-objects",
+      bundleFormat: "codex" as const,
+      manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+    },
+    {
+      name: "rejects JSON5 Claude bundle manifests that parse to non-objects",
+      bundleFormat: "claude" as const,
+      manifestRelativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+    },
+    {
+      name: "rejects JSON5 Cursor bundle manifests that parse to non-objects",
+      bundleFormat: "cursor" as const,
+      manifestRelativePath: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+    },
+  ] as const)("$name", ({ bundleFormat, manifestRelativePath }) => {
+    const rootDir = makeTempDir();
+    setupBundleFixture({
+      rootDir,
+      dirs: [path.dirname(manifestRelativePath)],
+      textFiles: {
+        [manifestRelativePath]: "'still not an object'",
+      },
+    });
+
+    const result = loadBundleManifest({ rootDir, bundleFormat });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("plugin manifest must be an object");
+    }
+  });
+
+  it.each([
+    {
       name: "resolves Claude bundle hooks from default and declared paths",
       setupKind: "default-hooks",
       expectedHooks: ["hooks/hooks.json"],

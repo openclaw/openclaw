@@ -90,4 +90,14 @@ describe("loadPluginManifest JSON5 tolerance", () => {
       expect(result.error).toContain("failed to parse plugin manifest");
     }
   });
+
+  it("rejects JSON5 values that parse but are not objects", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), "'just a string'", "utf-8");
+    const result = loadPluginManifest(dir, false);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("plugin manifest must be an object");
+    }
+  });
 });
