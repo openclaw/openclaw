@@ -231,7 +231,7 @@ flowchart TD
     Deep pages:
 
     - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
-    - [/automation/troubleshooting](/automation/troubleshooting)
+    - [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
     - [/gateway/heartbeat](/gateway/heartbeat)
 
   </Accordion>
@@ -350,4 +350,4 @@ flowchart TD
 - [Gateway Troubleshooting](/gateway/troubleshooting) — gateway-specific issues
 - [Doctor](/gateway/doctor) — automated health checks and repairs
 - [Channel Troubleshooting](/channels/troubleshooting) — channel connectivity issues
-- [Automation Troubleshooting](/automation/troubleshooting) — cron and heartbeat issues
+- [Automation Troubleshooting](/automation/cron-jobs#troubleshooting) — cron and heartbeat issues
