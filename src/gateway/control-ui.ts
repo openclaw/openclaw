@@ -232,8 +232,32 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string) {
-  const hashes = computeInlineScriptHashes(body);
+function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath: string) {
+  // Inject basePath into the HTML so the frontend knows the correct basePath from the start.
+  // This fixes the issue where the frontend infers basePath from URL pathname before
+  // the bootstrap config is loaded, causing a mismatch when the gateway serves at a different path.
+  let html = body;
+  if (basePath) {
+    // Escape for safe embedding in an inline <script> tag:
+    // 1. JSON.stringify escapes JS string characters (quotes, backslashes, etc.)
+    // 2. Replace < and > with JS escape sequences to prevent </script> injection
+    //    which could break out of the script tag and allow XSS.
+    const escapedPath = JSON.stringify(basePath).replace(/</g, "\\x3c").replace(/>/g, "\\x3e");
+    const script = `<script>window.__OPENCLAW_CONTROL_UI_BASE_PATH__=${escapedPath};</script>`;
+    // Insert after the opening <head> tag, before any other content.
+    // Use a callback function to avoid replacement-token expansion (e.g., $&, $`, $').
+    // If <head> is not found, prepend the script as a fallback.
+    let injected = false;
+    html = html.replace(/<head[^>]*>/i, (match) => {
+      injected = true;
+      return match + script;
+    });
+    if (!injected) {
+      html = script + html;
+    }
+  }
+  // Compute CSP hashes for any inline scripts (including the basePath script we may have injected)
+  const hashes = computeInlineScriptHashes(html);
   if (hashes.length > 0) {
     res.setHeader(
       "Content-Security-Policy",
@@ -242,7 +266,7 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(body);
+  res.end(html);
 }
 
 function isExpectedSafePathError(error: unknown): boolean {
@@ -447,7 +471,7 @@ export function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"), basePath);
         return true;
       }
       serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
@@ -475,7 +499,7 @@ export function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
+      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"), basePath);
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);
