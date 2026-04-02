@@ -170,6 +170,67 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     // Windows returns empty array (uses existing PATH)
     expect(result).toEqual([]);
   });
+
+  it("includes default Nix Home Manager profile on Linux", () => {
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+    });
+
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
+  });
+
+  it("includes Nix Home Manager profile directories on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /home/testuser/.nix-profile",
+      },
+    });
+
+    // Should include default Nix profile
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
+    // Should include all profiles from NIX_PROFILES env var
+    expect(result).toContain("/nix/var/nix/profiles/default/bin");
+  });
+
+  it("handles single Nix profile from NIX_PROFILES on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
+      },
+    });
+
+    expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
+  });
+
+  it("includes default Nix Home Manager profile on macOS", () => {
+    const result = getMinimalServicePathParts({
+      platform: "darwin",
+      home: "/Users/testuser",
+    });
+
+    expect(result).toContain("/Users/testuser/.nix-profile/bin");
+  });
+
+  it("includes Nix Home Manager profile directories on macOS", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /Users/testuser/.nix-profile",
+      },
+    });
+
+    // Should include default Nix profile
+    expect(result).toContain("/Users/testuser/.nix-profile/bin");
+    // Should include all profiles from NIX_PROFILES env var
+    expect(result).toContain("/nix/var/nix/profiles/default/bin");
+  });
 });
 
 describe("buildMinimalServicePath", () => {

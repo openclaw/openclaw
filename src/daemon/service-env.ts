@@ -105,6 +105,35 @@ function addCommonEnvConfiguredBinDirs(
   addNonEmptyDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"));
 }
 
+/**
+ * Add Nix Home Manager bin directories.
+ * Works across all Unix platforms (macOS, Linux, BSD, etc.).
+ *
+ * Nix profiles can be in multiple locations:
+ * - ~/.nix-profile/bin (default single-user profile)
+ * - NIX_PROFILES env var (space-separated list of profile paths for multi-profile setups)
+ */
+function addNixProfileBinDirs(
+  dirs: string[],
+  home: string,
+  env: Record<string, string | undefined> | undefined,
+): void {
+  // Default single-user Nix profile
+  dirs.push(`${home}/.nix-profile/bin`);
+
+  // Multi-profile support: NIX_PROFILES is a space-separated list of profile paths
+  // Example: "/nix/var/nix/profiles/default /home/user/.nix-profile"
+  const nixProfiles = env?.NIX_PROFILES?.trim();
+  if (nixProfiles) {
+    const profiles = nixProfiles.split(/\s+/);
+    for (const profile of profiles) {
+      if (profile) {
+        addNonEmptyDir(dirs, appendSubdir(profile, "bin"));
+      }
+    }
+  }
+}
+
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   if (platform === "darwin") {
     return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
@@ -147,6 +176,9 @@ export function resolveDarwinUserBinDirs(
   // Common user bin directories
   addCommonUserBinDirs(dirs, home);
 
+  // Nix Home Manager (cross-platform)
+  addNixProfileBinDirs(dirs, home, env);
+
   // Node version managers - macOS specific paths
   // nvm: no stable default path, depends on user's shell configuration
   // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
@@ -180,6 +212,9 @@ export function resolveLinuxUserBinDirs(
 
   // Common user bin directories
   addCommonUserBinDirs(dirs, home);
+
+  // Nix Home Manager (cross-platform)
+  addNixProfileBinDirs(dirs, home, env);
 
   // Node version managers
   dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
