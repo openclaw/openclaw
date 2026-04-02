@@ -17,11 +17,13 @@ import { buildGeminiEmbeddingRequest } from "./embeddings-gemini.js";
 import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
+  chunkMarkdownWithOffset,
   hashText,
   parseEmbedding,
   remapChunkLines,
   type MemoryChunk,
   type MemoryFileEntry,
+  type ChunkWithOffset,
 } from "./internal.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 import type { SessionFileEntry } from "./session-files.js";
@@ -794,10 +796,260 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(pathname, source);
   }
 
+  private deleteChunksById(ids: string[], pathname: string, source: MemorySource): void {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => "?").join(", ");
+    // Delete vectors
+    if (this.vector.enabled) {
+      try {
+        this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id IN (${placeholders})`).run(...ids);
+      } catch {}
+    }
+    // Delete FTS
+    if (this.fts.enabled && this.fts.available) {
+      try {
+        this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE id IN (${placeholders})`).run(...ids);
+      } catch {}
+    }
+    // Delete chunks
+    this.db.prepare(`DELETE FROM chunks WHERE id IN (${placeholders})`).run(...ids);
+  }
+
   private isStructuredInputTooLargeError(message: string): boolean {
     return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
       message,
     );
+  }
+
+  protected async indexSessionFileIncremental(
+    entry: SessionFileEntry,
+    options: { source: MemorySource; content: string },
+  ) {
+    if (!this.provider) {
+      log.debug("Skipping embedding indexing in FTS-only mode", {
+        path: entry.path,
+        source: options.source,
+      });
+      return;
+    }
+
+    // 1. Generate chunks from full content
+    const rawChunks = enforceEmbeddingMaxInputTokens(
+      this.provider,
+      chunkMarkdownWithOffset(options.content, this.settings.chunking).filter(
+        (chunk) => chunk.text.trim().length > 0,
+      ),
+      EMBEDDING_BATCH_MAX_TOKENS,
+    );
+    const allChunks: ChunkWithOffset[] = rawChunks.map((chunk) => ({
+      ...chunk,
+      startOffset: ("startOffset" in chunk ? chunk.startOffset : 0) as number,
+      endOffset: ("endOffset" in chunk ? chunk.endOffset : 0) as number,
+    }));
+    if ("lineMap" in entry) {
+      remapChunkLines(allChunks, entry.lineMap);
+    }
+
+    // 2. Get ALL existing chunks from database
+    const existingRows = this.db
+      .prepare(
+        `SELECT id, start_line, end_line, hash, model, text, embedding, updated_at
+         FROM chunks
+         WHERE path = ? AND source = ?`,
+      )
+      .all(entry.path, options.source) as Array<{
+      id: string;
+      start_line: number;
+      end_line: number;
+      hash: string;
+      model: string;
+      text: string;
+      embedding: string;
+      updated_at: number;
+    }>;
+
+    // 3. Build lookup by hash (not position) for existing chunks
+    const existingByHash = new Map<string, Array<(typeof existingRows)[0]>>();
+    const usedExistingIds = new Set<string>();
+    for (const row of existingRows) {
+      const bucket = existingByHash.get(row.hash) ?? [];
+      bucket.push(row);
+      existingByHash.set(row.hash, bucket);
+    }
+
+    // 4. Categorize chunks by matching hash
+    const chunksToEmbed: ChunkWithOffset[] = [];
+    const chunksToUpdate: Array<{ existing: (typeof existingRows)[0]; chunk: ChunkWithOffset }> =
+      [];
+
+    for (const chunk of allChunks) {
+      const bucket = existingByHash.get(chunk.hash);
+      const existing = bucket?.shift();
+      if (existing && existing.model === this.provider?.model) {
+        // Hash matches - chunk is unchanged, skip re-embedding
+        usedExistingIds.add(existing.id);
+      } else if (existing && existing.model !== this.provider?.model) {
+        // Hash matches but model changed, update
+        chunksToUpdate.push({ existing, chunk });
+        usedExistingIds.add(existing.id);
+      } else {
+        // New or changed chunk
+        chunksToEmbed.push(chunk);
+      }
+    }
+
+    // 5. Delete chunks that are no longer in the content
+    const chunksToDelete: string[] = existingRows
+      .filter((row) => !usedExistingIds.has(row.id))
+      .map((row) => row.id);
+
+    if (chunksToDelete.length > 0) {
+      this.deleteChunksById(chunksToDelete, entry.path, options.source);
+    }
+
+    // 6. Calculate embeddings for new/changed chunks
+    const allNeedEmbedding = [...chunksToEmbed, ...chunksToUpdate.map((u) => u.chunk)];
+    let embeddings: number[][] = [];
+    if (allNeedEmbedding.length > 0) {
+      try {
+        embeddings = this.batch.enabled
+          ? await this.embedChunksWithBatch(allNeedEmbedding, entry, options.source)
+          : await this.embedChunksInBatches(allNeedEmbedding);
+      } catch (err) {
+        throw err;
+      }
+    }
+
+    const sample = embeddings.find((embedding) => embedding.length > 0);
+    const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
+    const now = Date.now();
+
+    // 7. Insert new chunks
+    for (let i = 0; i < chunksToEmbed.length; i++) {
+      const chunk = chunksToEmbed[i];
+      const embedding = embeddings[i] ?? [];
+      const id = hashText(
+        `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${this.provider.model}`,
+      );
+      this.db
+        .prepare(
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, start_offset, end_offset)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          entry.path,
+          options.source,
+          chunk.startLine,
+          chunk.endLine,
+          chunk.hash,
+          this.provider.model,
+          chunk.text,
+          JSON.stringify(embedding),
+          now,
+          chunk.startOffset,
+          chunk.endOffset,
+        );
+      if (vectorReady && embedding.length > 0) {
+        try {
+          this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(id);
+        } catch {}
+        this.db
+          .prepare(`INSERT INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
+          .run(id, vectorToBlob(embedding));
+      }
+      if (this.fts.enabled && this.fts.available) {
+        this.db
+          .prepare(
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            chunk.text,
+            id,
+            entry.path,
+            options.source,
+            this.provider.model,
+            chunk.startLine,
+            chunk.endLine,
+          );
+      }
+    }
+
+    // 8. Update chunks where hash matches but model changed
+    for (let i = 0; i < chunksToUpdate.length; i++) {
+      const { existing, chunk } = chunksToUpdate[i];
+      const embedding = embeddings[chunksToEmbed.length + i] ?? [];
+      const newId = hashText(
+        `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${this.provider.model}`,
+      );
+
+      if (newId !== existing.id) {
+        try {
+          this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(existing.id);
+        } catch {}
+        if (this.fts.enabled && this.fts.available) {
+          try {
+            this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE id = ?`).run(existing.id);
+          } catch {}
+        }
+        this.db.prepare(`DELETE FROM chunks WHERE id = ?`).run(existing.id);
+      }
+
+      this.db
+        .prepare(
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, start_offset, end_offset)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             hash=excluded.hash,
+             model=excluded.model,
+             text=excluded.text,
+             embedding=excluded.embedding,
+             updated_at=excluded.updated_at,
+             start_offset=excluded.start_offset,
+             end_offset=excluded.end_offset`,
+        )
+        .run(
+          newId,
+          entry.path,
+          options.source,
+          chunk.startLine,
+          chunk.endLine,
+          chunk.hash,
+          this.provider.model,
+          chunk.text,
+          JSON.stringify(embedding),
+          now,
+          chunk.startOffset,
+          chunk.endOffset,
+        );
+      if (vectorReady && embedding.length > 0) {
+        try {
+          this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(newId);
+        } catch {}
+        this.db
+          .prepare(`INSERT INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
+          .run(newId, vectorToBlob(embedding));
+      }
+      if (this.fts.enabled && this.fts.available) {
+        this.db
+          .prepare(
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            chunk.text,
+            newId,
+            entry.path,
+            options.source,
+            this.provider.model,
+            chunk.startLine,
+            chunk.endLine,
+          );
+      }
+    }
+
+    this.upsertFileRecord(entry, options.source);
   }
 
   protected async indexFile(
