@@ -685,6 +685,141 @@ describe("gateway server chat", () => {
     ]);
   });
 
+  test("chat.history hides internal /new startup sequence and bootstrap read tool chatter", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content:
+          "A new session was started via /new or /reset. Run your Session Startup sequence - read the required files before responding to the user. Then greet the user in your configured persona, if one is provided. Do not mention internal steps, files, tools, or reasoning.\nCurrent time: Thursday, April 2nd, 2026 — 20:49 (Asia/Shanghai) / 2026-04-02 12:49 UTC",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "read:0",
+            name: "read",
+            arguments: { file_path: "/home/user/.openclaw/workspace/SOUL.md" },
+          },
+          {
+            type: "toolCall",
+            id: "read:1",
+            name: "read",
+            arguments: { file_path: "/home/user/.openclaw/workspace/USER.md" },
+          },
+          {
+            type: "toolCall",
+            id: "read:2",
+            name: "read",
+            arguments: { file_path: "/home/user/.openclaw/workspace/IDENTITY.md" },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "read:0",
+        toolName: "read",
+        content: [{ type: "text", text: "SOUL" }],
+        timestamp: 3,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "read:1",
+        toolName: "read",
+        content: [{ type: "text", text: "USER" }],
+        timestamp: 4,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "read:2",
+        toolName: "read",
+        content: [{ type: "text", text: "IDENTITY" }],
+        timestamp: 5,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Hey. I just came online. Who am I? Who are you?" }],
+        timestamp: 6,
+      },
+    ]);
+
+    const roleAndText = historyMessages
+      .map((message) => {
+        const role =
+          message &&
+          typeof message === "object" &&
+          typeof (message as { role?: unknown }).role === "string"
+            ? (message as { role: string }).role
+            : "unknown";
+        const text =
+          message &&
+          typeof message === "object" &&
+          typeof (message as { text?: unknown }).text === "string"
+            ? (message as { text: string }).text
+            : (extractFirstTextBlock(message) ?? "");
+        return `${role}:${text}`;
+      })
+      .filter((entry) => entry !== "unknown:");
+
+    expect(roleAndText).toEqual(["assistant:Hey. I just came online. Who am I? Who are you?"]);
+  });
+
+  test("chat.history hides bare /new command and subsequent startup bootstrap chatter", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "/new" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "read:0",
+            name: "read",
+            arguments: { file_path: "/home/user/.openclaw/workspace/SOUL.md" },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "read:0",
+        toolName: "read",
+        content: [{ type: "text", text: "SOUL" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello after reset" }],
+        timestamp: 4,
+      },
+    ]);
+
+    const roleAndText = historyMessages
+      .map((message) => {
+        const role =
+          message &&
+          typeof message === "object" &&
+          typeof (message as { role?: unknown }).role === "string"
+            ? (message as { role: string }).role
+            : "unknown";
+        const text =
+          message &&
+          typeof message === "object" &&
+          typeof (message as { text?: unknown }).text === "string"
+            ? (message as { text: string }).text
+            : (extractFirstTextBlock(message) ?? "");
+        return `${role}:${text}`;
+      })
+      .filter((entry) => entry !== "unknown:");
+
+    expect(roleAndText).toEqual(["assistant:Hello after reset"]);
+  });
+
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {
     await withGatewayServer(async ({ port }) => {
       await withMainSessionStore(async () => {

@@ -105,6 +105,24 @@ type ChatAbortRequester = {
 const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const SESSION_RESET_PROMPT_REQUIRED_MARKERS = [
+  "/new or /reset",
+  "session startup sequence",
+] as const;
+const SESSION_RESET_PROMPT_OPTIONAL_MARKERS = [
+  "read the required files before responding",
+  "do not mention internal steps, files, tools, or reasoning",
+] as const;
+const STARTUP_BOOTSTRAP_BASENAMES = new Set([
+  "agents.md",
+  "soul.md",
+  "tools.md",
+  "identity.md",
+  "user.md",
+  "heartbeat.md",
+  "bootstrap.md",
+  "memory.md",
+]);
 let chatHistoryPlaceholderEmitCount = 0;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
@@ -718,7 +736,41 @@ function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unk
   }
   let changed = false;
   const next: unknown[] = [];
+  const startupReadToolCallIds = new Set<string>();
+  let suppressStartupSequence = false;
   for (const message of messages) {
+    if (isResetCommandMessage(message)) {
+      changed = true;
+      suppressStartupSequence = true;
+      continue;
+    }
+    if (isSessionResetInstructionMessage(message)) {
+      changed = true;
+      suppressStartupSequence = true;
+      continue;
+    }
+    if (suppressStartupSequence) {
+      const startupRead = classifyStartupBootstrapReadMessage(message);
+      if (startupRead.kind === "assistant-read-tool-calls") {
+        changed = true;
+        for (const callId of startupRead.callIds) {
+          startupReadToolCallIds.add(callId);
+        }
+        continue;
+      }
+      if (
+        startupRead.kind === "tool-result" &&
+        startupRead.callId &&
+        startupReadToolCallIds.has(startupRead.callId)
+      ) {
+        changed = true;
+        continue;
+      }
+      if (hasAssistantVisibleText(message)) {
+        suppressStartupSequence = false;
+      }
+    }
+
     // Drop assistant messages whose entire visible text is the silent reply token.
     const text = extractAssistantTextForSilentCheck(message);
     if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
@@ -730,6 +782,111 @@ function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unk
     next.push(res.message);
   }
   return changed ? next : messages;
+}
+
+function isSessionResetInstructionMessage(message: unknown): boolean {
+  const text = extractVisibleTextForHistoryFilter(message);
+  if (text === undefined) {
+    return false;
+  }
+  const normalized = text.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!SESSION_RESET_PROMPT_REQUIRED_MARKERS.every((marker) => normalized.includes(marker))) {
+    return false;
+  }
+  return SESSION_RESET_PROMPT_OPTIONAL_MARKERS.some((marker) => normalized.includes(marker));
+}
+
+function hasAssistantVisibleText(message: unknown): boolean {
+  const text = extractAssistantTextForSilentCheck(message);
+  return typeof text === "string" && text.trim().length > 0;
+}
+
+function extractVisibleTextForHistoryFilter(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as Record<string, unknown>;
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (!Array.isArray(entry.content) || entry.content.length === 0) {
+    return undefined;
+  }
+  const texts: string[] = [];
+  for (const block of entry.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typed = block as Record<string, unknown>;
+    if (typed.type === "text" && typeof typed.text === "string") {
+      texts.push(typed.text);
+    }
+  }
+  return texts.length > 0 ? texts.join("\n") : undefined;
+}
+
+function classifyStartupBootstrapReadMessage(
+  message: unknown,
+):
+  | { kind: "none" }
+  | { kind: "assistant-read-tool-calls"; callIds: string[] }
+  | { kind: "tool-result"; callId?: string } {
+  if (!message || typeof message !== "object") {
+    return { kind: "none" };
+  }
+  const entry = message as Record<string, unknown>;
+  const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  if (role === "toolresult") {
+    return {
+      kind: "tool-result",
+      callId: typeof entry.toolCallId === "string" ? entry.toolCallId : undefined,
+    };
+  }
+  if (role !== "assistant" || !Array.isArray(entry.content) || entry.content.length === 0) {
+    return { kind: "none" };
+  }
+  const callIds: string[] = [];
+  for (const block of entry.content) {
+    if (!block || typeof block !== "object") {
+      return { kind: "none" };
+    }
+    const typed = block as Record<string, unknown>;
+    if (typed.type !== "toolCall" || typed.name !== "read") {
+      return { kind: "none" };
+    }
+    const args = typed.arguments as Record<string, unknown> | undefined;
+    const filePath = typeof args?.file_path === "string" ? args.file_path : "";
+    const baseName = filePath.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+    if (!STARTUP_BOOTSTRAP_BASENAMES.has(baseName)) {
+      return { kind: "none" };
+    }
+    if (typeof typed.id === "string" && typed.id.trim()) {
+      callIds.push(typed.id);
+    }
+  }
+  return { kind: "assistant-read-tool-calls", callIds };
+}
+
+function isResetCommandMessage(message: unknown): boolean {
+  const text = extractVisibleTextForHistoryFilter(message);
+  if (typeof text !== "string") {
+    return false;
+  }
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const role =
+    typeof (message as { role?: unknown }).role === "string"
+      ? (message as { role: string }).role.toLowerCase()
+      : "";
+  if (role !== "user") {
+    return false;
+  }
+  const normalized = text.trim().toLowerCase();
+  return normalized === "/new" || normalized === "/reset";
 }
 
 function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
