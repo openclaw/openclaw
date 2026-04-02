@@ -40,6 +40,9 @@ export const unitTestAdditionalExcludePatterns = [
   "src/channels/plugins/contracts/**",
   "src/plugins/contracts/**",
   ...bundledPluginDependentUnitTestFiles,
+  "src/config/doc-baseline.integration.test.ts",
+  "src/config/schema.base.generated.test.ts",
+  "src/config/schema.help.quality.test.ts",
   "test/**",
 ];
 
