@@ -1117,7 +1117,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
   function makeTextReplyDedupeResult(overrides?: Record<string, unknown>) {
     return {
       payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["different message"],
+      messagingToolSentTexts: ["hello world!"],
       ...overrides,
     };
   }

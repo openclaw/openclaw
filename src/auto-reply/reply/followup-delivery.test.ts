@@ -43,19 +43,20 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ mediaUrl: undefined, mediaUrls: undefined }]);
   });
 
-  it("suppresses replies when a messaging tool already sent to the same provider and target", () => {
+  it("keeps different-text replies when a messaging tool already sent to the same provider and target", () => {
     expect(
       resolveFollowupDeliveryPayloads({
         cfg: baseConfig,
         payloads: [{ text: "hello world!" }],
         messageProvider: "slack",
         originatingTo: "channel:C1",
+        sentTexts: ["different message"],
         sentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
       }),
-    ).toEqual([]);
+    ).toEqual([{ text: "hello world!" }]);
   });
 
-  it("suppresses replies when originating channel resolves the provider", () => {
+  it("deduplicates same-text replies when originating channel resolves the provider", () => {
     expect(
       resolveFollowupDeliveryPayloads({
         cfg: baseConfig,
@@ -63,8 +64,24 @@ describe("resolveFollowupDeliveryPayloads", () => {
         messageProvider: "heartbeat",
         originatingChannel: "telegram",
         originatingTo: "268300329",
+        sentTexts: ["hello world!"],
         sentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
       }),
     ).toEqual([]);
+  });
+
+  it("keeps final text when a same-target messaging tool send only duplicated media", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "Setup complete! Here is the summary..." }],
+        messageProvider: "heartbeat",
+        originatingChannel: "discord",
+        originatingTo: "channel:1489265252167323680",
+        sentMediaUrls: ["file:///tmp/test.mp3"],
+        sentTargets: [{ tool: "message", provider: "discord", to: "channel:1489265252167323680" }],
+        sentTexts: ["Test audio 🟢"],
+      }),
+    ).toEqual([{ text: "Setup complete! Here is the summary..." }]);
   });
 });
