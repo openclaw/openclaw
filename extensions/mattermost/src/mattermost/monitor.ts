@@ -1263,7 +1263,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return;
     }
     let fileIds = post.file_ids ?? [];
-    if (fileIds.length === 0) {
+    // Skip re-fetch for debounced merged posts: the merged payload carries only
+    // the last post's id, so re-fetching would query the wrong post.  Debounced
+    // batches already bypass file-bearing messages (shouldDebounce returns false
+    // when file_ids is non-empty), so this is a known gap only when a file post
+    // is batched with a later text post.
+    if (fileIds.length === 0 && !messageIds) {
       fileIds = await refetchPostFileIds(post.id);
     }
     const mediaList = await resolveMattermostMedia(fileIds);

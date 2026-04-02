@@ -174,7 +174,31 @@ describe("mattermost monitor resources", () => {
     expect(fetchMattermostPost).toHaveBeenCalledTimes(2);
   });
 
-  it("refetchPostFileIds returns empty array when REST fetch fails", async () => {
+  it("refetchPostFileIds continues retrying after transient REST errors", async () => {
+    fetchMattermostPost
+      .mockRejectedValueOnce(new Error("network error"))
+      .mockResolvedValueOnce({ id: "post-1", file_ids: ["f1"], message: "hello" });
+    const debugSpy = vi.fn();
+    const { createMattermostMonitorResources } = await import("./monitor-resources.js");
+
+    const resources = createMattermostMonitorResources({
+      ...defaultResourceParams,
+      logger: { debug: debugSpy },
+    });
+
+    const promise = resources.refetchPostFileIds("post-1");
+    // first attempt at 500ms fails, second at 500+1500=2000ms succeeds
+    await vi.advanceTimersByTimeAsync(2000);
+    const result = await promise;
+
+    expect(result).toEqual(["f1"]);
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining("failed to re-fetch post post-1"),
+    );
+    expect(fetchMattermostPost).toHaveBeenCalledTimes(2);
+  });
+
+  it("refetchPostFileIds returns empty array when all retries fail", async () => {
     fetchMattermostPost.mockRejectedValue(new Error("network error"));
     const debugSpy = vi.fn();
     const { createMattermostMonitorResources } = await import("./monitor-resources.js");
@@ -185,13 +209,11 @@ describe("mattermost monitor resources", () => {
     });
 
     const promise = resources.refetchPostFileIds("post-1");
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(2000);
     const result = await promise;
 
     expect(result).toEqual([]);
-    expect(debugSpy).toHaveBeenCalledWith(
-      expect.stringContaining("failed to re-fetch post post-1"),
-    );
+    expect(debugSpy).toHaveBeenCalledTimes(2);
   });
 
   it("refetchPostFileIds returns empty array after all retries exhausted", async () => {
