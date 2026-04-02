@@ -2491,6 +2491,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     additionalProperties: false,
                   },
+                  notifyUser: {
+                    type: "boolean",
+                  },
                 },
                 additionalProperties: false,
               },
@@ -13863,6 +13866,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
       tags: ["advanced"],
     },
+    "agents.defaults.compaction.notifyUser": {
+      label: "Compaction Notify User",
+      help: "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
+      tags: ["advanced"],
+    },
     "agents.defaults.compaction.memoryFlush": {
       label: "Compaction Memory Flush",
       help: "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
@@ -15304,6 +15312,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.1",
+  version: "2026.4.2",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

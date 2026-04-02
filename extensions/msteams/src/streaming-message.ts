@@ -214,6 +214,16 @@ export class TeamsHttpStream {
     return this.accumulatedText.length > 0 && !this.streamFailed;
   }
 
+  /** Whether streaming failed and fallback delivery is needed. */
+  get isFailed(): boolean {
+    return this.streamFailed;
+  }
+
+  /** Number of characters successfully streamed before failure. */
+  get streamedLength(): number {
+    return this.lastStreamedText.length;
+  }
+
   /** Whether the stream has been finalized. */
   get isFinalized(): boolean {
     return this.finalized;
