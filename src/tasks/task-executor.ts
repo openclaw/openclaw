@@ -6,12 +6,14 @@ import {
   createFlowForTask,
   deleteFlowRecordById,
   getFlowById,
+  requestFlowCancel,
   updateFlowRecordByIdExpectedRevision,
 } from "./flow-runtime-internal.js";
 import {
   cancelTaskById,
   createTaskRecord,
   findLatestTaskForFlowId,
+  isParentFlowLinkError,
   linkTaskToFlowById,
   listTasksForFlowId,
   markTaskLostById,
@@ -293,7 +295,7 @@ function resolveRetryableBlockedFlowTask(flowId: string): {
       flowFound: true,
       retryable: false,
       latestTask,
-      reason: "Latest flow task is not blocked.",
+      reason: "Latest TaskFlow task is not blocked.",
     };
   }
   return {
@@ -376,6 +378,14 @@ type CancelFlowResult = {
   tasks?: TaskRecord[];
 };
 
+type RunTaskInFlowResult = {
+  found: boolean;
+  created: boolean;
+  reason?: string;
+  flow?: FlowRecord;
+  task?: TaskRecord;
+};
+
 function isActiveTaskStatus(status: TaskStatus): boolean {
   return status === "queued" || status === "running";
 }
@@ -384,6 +394,237 @@ function isTerminalFlowStatus(status: FlowRecord["status"]): boolean {
   return (
     status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
   );
+}
+
+function markFlowCancelRequested(flow: FlowRecord): FlowRecord | FlowUpdateFailure {
+  if (flow.cancelRequestedAt != null) {
+    return flow;
+  }
+  const result = requestFlowCancel({
+    flowId: flow.flowId,
+    expectedRevision: flow.revision,
+  });
+  if (result.applied) {
+    return result.flow;
+  }
+  return {
+    reason:
+      result.reason === "revision_conflict"
+        ? "Flow changed while cancellation was in progress."
+        : "Flow not found.",
+    flow: result.current ?? getFlowById(flow.flowId),
+  };
+}
+
+type FlowUpdateFailure = {
+  reason: string;
+  flow?: FlowRecord;
+};
+
+function cancelManagedFlowAfterChildrenSettle(
+  flow: FlowRecord,
+  endedAt: number,
+): FlowRecord | FlowUpdateFailure {
+  const result = updateFlowRecordByIdExpectedRevision({
+    flowId: flow.flowId,
+    expectedRevision: flow.revision,
+    patch: {
+      status: "cancelled",
+      blockedTaskId: null,
+      blockedSummary: null,
+      waitJson: null,
+      endedAt,
+      updatedAt: endedAt,
+    },
+  });
+  if (result.applied) {
+    return result.flow;
+  }
+  return {
+    reason:
+      result.reason === "revision_conflict"
+        ? "Flow changed while cancellation was in progress."
+        : "Flow not found.",
+    flow: result.current ?? getFlowById(flow.flowId),
+  };
+}
+
+function mapRunTaskInFlowCreateError(params: {
+  error: unknown;
+  flowId: string;
+}): RunTaskInFlowResult {
+  const flow = getFlowById(params.flowId);
+  if (isParentFlowLinkError(params.error)) {
+    if (params.error.code === "cancel_requested") {
+      return {
+        found: true,
+        created: false,
+        reason: "Flow cancellation has already been requested.",
+        ...(flow ? { flow } : {}),
+      };
+    }
+    if (params.error.code === "terminal") {
+      const terminalStatus = flow?.status ?? params.error.details?.status ?? "terminal";
+      return {
+        found: true,
+        created: false,
+        reason: `Flow is already ${terminalStatus}.`,
+        ...(flow ? { flow } : {}),
+      };
+    }
+    if (params.error.code === "parent_flow_not_found") {
+      return {
+        found: false,
+        created: false,
+        reason: "Flow not found.",
+      };
+    }
+  }
+  throw params.error;
+}
+
+export function runTaskInFlow(params: {
+  flowId: string;
+  runtime: TaskRuntime;
+  sourceId?: string;
+  childSessionKey?: string;
+  parentTaskId?: string;
+  agentId?: string;
+  runId?: string;
+  label?: string;
+  task: string;
+  preferMetadata?: boolean;
+  notifyPolicy?: TaskNotifyPolicy;
+  deliveryStatus?: TaskDeliveryStatus;
+  status?: "queued" | "running";
+  startedAt?: number;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+}): RunTaskInFlowResult {
+  const flow = getFlowById(params.flowId);
+  if (!flow) {
+    return {
+      found: false,
+      created: false,
+      reason: "Flow not found.",
+    };
+  }
+  if (flow.syncMode !== "managed") {
+    return {
+      found: true,
+      created: false,
+      reason: "Flow does not accept managed child tasks.",
+      flow,
+    };
+  }
+  if (flow.cancelRequestedAt != null) {
+    return {
+      found: true,
+      created: false,
+      reason: "Flow cancellation has already been requested.",
+      flow,
+    };
+  }
+  if (isTerminalFlowStatus(flow.status)) {
+    return {
+      found: true,
+      created: false,
+      reason: `Flow is already ${flow.status}.`,
+      flow,
+    };
+  }
+
+  const common = {
+    runtime: params.runtime,
+    sourceId: params.sourceId,
+    ownerKey: flow.ownerKey,
+    scopeKind: "session" as const,
+    requesterOrigin: flow.requesterOrigin,
+    parentFlowId: flow.flowId,
+    childSessionKey: params.childSessionKey,
+    parentTaskId: params.parentTaskId,
+    agentId: params.agentId,
+    runId: params.runId,
+    label: params.label,
+    task: params.task,
+    preferMetadata: params.preferMetadata,
+    notifyPolicy: params.notifyPolicy,
+    deliveryStatus: params.deliveryStatus ?? "pending",
+  };
+  let task: TaskRecord;
+  try {
+    task =
+      params.status === "running"
+        ? createRunningTaskRun({
+            ...common,
+            startedAt: params.startedAt,
+            lastEventAt: params.lastEventAt,
+            progressSummary: params.progressSummary,
+          })
+        : createQueuedTaskRun(common);
+  } catch (error) {
+    return mapRunTaskInFlowCreateError({
+      error,
+      flowId: flow.flowId,
+    });
+  }
+
+  return {
+    found: true,
+    created: true,
+    flow: getFlowById(flow.flowId) ?? flow,
+    task,
+  };
+}
+
+export function runTaskInFlowForOwner(params: {
+  flowId: string;
+  callerOwnerKey: string;
+  runtime: TaskRuntime;
+  sourceId?: string;
+  childSessionKey?: string;
+  parentTaskId?: string;
+  agentId?: string;
+  runId?: string;
+  label?: string;
+  task: string;
+  preferMetadata?: boolean;
+  notifyPolicy?: TaskNotifyPolicy;
+  deliveryStatus?: TaskDeliveryStatus;
+  status?: "queued" | "running";
+  startedAt?: number;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+}): RunTaskInFlowResult {
+  const flow = getFlowByIdForOwner({
+    flowId: params.flowId,
+    callerOwnerKey: params.callerOwnerKey,
+  });
+  if (!flow) {
+    return {
+      found: false,
+      created: false,
+      reason: "Flow not found.",
+    };
+  }
+  return runTaskInFlow({
+    flowId: flow.flowId,
+    runtime: params.runtime,
+    sourceId: params.sourceId,
+    childSessionKey: params.childSessionKey,
+    parentTaskId: params.parentTaskId,
+    agentId: params.agentId,
+    runId: params.runId,
+    label: params.label,
+    task: params.task,
+    preferMetadata: params.preferMetadata,
+    notifyPolicy: params.notifyPolicy,
+    deliveryStatus: params.deliveryStatus,
+    status: params.status,
+    startedAt: params.startedAt,
+    lastEventAt: params.lastEventAt,
+    progressSummary: params.progressSummary,
+  });
 }
 
 export async function cancelFlowById(params: {
@@ -396,6 +637,25 @@ export async function cancelFlowById(params: {
       found: false,
       cancelled: false,
       reason: "Flow not found.",
+    };
+  }
+  if (isTerminalFlowStatus(flow.status)) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: `Flow is already ${flow.status}.`,
+      flow,
+      tasks: listTasksForFlowId(flow.flowId),
+    };
+  }
+  const cancelRequestedFlow = markFlowCancelRequested(flow);
+  if ("reason" in cancelRequestedFlow) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: cancelRequestedFlow.reason,
+      flow: cancelRequestedFlow.flow,
+      tasks: listTasksForFlowId(flow.flowId),
     };
   }
   const linkedTasks = listTasksForFlowId(flow.flowId);
@@ -413,48 +673,38 @@ export async function cancelFlowById(params: {
       found: true,
       cancelled: false,
       reason: "One or more child tasks are still active.",
-      flow: getFlowById(flow.flowId),
-      tasks: refreshedTasks,
-    };
-  }
-  if (isTerminalFlowStatus(flow.status)) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: `Flow is already ${flow.status}.`,
-      flow,
+      flow: getFlowById(flow.flowId) ?? cancelRequestedFlow,
       tasks: refreshedTasks,
     };
   }
   const now = Date.now();
-  const refreshedFlow = getFlowById(flow.flowId) ?? flow;
-  const updatedFlowResult = updateFlowRecordByIdExpectedRevision({
-    flowId: refreshedFlow.flowId,
-    expectedRevision: refreshedFlow.revision,
-    patch: {
-      status: "cancelled",
-      blockedTaskId: null,
-      blockedSummary: null,
-      endedAt: now,
-      updatedAt: now,
-    },
-  });
-  if (!updatedFlowResult.applied) {
+  const refreshedFlow = getFlowById(flow.flowId) ?? cancelRequestedFlow;
+  if (isTerminalFlowStatus(refreshedFlow.status)) {
+    return {
+      found: true,
+      cancelled: refreshedFlow.status === "cancelled",
+      reason:
+        refreshedFlow.status === "cancelled"
+          ? undefined
+          : `Flow is already ${refreshedFlow.status}.`,
+      flow: refreshedFlow,
+      tasks: refreshedTasks,
+    };
+  }
+  const updatedFlow = cancelManagedFlowAfterChildrenSettle(refreshedFlow, now);
+  if ("reason" in updatedFlow) {
     return {
       found: true,
       cancelled: false,
-      reason:
-        updatedFlowResult.reason === "revision_conflict"
-          ? "Flow changed while cancellation was in progress."
-          : "Flow not found.",
-      flow: updatedFlowResult.current ?? getFlowById(flow.flowId),
+      reason: updatedFlow.reason,
+      flow: updatedFlow.flow,
       tasks: refreshedTasks,
     };
   }
   return {
     found: true,
     cancelled: true,
-    flow: updatedFlowResult.flow,
+    flow: updatedFlow,
     tasks: refreshedTasks,
   };
 }

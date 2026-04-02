@@ -19,7 +19,7 @@ function noteFlowRecoveryHints() {
       flow.waitJson === undefined
     ) {
       findings.push(
-        `${flow.flowId}: running managed flow has no linked tasks or wait state; inspect or cancel it manually.`,
+        `${flow.flowId}: running managed TaskFlow has no linked tasks or wait state; inspect or cancel it manually.`,
       );
     }
     if (
@@ -28,7 +28,7 @@ function noteFlowRecoveryHints() {
       !tasks.some((task) => task.taskId === flow.blockedTaskId)
     ) {
       findings.push(
-        `${flow.flowId}: blocked flow points at missing task ${flow.blockedTaskId}; inspect before retrying.`,
+        `${flow.flowId}: blocked TaskFlow points at missing task ${flow.blockedTaskId}; inspect before retrying.`,
       );
     }
     return findings;
