@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveProviderPluginChoice } from "../../src/plugins/provider-wizard.js";
-import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import plugin from "./index.js";
 
 const PROVIDER_ID = "novita";
