@@ -376,13 +376,12 @@ export async function resolveApiKeyForProvider(params: {
           mode: resolvedMode,
         };
         if (
-          !deferredAuthProfileResult &&
           shouldDeferSyntheticOllamaProfileAuth({
             provider,
             resolvedApiKey: resolved.apiKey,
           })
         ) {
-          deferredAuthProfileResult = result;
+          deferredAuthProfileResult ??= result;
           continue;
         }
         return result;
