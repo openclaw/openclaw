@@ -8,6 +8,7 @@
  * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
  * - mdl_back              - back to providers list
  */
+import { fitsTelegramCallbackData } from "./approval-callback-data.js";
 
 export type ButtonRow = Array<{ text: string; callback_data: string }>;
 
@@ -39,7 +40,6 @@ export type ModelsKeyboardParams = {
 };
 
 const MODELS_PAGE_SIZE = 8;
-const MAX_CALLBACK_DATA_BYTES = 64;
 const CALLBACK_PREFIX = {
   providers: "mdl_prov",
   back: "mdl_back",
@@ -108,13 +108,11 @@ export function buildModelSelectionCallbackData(params: {
   model: string;
 }): string | null {
   const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
-  if (Buffer.byteLength(fullCallbackData, "utf8") <= MAX_CALLBACK_DATA_BYTES) {
+  if (fitsTelegramCallbackData(fullCallbackData)) {
     return fullCallbackData;
   }
   const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return Buffer.byteLength(compactCallbackData, "utf8") <= MAX_CALLBACK_DATA_BYTES
-    ? compactCallbackData
-    : null;
+  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
 }
 
 export function resolveModelSelection(params: {
