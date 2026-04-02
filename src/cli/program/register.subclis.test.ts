@@ -139,12 +139,9 @@ describe("registerSubCliCommands", () => {
 
     // Before fix: --help was intercepted by the placeholder and showed parent help.
     // After fix: --help passes through to action, re-parse routes to the real subcommand.
-    try {
-      await program.parseAsync(["nodes", "list", "--help"], { from: "user" });
-    } catch (err: unknown) {
-      // Commander throws with exitOverride when outputting help — that's expected.
-      expect((err as { code?: string }).code).toBe("commander.helpDisplayed");
-    }
+    await expect(
+      program.parseAsync(["nodes", "list", "--help"], { from: "user" }),
+    ).rejects.toMatchObject({ code: "commander.helpDisplayed" });
 
     // The real CLI module was loaded (placeholder didn't swallow --help).
     expect(registerNodesCli).toHaveBeenCalledTimes(1);
