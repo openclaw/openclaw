@@ -65,6 +65,7 @@ import {
   normalizeBlueBubblesHandle,
 } from "./targets.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
@@ -804,10 +805,10 @@ export async function processMessage(
           logVerbose(
             core,
             runtime,
-            `bluebubbles pairing reply failed for ${message.senderId}: ${String(err)}`,
+            `bluebubbles pairing reply failed for ${message.senderId}: ${formatErrorMessage(err)}`,
           );
           runtime.error?.(
-            `[bluebubbles] pairing reply failed sender=${message.senderId}: ${String(err)}`,
+            `[bluebubbles] pairing reply failed sender=${message.senderId}: ${formatErrorMessage(err)}`,
           );
         },
       });
@@ -936,7 +937,7 @@ export async function processMessage(
       logVerbose(
         core,
         runtime,
-        `bluebubbles: participant fallback lookup failed chat=${peerId}: ${String(err)}`,
+        `bluebubbles: participant fallback lookup failed chat=${peerId}: ${formatErrorMessage(err)}`,
       );
     }
   }
@@ -1002,7 +1003,7 @@ export async function processMessage(
           logVerbose(
             core,
             runtime,
-            `attachment download failed guid=${attachment.guid} err=${String(err)}`,
+            `attachment download failed guid=${attachment.guid} err=${formatErrorMessage(err)}`,
           );
         }
       }
@@ -1147,7 +1148,7 @@ export async function processMessage(
             logVerbose(
               core,
               runtime,
-              `ack reaction failed chatGuid=${chatGuidForActions} msg=${ackMessageId}: ${String(err)}`,
+              `ack reaction failed chatGuid=${chatGuidForActions} msg=${ackMessageId}: ${formatErrorMessage(err)}`,
             );
             return false;
           },
@@ -1164,7 +1165,7 @@ export async function processMessage(
       });
       logVerbose(core, runtime, `marked read chatGuid=${chatGuidForActions}`);
     } catch (err) {
-      runtime.error?.(`[bluebubbles] mark read failed: ${String(err)}`);
+      runtime.error?.(`[bluebubbles] mark read failed: ${formatErrorMessage(err)}`);
     }
   } else if (!sendReadReceipts) {
     logVerbose(core, runtime, "mark read skipped (sendReadReceipts=false)");
@@ -1306,7 +1307,7 @@ export async function processMessage(
         logVerbose(
           core,
           runtime,
-          `history backfill failed for ${historyIdentifier}: ${String(err)} (retries left=${Math.max(remainingAttempts, 0)} next_in_ms=${nextBackoffMs})`,
+          `history backfill failed for ${historyIdentifier}: ${formatErrorMessage(err)} (retries left=${Math.max(remainingAttempts, 0)} next_in_ms=${nextBackoffMs})`,
         );
       }
     }
@@ -1389,7 +1390,7 @@ export async function processMessage(
         cfg: config,
         accountId: account.accountId,
       }).catch((err) => {
-        runtime.error?.(`[bluebubbles] typing restart failed: ${String(err)}`);
+        runtime.error?.(`[bluebubbles] typing restart failed: ${formatErrorMessage(err)}`);
       });
     }, typingRestartDelayMs);
   };
@@ -1415,7 +1416,7 @@ export async function processMessage(
               accountId: account.accountId,
             });
           } catch (err) {
-            runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
+            runtime.error?.(`[bluebubbles] typing start failed: ${formatErrorMessage(err)}`);
           }
         },
         onIdle: () => {
@@ -1555,7 +1556,7 @@ export async function processMessage(
         onReplyStart: typingCallbacks?.onReplyStart,
         onIdle: typingCallbacks?.onIdle,
         onError: (err, info) => {
-          runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${String(err)}`);
+          runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${formatErrorMessage(err)}`);
         },
       },
       replyOptions: {

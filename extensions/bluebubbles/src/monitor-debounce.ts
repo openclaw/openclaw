@@ -1,6 +1,7 @@
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import type { BlueBubblesCoreRuntime, WebhookTarget } from "./monitor-shared.js";
 import type { OpenClawConfig } from "./runtime-api.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 /**
  * Entry type for debouncing inbound messages.
@@ -207,7 +208,7 @@ export function createBlueBubblesDebounceRegistry(params: {
         },
         onError: (err) => {
           runtime.error?.(
-            `[${account.accountId}] [bluebubbles] debounce flush failed: ${String(err)}`,
+            `[${account.accountId}] [bluebubbles] debounce flush failed: ${formatErrorMessage(err)}`,
           );
         },
       });

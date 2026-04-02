@@ -18,6 +18,7 @@ import {
   type BlueBubblesSendTarget,
   type SsrFPolicy,
 } from "./types.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined): SsrFPolicy {
   return allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
@@ -129,7 +130,7 @@ export async function downloadBlueBubblesAttachment(
     if (readMediaFetchErrorCode(error) === "max_bytes") {
       throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`);
     }
-    const text = error instanceof Error ? error.message : String(error);
+    const text = error instanceof Error ? error.message : formatErrorMessage(error);
     throw new Error(`BlueBubbles attachment download failed: ${text}`);
   }
 }

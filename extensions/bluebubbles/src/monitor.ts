@@ -26,6 +26,7 @@ import {
   withResolvedWebhookRequestPipeline,
 } from "./runtime-api.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
 const webhookRateLimiter = createFixedWindowRateLimiter({
@@ -87,7 +88,7 @@ function parseBlueBubblesWebhookPayload(
     try {
       return { ok: true, value: JSON.parse(payload) as unknown };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: error instanceof Error ? error.message : formatErrorMessage(error) };
     }
   }
 }
@@ -281,7 +282,7 @@ export async function handleBlueBubblesWebhookRequest(
       if (reaction) {
         processReaction(reaction, target).catch((err) => {
           target.runtime.error?.(
-            `[${target.account.accountId}] BlueBubbles reaction failed: ${String(err)}`,
+            `[${target.account.accountId}] BlueBubbles reaction failed: ${formatErrorMessage(err)}`,
           );
         });
       } else if (message) {
@@ -290,7 +291,7 @@ export async function handleBlueBubblesWebhookRequest(
         const debouncer = debounceRegistry.getOrCreateDebouncer(target);
         debouncer.enqueue({ message, target }).catch((err) => {
           target.runtime.error?.(
-            `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
+            `[${target.account.accountId}] BlueBubbles webhook failed: ${formatErrorMessage(err)}`,
           );
         });
       }
