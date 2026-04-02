@@ -409,6 +409,7 @@ export class AcpGatewayAgent implements Agent {
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
   private disconnectTimer: NodeJS.Timeout | null = null;
+  private disconnectGeneration = 0;
 
   constructor(
     connection: AgentSideConnection,
@@ -438,7 +439,7 @@ export class AcpGatewayAgent implements Agent {
 
   handleGatewayReconnect(): void {
     this.log("gateway reconnected");
-    void this.reconcilePendingPromptsOnReconnect();
+    void this.reconcilePendingPromptsOnReconnect(this.disconnectGeneration);
   }
 
   handleGatewayDisconnect(reason: string): void {
@@ -446,6 +447,7 @@ export class AcpGatewayAgent implements Agent {
     if (this.pendingPrompts.size === 0) {
       return;
     }
+    this.disconnectGeneration += 1;
     this.clearDisconnectTimer();
     this.disconnectTimer = setTimeout(() => {
       this.disconnectTimer = null;
@@ -1026,9 +1028,13 @@ export class AcpGatewayAgent implements Agent {
     this.pendingPrompts.clear();
   }
 
-  private async reconcilePendingPromptsOnReconnect(): Promise<void> {
+  private async reconcilePendingPromptsOnReconnect(
+    observedDisconnectGeneration: number,
+  ): Promise<void> {
     if (this.pendingPrompts.size === 0) {
-      this.clearDisconnectTimer();
+      if (this.disconnectGeneration === observedDisconnectGeneration) {
+        this.clearDisconnectTimer();
+      }
       return;
     }
 
@@ -1064,7 +1070,9 @@ export class AcpGatewayAgent implements Agent {
       }
     }
 
-    this.clearDisconnectTimer();
+    if (this.disconnectGeneration === observedDisconnectGeneration) {
+      this.clearDisconnectTimer();
+    }
   }
 
   private async sendAvailableCommands(sessionId: string): Promise<void> {

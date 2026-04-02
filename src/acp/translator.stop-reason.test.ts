@@ -289,4 +289,60 @@ describe("acp translator stop reason mapping", () => {
       vi.useRealTimers();
     }
   });
+
+  it("does not clear a newer disconnect deadline while reconnect reconciliation is still running", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionId = "session-1";
+      const sessionKey = "agent:main:main";
+      let resolveAgentWait: ((value: { status: "timeout" }) => void) | undefined;
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          return {};
+        }
+        if (method === "agent.wait") {
+          return await new Promise<{ status: "timeout" }>((resolve) => {
+            resolveAgentWait = resolve;
+          });
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const sessionStore = createInMemorySessionStore();
+      sessionStore.createSession({
+        sessionId,
+        sessionKey,
+        cwd: "/tmp",
+      });
+      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+        sessionStore,
+      });
+      const promptPromise = agent.prompt({
+        sessionId,
+        prompt: [{ type: "text", text: "hello" }],
+        _meta: {},
+      } as unknown as PromptRequest);
+      const settleSpy = vi.fn();
+      void promptPromise.then(
+        (value) => settleSpy({ kind: "resolve", value }),
+        (error) => settleSpy({ kind: "reject", error }),
+      );
+
+      await Promise.resolve();
+      agent.handleGatewayDisconnect("1006: first disconnect");
+      agent.handleGatewayReconnect();
+      await Promise.resolve();
+
+      agent.handleGatewayDisconnect("1006: second disconnect");
+      resolveAgentWait?.({ status: "timeout" });
+      await Promise.resolve();
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settleSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: second disconnect");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
