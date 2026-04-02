@@ -37,7 +37,11 @@ export type {
 } from "./browser/client.js";
 export type { BrowserExecutable } from "./browser/chrome.executables.js";
 export type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./browser/config.js";
-export { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
+export {
+  resolveBrowserConfig,
+  resolveBrowserSsrFPolicy,
+  resolveProfile,
+} from "./browser/config.js";
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_EVALUATE_ENABLED,

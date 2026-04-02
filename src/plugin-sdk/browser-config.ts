@@ -7,6 +7,8 @@ export {
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
   DEFAULT_UPLOAD_DIR,
   resolveBrowserConfig,
+  resolveBrowserControlAuth,
+  resolveBrowserSsrFPolicy,
   resolveProfile,
   type ResolvedBrowserConfig,
   type ResolvedBrowserProfile,

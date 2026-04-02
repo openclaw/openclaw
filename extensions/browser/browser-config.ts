@@ -9,6 +9,7 @@ export {
   redactCdpUrl,
   resolveBrowserConfig,
   resolveBrowserControlAuth,
+  resolveBrowserSsrFPolicy,
   resolveProfile,
   type BrowserControlAuth,
   type ResolvedBrowserConfig,

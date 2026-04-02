@@ -7,6 +7,7 @@ import {
   resolveBrowserControlAuth,
 } from "../../plugin-sdk/browser-control-auth.js";
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../plugin-sdk/browser-profiles.js";
+import { resolveBrowserSsrFPolicy } from "../../plugin-sdk/browser-config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { canExecRequestNode } from "../exec-defaults.js";
@@ -201,6 +202,7 @@ export async function resolveSandboxContext(params: {
           cfg: resolvedCfg,
           evaluateEnabled,
           bridgeAuth,
+          ssrfPolicy: resolveBrowserSsrFPolicy(params.config?.browser),
         })
       : null;
 

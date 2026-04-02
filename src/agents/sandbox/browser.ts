@@ -11,6 +11,7 @@ import {
   resolveProfile,
   type ResolvedBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -43,6 +44,17 @@ import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./worksp
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
 
+function normalizeSandboxBridgeSsrFPolicyKey(ssrfPolicy?: SsrFPolicy): string {
+  if (!ssrfPolicy) {
+    return "";
+  }
+  return JSON.stringify({
+    dangerouslyAllowPrivateNetwork: ssrfPolicy.dangerouslyAllowPrivateNetwork === true,
+    allowedHostnames: [...(ssrfPolicy.allowedHostnames ?? [])].toSorted(),
+    hostnameAllowlist: [...(ssrfPolicy.hostnameAllowlist ?? [])].toSorted(),
+  });
+}
+
 async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
   const url = `http://127.0.0.1:${params.cdpPort}/json/version`;
@@ -71,6 +83,7 @@ function buildSandboxBrowserResolvedConfig(params: {
   cdpPort: number;
   headless: boolean;
   evaluateEnabled: boolean;
+  ssrfPolicy?: SsrFPolicy;
 }): ResolvedBrowserConfig {
   const cdpHost = "127.0.0.1";
   const cdpPortRange = deriveDefaultBrowserCdpPortRange(params.controlPort);
@@ -98,6 +111,7 @@ function buildSandboxBrowserResolvedConfig(params: {
         color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       },
     },
+    ssrfPolicy: params.ssrfPolicy,
   };
 }
 
@@ -138,6 +152,7 @@ export async function ensureSandboxBrowser(params: {
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) {
     return null;
@@ -311,10 +326,18 @@ export async function ensureSandboxBrowser(params: {
 
   const shouldReuse =
     existing && existing.containerName === containerName && existingProfile?.cdpPort === mappedCdp;
+  const policyMatches =
+    !existing ||
+    normalizeSandboxBridgeSsrFPolicyKey(existing.bridge.state.resolved.ssrfPolicy) ===
+      normalizeSandboxBridgeSsrFPolicyKey(params.ssrfPolicy);
   const authMatches =
     !existing ||
     (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
   if (existing && !shouldReuse) {
+    await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
+    BROWSER_BRIDGES.delete(params.scopeKey);
+  }
+  if (existing && shouldReuse && !policyMatches) {
     await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
     BROWSER_BRIDGES.delete(params.scopeKey);
   }
@@ -324,7 +347,7 @@ export async function ensureSandboxBrowser(params: {
   }
 
   const bridge = (() => {
-    if (shouldReuse && authMatches && existing) {
+    if (shouldReuse && policyMatches && authMatches && existing) {
       return existing.bridge;
     }
     return null;
@@ -359,6 +382,7 @@ export async function ensureSandboxBrowser(params: {
         cdpPort: mappedCdp,
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
+        ssrfPolicy: params.ssrfPolicy,
       }),
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
@@ -368,7 +392,7 @@ export async function ensureSandboxBrowser(params: {
   };
 
   const resolvedBridge = await ensureBridge();
-  if (!shouldReuse || !authMatches) {
+  if (!shouldReuse || !policyMatches || !authMatches) {
     BROWSER_BRIDGES.set(params.scopeKey, {
       bridge: resolvedBridge,
       containerName,
