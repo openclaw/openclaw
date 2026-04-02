@@ -581,13 +581,14 @@ async function syncPaperclipIssueForTask(task: ChiefTaskRecord): Promise<Papercl
   if (!issueId || !shouldSyncPaperclipIssueForTask(task)) {
     return { ok: true };
   }
+  const syncRunId = task.paperclipRunId?.trim() || randomUUID();
   try {
     await updatePaperclipTrackedIssue({
       issueId,
       status: mapChiefTaskStatusToPaperclipStatus(task),
       description: buildPaperclipIssueDescriptionFromTask(task),
       comment: buildPaperclipIssueComment(task),
-      runId: task.paperclipRunId,
+      runId: syncRunId,
     });
     return { ok: true };
   } catch (error) {
