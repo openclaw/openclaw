@@ -636,9 +636,6 @@ function isIpv4LoopbackOrPrivate(hostname: string): boolean {
   if (lower === "localhost") {
     return true;
   }
-  if (/^127(?:\.\d{1,3}){3}$/.test(lower)) {
-    return true;
-  }
   const ipv4Match = lower.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!ipv4Match) {
     return false;
