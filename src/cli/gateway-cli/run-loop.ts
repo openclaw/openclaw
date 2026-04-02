@@ -31,7 +31,9 @@ export async function runGatewayLoop(params: {
   runtime: RuntimeEnv;
   lockPort?: number;
 }) {
+  gatewayLog.info("acquiring gateway lock...");
   let lock = await acquireGatewayLock({ port: params.lockPort });
+  gatewayLog.info("gateway lock acquired");
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;

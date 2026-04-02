@@ -71,7 +71,7 @@ function readLinuxCmdline(pid: number): string[] | null {
   }
 }
 
-const CMDLINE_EXEC_TIMEOUT_MS = 3000;
+const CMDLINE_EXEC_TIMEOUT_MS = 1000;
 
 /**
  * Read the command line of a Windows process via `wmic`.
@@ -80,11 +80,17 @@ const CMDLINE_EXEC_TIMEOUT_MS = 3000;
  */
 function readWindowsCmdline(pid: number): string[] | null {
   try {
-    const raw = execFileSync(
+    // Omit `encoding` so execFileSync returns a Buffer — wmic emits UTF-16LE
+    // (with BOM) on most Windows 10/11 builds, which would be garbled as UTF-8.
+    const buf = execFileSync(
       "wmic",
       ["process", "where", `processid=${pid}`, "get", "CommandLine", "/value"],
-      { encoding: "utf8", timeout: CMDLINE_EXEC_TIMEOUT_MS, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
-    );
+      { timeout: CMDLINE_EXEC_TIMEOUT_MS, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
+    ) as Buffer;
+    const raw =
+      buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe
+        ? buf.toString("utf16le")
+        : buf.toString("utf8");
     const match = raw.match(/CommandLine=(.+)/);
     if (!match) {
       return null;
@@ -97,6 +103,11 @@ function readWindowsCmdline(pid: number): string[] | null {
 
 /**
  * Read the command line of a macOS/BSD process via `ps`.
+ *
+ * `ps -o command=` outputs an unquoted flat string, so the naive whitespace
+ * split will misparse paths containing spaces. This is acceptable because
+ * standard macOS install paths do not contain spaces, and when the split
+ * does fail the caller falls back to "alive" (conservative).
  */
 function readDarwinCmdline(pid: number): string[] | null {
   try {
@@ -206,11 +217,11 @@ async function resolveGatewayOwnerStatus(
   const readFn = readCmdline ?? ((p: number) => defaultReadProcessCmdline(p, platform));
   const args = readFn(pid);
   if (!args) {
-    // No cmdline reader available or it failed — fall back to "unknown" so
-    // the stale-lock heuristic can still reclaim very old locks.
-    return platform === "linux" || platform === "win32" || platform === "darwin"
-      ? "unknown"
-      : "alive";
+    // Cmdline reader unavailable or failed. On Linux legacy locks (no
+    // start-time), "unknown" lets the stale-lock heuristic eventually reclaim
+    // very old locks. On win32/darwin/other, conservatively assume "alive" to
+    // preserve single-instance guarantees when wmic/ps is unavailable.
+    return platform === "linux" ? "unknown" : "alive";
   }
   return isGatewayArgv(args) ? "alive" : "dead";
 }
