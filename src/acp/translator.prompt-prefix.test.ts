@@ -83,7 +83,6 @@ describe("acp prompt cwd prefix", () => {
       expect.objectContaining({
         message: expect.stringMatching(/\[Working directory: ~[\\/]openclaw-test\]/),
       }),
-      { expectFinal: true },
     );
   });
 
@@ -94,7 +93,6 @@ describe("acp prompt cwd prefix", () => {
       expect.objectContaining({
         message: expect.stringContaining("[Working directory: ~\\openclaw-test]"),
       }),
-      { expectFinal: true },
     );
   });
 
@@ -111,7 +109,6 @@ describe("acp prompt cwd prefix", () => {
         },
         systemProvenanceReceipt: undefined,
       }),
-      { expectFinal: true },
     );
   });
 
@@ -128,28 +125,24 @@ describe("acp prompt cwd prefix", () => {
         },
         systemProvenanceReceipt: expect.stringContaining("[Source Receipt]"),
       }),
-      { expectFinal: true },
     );
     expect(requestSpy).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
         systemProvenanceReceipt: expect.stringContaining("bridge=openclaw-acp"),
       }),
-      { expectFinal: true },
     );
     expect(requestSpy).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
         systemProvenanceReceipt: expect.stringContaining(`originSessionId=${TEST_SESSION_ID}`),
       }),
-      { expectFinal: true },
     );
     expect(requestSpy).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
         systemProvenanceReceipt: expect.stringContaining(`targetSession=${TEST_SESSION_KEY}`),
       }),
-      { expectFinal: true },
     );
   });
 
@@ -192,7 +185,6 @@ describe("acp prompt cwd prefix", () => {
         },
         systemProvenanceReceipt: expect.stringContaining("[Source Receipt]"),
       }),
-      { expectFinal: true },
     );
     expect(requestSpy).toHaveBeenNthCalledWith(
       2,
@@ -201,7 +193,6 @@ describe("acp prompt cwd prefix", () => {
         systemInputProvenance: expect.anything(),
         systemProvenanceReceipt: expect.anything(),
       }),
-      { expectFinal: true },
     );
   });
 });

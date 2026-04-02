@@ -108,4 +108,30 @@ describe("acp translator stop reason mapping", () => {
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
   });
+
+  it("keeps in-flight prompts pending across transient gateway disconnects", async () => {
+    const { agent, promptPromise, runId } = await createPendingPromptHarness();
+    const settleSpy = vi.fn();
+    void promptPromise.then(
+      (value) => settleSpy({ kind: "resolve", value }),
+      (error) => settleSpy({ kind: "reject", error }),
+    );
+
+    agent.handleGatewayDisconnect("1006: connection lost");
+    await Promise.resolve();
+
+    expect(settleSpy).not.toHaveBeenCalled();
+
+    agent.handleGatewayReconnect();
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "final",
+      }),
+    );
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  });
 });

@@ -431,11 +431,6 @@ export class AcpGatewayAgent implements Agent {
 
   handleGatewayDisconnect(reason: string): void {
     this.log(`gateway disconnected: ${reason}`);
-    for (const pending of this.pendingPrompts.values()) {
-      pending.reject(new Error(`Gateway disconnected: ${reason}`));
-      this.sessionStore.clearActiveRun(pending.sessionId);
-    }
-    this.pendingPrompts.clear();
   }
 
   async handleGatewayEvent(evt: EventFrame): Promise<void> {
@@ -678,21 +673,17 @@ export class AcpGatewayAgent implements Agent {
 
       const sendWithProvenanceFallback = async () => {
         try {
-          await this.gateway.request(
-            "chat.send",
-            {
-              ...requestParams,
-              systemInputProvenance,
-              systemProvenanceReceipt,
-            },
-            { expectFinal: true },
-          );
+          await this.gateway.request("chat.send", {
+            ...requestParams,
+            systemInputProvenance,
+            systemProvenanceReceipt,
+          });
         } catch (err) {
           if (
             (systemInputProvenance || systemProvenanceReceipt) &&
             isAdminScopeProvenanceRejection(err)
           ) {
-            await this.gateway.request("chat.send", requestParams, { expectFinal: true });
+            await this.gateway.request("chat.send", requestParams);
             return;
           }
           throw err;
