@@ -112,6 +112,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaType?: string;
     mediaPaths?: string[];
     mediaTypes?: string[];
+    replyToBody?: string;
+    replyToMediaPath?: string;
+    replyToMediaType?: string;
     commandAuthorized: boolean;
     wasMentioned?: boolean;
   };
@@ -212,6 +215,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaPaths: entry.mediaPaths,
       MediaUrls: entry.mediaPaths,
       MediaTypes: entry.mediaTypes,
+      ReplyToBody: entry.replyToBody,
+      ReplyToMediaPath: entry.replyToMediaPath,
+      ReplyToMediaType: entry.replyToMediaType,
       WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
@@ -632,7 +638,35 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       senderPeerId,
     });
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
-    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const regexMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    // Signal provides structured mention metadata; check if the bot's
+    // account phone or UUID appears in the raw mentions array.
+    const signalMentions = dataMessage.mentions ?? [];
+    const hasAnySignalMention = isGroup && signalMentions.length > 0;
+    const signalMentionedBot =
+      isGroup &&
+      signalMentions.some((m) => {
+        const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
+        if (m.number && normalizedAccount && normalizeE164(m.number) === normalizedAccount) {
+          return true;
+        }
+        if (m.uuid && deps.accountUuid && m.uuid === deps.accountUuid) {
+          return true;
+        }
+        return false;
+      });
+    const wasMentioned = regexMentioned || signalMentionedBot;
+    // Treat a reply/quote to the bot's own message as an implicit mention.
+    const quoteAuthor = dataMessage.quote?.author ?? dataMessage.quote?.authorUuid;
+    const isReplyToBot =
+      isGroup &&
+      quoteAuthor != null &&
+      (() => {
+        const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
+        if (normalizedAccount && normalizeE164(quoteAuthor) === normalizedAccount) return true;
+        if (deps.accountUuid && quoteAuthor === deps.accountUuid) return true;
+        return false;
+      })();
     const requireMention =
       isGroup &&
       resolveChannelGroupRequireMention({
@@ -641,14 +675,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupId,
         accountId: deps.accountId,
       });
-    const canDetectMention = mentionRegexes.length > 0;
+    // Signal provides structured mention data, so we can always detect bot mentions
+    // when an account identity (phone or UUID) is configured — regardless of whether
+    // the current message happens to contain any mentions.
+    const canDetectMention =
+      mentionRegexes.length > 0 ||
+      isReplyToBot ||
+      (isGroup && (deps.account != null || deps.accountUuid != null));
     const mentionGate = resolveMentionGatingWithBypass({
       isGroup,
       requireMention: Boolean(requireMention),
       canDetectMention,
       wasMentioned,
-      implicitMention: false,
-      hasAnyMention: false,
+      implicitMention: isReplyToBot,
+      hasAnyMention: hasAnySignalMention,
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
@@ -745,6 +785,38 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
+    // Download first attachment from quoted (reply-target) message, if any.
+    let replyToBody: string | undefined;
+    let replyToMediaPath: string | undefined;
+    let replyToMediaType: string | undefined;
+    const quote = dataMessage.quote;
+    if (quote) {
+      replyToBody = quote.text?.trim() || undefined;
+      const quoteAttachments = quote.attachments ?? [];
+      if (!deps.ignoreAttachments && quoteAttachments.length > 0) {
+        const firstQuoteAttachment = quoteAttachments.find((a) => a?.id);
+        if (firstQuoteAttachment) {
+          try {
+            const fetched = await deps.fetchAttachment({
+              baseUrl: deps.baseUrl,
+              account: deps.account,
+              attachment: firstQuoteAttachment,
+              sender: senderRecipient,
+              groupId,
+              maxBytes: deps.mediaMaxBytes,
+            });
+            if (fetched) {
+              replyToMediaPath = fetched.path;
+              replyToMediaType =
+                fetched.contentType ?? firstQuoteAttachment.contentType ?? undefined;
+            }
+          } catch (err) {
+            logVerbose(`quoted attachment fetch failed: ${String(err)}`);
+          }
+        }
+      }
+    }
+
     const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
     if (!bodyText) {
       return;
@@ -794,6 +866,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaType,
       mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+      replyToBody,
+      replyToMediaPath,
+      replyToMediaType,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
     });

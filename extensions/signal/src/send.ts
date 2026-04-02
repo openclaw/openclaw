@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
@@ -6,6 +8,31 @@ import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
+
+/**
+ * Convert a local file path to a data URI so signal-cli can receive the
+ * attachment inline (useful when signal-cli runs on a different host).
+ */
+async function localFileToDataUri(filePath: string): Promise<string> {
+  const buf = await fs.readFile(filePath);
+  const ext = path.extname(filePath).toLowerCase().replace(".", "");
+  const mimeMap: Record<string, string> = {
+    mp3: "audio/mpeg",
+    ogg: "audio/ogg",
+    wav: "audio/wav",
+    m4a: "audio/mp4",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    webp: "image/webp",
+    gif: "image/gif",
+    mp4: "video/mp4",
+    pdf: "application/pdf",
+  };
+  const mime = mimeMap[ext] ?? "application/octet-stream";
+  const fname = path.basename(filePath);
+  return `data:${mime};filename=${fname};base64,${buf.toString("base64")}`;
+}
 
 export type SignalSendOpts = {
   cfg?: OpenClawConfig;
@@ -137,7 +164,12 @@ export async function sendMessageSignal(
       localRoots: opts.mediaLocalRoots,
       readFile: opts.mediaReadFile,
     });
-    attachments = [resolved.path];
+    // Convert to data URI only for remote signal-cli (non-localhost baseUrl),
+    // since remote hosts cannot access local file paths. Local signal-cli
+    // can handle file paths directly and avoids unnecessary base64 encoding.
+    const isRemote = baseUrl != null && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(baseUrl);
+    const attachmentRef = isRemote ? await localFileToDataUri(resolved.path) : resolved.path;
+    attachments = [attachmentRef];
     const kind = kindFromMime(resolved.contentType ?? undefined);
     if (!message && kind) {
       // Avoid sending an empty body when only attachments exist.
