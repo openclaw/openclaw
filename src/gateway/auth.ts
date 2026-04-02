@@ -350,10 +350,13 @@ function authorizeTrustedProxy(params: {
     return { reason: "trusted_proxy_untrusted_source" };
   }
   if (isLoopbackAddress(remoteAddr)) {
-    const forwardedClientIp = resolveRequestClientIp(req, trustedProxies, false);
-    if (!forwardedClientIp || isLoopbackAddress(forwardedClientIp)) {
+    if (!trustedProxyConfig.unsafeAllowLoopbackProxies) {
       return { reason: "trusted_proxy_loopback_source" };
     }
+    // unsafeAllowLoopbackProxies is enabled; loopback requests are accepted.
+    // Note: x-forwarded-for and identity headers are client-controlled on direct
+    // localhost requests, enabling local privilege elevation attacks. Only safe if
+    // the host is fully controlled and no untrusted processes can run.
   }
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];

@@ -145,6 +145,20 @@ export type GatewayTrustedProxyConfig = {
    * Example: ["nick@example.com", "admin@company.org"]
    */
   allowUsers?: string[];
+  /**
+   * ⚠️ SECURITY WARNING: Allow requests from loopback addresses (127.0.0.1, ::1).
+   * ONLY enable this if running a same-host reverse proxy (nginx, Caddy on localhost).
+   * 
+   * DANGER: On direct localhost requests, x-forwarded-for and identity headers are
+   * client-controlled. Any local process can forge these headers and impersonate users.
+   * Only enable if you fully control who runs processes on this host.
+   * 
+   * Safer alternatives:
+   * - Have the proxy listen on a non-loopback address (192.168.x.x, etc.)
+   * - Use token or password auth instead of trusted-proxy
+   * - Use Tailscale proxy when available
+   */
+  unsafeAllowLoopbackProxies?: boolean;
 };
 
 export type GatewayAuthConfig = {
