@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
@@ -58,12 +59,7 @@ function isAnthropicPublicApiBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
     return true;
   }
-
-  try {
-    return new URL(baseUrl).hostname.toLowerCase() === "api.anthropic.com";
-  } catch {
-    return baseUrl.toLowerCase().includes("api.anthropic.com");
-  }
+  return resolveProviderEndpoint(baseUrl).endpointClass === "anthropic-public";
 }
 
 function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier {

@@ -277,6 +277,18 @@ describe("provider attribution", () => {
     });
   });
 
+  it("classifies native Anthropic endpoints separately from custom hosts", () => {
+    expect(resolveProviderEndpoint("https://api.anthropic.com/v1")).toMatchObject({
+      endpointClass: "anthropic-public",
+      hostname: "api.anthropic.com",
+    });
+
+    expect(resolveProviderEndpoint("https://proxy.example.com/anthropic")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "proxy.example.com",
+    });
+  });
+
   it("classifies Google Gemini and Vertex endpoints separately from custom hosts", () => {
     expect(resolveProviderEndpoint("https://generativelanguage.googleapis.com")).toMatchObject({
       endpointClass: "google-generative-ai",
@@ -326,6 +338,11 @@ describe("provider attribution", () => {
   });
 
   it("does not trust schemeless or embedded trusted-provider substrings", () => {
+    expect(resolveProviderEndpoint("api.anthropic.com.attacker.example")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "api.anthropic.com.attacker.example",
+    });
+
     expect(resolveProviderEndpoint("api.openai.com.attacker.example")).toMatchObject({
       endpointClass: "custom",
       hostname: "api.openai.com.attacker.example",
