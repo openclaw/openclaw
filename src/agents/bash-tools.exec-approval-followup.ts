@@ -2,6 +2,7 @@ import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-
 import { sendMessage } from "../infra/outbound/message.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { isExecDeniedResultText, parseExecApprovalResultText } from "./exec-approval-result.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers/errors.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -14,10 +15,6 @@ type ExecApprovalFollowupParams = {
   turnSourceThreadId?: string | number;
   resultText: string;
 };
-
-const EXEC_DENIED_RE = /^exec denied \(([^)]*)\):(?:\s*([\s\S]*))?$/i;
-const EXEC_FINISHED_RE = /^exec finished \(([^)]*)\)(?:\n([\s\S]*))?$/i;
-const EXEC_COMPLETED_RE = /^exec completed:\s*([\s\S]*)$/i;
 
 function buildExecDeniedFollowupPrompt(resultText: string): string {
   return [
@@ -37,7 +34,7 @@ function buildExecDeniedFollowupPrompt(resultText: string): string {
 
 export function buildExecApprovalFollowupPrompt(resultText: string): string {
   const trimmed = resultText.trim();
-  if (isExecDeniedResult(trimmed)) {
+  if (isExecDeniedResultText(trimmed)) {
     return buildExecDeniedFollowupPrompt(trimmed);
   }
   return [
@@ -55,24 +52,22 @@ export function buildExecApprovalFollowupPrompt(resultText: string): string {
   ].join("\n");
 }
 
-function isExecDeniedResult(resultText: string): boolean {
-  return EXEC_DENIED_RE.test(resultText.trim());
-}
-
 function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boolean {
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey);
 }
 
 function formatDirectExecApprovalFollowupText(resultText: string): string | null {
-  const trimmed = resultText.trim();
-  if (!trimmed || isExecDeniedResult(trimmed)) {
+  const parsed = parseExecApprovalResultText(resultText);
+  if (parsed.kind === "other" && !parsed.raw) {
+    return null;
+  }
+  if (parsed.kind === "denied") {
     return null;
   }
 
-  const finishedMatch = EXEC_FINISHED_RE.exec(trimmed);
-  if (finishedMatch) {
-    const metadata = finishedMatch[1]?.toLowerCase() ?? "";
-    const body = sanitizeUserFacingText(finishedMatch[2] ?? "", {
+  if (parsed.kind === "finished") {
+    const metadata = parsed.metadata.toLowerCase();
+    const body = sanitizeUserFacingText(parsed.body, {
       errorContext: !metadata.includes("code 0"),
     }).trim();
 
@@ -88,13 +83,12 @@ function formatDirectExecApprovalFollowupText(resultText: string): string | null
     return body ? `${prefix ? `${prefix}\n\n` : ""}${body}` : prefix || null;
   }
 
-  const completedMatch = EXEC_COMPLETED_RE.exec(trimmed);
-  if (completedMatch) {
-    const body = sanitizeUserFacingText(completedMatch[1] ?? "", { errorContext: true }).trim();
+  if (parsed.kind === "completed") {
+    const body = sanitizeUserFacingText(parsed.body, { errorContext: true }).trim();
     return body || "Background command finished.";
   }
 
-  return sanitizeUserFacingText(trimmed, { errorContext: true }).trim() || null;
+  return sanitizeUserFacingText(parsed.raw, { errorContext: true }).trim() || null;
 }
 
 export async function sendExecApprovalFollowup(
@@ -105,7 +99,7 @@ export async function sendExecApprovalFollowup(
   if (!resultText) {
     return false;
   }
-  const isDenied = isExecDeniedResult(resultText);
+  const isDenied = isExecDeniedResultText(resultText);
   if (isDenied && shouldSuppressExecDeniedFollowup(sessionKey)) {
     return false;
   }

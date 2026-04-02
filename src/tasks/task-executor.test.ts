@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { resetAgentEventsForTest, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -64,8 +64,9 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
     resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetAgentRunContextForTest();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     try {
       await run(stateDir);
     } finally {
@@ -73,8 +74,9 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
       resetHeartbeatWakeStateForTests();
       resetAgentEventsForTest();
       resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetAgentRunContextForTest();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
 }
@@ -90,8 +92,9 @@ describe("task-executor", () => {
     resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetAgentRunContextForTest();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
