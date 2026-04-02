@@ -8,7 +8,7 @@ title: "flows"
 
 # `openclaw flows`
 
-Inspect and manage [TaskFlow](/automation/clawflow) flows from the command line.
+Inspect and manage [TaskFlow](/automation/taskflow) flows from the command line.
 
 ## Commands
 
@@ -38,6 +38,6 @@ Cancel a running flow and its active tasks.
 
 ## Related
 
-- [TaskFlow](/automation/clawflow) — flow orchestration overview
+- [TaskFlow](/automation/taskflow) — flow orchestration overview
 - [Background Tasks](/automation/tasks) — the detached work ledger
 - [CLI reference](/cli/index) — full command tree
