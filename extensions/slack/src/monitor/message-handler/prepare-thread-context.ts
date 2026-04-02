@@ -3,6 +3,7 @@ import { readSessionUpdatedAt } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
+import { resolveSlackUserAllowed } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
 import {
   resolveSlackMedia,
@@ -19,10 +20,53 @@ export type SlackThreadContextData = {
   threadStarterMedia: SlackMediaResult[] | null;
 };
 
+type SlackThreadContextSender = {
+  userId?: string;
+  botId?: string;
+};
+
+function isSlackThreadContextSenderAllowed(params: {
+  sender: SlackThreadContextSender;
+  senderName?: string;
+  allowFromLower: string[];
+  channelUsers?: Array<string | number>;
+  allowNameMatching: boolean;
+}): boolean {
+  const hasSenderAllowlist =
+    params.allowFromLower.length > 0 || (params.channelUsers?.length ?? 0) > 0;
+  if (!hasSenderAllowlist) {
+    return true;
+  }
+  if (params.sender.botId) {
+    return true;
+  }
+  if (!params.sender.userId) {
+    return false;
+  }
+  const allowedByOwnerAllowlist = resolveSlackUserAllowed({
+    allowList: params.allowFromLower,
+    userId: params.sender.userId,
+    userName: params.senderName,
+    allowNameMatching: params.allowNameMatching,
+  });
+  if (!allowedByOwnerAllowlist) {
+    return false;
+  }
+  return resolveSlackUserAllowed({
+    allowList: params.channelUsers,
+    userId: params.sender.userId,
+    userName: params.senderName,
+    allowNameMatching: params.allowNameMatching,
+  });
+}
+
 export async function resolveSlackThreadContextData(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
+  allowFromLower: string[];
+  allowNameMatching: boolean;
+  channelUsers?: Array<string | number>;
   isThreadReply: boolean;
   threadTs: string | undefined;
   threadStarter: SlackThreadStarter | null;
@@ -50,8 +94,35 @@ export async function resolveSlackThreadContextData(params: {
     };
   }
 
+  const userMap = new Map<string, { name?: string }>();
+  const resolveCachedUserName = async (id: string): Promise<{ name?: string }> => {
+    const cached = userMap.get(id);
+    if (cached) {
+      return cached;
+    }
+    const user = await params.ctx.resolveUserName(id);
+    const normalized = user ?? {};
+    userMap.set(id, normalized);
+    return normalized;
+  };
+
   const starter = params.threadStarter;
-  if (starter?.text) {
+  const hasSenderAllowlist =
+    params.allowFromLower.length > 0 || (params.channelUsers?.length ?? 0) > 0;
+  const starterSenderName =
+    starter?.userId && params.allowNameMatching && hasSenderAllowlist
+      ? (await resolveCachedUserName(starter.userId)).name
+      : undefined;
+  const starterAllowed = starter
+    ? isSlackThreadContextSenderAllowed({
+        sender: { userId: starter.userId, botId: starter.botId },
+        senderName: starterSenderName,
+        allowFromLower: params.allowFromLower,
+        channelUsers: params.channelUsers,
+        allowNameMatching: params.allowNameMatching,
+      })
+    : false;
+  if (starter?.text && starterAllowed) {
     threadStarterBody = starter.text;
     const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? `: ${snippet}` : ""}`;
@@ -91,18 +162,24 @@ export async function resolveSlackThreadContextData(params: {
           threadHistory.map((item) => item.userId).filter((id): id is string => Boolean(id)),
         ),
       ];
-      const userMap = new Map<string, { name?: string }>();
       await Promise.all(
         uniqueUserIds.map(async (id) => {
-          const user = await params.ctx.resolveUserName(id);
-          if (user) {
-            userMap.set(id, user);
-          }
+          await resolveCachedUserName(id);
+        }),
+      );
+
+      const filteredHistory = threadHistory.filter((historyMsg) =>
+        isSlackThreadContextSenderAllowed({
+          sender: historyMsg,
+          senderName: historyMsg.userId ? userMap.get(historyMsg.userId)?.name : undefined,
+          allowFromLower: params.allowFromLower,
+          channelUsers: params.channelUsers,
+          allowNameMatching: params.allowNameMatching,
         }),
       );
 
       const historyParts: string[] = [];
-      for (const historyMsg of threadHistory) {
+      for (const historyMsg of filteredHistory) {
         const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
         const msgSenderName =
           msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
@@ -120,10 +197,18 @@ export async function resolveSlackThreadContextData(params: {
           }),
         );
       }
-      threadHistoryBody = historyParts.join("\n\n");
-      logVerbose(
-        `slack: populated thread history with ${threadHistory.length} messages for new session`,
-      );
+      if (historyParts.length > 0) {
+        threadHistoryBody = historyParts.join("\n\n");
+      }
+      const dropped = threadHistory.length - filteredHistory.length;
+      if (dropped > 0) {
+        logVerbose(`slack: dropped ${dropped} thread history messages due to sender allowlists`);
+      }
+      if (filteredHistory.length > 0) {
+        logVerbose(
+          `slack: populated thread history with ${filteredHistory.length} messages for new session`,
+        );
+      }
     }
   }
 
