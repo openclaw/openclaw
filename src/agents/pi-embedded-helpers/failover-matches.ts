@@ -26,6 +26,7 @@ const ERROR_PATTERNS = {
     "high demand",
   ],
   timeout: [
+    /\bterminated\b/i,
     "timeout",
     "timed out",
     "service unavailable",
