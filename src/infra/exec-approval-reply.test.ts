@@ -54,12 +54,12 @@ describe("exec approval reply helpers", () => {
     );
   });
 
-  it("mentions Slack in the fallback approval-client guidance", () => {
+  it("mentions native chat approval clients in the fallback guidance", () => {
     expect(
       buildExecApprovalUnavailableReplyPayload({
         reason: "no-approval-route",
       }).text,
-    ).toContain("Discord, Slack, or Telegram exec approvals");
+    ).toContain("native chat approval client such as Discord, Slack, or Telegram");
   });
 
   it.each(invalidReplyMetadataCases)(

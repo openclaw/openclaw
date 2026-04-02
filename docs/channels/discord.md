@@ -952,7 +952,7 @@ Default slash command settings:
     - `channels.discord.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`, `cleanupAfterResolve`
 
-    Discord becomes an approval client when `enabled: true` and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's existing owner config (`allowFrom`, legacy `dm.allowFrom`, or explicit DM `defaultTo`).
+    Discord auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's existing owner config (`allowFrom`, legacy `dm.allowFrom`, or explicit DM `defaultTo`). Set `enabled: false` to disable Discord as a native approval client explicitly.
 
     When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only resolved approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
 

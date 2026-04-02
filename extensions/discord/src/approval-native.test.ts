@@ -9,6 +9,11 @@ import {
 } from "./approval-native.js";
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-discord-approval-native-test.json");
+const NATIVE_APPROVAL_CFG = {
+  commands: {
+    ownerAllowFrom: ["discord:555555555"],
+  },
+} as const;
 
 function writeStore(store: Record<string, unknown>) {
   fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
@@ -45,7 +50,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: {} as never,
+      cfg: NATIVE_APPROVAL_CFG as never,
       accountId: "main",
       approvalKind: "plugin",
       request: {
@@ -69,7 +74,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: {} as never,
+      cfg: NATIVE_APPROVAL_CFG as never,
       accountId: "main",
       approvalKind: "plugin",
       request: {
@@ -104,7 +109,10 @@ describe("createDiscordNativeApprovalAdapter", () => {
 
     const adapter = createDiscordNativeApprovalAdapter();
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: { session: { store: STORE_PATH } } as never,
+      cfg: {
+        ...NATIVE_APPROVAL_CFG,
+        session: { store: STORE_PATH },
+      } as never,
       accountId: "main",
       approvalKind: "plugin",
       request: {
@@ -129,7 +137,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: {} as never,
+      cfg: NATIVE_APPROVAL_CFG as never,
       accountId: "main",
       approvalKind: "plugin",
       request: {
@@ -154,7 +162,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: {} as never,
+      cfg: NATIVE_APPROVAL_CFG as never,
       accountId: "main",
       approvalKind: "plugin",
       request: {
@@ -176,7 +184,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: {} as never,
+      cfg: NATIVE_APPROVAL_CFG as never,
       accountId: "main",
       approvalKind: "plugin",
       request: {

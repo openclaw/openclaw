@@ -4,6 +4,7 @@ import {
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
   doesApprovalRequestMatchChannelAccount,
+  isChannelExecApprovalClientEnabledFromConfig,
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -75,16 +76,18 @@ export function shouldHandleDiscordApprovalRequest(params: {
   ) {
     return false;
   }
-  if (!config) {
-    return true;
-  }
-  if (!config.enabled || approvers.length === 0) {
+  if (
+    !isChannelExecApprovalClientEnabledFromConfig({
+      enabled: config?.enabled,
+      approverCount: approvers.length,
+    })
+  ) {
     return false;
   }
   return matchesApprovalRequestFilters({
     request: params.request.request,
-    agentFilter: config.agentFilter,
-    sessionFilter: config.sessionFilter,
+    agentFilter: config?.agentFilter,
+    sessionFilter: config?.sessionFilter,
   });
 }
 
