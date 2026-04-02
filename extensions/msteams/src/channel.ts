@@ -322,7 +322,8 @@ function describeMSTeamsMessageTool({
   return {
     // "react" and "reactions" are omitted: setReaction/unsetReaction require Delegated permissions,
     // but the bot authenticates with Application credentials (client_credentials flow).
-    // Re-enable "react"/"reactions" here once delegated-auth support is available.
+    // Re-enable "react" here once delegated-auth support is available.
+    // "reactions" (list) is read-only (GET) and works with Application auth.
     actions: enabled
       ? ([
           "upload-file",
@@ -333,6 +334,7 @@ function describeMSTeamsMessageTool({
           "unpin",
           "list-pins",
           "read",
+          "reactions",
           "search",
           "member-info",
           "channel-list",

@@ -173,3 +173,110 @@ export async function removeReactionMSTeams(
   log.debug?.("reaction removed", { conversationId, activityId, reactionType });
   return { ok: true };
 }
+
+// ---------------------------------------------------------------------------
+// List reactions (read-only, works with Application auth)
+// ---------------------------------------------------------------------------
+
+type GraphReaction = {
+  reactionType?: string;
+  user?: { id?: string; displayName?: string };
+  createdDateTime?: string;
+};
+
+type GraphMessageWithReactions = {
+  reactions?: GraphReaction[];
+};
+
+export type ListReactionsMSTeamsParams = {
+  /** Full config (for credentials) */
+  cfg: OpenClawConfig;
+  /** Conversation ID (19:xxx@thread.*) or teamId/channelId */
+  to: string;
+  /** Message ID to list reactions for */
+  messageId: string;
+};
+
+export type ReactionSummary = {
+  reactionType: string;
+  count: number;
+  users: Array<{ id: string; displayName?: string }>;
+};
+
+export type ListReactionsMSTeamsResult = {
+  reactions: ReactionSummary[];
+};
+
+/**
+ * Strip conversation: or user: prefix from a target string so the bare ID
+ * can be used in Graph API paths.
+ */
+function stripTargetPrefix(raw: string): string {
+  const trimmed = raw.trim();
+  if (/^conversation:/i.test(trimmed)) {
+    return trimmed.slice("conversation:".length).trim();
+  }
+  if (/^user:/i.test(trimmed)) {
+    return trimmed.slice("user:".length).trim();
+  }
+  return trimmed;
+}
+
+/**
+ * Resolve the Graph API base path for a conversation target.
+ * Supports both chat IDs (19:xxx) and teamId/channelId pairs.
+ */
+function resolveConversationBasePath(to: string): string {
+  const cleaned = stripTargetPrefix(to);
+  if (cleaned.includes("/")) {
+    const [teamId, channelId] = cleaned.split("/", 2);
+    return `/teams/${encodeURIComponent(teamId!)}/channels/${encodeURIComponent(channelId!)}`;
+  }
+  return `/chats/${encodeURIComponent(cleaned)}`;
+}
+
+/**
+ * List reactions on a message, grouped by type.
+ * Uses Graph v1.0 GET (reactions are included in the message resource).
+ * This is a read-only operation that works with Application auth.
+ */
+export async function listReactionsMSTeams(
+  params: ListReactionsMSTeamsParams,
+): Promise<ListReactionsMSTeamsResult> {
+  const { cfg, to, messageId } = params;
+  const token = await resolveGraphToken(cfg);
+
+  const rawTo = to.trim().replace(/^conversation:/i, "");
+  const conversationId = normalizeMSTeamsConversationId(rawTo);
+  if (!isGraphCompatibleConversationId(conversationId) && !conversationId.includes("/")) {
+    throw new Error(
+      `MS Teams list reactions requires a Graph-compatible conversation ID (got: ${conversationId}).`,
+    );
+  }
+
+  const basePath = resolveConversationBasePath(conversationId);
+  const path = `${basePath}/messages/${encodeURIComponent(messageId)}`;
+  const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
+
+  const grouped = new Map<string, Array<{ id: string; displayName?: string }>>();
+  for (const reaction of msg.reactions ?? []) {
+    const type = reaction.reactionType ?? "unknown";
+    if (!grouped.has(type)) {
+      grouped.set(type, []);
+    }
+    if (reaction.user?.id) {
+      grouped.get(type)!.push({
+        id: reaction.user.id,
+        displayName: reaction.user.displayName,
+      });
+    }
+  }
+
+  const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, users]) => ({
+    reactionType: type,
+    count: users.length,
+    users,
+  }));
+
+  return { reactions };
+}

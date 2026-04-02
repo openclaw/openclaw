@@ -3,6 +3,7 @@ import {
   isDangerousNameMatchingEnabled,
   resolveEffectiveAllowFromLists,
   readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
   resolveDefaultGroupPolicy,
   createChannelPairingController,
 } from "../../runtime-api.js";
@@ -103,16 +104,30 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       dmPolicy,
     });
 
-    // For DMs, check if the sender is in the allowlist.
+    // Enforce dmPolicy for DMs (open / disabled / allowlist / pairing).
+    const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
     if (isDirectMessage && msteamsCfg) {
-      const allowMatch = resolveMSTeamsAllowlistMatch({
-        allowFrom: resolvedAllowFromLists.effectiveAllowFrom,
-        senderId,
-        senderName,
-        allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
+      const access = resolveDmGroupAccessWithLists({
+        isGroup: false,
+        dmPolicy,
+        groupPolicy: msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist",
+        allowFrom: dmAllowFrom,
+        groupAllowFrom,
+        storeAllowFrom: storedAllowFrom,
+        groupAllowFromFallbackToAllowFrom: false,
+        isSenderAllowed: (allowFrom) =>
+          resolveMSTeamsAllowlistMatch({
+            allowFrom,
+            senderId,
+            senderName,
+            allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
+          }).allowed,
       });
-      if (!allowMatch.allowed) {
-        log.debug?.("dropping reaction (sender not allowlisted)", { sender: senderId });
+      if (access.decision !== "allow") {
+        log.debug?.("dropping reaction (dm access denied)", {
+          sender: senderId,
+          reason: access.reason,
+        });
         return;
       }
     }
@@ -139,7 +154,6 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       }
 
       const effectiveGroupAllowFrom = resolvedAllowFromLists.effectiveGroupAllowFrom;
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
       const groupAllowed = isMSTeamsGroupAllowed({
         groupPolicy: msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist",
         allowFrom: effectiveGroupAllowFrom,
