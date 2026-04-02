@@ -112,6 +112,12 @@ function resolveCoverageEnvId(entry: SecretRegistryEntry, fallbackEnvId: string)
     : fallbackEnvId;
 }
 
+function resolveCoverageResolvedPath(entry: SecretRegistryEntry): string {
+  return entry.id === "tools.web.x_search.apiKey"
+    ? "plugins.entries.xai.config.webSearch.apiKey"
+    : entry.pathPattern;
+}
+
 function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string): OpenClawConfig {
   const config = {} as OpenClawConfig;
   const resolvedEnvId = resolveCoverageEnvId(entry, envId);
@@ -262,7 +268,10 @@ describe("secrets runtime target coverage", () => {
         agentDirs: ["/tmp/openclaw-agent-main"],
         loadAuthStore: () => ({ version: 1, profiles: {} }),
       });
-      const resolved = getPath(snapshot.config, toConcretePathSegments(entry.pathPattern));
+      const resolved = getPath(
+        snapshot.config,
+        toConcretePathSegments(resolveCoverageResolvedPath(entry)),
+      );
       if (entry.expectedResolvedValue === "string") {
         expect(resolved).toBe(expectedValue);
       } else {

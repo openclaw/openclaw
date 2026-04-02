@@ -278,11 +278,11 @@ flowchart TD
 
     - If `tools.exec.host` is unset, the default is `auto`.
     - `host=auto` resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.
-    - On `gateway` and `node`, unset `tools.exec.security` defaults to `allowlist`.
-    - Unset `tools.exec.ask` defaults to `on-miss`.
-    - Result: ordinary host commands can now pause with `Approval required` instead of running immediately.
+    - On `gateway` and `node`, unset `tools.exec.security` defaults to `full`.
+    - Unset `tools.exec.ask` defaults to `off`.
+    - Result: if you are seeing approvals, some host-local or per-session policy tightened exec away from the current defaults.
 
-    Restore the old gateway no-approval behavior:
+    Restore current default no-approval behavior:
 
     ```bash
     openclaw config set tools.exec.host gateway
@@ -293,8 +293,8 @@ flowchart TD
 
     Safer alternatives:
 
-    - Set only `tools.exec.host=gateway` if you just want stable host routing and still want approvals.
-    - Keep `security=allowlist` with `ask=on-miss` if you want host exec but still want review on allowlist misses.
+    - Set only `tools.exec.host=gateway` if you just want stable host routing.
+    - Use `security=allowlist` with `ask=on-miss` if you want host exec but still want review on allowlist misses.
     - Enable sandbox mode if you want `host=auto` to resolve back to `sandbox`.
 
     Common log signatures:

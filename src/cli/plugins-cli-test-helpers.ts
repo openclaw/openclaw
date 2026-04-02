@@ -18,7 +18,10 @@ export const resolveMarketplaceInstallShortcut = vi.fn();
 export const enablePluginInConfig = vi.fn();
 export const recordPluginInstall = vi.fn();
 export const clearPluginManifestRegistryCache = vi.fn();
-export const buildPluginStatusReport = vi.fn();
+export const buildPluginSnapshotReport = vi.fn();
+export const buildPluginDiagnosticsReport = vi.fn();
+export const buildPluginStatusReport = buildPluginDiagnosticsReport;
+export const buildPluginCompatibilityNotices = vi.fn();
 export const applyExclusiveSlotSelection = vi.fn();
 export const uninstallPlugin = vi.fn();
 export const updateNpmInstalledPlugins = vi.fn();
@@ -72,7 +75,9 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginStatusReport: (...args: unknown[]) => buildPluginStatusReport(...args),
+  buildPluginSnapshotReport: (...args: unknown[]) => buildPluginSnapshotReport(...args),
+  buildPluginDiagnosticsReport: (...args: unknown[]) => buildPluginDiagnosticsReport(...args),
+  buildPluginCompatibilityNotices: (...args: unknown[]) => buildPluginCompatibilityNotices(...args),
 }));
 
 vi.mock("../plugins/slots.js", () => ({
@@ -154,7 +159,9 @@ export function resetPluginsCliTestState() {
   enablePluginInConfig.mockReset();
   recordPluginInstall.mockReset();
   clearPluginManifestRegistryCache.mockReset();
-  buildPluginStatusReport.mockReset();
+  buildPluginSnapshotReport.mockReset();
+  buildPluginDiagnosticsReport.mockReset();
+  buildPluginCompatibilityNotices.mockReset();
   applyExclusiveSlotSelection.mockReset();
   uninstallPlugin.mockReset();
   updateNpmInstalledPlugins.mockReset();
@@ -199,10 +206,13 @@ export function resetPluginsCliTestState() {
   });
   enablePluginInConfig.mockImplementation((cfg: OpenClawConfig) => ({ config: cfg }));
   recordPluginInstall.mockImplementation((cfg: OpenClawConfig) => cfg);
-  buildPluginStatusReport.mockReturnValue({
+  const defaultPluginReport = {
     plugins: [],
     diagnostics: [],
-  });
+  };
+  buildPluginSnapshotReport.mockReturnValue(defaultPluginReport);
+  buildPluginDiagnosticsReport.mockReturnValue(defaultPluginReport);
+  buildPluginCompatibilityNotices.mockReturnValue([]);
   applyExclusiveSlotSelection.mockImplementation(({ config }: { config: OpenClawConfig }) => ({
     config,
     warnings: [],

@@ -78,7 +78,7 @@ describe("web fetch runtime", () => {
     clearSecretsRuntimeSnapshot();
   });
 
-  it("does not auto-detect providers from env SecretRefs without runtime metadata", () => {
+  it("auto-detects providers from plugin-owned env SecretRefs without runtime metadata", () => {
     const provider = createProvider({
       pluginId: "firecrawl",
       id: "firecrawl",
@@ -112,7 +112,9 @@ describe("web fetch runtime", () => {
       },
     };
 
-    expect(resolveWebFetchDefinition({ config })).toBeNull();
+    const resolved = resolveWebFetchDefinition({ config });
+
+    expect(resolved?.provider.id).toBe("firecrawl");
   });
 
   it("prefers the runtime-selected provider when metadata is available", async () => {
