@@ -253,13 +253,13 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
-  const acpDispatchSessionKey = resolveAcpDispatchSessionKey(ctx, cfg) ?? sessionKey;
+  const routeSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  const acpDispatchSessionKey = resolveAcpDispatchSessionKey(ctx, cfg) ?? routeSessionKey;
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
   // stale route after thread delivery was intentionally cleared.
-  const routeThreadId =
-    ctx.MessageThreadId ?? parseSessionThreadInfo(acpDispatchSessionKey).threadId;
+  const routeThreadId = ctx.MessageThreadId ?? parseSessionThreadInfo(routeSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
