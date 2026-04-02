@@ -1,5 +1,10 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  assertOkOrThrowHttpError,
+  postJsonRequest,
+  resolveProviderHttpRequestConfig,
+} from "openclaw/plugin-sdk/provider-http";
 import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
@@ -57,57 +62,59 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       if (!auth.apiKey) {
         throw new Error("OpenAI API key missing");
       }
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        resolveProviderHttpRequestConfig({
+          baseUrl: resolveOpenAIBaseUrl(req.cfg),
+          defaultBaseUrl: DEFAULT_OPENAI_IMAGE_BASE_URL,
+          allowPrivateNetwork: false,
+          defaultHeaders: {
+            Authorization: `Bearer ${auth.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          provider: "openai",
+          capability: "image",
+          transport: "http",
+        });
 
-      const controller = new AbortController();
-      const timeoutMs = req.timeoutMs;
-      const timeout =
-        typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-          ? setTimeout(() => controller.abort(), timeoutMs)
-          : undefined;
-
-      const response = await fetch(`${resolveOpenAIBaseUrl(req.cfg)}/images/generations`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${auth.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      const { response, release } = await postJsonRequest({
+        url: `${baseUrl}/images/generations`,
+        headers,
+        body: {
           model: req.model || DEFAULT_OPENAI_IMAGE_MODEL,
           prompt: req.prompt,
           n: req.count ?? 1,
           size: req.size ?? DEFAULT_SIZE,
-        }),
-        signal: controller.signal,
-      }).finally(() => {
-        clearTimeout(timeout);
+        },
+        timeoutMs: req.timeoutMs,
+        fetchFn: fetch,
+        allowPrivateNetwork,
+        dispatcherPolicy,
       });
+      try {
+        await assertOkOrThrowHttpError(response, "OpenAI image generation failed");
 
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        throw new Error(
-          `OpenAI image generation failed (${response.status}): ${text || response.statusText}`,
-        );
+        const data = (await response.json()) as OpenAIImageApiResponse;
+        const images = (data.data ?? [])
+          .map((entry, index) => {
+            if (!entry.b64_json) {
+              return null;
+            }
+            return {
+              buffer: Buffer.from(entry.b64_json, "base64"),
+              mimeType: DEFAULT_OUTPUT_MIME,
+              fileName: `image-${index + 1}.png`,
+              ...(entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {}),
+            };
+          })
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
+        return {
+          images,
+          model: req.model || DEFAULT_OPENAI_IMAGE_MODEL,
+        };
+      } finally {
+        await release();
       }
-
-      const data = (await response.json()) as OpenAIImageApiResponse;
-      const images = (data.data ?? [])
-        .map((entry, index) => {
-          if (!entry.b64_json) {
-            return null;
-          }
-          return {
-            buffer: Buffer.from(entry.b64_json, "base64"),
-            mimeType: DEFAULT_OUTPUT_MIME,
-            fileName: `image-${index + 1}.png`,
-            ...(entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {}),
-          };
-        })
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-
-      return {
-        images,
-        model: req.model || DEFAULT_OPENAI_IMAGE_MODEL,
-      };
     },
   };
 }

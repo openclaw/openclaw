@@ -117,6 +117,37 @@ describe("openai plugin", () => {
     ).rejects.toThrow("does not support reference-image edits");
   });
 
+  it("does not allow private-network routing just because a custom base URL is configured", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "sk-test",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-1",
+        prompt: "draw a cat",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "http://127.0.0.1:8080/v1",
+                models: [],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+      }),
+    ).rejects.toThrow("Blocked hostname or private/internal/special-use IP address");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("bootstraps the env proxy dispatcher before refreshing codex oauth credentials", async () => {
     const refreshed = {
       access: "next-access",
