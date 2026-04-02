@@ -559,6 +559,14 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
+  // FORK: trace heartbeat invocations to debug stray :heartbeat sessions
+  log.warn("heartbeat: runHeartbeatOnce entry", {
+    reason: opts.reason,
+    sessionKey: opts.sessionKey,
+    agentId,
+    caller: new Error().stack?.split("\n").slice(1, 4).map(s => s.trim()).join(" <- "),
+  });
+
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
   const preflight = await resolveHeartbeatPreflight({
     cfg,
@@ -593,6 +601,20 @@ export async function runHeartbeatOnce(opts: {
     !preflight.isCronEventReason &&
     !preflight.isWakeReason &&
     !preflight.hasTaggedCronEvents;
+
+  // FORK: trace isolation decision
+  log.warn("heartbeat: isolation decision", {
+    sessionKey,
+    reason: opts.reason,
+    reasonKind: resolveHeartbeatReasonKind(opts.reason),
+    useIsolatedSession,
+    isExecEvent: preflight.isExecEventReason,
+    isCronEvent: preflight.isCronEventReason,
+    isWake: preflight.isWakeReason,
+    hasTaggedCron: preflight.hasTaggedCronEvents,
+    isolatedCfg: heartbeat?.isolatedSession,
+  });
+
   let runSessionKey = sessionKey;
   let runStorePath = storePath;
   if (useIsolatedSession) {

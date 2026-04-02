@@ -28,13 +28,14 @@ export function resolveHeartbeatReasonKind(reason?: string): HeartbeatReasonKind
   if (trimmed === "manual") {
     return "manual";
   }
-  if (trimmed === "exec-event") {
+  // exec-event, exec:<sessionId>:exit, exec:<sessionId>:signal, etc.
+  if (trimmed === "exec-event" || trimmed.startsWith("exec:")) {
     return "exec-event";
   }
   if (trimmed === "wake") {
     return "wake";
   }
-  if (trimmed.startsWith("acp:spawn:")) {
+  if (trimmed.startsWith("acp:spawn:") || trimmed.startsWith("acp:")) {
     return "wake";
   }
   if (trimmed === "background-task" || trimmed === "background-task-blocked") {
