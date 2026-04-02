@@ -77,11 +77,6 @@ function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
   return readPluginXaiWebSearchApiKey(cfg) ?? readLegacyGrokApiKey(cfg);
 }
 
-function readLegacyXSearchApiKey(cfg?: OpenClawConfig): string | undefined {
-  const legacyConfig = resolveLegacyXSearchConfig(cfg);
-  return readConfiguredSecretString(legacyConfig?.apiKey, "tools.web.x_search.apiKey");
-}
-
 function resolveXSearchConfig(cfg?: OpenClawConfig): Record<string, unknown> | undefined {
   return resolveEffectiveXSearchConfig(cfg);
 }
@@ -94,33 +89,19 @@ function resolveXSearchEnabled(params: {
   if (params.config?.enabled === false) {
     return false;
   }
-  if (
-    resolveFallbackXaiApiKey(params.runtimeConfig) ||
-    readLegacyXSearchApiKey(params.runtimeConfig)
-  ) {
+  if (resolveFallbackXaiApiKey(params.runtimeConfig)) {
     return true;
   }
-  return Boolean(
-    resolveFallbackXaiApiKey(params.cfg) ||
-    readLegacyXSearchApiKey(params.cfg) ||
-    readProviderEnvValue(["XAI_API_KEY"]),
-  );
+  return Boolean(resolveFallbackXaiApiKey(params.cfg) || readProviderEnvValue(["XAI_API_KEY"]));
 }
 
 function resolveXSearchApiKey(params: {
   sourceConfig?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
 }): string | undefined {
-  const sourceXSearchConfig = resolveXSearchConfig(params.sourceConfig);
-  const runtimeXSearchConfig =
-    params.runtimeConfig && params.runtimeConfig !== params.sourceConfig
-      ? resolveXSearchConfig(params.runtimeConfig)
-      : undefined;
   return (
     resolveFallbackXaiApiKey(params.runtimeConfig) ??
     resolveFallbackXaiApiKey(params.sourceConfig) ??
-    readLegacyXSearchApiKey(params.runtimeConfig) ??
-    readLegacyXSearchApiKey(params.sourceConfig) ??
     readProviderEnvValue(["XAI_API_KEY"])
   );
 }

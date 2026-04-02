@@ -715,17 +715,6 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
-    id: "tools.web.x_search.apiKey",
-    targetType: "tools.web.x_search.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "tools.web.x_search.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
     id: "plugins.entries.brave.config.webSearch.apiKey",
     targetType: "plugins.entries.brave.config.webSearch.apiKey",
     configFile: "openclaw.json",
