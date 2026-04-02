@@ -14,6 +14,7 @@ import {
   resolveDiffImageRenderOptions,
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
+  resolveDiffsPluginViewerBaseUrl,
 } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
@@ -219,10 +220,25 @@ describe("resolveDiffsPluginSecurity", () => {
   });
 });
 
+describe("resolveDiffsPluginViewerBaseUrl", () => {
+  it("defaults to undefined when config is missing", () => {
+    expect(resolveDiffsPluginViewerBaseUrl(undefined)).toBeUndefined();
+  });
+
+  it("normalizes configured viewer base URLs", () => {
+    expect(
+      resolveDiffsPluginViewerBaseUrl({
+        viewerBaseUrl: "https://example.com/openclaw/",
+      }),
+    ).toBe("https://example.com/openclaw");
+  });
+});
+
 describe("diffs plugin schema surfaces", () => {
   it("preserves defaults and security for direct safeParse callers", () => {
     expect(
       diffsPluginConfigSchema.safeParse?.({
+        viewerBaseUrl: "https://example.com/openclaw/",
         defaults: {
           theme: "light",
         },
@@ -233,6 +249,7 @@ describe("diffs plugin schema surfaces", () => {
     ).toMatchObject({
       success: true,
       data: {
+        viewerBaseUrl: "https://example.com/openclaw",
         defaults: {
           fontFamily: "Fira Code",
           fontSize: 15,
@@ -273,6 +290,24 @@ describe("diffs plugin schema surfaces", () => {
           fileScale: 2.5,
           fileMaxWidth: 1200,
         },
+      },
+    });
+  });
+
+  it("rejects invalid viewerBaseUrl config values", () => {
+    expect(
+      diffsPluginConfigSchema.safeParse?.({
+        viewerBaseUrl: "javascript:alert(1)",
+      }),
+    ).toMatchObject({
+      success: false,
+      error: {
+        issues: [
+          {
+            path: ["viewerBaseUrl"],
+            message: "viewerBaseUrl must use http or https: javascript:alert(1)",
+          },
+        ],
       },
     });
   });
@@ -329,12 +364,28 @@ describe("diffs viewer URL helpers", () => {
     ).toBe("https://example.com/openclaw/plugins/diffs/view/id/token");
   });
 
+  it("prefers normalized viewerBaseUrl strings too", () => {
+    expect(
+      buildViewerUrl({
+        config: {},
+        baseUrl: "https://example.com/openclaw/",
+        viewerPath: "/plugins/diffs/view/id/token",
+      }),
+    ).toBe("https://example.com/openclaw/plugins/diffs/view/id/token");
+  });
+
   it("rejects base URLs with query/hash", () => {
     expect(() => normalizeViewerBaseUrl("https://example.com?a=1")).toThrow(
       "baseUrl must not include query/hash",
     );
     expect(() => normalizeViewerBaseUrl("https://example.com#frag")).toThrow(
       "baseUrl must not include query/hash",
+    );
+  });
+
+  it("uses the configured field name in viewerBaseUrl validation errors", () => {
+    expect(() => normalizeViewerBaseUrl("https://example.com?a=1", "viewerBaseUrl")).toThrow(
+      "viewerBaseUrl must not include query/hash",
     );
   });
 });

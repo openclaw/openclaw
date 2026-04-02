@@ -125,7 +125,7 @@ const DiffsToolSchema = Type.Object(
     baseUrl: Type.Optional(
       Type.String({
         description:
-          "Optional gateway base URL override used when building the viewer URL, for example https://gateway.example.com.",
+          "Optional gateway base URL override used when building the viewer URL. Overrides configured viewerBaseUrl, for example https://gateway.example.com.",
       }),
     ),
   },
@@ -142,6 +142,7 @@ export function createDiffsTool(params: {
   api: OpenClawPluginApi;
   store: DiffArtifactStore;
   defaults: DiffToolDefaults;
+  viewerBaseUrl?: string;
   screenshotter?: DiffScreenshotter;
   context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
@@ -237,7 +238,7 @@ export function createDiffsTool(params: {
       const viewerUrl = buildViewerUrl({
         config: params.api.config,
         viewerPath: artifact.viewerPath,
-        baseUrl: normalizeBaseUrl(toolParams.baseUrl),
+        baseUrl: normalizeBaseUrl(toolParams.baseUrl) ?? params.viewerBaseUrl,
       });
 
       const baseDetails = {
