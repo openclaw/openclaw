@@ -138,6 +138,7 @@ describe("extensionForMime", () => {
     { mime: "text/html", expected: ".html" },
     { mime: "text/xml", expected: ".xml" },
     { mime: "text/css", expected: ".css" },
+    { mime: "application/xml", expected: ".xml" },
     { mime: "IMAGE/JPEG", expected: ".jpg" },
     { mime: "Audio/X-M4A", expected: ".m4a" },
     { mime: "Video/QuickTime", expected: ".mov" },
