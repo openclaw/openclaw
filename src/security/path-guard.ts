@@ -126,16 +126,16 @@ export async function checkPathGuardStrict(
           ].filter((v) => v >= 0);
           return candidates.length ? Math.min(...candidates) : -1;
         })();
-        const prefix = firstMagic >= 0 ? normalizedEntryPattern.slice(0, firstMagic) : normalizedEntryPattern;
-        const rest = firstMagic >= 0 ? normalizedEntryPattern.slice(firstMagic) : "";
+        // Canonicalize a *directory* prefix, not a partial path segment.
+        // If magic appears mid-segment (e.g. /dir[12]/...), splitting at firstMagic would produce
+        // prefix=/dir and rest=[12]/..., and inserting '/' changes semantics. Instead, rewrite from
+        // the last '/' before firstMagic.
+        const splitIndex = firstMagic >= 0 ? normalizedEntryPattern.lastIndexOf("/", firstMagic) : -1;
+        const dirPrefix = splitIndex > 0 ? normalizedEntryPattern.slice(0, splitIndex) : "/";
+        const remainder = splitIndex >= 0 ? normalizedEntryPattern.slice(splitIndex) : normalizedEntryPattern;
         try {
-          const canonicalPrefix = toPosixPath(await resolveRealPathStrict(prefix));
-          const needsSlash =
-            canonicalPrefix.length > 0 &&
-            !canonicalPrefix.endsWith("/") &&
-            rest.length > 0 &&
-            !rest.startsWith("/");
-          const rewrittenPattern = needsSlash ? `${canonicalPrefix}/${rest}` : `${canonicalPrefix}${rest}`;
+          const canonicalDirPrefix = toPosixPath(await resolveRealPathStrict(dirPrefix));
+          const rewrittenPattern = `${canonicalDirPrefix}${remainder}`;
           return minimatch(normalizedRealPath, rewrittenPattern, {
             dot: true,
             magicalBraces: true,
