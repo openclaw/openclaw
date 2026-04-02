@@ -521,8 +521,12 @@ export async function runPreparedReply(
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
   const followupRun: FollowupRun = {
     execution: { visibility: "internal", agentPrompt: queuedBody },
-    display: baseBodyTrimmedRaw
-      ? { visibility: "user-visible", summaryLine: baseBodyTrimmedRaw }
+    display: queuedBody
+      ? {
+          visibility: "user-visible",
+          text: queuedBody,
+          summaryLine: baseBodyTrimmedRaw || undefined,
+        }
       : undefined,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     enqueuedAt: Date.now(),

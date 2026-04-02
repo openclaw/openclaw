@@ -1613,6 +1613,52 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).toContain("Queued #2\ntwo");
   });
 
+  it("preserves full deferred prompt context when collect mode re-batches display payloads", async () => {
+    const key = `test-collect-display-context-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt:
+          "[System]\n[Thread history - for context]\nprior note\n\n[User sent media without caption]",
+        displayText:
+          "[System]\n[Thread history - for context]\nprior note\n\n[User sent media without caption]",
+        summaryLine: "latest user body",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "[System]\nsecond queued prompt",
+        displayText: "[System]\nsecond queued prompt",
+        summaryLine: "second user body",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const batchedPrompt = calls[0]?.execution.agentPrompt ?? "";
+    expect(batchedPrompt).toContain("[Thread history - for context]\nprior note");
+    expect(batchedPrompt).toContain("[User sent media without caption]");
+    expect(batchedPrompt).toContain("[System]\nsecond queued prompt");
+    expect(batchedPrompt).not.toContain("Queued #1\nlatest user body");
+  });
+
   it.each([
     {
       name: "display-first mixed collect retries",
