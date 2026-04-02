@@ -3,8 +3,20 @@ import type { CoreConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { LogService } from "../sdk/logger.js";
 import { resolveMatrixAuth, resolveMatrixAuthContext } from "./config.js";
-import { createMatrixClient } from "./create-client.js";
 import type { MatrixAuth } from "./types.js";
+
+type MatrixCreateClientDeps = {
+  createMatrixClient: typeof import("./create-client.js").createMatrixClient;
+};
+
+let matrixCreateClientDepsPromise: Promise<MatrixCreateClientDeps> | undefined;
+
+async function loadMatrixCreateClientDeps(): Promise<MatrixCreateClientDeps> {
+  matrixCreateClientDepsPromise ??= import("./create-client.js").then((runtime) => ({
+    createMatrixClient: runtime.createMatrixClient,
+  }));
+  return await matrixCreateClientDepsPromise;
+}
 
 type SharedMatrixClientState = {
   client: MatrixClient;
@@ -38,6 +50,7 @@ async function createSharedMatrixClient(params: {
   auth: MatrixAuth;
   timeoutMs?: number;
 }): Promise<SharedMatrixClientState> {
+  const { createMatrixClient } = await loadMatrixCreateClientDeps();
   const client = await createMatrixClient({
     homeserver: params.auth.homeserver,
     userId: params.auth.userId,
