@@ -199,4 +199,43 @@ describe("RunnerManager", () => {
       await fs.rm(fixture.dir, { recursive: true, force: true });
     }
   });
+
+  it("cold-loads again when ensureReady runs after stop aborted an in-flight launch", async () => {
+    let releaseBarrier!: () => void;
+    const lateHandle = { runner: true };
+    mockState.createBarrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    mockState.createRunner.mockImplementation(async () => {
+      await mockState.createBarrier;
+      return lateHandle;
+    });
+    const fixture = await createRuntimeFixture();
+
+    try {
+      const manager = new RunnerManager({
+        runtimeLibraryPath: fixture.runtimeLibraryPath,
+        backend: "metal",
+        modelPath: fixture.modelPath,
+        tokenizerPath: fixture.tokenizerPath,
+        logger: { info() {}, warn() {}, error() {} },
+      });
+
+      const aborted = manager.ensureReady();
+      await waitForExpectation(() => expect(mockState.createRunner).toHaveBeenCalledTimes(1));
+      manager.stop();
+      releaseBarrier();
+      await aborted;
+
+      expect(manager.state).toBe("unloaded");
+      mockState.createRunner.mockImplementation(async () => ({ runner: true }));
+
+      await manager.ensureReady();
+
+      expect(manager.state).toBe("ready");
+      expect(mockState.createRunner).toHaveBeenCalledTimes(2);
+    } finally {
+      await fs.rm(fixture.dir, { recursive: true, force: true });
+    }
+  });
 });

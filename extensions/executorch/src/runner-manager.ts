@@ -35,6 +35,8 @@ export class RunnerManager {
   private readyPromise: Promise<void> | null = null;
   private _native: NativeExecuTorchAddon | null = null;
   private launchGeneration = 0;
+  /** Incremented only from `stop()` so waiters can avoid auto-relaunch after cancellation. */
+  private stopEpoch = 0;
 
   private get native(): NativeExecuTorchAddon {
     if (!this._native) this._native = loadNativeExecuTorchAddon();
@@ -78,15 +80,38 @@ export class RunnerManager {
   }
 
   async ensureReady(): Promise<void> {
-    if (this._state === "ready" && this.isAlive) return;
-    if (this.readyPromise) return this.readyPromise;
-    const launchPromise = this.launch();
-    this.readyPromise = launchPromise;
-    try {
-      await launchPromise;
-    } finally {
-      if (this.readyPromise === launchPromise) {
-        this.readyPromise = null;
+    const stopEpochAtEntry = this.stopEpoch;
+    for (;;) {
+      if (this._state === "ready" && this.isAlive) {
+        return;
+      }
+      if (this.readyPromise) {
+        const pending = this.readyPromise;
+        await pending;
+        if (this._state === "ready" && this.isAlive) {
+          return;
+        }
+        // Shared launch finished without a live handle: retry unless `stop()` ran during the wait
+        // (callers awaiting the same promise after stop should observe unloaded, not cold-load again).
+        if (this.stopEpoch > stopEpochAtEntry) {
+          return;
+        }
+        continue;
+      }
+      const launchPromise = this.launch();
+      this.readyPromise = launchPromise;
+      try {
+        await launchPromise;
+      } finally {
+        if (this.readyPromise === launchPromise) {
+          this.readyPromise = null;
+        }
+      }
+      if (this._state === "ready" && this.isAlive) {
+        return;
+      }
+      if (this.stopEpoch > stopEpochAtEntry) {
+        return;
       }
     }
   }
@@ -109,6 +134,7 @@ export class RunnerManager {
   }
 
   stop(): void {
+    this.stopEpoch += 1;
     this.launchGeneration += 1;
     this.resetHandle();
   }

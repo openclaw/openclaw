@@ -104,14 +104,15 @@ struct AsyncTranscribeWork {
   std::string error;
 };
 
-std::string g_last_error;
+// Per-thread: async createRunner workers run concurrently; a process-global buffer would race.
+thread_local std::string tls_last_error;
 
 void set_last_error(const std::string& message) {
-  g_last_error = message;
+  tls_last_error = message;
 }
 
 void throw_last_error(napi_env env, const char* fallback) {
-  const char* msg = g_last_error.empty() ? fallback : g_last_error.c_str();
+  const char* msg = tls_last_error.empty() ? fallback : tls_last_error.c_str();
   napi_throw_error(env, nullptr, msg);
 }
 
@@ -400,7 +401,8 @@ napi_value create_runner(napi_env env, napi_callback_info info) {
 
         RuntimeSymbols symbols;
         if (!load_runtime_symbols(work->runtime_library_path, &symbols)) {
-          work->error = g_last_error.empty() ? "failed to load runtime symbols" : g_last_error;
+          work->error =
+              tls_last_error.empty() ? "failed to load runtime symbols" : tls_last_error;
           return;
         }
 
