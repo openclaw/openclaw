@@ -961,14 +961,7 @@ function collectAllowAlwaysPatterns(params: {
     }
   }
   if (!trustPlan.shellWrapperExecutable) {
-    // In strict inline-eval mode we deliberately persist benign interpreter
-    // executables without an argv binding so later inline-eval attempts match
-    // the binary and get rejected by strictInlineEval instead of reopening the
-    // generic allowlist approval prompt on Windows.
-    const argPattern =
-      params.strictInlineEval === true && isInterpreterLikeAllowlistPattern(candidatePath)
-        ? undefined
-        : buildArgPatternFromArgv(segment.argv, params.platform);
+    const argPattern = buildArgPatternFromArgv(segment.argv, params.platform);
     addAllowAlwaysPattern(params.out, candidatePath, argPattern);
     return;
   }
