@@ -1206,6 +1206,7 @@ export async function runEmbeddedAttempt(
       let aborted = Boolean(params.abortSignal?.aborted);
       let yieldAborted = false;
       let timedOut = false;
+      let idleTimedOut = false;
       let timedOutDuringCompaction = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
         "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
@@ -1255,6 +1256,7 @@ export async function runEmbeddedAttempt(
         void activeSession.abort();
       };
       idleTimeoutTrigger = (error) => {
+        idleTimedOut = true;
         abortRun(true, error);
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
@@ -1885,6 +1887,7 @@ export async function runEmbeddedAttempt(
       return {
         aborted,
         timedOut,
+        idleTimedOut,
         timedOutDuringCompaction,
         promptError,
         sessionIdUsed,

@@ -177,6 +177,7 @@ const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage 
 const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => ({
   aborted: false,
   timedOut: false,
+  idleTimedOut: false,
   timedOutDuringCompaction: false,
   promptError: null,
   sessionIdUsed: "session:test",

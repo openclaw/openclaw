@@ -571,6 +571,7 @@ export async function runEmbeddedPiAgent(
             aborted,
             promptError,
             timedOut,
+            idleTimedOut,
             timedOutDuringCompaction,
             sessionIdUsed,
             lastAssistant,
@@ -1327,12 +1328,15 @@ export async function runEmbeddedPiAgent(
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
           if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+            const timeoutHint = idleTimedOut
+              ? "The model took too long to respond. " +
+                "Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config (set to 0 to disable)."
+              : "Request timed out before a response was generated. " +
+                "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
             return {
               payloads: [
                 {
-                  text:
-                    "Request timed out before a response was generated. " +
-                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                  text: timeoutHint,
                   isError: true,
                 },
               ],

@@ -15,6 +15,7 @@ function makeAttemptResult(
   return {
     aborted: false,
     timedOut: false,
+    idleTimedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
     sessionIdUsed: "test-session",

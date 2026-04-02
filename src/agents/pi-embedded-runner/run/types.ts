@@ -35,6 +35,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
   timedOut: boolean;
+  /** True if the timeout was triggered by the LLM idle timeout (no tokens received). */
+  idleTimedOut: boolean;
   /** True if the timeout occurred while compaction was in progress or pending. */
   timedOutDuringCompaction: boolean;
   promptError: unknown;
