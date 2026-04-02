@@ -21,6 +21,13 @@ import type { CoreConfig } from "./types.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type MatrixOriginTarget = { to: string; threadId?: string };
+const MATRIX_PLUGIN_NATIVE_DELIVERY_DISABLED = {
+  enabled: false,
+  preferredSurface: "approver-dm" as const,
+  supportsOriginSurface: false,
+  supportsApproverDmSurface: false,
+  notifyOriginWhenDmOnly: false,
+};
 
 function normalizeComparableTarget(value: string): string {
   const target = resolveMatrixTargetIdentity(value);
@@ -78,6 +85,10 @@ function matrixTargetsMatch(a: MatrixOriginTarget, b: MatrixOriginTarget): boole
     normalizeComparableTarget(a.to) === normalizeComparableTarget(b.to) &&
     (a.threadId ?? "") === (b.threadId ?? "")
   );
+}
+
+function hasMatrixPluginApprovers(params: { cfg: CoreConfig; accountId?: string | null }): boolean {
+  return getMatrixApprovalAuthApprovers(params).length > 0;
 }
 
 const resolveMatrixOriginTarget = createChannelNativeOriginTargetResolver({
@@ -146,13 +157,7 @@ const matrixExecOnlyNativeApprovalAdapter = matrixBaseNativeApprovalAdapter && {
     params: Parameters<typeof matrixBaseNativeApprovalAdapter.describeDeliveryCapabilities>[0],
   ) =>
     params.approvalKind === "plugin"
-      ? {
-          enabled: false,
-          preferredSurface: "approver-dm" as const,
-          supportsOriginSurface: false,
-          supportsApproverDmSurface: false,
-          notifyOriginWhenDmOnly: false,
-        }
+      ? MATRIX_PLUGIN_NATIVE_DELIVERY_DISABLED
       : matrixBaseNativeApprovalAdapter.describeDeliveryCapabilities(params),
   resolveOriginTarget: async (
     params: Parameters<NonNullable<typeof matrixBaseNativeApprovalAdapter.resolveOriginTarget>>[0],
@@ -172,36 +177,30 @@ const matrixExecOnlyNativeApprovalAdapter = matrixBaseNativeApprovalAdapter && {
 
 export const matrixApprovalCapability = createChannelApprovalCapability({
   authorizeActorAction: (params) => {
-    if (params.approvalKind === "plugin") {
-      if (
-        getMatrixApprovalAuthApprovers({
-          cfg: params.cfg as CoreConfig,
-          accountId: params.accountId,
-        }).length === 0
-      ) {
-        return {
-          authorized: false,
-          reason: "❌ Matrix plugin approvals are not enabled for this bot account.",
-        } as const;
-      }
-      return matrixApprovalAuth.authorizeActorAction(params);
+    if (params.approvalKind !== "plugin") {
+      return matrixNativeApprovalCapability.authorizeActorAction?.(params) ?? { authorized: true };
     }
-    return matrixNativeApprovalCapability.authorizeActorAction?.(params) ?? { authorized: true };
-  },
-  getActionAvailabilityState: (params) => {
     if (
-      getMatrixApprovalAuthApprovers({
+      !hasMatrixPluginApprovers({
         cfg: params.cfg as CoreConfig,
         accountId: params.accountId,
-      }).length > 0
+      })
     ) {
-      return { kind: "enabled" } as const;
+      return {
+        authorized: false,
+        reason: "❌ Matrix plugin approvals are not enabled for this bot account.",
+      } as const;
     }
-    return (
-      matrixNativeApprovalCapability.getActionAvailabilityState?.(params) ??
-      ({ kind: "disabled" } as const)
-    );
+    return matrixApprovalAuth.authorizeActorAction(params);
   },
+  getActionAvailabilityState: (params) =>
+    hasMatrixPluginApprovers({
+      cfg: params.cfg as CoreConfig,
+      accountId: params.accountId,
+    })
+      ? ({ kind: "enabled" } as const)
+      : (matrixNativeApprovalCapability.getActionAvailabilityState?.(params) ??
+        ({ kind: "disabled" } as const)),
   approvals: {
     delivery: matrixDeliveryAdapter,
     native: matrixExecOnlyNativeApprovalAdapter,

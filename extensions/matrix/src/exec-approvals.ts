@@ -91,19 +91,14 @@ export const resolveMatrixExecApprovalTarget = matrixExecApprovalProfile.resolve
 export const shouldHandleMatrixExecApprovalRequest = matrixExecApprovalProfile.shouldHandleRequest;
 
 function buildFilterCheckRequest(params: {
-  approvalId: string;
-  payload: ReplyPayload;
-}): ExecApprovalRequest | null {
-  const metadata = getExecApprovalReplyMetadata(params.payload);
-  if (!metadata) {
-    return null;
-  }
+  metadata: NonNullable<ReturnType<typeof getExecApprovalReplyMetadata>>;
+}): ExecApprovalRequest {
   return {
-    id: params.approvalId,
+    id: params.metadata.approvalId,
     request: {
       command: "",
-      agentId: metadata.agentId ?? null,
-      sessionKey: metadata.sessionKey ?? null,
+      agentId: params.metadata.agentId ?? null,
+      sessionKey: params.metadata.sessionKey ?? null,
     },
     createdAtMs: 0,
     expiresAtMs: 0,
@@ -123,12 +118,8 @@ export function shouldSuppressLocalMatrixExecApprovalPrompt(params: {
     return false;
   }
   const request = buildFilterCheckRequest({
-    approvalId: metadata.approvalId,
-    payload: params.payload,
+    metadata,
   });
-  if (!request) {
-    return false;
-  }
   return shouldHandleMatrixExecApprovalRequest({
     cfg: params.cfg,
     accountId: params.accountId,
