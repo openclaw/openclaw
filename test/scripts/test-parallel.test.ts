@@ -30,6 +30,7 @@ const clearPlannerShardEnv = (env) => {
   delete nextEnv.OPENCLAW_TEST_INCLUDE_EXTENSIONS;
   delete nextEnv.OPENCLAW_TEST_INCLUDE_CHANNELS;
   delete nextEnv.OPENCLAW_TEST_INCLUDE_GATEWAY;
+  delete nextEnv.OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS;
   return nextEnv;
 };
 
@@ -464,16 +465,6 @@ describe("scripts/test-parallel lane planning", () => {
     });
     expect(outputs).toContain("run_install_smoke=true");
     expect(outputs).not.toContain("run_checks=");
-  });
-
-  it("writes bun outputs in ci-bun mode", () => {
-    const outputs = runManifestOutputWriter("ci-bun", {
-      OPENCLAW_CI_DOCS_ONLY: "false",
-      OPENCLAW_CI_RUN_NODE: "true",
-    });
-    expect(outputs).toContain("run_bun_checks=true");
-    expect(outputs).toContain("bun_checks_matrix=");
-    expect(outputs).not.toContain("run_install_smoke=");
   });
 
   it("passes through vitest --mode values that are not wrapper runtime overrides", () => {

@@ -14,10 +14,16 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-  listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
-}));
+vi.mock("../channels/plugins/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/index.js")>(
+    "../channels/plugins/index.js",
+  );
+  return {
+    ...actual,
+    getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+    listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
+  };
+});
 
 vi.mock("../utils/message-channel.js", () => ({
   INTERNAL_MESSAGE_CHANNEL: "web",
@@ -123,6 +129,26 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
 
+  it("reads approval availability from approvalCapability when auth is omitted", () => {
+    getChannelPluginMock.mockReturnValue({
+      approvalCapability: {
+        getActionAvailabilityState: () => ({ kind: "disabled" }),
+      },
+    });
+
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        channel: "discord",
+        accountId: "main",
+        cfg: {} as never,
+      }),
+    ).toEqual({
+      kind: "disabled",
+      channel: "discord",
+      channelLabel: "Discord",
+    });
+  });
+
   it("loads config lazily when cfg is omitted and marks unsupported channels", () => {
     loadConfigMock.mockReturnValueOnce({ loaded: true });
     getChannelPluginMock.mockImplementation((channel: string) =>
@@ -223,5 +249,36 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
   ])("reports whether any plugin routes approvals to DM for %j", ({ plugins, expected }) => {
     listChannelPluginsMock.mockReturnValueOnce(plugins);
     expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(expected);
+  });
+
+  it("detects DM routes exposed through approvalCapability", () => {
+    listChannelPluginsMock.mockReturnValueOnce([
+      {
+        approvalCapability: {
+          delivery: {
+            hasConfiguredDmRoute: () => true,
+          },
+        },
+      },
+    ]);
+
+    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(true);
+  });
+
+  it("preserves legacy DM routes when approvalCapability only defines auth", () => {
+    listChannelPluginsMock.mockReturnValueOnce([
+      {
+        approvalCapability: {
+          authorizeActorAction: () => ({ authorized: true }),
+        },
+        approvals: {
+          delivery: {
+            hasConfiguredDmRoute: () => true,
+          },
+        },
+      },
+    ]);
+
+    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(true);
   });
 });

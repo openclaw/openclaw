@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.1",
+  "version": "2026.4.2",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -32,6 +32,7 @@
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
     "skills/",
+    "scripts/npm-runner.mjs",
     "scripts/postinstall-bundled-plugins.mjs"
   ],
   "type": "module",
@@ -133,6 +134,14 @@
     "./plugin-sdk/infra-runtime": {
       "types": "./dist/plugin-sdk/infra-runtime.d.ts",
       "default": "./dist/plugin-sdk/infra-runtime.js"
+    },
+    "./plugin-sdk/runtime-config-snapshot": {
+      "types": "./dist/plugin-sdk/runtime-config-snapshot.d.ts",
+      "default": "./dist/plugin-sdk/runtime-config-snapshot.js"
+    },
+    "./plugin-sdk/runtime-group-policy": {
+      "types": "./dist/plugin-sdk/runtime-group-policy.d.ts",
+      "default": "./dist/plugin-sdk/runtime-group-policy.js"
     },
     "./plugin-sdk/ssrf-runtime": {
       "types": "./dist/plugin-sdk/ssrf-runtime.d.ts",
@@ -246,6 +255,10 @@
       "types": "./dist/plugin-sdk/logging-core.d.ts",
       "default": "./dist/plugin-sdk/logging-core.js"
     },
+    "./plugin-sdk/markdown-table-runtime": {
+      "types": "./dist/plugin-sdk/markdown-table-runtime.d.ts",
+      "default": "./dist/plugin-sdk/markdown-table-runtime.js"
+    },
     "./plugin-sdk/account-helpers": {
       "types": "./dist/plugin-sdk/account-helpers.d.ts",
       "default": "./dist/plugin-sdk/account-helpers.js"
@@ -306,6 +319,10 @@
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
     },
+    "./plugin-sdk/dangerous-name-runtime": {
+      "types": "./dist/plugin-sdk/dangerous-name-runtime.d.ts",
+      "default": "./dist/plugin-sdk/dangerous-name-runtime.js"
+    },
     "./plugin-sdk/cloudflare-ai-gateway": {
       "types": "./dist/plugin-sdk/cloudflare-ai-gateway.d.ts",
       "default": "./dist/plugin-sdk/cloudflare-ai-gateway.js"
@@ -325,6 +342,14 @@
     "./plugin-sdk/command-auth-native": {
       "types": "./dist/plugin-sdk/command-auth-native.d.ts",
       "default": "./dist/plugin-sdk/command-auth-native.js"
+    },
+    "./plugin-sdk/command-detection": {
+      "types": "./dist/plugin-sdk/command-detection.d.ts",
+      "default": "./dist/plugin-sdk/command-detection.js"
+    },
+    "./plugin-sdk/command-surface": {
+      "types": "./dist/plugin-sdk/command-surface.d.ts",
+      "default": "./dist/plugin-sdk/command-surface.js"
     },
     "./plugin-sdk/collection-runtime": {
       "types": "./dist/plugin-sdk/collection-runtime.d.ts",
@@ -670,6 +695,14 @@
       "types": "./dist/plugin-sdk/msteams.d.ts",
       "default": "./dist/plugin-sdk/msteams.js"
     },
+    "./plugin-sdk/models-provider-runtime": {
+      "types": "./dist/plugin-sdk/models-provider-runtime.d.ts",
+      "default": "./dist/plugin-sdk/models-provider-runtime.js"
+    },
+    "./plugin-sdk/native-command-registry": {
+      "types": "./dist/plugin-sdk/native-command-registry.d.ts",
+      "default": "./dist/plugin-sdk/native-command-registry.js"
+    },
     "./plugin-sdk/nextcloud-talk": {
       "types": "./dist/plugin-sdk/nextcloud-talk.d.ts",
       "default": "./dist/plugin-sdk/nextcloud-talk.js"
@@ -846,6 +879,14 @@
       "types": "./dist/plugin-sdk/sglang.d.ts",
       "default": "./dist/plugin-sdk/sglang.js"
     },
+    "./plugin-sdk/session-store-runtime": {
+      "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
+      "default": "./dist/plugin-sdk/session-store-runtime.js"
+    },
+    "./plugin-sdk/string-normalization-runtime": {
+      "types": "./dist/plugin-sdk/string-normalization-runtime.d.ts",
+      "default": "./dist/plugin-sdk/string-normalization-runtime.js"
+    },
     "./plugin-sdk/state-paths": {
       "types": "./dist/plugin-sdk/state-paths.d.ts",
       "default": "./dist/plugin-sdk/state-paths.js"
@@ -857,6 +898,10 @@
     "./plugin-sdk/telegram-account": {
       "types": "./dist/plugin-sdk/telegram-account.d.ts",
       "default": "./dist/plugin-sdk/telegram-account.js"
+    },
+    "./plugin-sdk/telegram-command-config": {
+      "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
+      "default": "./dist/plugin-sdk/telegram-command-config.js"
     },
     "./plugin-sdk/telegram-allow-from": {
       "types": "./dist/plugin-sdk/telegram-allow-from.d.ts",
@@ -1078,10 +1123,11 @@
     "postinstall": "node scripts/postinstall-bundled-plugins.mjs",
     "prepack": "node --import tsx scripts/openclaw-prepack.ts",
     "prepare": "command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0",
+    "prepush:ci": "bash scripts/prepush-ci.sh",
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
-    "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:facades:check && pnpm plugin-sdk:api:check && node scripts/stage-bundled-plugin-runtime-deps.mjs && node --import tsx scripts/release-check.ts",
+    "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:facades:check && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
@@ -1226,6 +1272,7 @@
     "oxfmt": "0.43.0",
     "oxlint": "^1.58.0",
     "oxlint-tsgolint": "^0.18.1",
+    "semver": "7.7.4",
     "signal-utils": "0.21.1",
     "tsdown": "0.21.7",
     "tsx": "^4.21.0",

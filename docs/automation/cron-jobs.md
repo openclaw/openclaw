@@ -36,7 +36,7 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 - Webhook posting is per job via `delivery.mode = "webhook"` + `delivery.to = "<url>"`.
 - Legacy fallback remains for stored jobs with `notify: true` when `cron.webhook` is set, migrate those jobs to webhook delivery mode.
-- For upgrades, `openclaw doctor --fix` can normalize legacy cron store fields before the scheduler touches them.
+- For upgrades, `openclaw doctor --fix` can normalize legacy cron store fields, including old top-level delivery hints such as `threadId`.
 
 ## Quick start (actionable)
 
@@ -198,12 +198,14 @@ Common `agentTurn` fields:
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
 - `lightContext`: optional lightweight bootstrap mode for jobs that do not need workspace bootstrap file injection.
+- `toolsAllow`: optional array of tool names to restrict which tools the job can use (e.g. `["exec", "read", "write"]`).
 
 Delivery config:
 
 - `delivery.mode`: `none` | `announce` | `webhook`.
 - `delivery.channel`: `last` or a specific channel.
 - `delivery.to`: channel-specific target (announce) or webhook URL (webhook mode).
+- `delivery.threadId`: optional explicit thread or topic id when the target channel supports threaded delivery.
 - `delivery.bestEffort`: avoid failing the job if announce delivery fails.
 
 Announce delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
@@ -272,6 +274,7 @@ Isolated jobs can deliver output to a channel via the top-level `delivery` confi
 - `delivery.mode`: `announce` (channel delivery), `webhook` (HTTP POST), or `none`.
 - `delivery.channel`: `last` or any deliverable channel id, for example `discord`, `matrix`, `telegram`, or `whatsapp`.
 - `delivery.to`: channel-specific recipient target.
+- `delivery.threadId`: optional thread/topic override for channels like Telegram, Slack, Discord, or Matrix when you want a specific thread without encoding it into `delivery.to`.
 
 `announce` delivery is only valid for isolated jobs (`sessionTarget: "isolated"`).
 `webhook` delivery is valid for both main and isolated jobs.
@@ -378,7 +381,8 @@ Notes:
 - `"current"` is resolved to `"session:<sessionKey>"` at creation time.
 - Custom sessions (`session:xxx`) maintain persistent context across runs.
 - Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun` (defaults to true for `at`),
-  `delivery`.
+  `delivery`, `toolsAllow`.
+- `toolsAllow`: optional array of tool names to restrict which tools the job can use (e.g. `["exec", "read"]`). Omit or set `null` to use all tools.
 - `wakeMode` defaults to `"now"` when omitted.
 
 ### cron.update params
@@ -663,6 +667,19 @@ openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --mes
 # Switch or clear the agent on an existing job
 openclaw cron edit <jobId> --agent ops
 openclaw cron edit <jobId> --clear-agent
+```
+
+Tool allowlists (restrict which tools a job can use):
+
+```bash
+# Only allow exec and read tools for this job
+openclaw cron add --name "Scoped job" --cron "0 8 * * *" --session isolated --message "Run scoped checks" --tools exec,read
+
+# Update an existing job's tool allowlist
+openclaw cron edit <jobId> --tools exec,read,write
+
+# Remove a tool allowlist (use all tools)
+openclaw cron edit <jobId> --clear-tools
 ```
 
 Manual run (force is the default, use `--due` to only run when due):

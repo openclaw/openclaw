@@ -3,7 +3,9 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  resolveExecApprovalAllowedDecisions,
   type ExecHost,
+  type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -336,6 +338,7 @@ export function buildApprovalPendingMessage(params: {
   warningText?: string;
   approvalSlug: string;
   approvalId: string;
+  allowedDecisions?: readonly ExecApprovalDecision[];
   command: string;
   cwd: string;
   host: "gateway" | "node";
@@ -347,6 +350,8 @@ export function buildApprovalPendingMessage(params: {
   }
   const commandBlock = `${fence}sh\n${params.command}\n${fence}`;
   const lines: string[] = [];
+  const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
+  const decisionText = allowedDecisions.join("|");
   const warningText = params.warningText?.trim();
   if (warningText) {
     lines.push(warningText, "");
@@ -360,8 +365,17 @@ export function buildApprovalPendingMessage(params: {
   lines.push("Command:");
   lines.push(commandBlock);
   lines.push("Mode: foreground (interactive approvals available).");
-  lines.push("Background mode requires pre-approved policy (allow-always or ask=off).");
-  lines.push(`Reply with: /approve ${params.approvalSlug} allow-once|allow-always|deny`);
+  lines.push(
+    allowedDecisions.includes("allow-always")
+      ? "Background mode requires pre-approved policy (allow-always or ask=off)."
+      : "Background mode requires an effective policy that allows pre-approval (for example ask=off).",
+  );
+  lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
+  if (!allowedDecisions.includes("allow-always")) {
+    lines.push(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+  }
   lines.push("If the short code is ambiguous, use the full id in /approve.");
   return lines.join("\n");
 }

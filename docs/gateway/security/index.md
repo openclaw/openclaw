@@ -116,6 +116,7 @@ These patterns are commonly reported and are usually closed as no-action unless 
 - Claims that classify normal operator read-path access (for example `sessions.list`/`sessions.preview`/`chat.history`) as IDOR in a shared-gateway setup.
 - Localhost-only deployment findings (for example HSTS on loopback-only gateway).
 - Discord inbound webhook signature findings for inbound paths that do not exist in this repo.
+- Reports that treat node pairing metadata as a hidden second per-command approval layer for `system.run`, when the real execution boundary is still the gateway's global node command policy plus the node's own exec approvals.
 - "Missing per-user authorization" findings that treat `sessionKey` as an auth token.
 
 ## Researcher preflight checklist
@@ -370,9 +371,17 @@ stronger isolation between agents, run them under separate OS users or separate 
 If a macOS node is paired, the Gateway can invoke `system.run` on that node. This is **remote code execution** on the Mac:
 
 - Requires node pairing (approval + token).
+- Gateway node pairing is not a per-command approval surface. It establishes node identity/trust and token issuance.
+- The Gateway applies a coarse global node command policy via `gateway.nodes.allowCommands` / `denyCommands`.
 - Controlled on the Mac via **Settings → Exec approvals** (security + ask + allowlist).
+- The per-node `system.run` policy is the node's own exec approvals file (`exec.approvals.node.*`), which can be stricter or looser than the gateway's global command-ID policy.
 - Approval mode binds exact request context and, when possible, one concrete local script/file operand. If OpenClaw cannot identify exactly one direct local file for an interpreter/runtime command, approval-backed execution is denied rather than promising full semantic coverage.
 - If you don’t want remote execution, set security to **deny** and remove node pairing for that Mac.
+
+This distinction matters for triage:
+
+- A reconnecting paired node advertising a different command list is not, by itself, a vulnerability if the Gateway global policy and the node's local exec approvals still enforce the actual execution boundary.
+- Reports that treat node pairing metadata as a second hidden per-command approval layer are usually policy/UX confusion, not a security boundary bypass.
 
 ## Dynamic skills (watcher / remote nodes)
 
