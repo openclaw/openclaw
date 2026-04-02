@@ -23,6 +23,41 @@ const DEFAULT_OPTIONS: NormalizeOptions = {
   applyDefaults: false,
 };
 
+function hasTrimmedStringValue(value: unknown) {
+  return parseOptionalField(TrimmedNonEmptyStringFieldSchema, value) !== undefined;
+}
+
+function hasAgentTurnPayloadHint(payload: UnknownRecord) {
+  return (
+    hasTrimmedStringValue(payload.model) ||
+    normalizeTrimmedStringArray(payload.fallbacks) !== undefined ||
+    normalizeTrimmedStringArray(payload.toolsAllow, { allowNull: true }) !== undefined ||
+    hasTrimmedStringValue(payload.thinking) ||
+    typeof payload.timeoutSeconds === "number" ||
+    typeof payload.lightContext === "boolean" ||
+    typeof payload.allowUnsafeExternalContent === "boolean"
+  );
+}
+
+function normalizeTrimmedStringArray(
+  value: unknown,
+  options?: { allowNull?: boolean },
+): string[] | null | undefined {
+  if (Array.isArray(value)) {
+    const normalized = value
+      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+      .map((entry) => entry.trim());
+    if (normalized.length === 0 && value.length > 0) {
+      return undefined;
+    }
+    return normalized;
+  }
+  if (options?.allowNull && value === null) {
+    return null;
+  }
+  return undefined;
+}
+
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = typeof schedule.kind === "string" ? schedule.kind.trim().toLowerCase() : "";
@@ -83,6 +118,23 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.staggerMs;
   }
 
+  if (next.kind === "at") {
+    delete next.everyMs;
+    delete next.anchorMs;
+    delete next.expr;
+    delete next.tz;
+    delete next.staggerMs;
+  } else if (next.kind === "every") {
+    delete next.at;
+    delete next.expr;
+    delete next.tz;
+    delete next.staggerMs;
+  } else if (next.kind === "cron") {
+    delete next.at;
+    delete next.everyMs;
+    delete next.anchorMs;
+  }
+
   return next;
 }
 
@@ -99,16 +151,11 @@ function coercePayload(payload: UnknownRecord) {
   if (!next.kind) {
     const hasMessage = typeof next.message === "string" && next.message.trim().length > 0;
     const hasText = typeof next.text === "string" && next.text.trim().length > 0;
-    const hasAgentTurnHint =
-      typeof next.model === "string" ||
-      typeof next.thinking === "string" ||
-      typeof next.timeoutSeconds === "number" ||
-      typeof next.allowUnsafeExternalContent === "boolean";
     if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
       next.kind = "systemEvent";
-    } else if (hasAgentTurnHint) {
+    } else if (hasAgentTurnPayloadHint(next)) {
       // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
       next.kind = "agentTurn";
     }
@@ -149,26 +196,39 @@ function coercePayload(payload: UnknownRecord) {
       delete next.timeoutSeconds;
     }
   }
+  if ("fallbacks" in next) {
+    const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
+    if (fallbacks !== undefined) {
+      next.fallbacks = fallbacks;
+    } else {
+      delete next.fallbacks;
+    }
+  }
+  if ("toolsAllow" in next) {
+    const toolsAllow = normalizeTrimmedStringArray(next.toolsAllow, { allowNull: true });
+    if (toolsAllow !== undefined) {
+      next.toolsAllow = toolsAllow;
+    } else {
+      delete next.toolsAllow;
+    }
+  }
   if (
     "allowUnsafeExternalContent" in next &&
     typeof next.allowUnsafeExternalContent !== "boolean"
   ) {
     delete next.allowUnsafeExternalContent;
   }
-  if ("toolsAllow" in next) {
-    if (Array.isArray(next.toolsAllow)) {
-      next.toolsAllow = (next.toolsAllow as unknown[])
-        .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
-        .map((t) => t.trim());
-      if ((next.toolsAllow as string[]).length === 0) {
-        delete next.toolsAllow;
-      }
-    } else if (next.toolsAllow === null) {
-      // Explicit null means "clear the allow-list" (edit --clear-tools)
-      next.toolsAllow = null;
-    } else {
-      delete next.toolsAllow;
-    }
+  if (next.kind === "systemEvent") {
+    delete next.message;
+    delete next.model;
+    delete next.fallbacks;
+    delete next.thinking;
+    delete next.timeoutSeconds;
+    delete next.lightContext;
+    delete next.allowUnsafeExternalContent;
+    delete next.toolsAllow;
+  } else if (next.kind === "agentTurn") {
+    delete next.text;
   }
   if ("deliver" in next) {
     delete next.deliver;
@@ -220,6 +280,24 @@ function coerceDelivery(delivery: UnknownRecord) {
     delete next.accountId;
   }
   return next;
+}
+
+function inferTopLevelPayload(next: UnknownRecord) {
+  const message = typeof next.message === "string" ? next.message.trim() : "";
+  if (message) {
+    return { kind: "agentTurn", message } satisfies UnknownRecord;
+  }
+
+  const text = typeof next.text === "string" ? next.text.trim() : "";
+  if (text) {
+    return { kind: "systemEvent", text } satisfies UnknownRecord;
+  }
+
+  if (hasAgentTurnPayloadHint(next)) {
+    return { kind: "agentTurn" } satisfies UnknownRecord;
+  }
+
+  return null;
 }
 
 function unwrapJob(raw: UnknownRecord) {
@@ -278,6 +356,21 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
   if (typeof payload.timeoutSeconds !== "number" && typeof next.timeoutSeconds === "number") {
     payload.timeoutSeconds = next.timeoutSeconds;
   }
+  if (!Array.isArray(payload.fallbacks) && Array.isArray(next.fallbacks)) {
+    const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
+    if (fallbacks !== undefined) {
+      payload.fallbacks = fallbacks;
+    }
+  }
+  if (!("toolsAllow" in payload) || payload.toolsAllow === undefined) {
+    const toolsAllow = normalizeTrimmedStringArray(next.toolsAllow, { allowNull: true });
+    if (toolsAllow !== undefined) {
+      payload.toolsAllow = toolsAllow;
+    }
+  }
+  if (typeof payload.lightContext !== "boolean" && typeof next.lightContext === "boolean") {
+    payload.lightContext = next.lightContext;
+  }
   if (
     typeof payload.allowUnsafeExternalContent !== "boolean" &&
     typeof next.allowUnsafeExternalContent === "boolean"
@@ -290,12 +383,16 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.model;
   delete next.thinking;
   delete next.timeoutSeconds;
+  delete next.fallbacks;
+  delete next.lightContext;
+  delete next.toolsAllow;
   delete next.allowUnsafeExternalContent;
   delete next.message;
   delete next.text;
   delete next.deliver;
   delete next.channel;
   delete next.to;
+  delete next.toolsAllow;
   delete next.threadId;
   delete next.bestEffortDeliver;
   delete next.provider;
@@ -377,12 +474,9 @@ export function normalizeCronJobInput(
   }
 
   if (!("payload" in next) || !isRecord(next.payload)) {
-    const message = typeof next.message === "string" ? next.message.trim() : "";
-    const text = typeof next.text === "string" ? next.text.trim() : "";
-    if (message) {
-      next.payload = { kind: "agentTurn", message };
-    } else if (text) {
-      next.payload = { kind: "systemEvent", text };
+    const inferredPayload = inferTopLevelPayload(next);
+    if (inferredPayload) {
+      next.payload = inferredPayload;
     }
   }
 

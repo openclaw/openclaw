@@ -10,6 +10,7 @@ import {
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   resolveNpmCommandInvocation,
+  shouldSkipPackedTarballValidation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
 
@@ -152,6 +153,28 @@ describe("resolveNpmDistTagMirrorAuth", () => {
       hasAuth: false,
       source: "none",
     });
+  });
+});
+
+describe("shouldSkipPackedTarballValidation", () => {
+  it("defaults to full pack validation", () => {
+    expect(shouldSkipPackedTarballValidation({})).toBe(false);
+  });
+
+  it("accepts truthy values for metadata-only validation", () => {
+    expect(
+      shouldSkipPackedTarballValidation({
+        OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1",
+      }),
+    ).toBe(true);
+  });
+
+  it("treats false-like values as disabled", () => {
+    expect(
+      shouldSkipPackedTarballValidation({
+        OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "false",
+      }),
+    ).toBe(false);
   });
 });
 

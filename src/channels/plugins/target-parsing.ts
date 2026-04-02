@@ -1,6 +1,6 @@
 import type { ChatType } from "../chat-type.js";
 import { normalizeChatChannelId } from "../registry.js";
-import { getChannelPlugin, normalizeChannelId } from "./registry.js";
+import { getChannelPlugin, normalizeChannelId } from "./index.js";
 
 export type ParsedChannelExplicitTarget = {
   to: string;

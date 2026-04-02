@@ -46,6 +46,11 @@ function createExecApprovals(): ExecApprovalsResolved {
       askFallback: "full",
       autoAllowSkills: false,
     },
+    agentSources: {
+      security: "defaults.security",
+      ask: "defaults.ask",
+      askFallback: "defaults.askFallback",
+    },
     allowlist: [],
     file: {
       version: 1,

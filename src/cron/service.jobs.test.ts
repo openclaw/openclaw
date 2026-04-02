@@ -169,6 +169,81 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("persists agentTurn payload.fallbacks updates when editing existing jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      fallbacks: ["openrouter/gpt-4.1-mini"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.fallbacks).toEqual(["anthropic/claude-haiku-3-5", "openai/gpt-5"]);
+    }
+  });
+
+  it("persists agentTurn payload.toolsAllow updates when editing existing jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-tools", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: ["read", "write"],
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.toolsAllow).toEqual(["read", "write"]);
+    }
+  });
+
+  it("clears agentTurn payload.toolsAllow when patch requests null", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-clear", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec", "read"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.toolsAllow).toBeUndefined();
+    }
+  });
+
   it("applies payload.lightContext when replacing payload kind via patch", () => {
     const job = createIsolatedAgentTurnJob("job-light-context-switch", {
       mode: "announce",
@@ -188,6 +263,50 @@ describe("applyJobPatch", () => {
     expect(payload.kind).toBe("agentTurn");
     if (payload.kind === "agentTurn") {
       expect(payload.lightContext).toBe(true);
+    }
+  });
+
+  it("carries payload.fallbacks when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.fallbacks).toEqual(["anthropic/claude-haiku-3-5", "openai/gpt-5"]);
+    }
+  });
+
+  it("carries payload.toolsAllow when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: ["exec", "read"],
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.toolsAllow).toEqual(["exec", "read"]);
     }
   });
 
