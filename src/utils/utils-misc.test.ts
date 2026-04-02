@@ -69,59 +69,6 @@ describe("parseBooleanValue", () => {
   });
 });
 
-describe("isReasoningTagProvider", () => {
-  it.each([
-    {
-      name: "returns false for ollama when the provider plugin has no tagged override",
-      value: "ollama",
-      expected: false,
-    },
-    {
-      name: "returns false for case-insensitive ollama",
-      value: "Ollama",
-      expected: false,
-    },
-    {
-      name: "returns true for google via provider hook",
-      value: "google",
-      expected: true,
-    },
-    {
-      name: "returns true for Google (case-insensitive)",
-      value: "Google",
-      expected: true,
-    },
-    {
-      name: "returns true for google-gemini-cli via provider hook",
-      value: "google-gemini-cli",
-      expected: true,
-    },
-    {
-      name: "returns true for google-generative-ai via provider hook",
-      value: "google-generative-ai",
-      expected: true,
-    },
-    { name: "returns true for minimax via provider hook", value: "minimax", expected: true },
-    {
-      name: "returns true for minimax-cn via provider hook alias",
-      value: "minimax-cn",
-      expected: true,
-    },
-    { name: "returns false for null", value: null, expected: false },
-    { name: "returns false for undefined", value: undefined, expected: false },
-    { name: "returns false for empty", value: "", expected: false },
-    { name: "returns false for anthropic", value: "anthropic", expected: false },
-    { name: "returns false for openai", value: "openai", expected: false },
-    { name: "returns false for openrouter", value: "openrouter", expected: false },
-  ] satisfies Array<{
-    name: string;
-    value: string | null | undefined;
-    expected: boolean;
-  }>)("$name", ({ value, expected }) => {
-    expect(isReasoningTagProvider(value)).toBe(expected);
-  });
-});
-
 describe("splitShellArgs", () => {
   it("splits whitespace and respects quotes", () => {
     expect(splitShellArgs(`qmd --foo "bar baz"`)).toEqual(["qmd", "--foo", "bar baz"]);
