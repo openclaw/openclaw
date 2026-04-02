@@ -46,19 +46,6 @@ file messages via any DingTalk client.
 openclaw plugins install @largezhou/ddingtalk
 ```
 
-### Lossless Claw (LCM)
-
-Lossless Context Management plugin for OpenClaw. DAG-based conversation
-summarization with incremental compaction — preserves full context fidelity
-while reducing token usage.
-
-- **npm:** `@martian-engineering/lossless-claw`
-- **repo:** [github.com/Martian-Engineering/lossless-claw](https://github.com/Martian-Engineering/lossless-claw)
-
-```bash
-openclaw plugins install @martian-engineering/lossless-claw
-```
-
 ### Google Workspace (All-in-One)
 
 All-in-one Google Workspace integration with shared OAuth. One plugin, one
@@ -70,6 +57,19 @@ as toggleable services with 24 tools.
 
 ```bash
 openclaw plugins install @tensorfold/openclaw-google-workspace
+```
+
+### Lossless Claw (LCM)
+
+Lossless Context Management plugin for OpenClaw. DAG-based conversation
+summarization with incremental compaction — preserves full context fidelity
+while reducing token usage.
+
+- **npm:** `@martian-engineering/lossless-claw`
+- **repo:** [github.com/Martian-Engineering/lossless-claw](https://github.com/Martian-Engineering/lossless-claw)
+
+```bash
+openclaw plugins install @martian-engineering/lossless-claw
 ```
 
 ### Opik
