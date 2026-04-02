@@ -460,7 +460,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   flowsCmd
     .command("list")
-    .description("List tracked background flows")
+    .description("List tracked TaskFlows")
     .option("--json", "Output as JSON", false)
     .option(
       "--status <name>",
@@ -481,7 +481,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   flowsCmd
     .command("show")
-    .description("Show one background flow by flow id or owner key")
+    .description("Show one TaskFlow by flow id or owner key")
     .argument("<lookup>", "Flow id or owner key")
     .option("--json", "Output as JSON", false)
     .action(async (lookup, opts, command) => {
@@ -499,7 +499,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   flowsCmd
     .command("cancel")
-    .description("Cancel a running background flow")
+    .description("Cancel a running TaskFlow")
     .argument("<lookup>", "Flow id or owner key")
     .action(async (lookup) => {
       await runCommandWithRuntime(defaultRuntime, async () => {

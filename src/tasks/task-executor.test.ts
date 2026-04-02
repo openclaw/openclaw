@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   cancelFlowById,
@@ -59,6 +61,8 @@ vi.mock("../agents/subagent-control.js", () => ({
 async function withTaskExecutorStateDir(run: (root: string) => Promise<void>): Promise<void> {
   await withTempDir({ prefix: "openclaw-task-executor-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
+    resetSystemEventsForTest();
+    resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
@@ -66,6 +70,8 @@ async function withTaskExecutorStateDir(run: (root: string) => Promise<void>): P
     try {
       await run(root);
     } finally {
+      resetSystemEventsForTest();
+      resetHeartbeatWakeStateForTests();
       resetAgentEventsForTest();
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests();
@@ -81,6 +87,8 @@ describe("task-executor", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
+    resetSystemEventsForTest();
+    resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
