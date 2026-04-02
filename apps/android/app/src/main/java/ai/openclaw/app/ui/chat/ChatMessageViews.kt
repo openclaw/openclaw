@@ -15,6 +15,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -45,6 +50,13 @@ import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileWarning
 import ai.openclaw.app.ui.mobileWarningSoft
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import java.util.Locale
 
 private data class ChatBubbleStyle(
@@ -55,9 +67,11 @@ private data class ChatBubbleStyle(
 )
 
 @Composable
-fun ChatMessageBubble(message: ChatMessage) {
+fun ChatMessageBubble(message: ChatMessage, onReply: (ChatMessage) -> Unit = {}) {
   val role = message.role.trim().lowercase(Locale.US)
   val style = bubbleStyle(role)
+  var showContextMenu by remember { mutableStateOf(false) }
+  var selectCopyText by remember { mutableStateOf<String?>(null) }
 
   // Filter to only displayable content parts (text with content, or base64 images).
   val displayableContent =
@@ -70,9 +84,61 @@ fun ChatMessageBubble(message: ChatMessage) {
 
   if (displayableContent.isEmpty()) return
 
-  ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
-    ChatMessageBody(content = displayableContent, textColor = mobileText)
+  Box {
+    ChatBubbleContainer(
+      style = style,
+      roleLabel = roleLabel(role),
+      onLongPress = { showContextMenu = true }
+    ) {
+      ChatMessageBody(content = displayableContent, textColor = mobileText)
+    }
+
+    ChatContextMenu(
+      isVisible = showContextMenu,
+      onDismiss = { showContextMenu = false },
+      message = message,
+      onSelectCopy = { text -> selectCopyText = text },
+      onReply = onReply
+    )
+
+    selectCopyText?.let { textToCopy ->
+      ChatSelectCopyDialog(
+        text = textToCopy,
+        onDismiss = { selectCopyText = null }
+      )
+    }
+
   }
+}
+
+@Composable
+fun ChatSelectCopyDialog(
+  text: String,
+  onDismiss: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    confirmButton = {
+      TextButton(onClick = onDismiss) {
+        Text("Done")
+      }
+    },
+    title = {
+      Text("Select Text to Copy")
+    },
+    text = {
+      Box(
+        modifier = Modifier
+          .fillMaxWidth()
+          .heightIn(max = 300.dp)
+          .verticalScroll(rememberScrollState())
+      ) {
+        SelectionContainer {
+          ChatMarkdown(text = text, textColor = mobileText)
+        }
+      }
+    }
+  )
 }
 
 @Composable
@@ -80,6 +146,7 @@ private fun ChatBubbleContainer(
   style: ChatBubbleStyle,
   roleLabel: String,
   modifier: Modifier = Modifier,
+  onLongPress: (() -> Unit)? = null,
   content: @Composable () -> Unit,
 ) {
   Row(
@@ -92,7 +159,13 @@ private fun ChatBubbleContainer(
       color = style.containerColor,
       tonalElevation = 0.dp,
       shadowElevation = 0.dp,
-      modifier = Modifier.fillMaxWidth(0.90f),
+      modifier = Modifier
+        .fillMaxWidth(0.90f)
+        .pointerInput(Unit) {
+          detectTapGestures(
+            onLongPress = { onLongPress?.invoke() }
+          )
+        },
     ) {
       Column(
         modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
