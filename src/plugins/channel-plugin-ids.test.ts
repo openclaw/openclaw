@@ -26,6 +26,14 @@ function createManifestRegistryFixture() {
         cliBackends: [],
       },
       {
+        id: "demo-other-channel",
+        channels: ["demo-other-channel"],
+        origin: "bundled",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "demo-default-on-sidecar",
         channels: [],
         origin: "bundled",
@@ -84,8 +92,16 @@ function createStartupConfig(params: {
   enabledPluginIds?: string[];
   providerIds?: string[];
   modelId?: string;
+  channelIds?: string[];
 }) {
   return {
+    ...(params.channelIds?.length
+      ? {
+          channels: Object.fromEntries(
+            params.channelIds.map((channelId) => [channelId, { enabled: true }]),
+          ),
+        }
+      : {}),
     ...(params.enabledPluginIds?.length
       ? {
           plugins: {
@@ -127,37 +143,47 @@ function createStartupConfig(params: {
 
 describe("resolveGatewayStartupPluginIds", () => {
   beforeEach(() => {
-    listPotentialConfiguredChannelIds.mockReset().mockReturnValue(["demo-channel"]);
+    listPotentialConfiguredChannelIds.mockReset().mockImplementation((config: OpenClawConfig) => {
+      const configuredChannelIds = Object.keys(config.channels ?? {});
+      return configuredChannelIds.length > 0 ? configuredChannelIds : ["demo-channel"];
+    });
     loadPluginManifestRegistry.mockReset().mockReturnValue(createManifestRegistryFixture());
   });
 
   it.each([
     [
-      "includes configured channels and explicitly enabled bundled sidecars",
+      "includes only configured channel plugins at idle startup",
       createStartupConfig({
         enabledPluginIds: ["demo-bundled-sidecar"],
         modelId: "demo-cli/demo-model",
       }),
-      ["demo-channel", "demo-provider-plugin", "demo-bundled-sidecar"],
+      ["demo-channel"],
     ],
     [
-      "skips bundled plugins with enabledByDefault: true until something references them",
+      "skips bundled plugins with enabledByDefault: true until a runtime path needs them",
       {} as OpenClawConfig,
       ["demo-channel"],
     ],
     [
-      "auto-loads bundled plugins referenced by configured provider ids",
+      "keeps provider plugins out of idle startup when only provider config references them",
       createStartupConfig({
         providerIds: ["demo-provider"],
       }),
-      ["demo-channel", "demo-provider-plugin"],
+      ["demo-channel"],
     ],
     [
-      "keeps non-bundled sidecars out of startup unless explicitly enabled",
+      "keeps non-channel sidecars out of idle startup even when explicitly enabled",
       createStartupConfig({
         enabledPluginIds: ["demo-global-sidecar"],
       }),
-      ["demo-channel", "demo-global-sidecar"],
+      ["demo-channel"],
+    ],
+    [
+      "includes every configured channel plugin and excludes other channels",
+      createStartupConfig({
+        channelIds: ["demo-channel", "demo-other-channel"],
+      }),
+      ["demo-channel", "demo-other-channel"],
     ],
   ] as const)("%s", (_name, config, expected) => {
     expectStartupPluginIdsCase({ config, expected });
