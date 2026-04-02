@@ -134,7 +134,56 @@ function decodeDispositionFileName(value: string): string | undefined {
   }
 
   const plainMatch = value.match(/filename="?([^";]+)"?/i);
-  return plainMatch?.[1]?.trim();
+  const rawFileName = plainMatch?.[1]?.trim();
+  if (!rawFileName) {
+    return undefined;
+  }
+
+  // Fix for Latin-1/UTF-8 encoding mismatch in HTTP headers.
+  // HTTP headers are typically parsed as ISO-8859-1 (Latin-1), but if the
+  // filename contains non-ASCII characters (e.g., Chinese), the original
+  // UTF-8 bytes get misinterpreted as Latin-1 characters.
+  // We detect this by checking for replacement characters or high-byte
+  // Latin-1 chars that look like misdecoded UTF-8, then re-encode back
+  // to Latin-1 bytes and decode as UTF-8.
+  // See: https://github.com/openclaw/openclaw/issues/59409
+  return fixMisdecodedUtf8(rawFileName);
+}
+
+/**
+ * Attempt to fix a string that was incorrectly decoded as Latin-1
+ * when it should have been decoded as UTF-8.
+ *
+ * When UTF-8 bytes are interpreted as Latin-1, each UTF-8 byte (0x80-0xFF)
+ * becomes a Latin-1 character. We can reverse this by encoding back to
+ * Latin-1 and decoding as UTF-8.
+ */
+function fixMisdecodedUtf8(str: string): string {
+  // Check if the string contains characters in the Latin-1 range 0x80-0xFF
+  // that could be misdecoded UTF-8 bytes. These are common patterns when
+  // UTF-8 multi-byte sequences are read as Latin-1.
+  const hasHighBytes = /[\u0080-\u00ff]/.test(str);
+  if (!hasHighBytes) {
+    return str;
+  }
+
+  try {
+    // Encode the string as Latin-1 (each char becomes its byte value)
+    // Then decode as UTF-8
+    const latin1Buffer = Buffer.from(str, "latin1");
+    const utf8String = latin1Buffer.toString("utf8");
+
+    // Validate that the result is valid UTF-8 (no replacement characters)
+    // If decoding produces replacement chars, the original was likely
+    // not misdecoded UTF-8, so return the original.
+    if (utf8String.includes("\uFFFD")) {
+      return str;
+    }
+
+    return utf8String;
+  } catch {
+    return str;
+  }
 }
 
 function extractFeishuDownloadMetadata(response: FeishuDownloadResponse): {
@@ -166,12 +215,16 @@ function extractFeishuDownloadMetadata(response: FeishuDownloadResponse): {
     responseWithOptionalFields.data?.mime_type;
 
   const disposition = readHeaderValue(headers, "content-disposition");
-  const fileName =
+  const rawFileName =
     (disposition ? decodeDispositionFileName(disposition) : undefined) ??
     responseWithOptionalFields.file_name ??
     responseWithOptionalFields.fileName ??
     responseWithOptionalFields.data?.file_name ??
     responseWithOptionalFields.data?.fileName;
+
+  // Apply UTF-8 fix to API response file_name field as well.
+  // The Feishu SDK may also misdecode UTF-8 as Latin-1 in JSON responses.
+  const fileName = rawFileName ? fixMisdecodedUtf8(rawFileName) : undefined;
 
   return { contentType, fileName };
 }
