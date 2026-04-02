@@ -15,13 +15,17 @@ type UsageLike = {
 };
 
 function extractUsage(raw: unknown) {
-  if (!raw || typeof raw !== "object") return undefined;
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
   const u = raw as UsageLike;
   const input = u.input ?? u.input_tokens;
   const output = u.output ?? u.output_tokens;
   const cacheRead = u.cacheRead ?? u.cache_read_input_tokens;
   const cacheWrite = u.cacheWrite ?? u.cache_creation_input_tokens;
-  if (input == null && output == null && cacheRead == null && cacheWrite == null) return undefined;
+  if (input == null && output == null && cacheRead == null && cacheWrite == null) {
+    return undefined;
+  }
   const total = (input ?? 0) + (output ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0) || undefined;
   return {
     input: input ?? undefined,
@@ -66,7 +70,7 @@ async function* wrapIterable(
   iterable: AsyncIterable<unknown>,
   params: EmitParams,
   callStartedAt: number,
-): AsyncGenerator<unknown> {
+): AsyncGenerator {
   let usage: ReturnType<typeof extractUsage> | undefined;
   let errorMessage: string | undefined;
   try {
@@ -128,7 +132,12 @@ export function wrapStreamFnCallTrace(
         (stream) =>
           wrapIterable(stream, emitParams, callStartedAt) as unknown as ReturnType<StreamFn>,
         (err: unknown) => {
-          emitCallEvent(emitParams, callStartedAt, undefined, err instanceof Error ? err.message : String(err));
+          emitCallEvent(
+            emitParams,
+            callStartedAt,
+            undefined,
+            err instanceof Error ? err.message : String(err),
+          );
           throw err;
         },
       ) as unknown as ReturnType<StreamFn>;

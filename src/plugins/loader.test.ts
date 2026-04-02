@@ -3923,14 +3923,14 @@ module.exports = {
       expect(record?.status).toBe("loaded");
 
       emitDiagnosticEvent({
-        type: "model.usage",
+        type: "turn.summary",
         sessionKey: "agent:main:test:dm:peer",
         usage: { total: 1 },
       });
 
       expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([
         {
-          type: "model.usage",
+          type: "turn.summary",
           sessionKey: "agent:main:test:dm:peer",
         },
       ]);

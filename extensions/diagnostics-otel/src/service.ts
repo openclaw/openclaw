@@ -372,7 +372,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return span;
       };
 
-      const recordModelUsage = (evt: Extract<DiagnosticEventPayload, { type: "model.usage" }>) => {
+      const recordModelUsage = (evt: Extract<DiagnosticEventPayload, { type: "turn.summary" }>) => {
         const attrs = {
           "openclaw.channel": evt.channel ?? "unknown",
           "openclaw.provider": evt.provider ?? "unknown",
@@ -432,7 +432,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.total": usage.total ?? 0,
         };
 
-        const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs);
+        const span = spanWithDuration("openclaw.turn.summary", spanAttrs, evt.durationMs);
         span.end();
       };
 
@@ -612,7 +612,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       unsubscribe = onDiagnosticEvent((evt: DiagnosticEventPayload) => {
         try {
           switch (evt.type) {
-            case "model.usage":
+            case "turn.summary":
               recordModelUsage(evt);
               return;
             case "webhook.received":

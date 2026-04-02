@@ -289,7 +289,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     llmCallStartedAt = Date.now();
   };
   const noteLlmCallEnd = (usageLike: unknown, errorMessage?: string) => {
-    if (!params.onLlmCallComplete) return;
+    if (!params.onLlmCallComplete) {
+      return;
+    }
     const usage = normalizeUsage((usageLike ?? undefined) as UsageLike | undefined);
     const durationMs = llmCallStartedAt > 0 ? Date.now() - llmCallStartedAt : 0;
     const callIndex = llmCallIndex++;
@@ -301,7 +303,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           cacheWrite: usage.cacheWrite ?? undefined,
           total:
             usage.total ??
-            (((usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)) || undefined),
+            ((usage.input ?? 0) +
+              (usage.output ?? 0) +
+              (usage.cacheRead ?? 0) +
+              (usage.cacheWrite ?? 0) ||
+              undefined),
         }
       : undefined;
     params.onLlmCallComplete({

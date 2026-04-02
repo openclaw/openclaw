@@ -24,7 +24,7 @@ describe("diagnostic-events", () => {
     });
 
     emitDiagnosticEvent({
-      type: "model.usage",
+      type: "turn.summary",
       usage: { total: 1 },
     });
     emitDiagnosticEvent({
@@ -34,7 +34,7 @@ describe("diagnostic-events", () => {
     stop();
 
     expect(events).toEqual([
-      { seq: 1, ts: 111, type: "model.usage" },
+      { seq: 1, ts: 111, type: "turn.summary" },
       { seq: 2, ts: 222, type: "session.state" },
     ]);
   });

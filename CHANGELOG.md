@@ -2,11 +2,11 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased (feat/llm-telemetry)
+## Unreleased (feat/telemetry)
 
 ### Changes
 
-- Diagnostics/call-trace: add per-call LLM and tool tracing under `diagnostics.callTrace` — when enabled, emits one `model.call` JSONL record per LLM API call (tokens, cost, duration of that exact call) and optionally one `tool.call` record per internal tool execution (duration, error status). Controlled by `diagnostics.callTrace.{ enabled, logLlmCalls, logToolCalls, dir, retainDays }`. Implemented via `message_start/message_end` hooks in the subscriber (no `streamFn` wrapping — zero risk to stream internals). JSONL files land in a single `YYYY-MM-DD.jsonl` per day under the configured dir (default: `~/.openclaw/call-traces/`); the `type` field distinguishes `model.call` from `tool.call` records.
+- Diagnostics/call-trace: add per-call LLM and tool tracing plus per-turn cost summaries under `diagnostics.callTrace` — when enabled, emits one `model.call` JSONL record per LLM API call (tokens, cost, duration of that exact call), optionally one `tool.call` record per internal tool execution (duration, error status), and optionally one `turn.summary` record per agent turn (aggregated cost, model, trigger metadata). Controlled by `diagnostics.callTrace.{ enabled, logLlmCalls, logToolCalls, logTurnSummaries, dir, retainDays }`. Implemented via `message_start/message_end` hooks in the subscriber (no `streamFn` wrapping — zero risk to stream internals). JSONL files land under the configured dir (default: `~/.openclaw/call-traces/`) in `YYYY-MM-DD.jsonl` for calls and `turns/YYYY-MM-DD.jsonl` for turn summaries; the `type` field distinguishes `model.call`, `tool.call`, and `turn.summary` records. Turn summary fields: `turnId`, `agentId`, `sessionKey`, `costUsd`, `thinkLevel`, `triggerKind`, `triggerChannel`.
 
 ## 2026.3.31
 

@@ -22,11 +22,7 @@ import {
   onDiagnosticEvent,
 } from "./diagnostic-events.js";
 
-const DEFAULT_DIR = path.join(
-  process.env["HOME"] ?? "/tmp",
-  ".openclaw",
-  "call-traces",
-);
+const DEFAULT_DIR = path.join(process.env["HOME"] ?? "/tmp", ".openclaw", "call-traces");
 const DEFAULT_RETAIN_DAYS = 30;
 
 function dateStamp(): string {
@@ -70,14 +66,20 @@ function purgeOldFiles(dir: string, retainDays: number): void {
  * Returns an unsubscribe function.
  */
 export function startCallTraceWriter(config: OpenClawConfig): (() => void) | undefined {
-  if (!isDiagnosticsEnabled(config)) return undefined;
+  if (!isDiagnosticsEnabled(config)) {
+    return undefined;
+  }
   const ct = config.diagnostics?.callTrace;
-  if (!ct?.enabled) return undefined;
+  if (!ct?.enabled) {
+    return undefined;
+  }
 
   const logTurnSummaries = ct.logTurnSummaries !== false; // default true  — turn.summary → turns/
-  const logLlmCalls = ct.logLlmCalls !== false;           // default true  — model.call  → calls/
-  const logToolCalls = ct.logToolCalls === true;           // default false — tool.call   → calls/
-  if (!logTurnSummaries && !logLlmCalls && !logToolCalls) return undefined;
+  const logLlmCalls = ct.logLlmCalls !== false; // default true  — model.call  → calls/
+  const logToolCalls = ct.logToolCalls === true; // default false — tool.call   → calls/
+  if (!logTurnSummaries && !logLlmCalls && !logToolCalls) {
+    return undefined;
+  }
 
   const baseDir = ct.dir ?? DEFAULT_DIR;
   const retainDays = ct.retainDays ?? DEFAULT_RETAIN_DAYS;
@@ -89,21 +91,27 @@ export function startCallTraceWriter(config: OpenClawConfig): (() => void) | und
     const stamp = dateStamp();
 
     if (evt.type === "turn.summary") {
-      if (!logTurnSummaries) return;
+      if (!logTurnSummaries) {
+        return;
+      }
       const filePath = path.join(baseDir, "turns", `${stamp}.jsonl`);
       appendJsonl(filePath, evt);
       return;
     }
 
     if (evt.type === "model.call") {
-      if (!logLlmCalls) return;
+      if (!logLlmCalls) {
+        return;
+      }
       const filePath = path.join(baseDir, "calls", `${stamp}.jsonl`);
       appendJsonl(filePath, evt);
       return;
     }
 
     if (evt.type === "tool.call") {
-      if (!logToolCalls) return;
+      if (!logToolCalls) {
+        return;
+      }
       const filePath = path.join(baseDir, "calls", `${stamp}.jsonl`);
       appendJsonl(filePath, evt);
       return;
