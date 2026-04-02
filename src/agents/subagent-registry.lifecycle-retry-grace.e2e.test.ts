@@ -112,6 +112,7 @@ vi.mock("../config/sessions.js", () => ({
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
+  initializeGlobalHookRunner: vi.fn(),
 }));
 
 vi.mock("./pi-embedded.js", async (importOriginal) => {
@@ -159,6 +160,7 @@ describe("subagent registry lifecycle error grace", () => {
     }));
     vi.doMock("../plugins/hook-runner-global.js", () => ({
       getGlobalHookRunner: vi.fn(() => null),
+      initializeGlobalHookRunner: vi.fn(),
     }));
     vi.doMock("./pi-embedded.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./pi-embedded.js")>();
@@ -438,6 +440,23 @@ describe("subagent registry lifecycle error grace", () => {
     expect(killed).toBe(1);
     const afterGen = mod.getSubagentRegistryGeneration();
     expect(afterGen).toBeGreaterThan(beforeGen);
+  });
+
+  it("does not bump registry generation for steer-restart bookkeeping toggles", () => {
+    registerCompletionRun(
+      "run-generation-bookkeeping",
+      "generation-bookkeeping",
+      "generation bookkeeping test",
+    );
+    const beforeGen = mod.getSubagentRegistryGeneration();
+
+    const marked = mod.markSubagentRunForSteerRestart("run-generation-bookkeeping");
+    expect(marked).toBe(true);
+    expect(mod.getSubagentRegistryGeneration()).toBe(beforeGen);
+
+    const cleared = mod.clearSubagentRunSteerRestart("run-generation-bookkeeping");
+    expect(cleared).toBe(true);
+    expect(mod.getSubagentRegistryGeneration()).toBe(beforeGen);
   });
 
   it("freezes completion result at run termination across deferred announce retries", async () => {

@@ -49,7 +49,7 @@ export async function emitSubagentEndedHookOnce(params: {
   outcome?: SubagentLifecycleEndedOutcome;
   error?: string;
   inFlightRunIds: Set<string>;
-  persist: () => void;
+  persist: (opts?: { bumpGeneration?: boolean }) => void;
 }) {
   const runId = params.entry.runId.trim();
   if (!runId) {
