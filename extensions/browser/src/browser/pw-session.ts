@@ -181,6 +181,16 @@ function clearBlockedTargetsForCdpUrl(cdpUrl?: string): void {
   }
 }
 
+function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
+  const prefix = `${normalizeCdpUrl(cdpUrl)}::`;
+  for (const key of blockedTargetsByCdpUrl) {
+    if (key.startsWith(prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export class BlockedBrowserTargetError extends Error {
   constructor() {
     super("Browser target is unavailable after SSRF policy blocked its navigation.");
@@ -407,7 +417,6 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {
             cachedByCdpUrl.delete(normalized);
-            clearBlockedTargetsForCdpUrl(normalized);
           }
         };
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
@@ -455,7 +464,17 @@ async function partitionAccessiblePages(opts: {
   let blockedCount = 0;
   for (const page of opts.pages) {
     const targetId = await pageTargetId(page).catch(() => null);
-    if (targetId && isBlockedTarget(opts.cdpUrl, targetId)) {
+    // Fail closed when we cannot resolve a target id while this session has
+    // quarantined targets; otherwise a blocked tab can become selectable.
+    if (!targetId) {
+      if (hasBlockedTargetsForCdpUrl(opts.cdpUrl)) {
+        blockedCount += 1;
+        continue;
+      }
+      accessible.push(page);
+      continue;
+    }
+    if (isBlockedTarget(opts.cdpUrl, targetId)) {
       blockedCount += 1;
       continue;
     }

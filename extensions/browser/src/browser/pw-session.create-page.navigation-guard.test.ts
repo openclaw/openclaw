@@ -88,7 +88,20 @@ function installBrowserMocks() {
   connectOverCdpSpy.mockResolvedValue(browser);
   getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
-  return { pageGoto, browserClose, pageClose, getRouteHandler: () => routeHandler, mainFrame };
+  const getBrowserDisconnectedHandler = () =>
+    browserOn.mock.calls.find((call) => call[0] === "disconnected")?.[1] as
+      | (() => void)
+      | undefined;
+
+  return {
+    pageGoto,
+    browserClose,
+    pageClose,
+    sessionSend,
+    getBrowserDisconnectedHandler,
+    getRouteHandler: () => routeHandler,
+    mainFrame,
+  };
 }
 
 afterEach(async () => {
@@ -438,6 +451,95 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       getPageForTargetId({
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "TARGET_1",
+      }),
+    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
+  });
+
+  it("preserves blocked-target quarantine across transport disconnects", async () => {
+    const { pageGoto, pageClose, getBrowserDisconnectedHandler, getRouteHandler, mainFrame } =
+      installBrowserMocks();
+    pageClose.mockRejectedValueOnce(new Error("close failed"));
+    pageGoto.mockImplementationOnce(async () => {
+      const handler = getRouteHandler();
+      if (!handler) {
+        throw new Error("missing route handler");
+      }
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "https://93.184.216.34/start",
+        },
+      );
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "http://127.0.0.1:18080/internal-hop",
+        },
+      );
+      throw new Error("Navigation aborted");
+    });
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    const disconnectedHandler = getBrowserDisconnectedHandler();
+    expect(disconnectedHandler).toBeTypeOf("function");
+    disconnectedHandler?.();
+
+    await expect(
+      getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "TARGET_1",
+      }),
+    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
+  });
+
+  it("keeps blocked tabs inaccessible when target lookup fails", async () => {
+    const { pageGoto, pageClose, sessionSend, getRouteHandler, mainFrame } = installBrowserMocks();
+    pageClose.mockRejectedValueOnce(new Error("close failed"));
+    pageGoto.mockImplementationOnce(async () => {
+      const handler = getRouteHandler();
+      if (!handler) {
+        throw new Error("missing route handler");
+      }
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "https://93.184.216.34/start",
+        },
+      );
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => mainFrame,
+          url: () => "http://127.0.0.1:18080/internal-hop",
+        },
+      );
+      throw new Error("Navigation aborted");
+    });
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    sessionSend.mockRejectedValueOnce(new Error("Target lookup failed"));
+    await expect(
+      getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:18792",
       }),
     ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
   });
