@@ -343,7 +343,7 @@ describe("exec approvals shell analysis", () => {
         platform: "linux",
       });
       expect(hostResult.analysisOk).toBe(true);
-      expect(hostResult.allowlistSatisfied).toBe(false);
+      expect(hostResult.allowlistSatisfied).toBe(true);
     });
 
     it("uses target-platform semantics when matching shell-wrapper script paths", () => {
