@@ -51,7 +51,7 @@ export function migrateLegacyXSearchConfig<T>(raw: T): { config: T; changes: str
     return { config: raw, changes: [] };
   }
   const legacy = resolveLegacyXSearchConfig(raw);
-  if (!legacy) {
+  if (!legacy || !Object.prototype.hasOwnProperty.call(legacy, "apiKey")) {
     return { config: raw, changes: [] };
   }
 

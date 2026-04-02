@@ -77,6 +77,25 @@ describe("legacy x_search config migration", () => {
     });
   });
 
+  it("does nothing for knob-only x_search config without a legacy apiKey", () => {
+    const config = {
+      tools: {
+        web: {
+          x_search: {
+            enabled: true,
+            model: "grok-4-1-fast",
+          },
+        } as Record<string, unknown>,
+      },
+    } as OpenClawConfig;
+
+    const res = migrateLegacyXSearchConfig(config);
+
+    expect(res.config).toEqual(config);
+    expect(res.changes).toEqual([]);
+    expect(res.config.plugins?.entries?.xai).toBeUndefined();
+  });
+
   it("lists legacy x_search paths", () => {
     expect(
       listLegacyXSearchConfigPaths({
