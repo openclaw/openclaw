@@ -179,6 +179,7 @@ const PNPM_OPTIONS_WITH_VALUE = new Set([
 const PNPM_FLAG_OPTIONS = new Set([
   "--aggregate-output",
   "--color",
+  "--parallel",
   "--recursive",
   "--silent",
   "--workspace-root",
