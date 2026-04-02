@@ -50547,6 +50547,79 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.entries.firecrawl.config.webFetch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Firecrawl Fetch API Key",
+      "help": "Firecrawl API key for web fetch fallback (fallback: FIRECRAWL_API_KEY env var).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
+      "label": "Firecrawl Fetch Base URL",
+      "help": "Firecrawl Fetch base URL override.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.maxAgeMs",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.onlyMainContent",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.timeoutSeconds",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.firecrawl.config.webSearch",
       "kind": "plugin",
       "type": "object",
@@ -66727,138 +66800,6 @@
       "hasChildren": false
     },
     {
-      "path": "tools.web.fetch.firecrawl",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.fetch.firecrawl.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "security",
-        "tools"
-      ],
-      "label": "Firecrawl API Key",
-      "help": "Firecrawl API key (fallback: FIRECRAWL_API_KEY env var).",
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.fetch.firecrawl.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.firecrawl.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.firecrawl.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.firecrawl.baseUrl",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "tools",
-        "url-secret"
-      ],
-      "label": "Firecrawl Base URL",
-      "help": "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.firecrawl.enabled",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Enable Firecrawl Fallback",
-      "help": "Enable Firecrawl fallback for web_fetch (if configured).",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.firecrawl.maxAgeMs",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "Firecrawl Cache Max Age (ms)",
-      "help": "Firecrawl maxAge (ms) for cached results when supported by the API.",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.firecrawl.onlyMainContent",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Firecrawl Main Content Only",
-      "help": "When true, Firecrawl returns only the main content (default: true).",
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.fetch.firecrawl.timeoutSeconds",
-      "kind": "core",
-      "type": "integer",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "Firecrawl Timeout (sec)",
-      "help": "Timeout in seconds for Firecrawl requests.",
-      "hasChildren": false
-    },
-    {
       "path": "tools.web.fetch.maxChars",
       "kind": "core",
       "type": "integer",
@@ -66917,6 +66858,20 @@
       ],
       "label": "Web Fetch Max Download Size (bytes)",
       "help": "Max download size before truncation.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.provider",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Web Fetch Provider",
+      "help": "Web fetch fallback provider id.",
       "hasChildren": false
     },
     {

@@ -5204,6 +5204,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   enabled: {
                     type: "boolean",
                   },
+                  provider: {
+                    type: "string",
+                  },
                   maxChars: {
                     type: "integer",
                     exclusiveMinimum: 0,
@@ -5238,97 +5241,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   readability: {
                     type: "boolean",
-                  },
-                  firecrawl: {
-                    type: "object",
-                    properties: {
-                      enabled: {
-                        type: "boolean",
-                      },
-                      apiKey: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            oneOf: [
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "env",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "file",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                              {
-                                type: "object",
-                                properties: {
-                                  source: {
-                                    type: "string",
-                                    const: "exec",
-                                  },
-                                  provider: {
-                                    type: "string",
-                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                                  },
-                                  id: {
-                                    type: "string",
-                                  },
-                                },
-                                required: ["source", "provider", "id"],
-                                additionalProperties: false,
-                              },
-                            ],
-                          },
-                        ],
-                      },
-                      baseUrl: {
-                        type: "string",
-                      },
-                      onlyMainContent: {
-                        type: "boolean",
-                      },
-                      maxAgeMs: {
-                        type: "integer",
-                        minimum: 0,
-                        maximum: 9007199254740991,
-                      },
-                      timeoutSeconds: {
-                        type: "integer",
-                        exclusiveMinimum: 0,
-                        maximum: 9007199254740991,
-                      },
-                    },
-                    additionalProperties: false,
                   },
                 },
                 additionalProperties: false,
@@ -12623,6 +12535,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Max download size before truncation.",
       tags: ["performance", "tools"],
     },
+    "tools.web.fetch.provider": {
+      label: "Web Fetch Provider",
+      help: "Web fetch fallback provider id.",
+      tags: ["tools"],
+    },
     "tools.web.fetch.timeoutSeconds": {
       label: "Web Fetch Timeout (sec)",
       help: "Timeout in seconds for web_fetch requests.",
@@ -12647,37 +12564,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Web Fetch Readability Extraction",
       help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
       tags: ["tools"],
-    },
-    "tools.web.fetch.firecrawl.enabled": {
-      label: "Enable Firecrawl Fallback",
-      help: "Enable Firecrawl fallback for web_fetch (if configured).",
-      tags: ["tools"],
-    },
-    "tools.web.fetch.firecrawl.apiKey": {
-      label: "Firecrawl API Key",
-      help: "Firecrawl API key (fallback: FIRECRAWL_API_KEY env var).",
-      tags: ["security", "auth", "tools"],
-      sensitive: true,
-    },
-    "tools.web.fetch.firecrawl.baseUrl": {
-      label: "Firecrawl Base URL",
-      help: "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
-      tags: ["tools", "url-secret"],
-    },
-    "tools.web.fetch.firecrawl.onlyMainContent": {
-      label: "Firecrawl Main Content Only",
-      help: "When true, Firecrawl returns only the main content (default: true).",
-      tags: ["tools"],
-    },
-    "tools.web.fetch.firecrawl.maxAgeMs": {
-      label: "Firecrawl Cache Max Age (ms)",
-      help: "Firecrawl maxAge (ms) for cached results when supported by the API.",
-      tags: ["performance", "tools"],
-    },
-    "tools.web.fetch.firecrawl.timeoutSeconds": {
-      label: "Firecrawl Timeout (sec)",
-      help: "Timeout in seconds for Firecrawl requests.",
-      tags: ["performance", "tools"],
     },
     "tools.web.x_search.enabled": {
       label: "Enable X Search Tool",
