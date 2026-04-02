@@ -18,8 +18,10 @@ import {
   type DiffTheme,
   type DiffToolDefaults,
 } from "./types.js";
+import { normalizeViewerBaseUrl } from "./url.js";
 
 type DiffsPluginConfig = {
+  viewerBaseUrl?: string;
   defaults?: {
     fontFamily?: string;
     fontSize?: number;
@@ -94,6 +96,19 @@ export const DEFAULT_DIFFS_PLUGIN_SECURITY: DiffsPluginSecurityConfig = {
 };
 
 const DiffsPluginJsonSchemaSource = z.strictObject({
+  viewerBaseUrl: z
+    .string()
+    .superRefine((value, ctx) => {
+      try {
+        normalizeViewerBaseUrl(value, "viewerBaseUrl");
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : "Invalid viewerBaseUrl",
+        });
+      }
+    })
+    .optional(),
   defaults: z
     .strictObject({
       fontFamily: z.string().default(DEFAULT_DIFFS_TOOL_DEFAULTS.fontFamily).optional(),
@@ -184,7 +199,9 @@ function resolveConfiguredValue<T>(options: {
 }
 
 function buildDiffsPluginConfigShape(config: DiffsPluginConfig): DiffsPluginConfig {
+  const viewerBaseUrl = resolveDiffsPluginViewerBaseUrl(config);
   return {
+    ...(viewerBaseUrl !== undefined ? { viewerBaseUrl } : {}),
     ...(config.defaults !== undefined ? { defaults: resolveDiffsPluginDefaults(config) } : {}),
     ...(config.security !== undefined ? { security: resolveDiffsPluginSecurity(config) } : {}),
   };
@@ -253,6 +270,20 @@ export function resolveDiffsPluginSecurity(config: unknown): DiffsPluginSecurity
   return {
     allowRemoteViewer: security.allowRemoteViewer === true,
   };
+}
+
+export function resolveDiffsPluginViewerBaseUrl(config: unknown): string | undefined {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return undefined;
+  }
+
+  const viewerBaseUrl = (config as DiffsPluginConfig).viewerBaseUrl;
+  if (typeof viewerBaseUrl !== "string") {
+    return undefined;
+  }
+
+  const normalized = viewerBaseUrl.trim();
+  return normalized ? normalizeViewerBaseUrl(normalized) : undefined;
 }
 
 export function toPresentationDefaults(defaults: DiffToolDefaults): DiffPresentationDefaults {
