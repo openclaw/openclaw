@@ -56,7 +56,7 @@ See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for a detailed comparison
 
 ## TaskFlow
 
-[TaskFlow](/automation/taskflow) is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, and exposes `openclaw flows list|show|cancel` for inspection and recovery. See [TaskFlow](/automation/taskflow) for details.
+[TaskFlow](/automation/taskflow) is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, and exposes `openclaw tasks flow list|show|cancel` for inspection and recovery. See [TaskFlow](/automation/taskflow) for details.
 
 ## Related
 

@@ -59,7 +59,7 @@ openclaw tasks audit
 | ACP background runs    | `acp`        | Spawning a child ACP session                           | `done_only`           |
 | Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`               | `done_only`           |
 | Cron jobs (all types)  | `cron`       | Every cron execution (main-session and isolated)       | `silent`              |
-| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `done_only`           |
+| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `silent`              |
 
 Main-session cron tasks use `silent` notify policy by default — they create records for tracking but do not generate notifications. Isolated cron tasks also default to `silent` but are more visible because they run in their own session.
 
@@ -226,9 +226,9 @@ A sweeper runs every **60 seconds** and handles three things:
 
 ### Tasks and TaskFlow
 
-[TaskFlow](/automation/taskflow) is the flow orchestration layer above background tasks. A single flow may coordinate multiple tasks over its lifetime using managed or mirrored sync modes. Use `openclaw tasks` to inspect individual task records and `openclaw flows` to inspect the orchestrating flow.
+[TaskFlow](/automation/taskflow) is the flow orchestration layer above background tasks. A single flow may coordinate multiple tasks over its lifetime using managed or mirrored sync modes. Use `openclaw tasks` to inspect individual task records and `openclaw tasks flow` to inspect the orchestrating flow.
 
-See [TaskFlow](/automation/taskflow) and [CLI: flows](/cli/flows) for details.
+See [TaskFlow](/automation/taskflow) for details.
 
 ### Tasks and cron
 
@@ -257,5 +257,5 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 - [Cron Jobs](/automation/cron-jobs) — scheduling background work
 - [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
-- [CLI: flows](/cli/flows) — CLI reference for `openclaw flows`
+- [CLI: tasks](/cli/index#tasks) — CLI reference for `openclaw tasks flow`
 - [CLI: Tasks](/cli/index#tasks) — CLI command reference
