@@ -459,6 +459,20 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("does not fail closed for non-executing pipelines that only print interpreter words", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-printf-pipe-text", {
+        command: "printf node | wc -c",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).toContain("4");
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
   it("does not fail closed when shell operator characters are escaped", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
