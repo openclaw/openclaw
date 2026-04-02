@@ -2,6 +2,8 @@ import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { parseExplicitTargetForChannel } from "../../channels/plugins/target-parsing.js";
+import { parseTelegramTarget } from "../../../extensions/telegram/api.js";
+import { parseSlackTarget } from "../../../extensions/slack/api.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import type { ReplyPayload } from "../types.js";
@@ -100,28 +102,51 @@ function resolveTargetProviderForComparison(params: {
   return targetProvider;
 }
 
+function parseBuiltinTarget(
+  provider: string,
+  raw: string,
+): { to: string; threadId?: string } | null {
+  if (provider === "telegram") {
+    const result = parseTelegramTarget(raw);
+    return {
+      to: result.chatId,
+      threadId: result.messageThreadId != null ? String(result.messageThreadId) : undefined,
+    };
+  }
+  if (provider === "slack") {
+    const result = parseSlackTarget(raw, { defaultKind: "channel" });
+    if (!result) {
+      return null;
+    }
+    return { to: result.id };
+  }
+  return null;
+}
+
 function targetsMatchForSuppression(params: {
   provider: string;
   originTarget: string;
   targetKey: string;
   targetThreadId?: string;
 }): boolean {
-  if (params.provider !== "telegram") {
-    return params.targetKey === params.originTarget;
-  }
-
-  const origin = parseExplicitTargetForChannel("telegram", params.originTarget);
-  const target = parseExplicitTargetForChannel("telegram", params.targetKey);
+  // Try plugin-based parsing first (handles all registered channels including Slack).
+  const originPlugin = parseExplicitTargetForChannel(params.provider, params.originTarget);
+  const targetPlugin = parseExplicitTargetForChannel(params.provider, params.targetKey);
+  const origin = originPlugin
+    ? { to: originPlugin.to, threadId: originPlugin.threadId != null ? String(originPlugin.threadId) : undefined }
+    : parseBuiltinTarget(params.provider, params.originTarget);
+  const target = targetPlugin
+    ? { to: targetPlugin.to, threadId: targetPlugin.threadId != null ? String(targetPlugin.threadId) : undefined }
+    : parseBuiltinTarget(params.provider, params.targetKey);
   if (!origin || !target) {
     return params.targetKey === params.originTarget;
   }
-  const explicitTargetThreadId = normalizeThreadIdForComparison(params.targetThreadId);
-  const targetThreadId =
-    explicitTargetThreadId ?? (target.threadId != null ? String(target.threadId) : undefined);
-  const originThreadId = origin.threadId != null ? String(origin.threadId) : undefined;
   if (origin.to.trim().toLowerCase() !== target.to.trim().toLowerCase()) {
     return false;
   }
+  const explicitTargetThreadId = normalizeThreadIdForComparison(params.targetThreadId);
+  const targetThreadId = explicitTargetThreadId ?? target.threadId;
+  const originThreadId = origin.threadId;
   if (originThreadId && targetThreadId != null) {
     return originThreadId === targetThreadId;
   }

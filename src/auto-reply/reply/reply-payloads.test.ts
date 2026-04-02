@@ -156,6 +156,36 @@ describe("shouldSuppressMessagingToolReplies", () => {
     ).toBe(true);
   });
 
+  it("suppresses slack replies when channel targets match in different normalized forms", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "slack",
+        originatingTo: "C12345678",
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel:C12345678" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("suppresses slack DM replies when user target forms differ", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "slack",
+        originatingTo: "channel:C12345678",
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "C12345678" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress slack replies when channel targets differ", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "slack",
+        originatingTo: "C12345678",
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "C99999999" }],
+      }),
+    ).toBe(false);
+  });
+
   it("suppresses telegram replies even when the active plugin registry omits telegram", () => {
     setActivePluginRegistry(createTestRegistry([]));
 
