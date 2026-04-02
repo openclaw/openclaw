@@ -73,6 +73,7 @@ Docs: https://docs.openclaw.ai
 - Exec/env: block additional host environment override pivots for package roots, language runtimes, compiler include paths, and credential/config locations so request-scoped exec cannot redirect trusted toolchains or config lookups. (#59233) Thanks @drobison00.
 - OpenShell/mirror sync: constrain mirror sync to managed roots only so user-added shell roots are no longer overwritten or removed during config synchronization. (#58515) Thanks @eleqtrizit.
 - Dotenv/workspace overrides: block workspace `.env` files from overriding `OPENCLAW_PINNED_PYTHON` and `OPENCLAW_PINNED_WRITE_PYTHON` so trusted helper interpreters cannot be redirected by repo-local env injection. (#58473) Thanks @eleqtrizit.
+- Plugins/install: accept JSON5 syntax in `openclaw.plugin.json` and bundle `plugin.json` manifests during install/validation, so third-party plugins with trailing commas, comments, or unquoted keys no longer fail to install. (#59084) Thanks @singleGanghood.
 
 ## 2026.4.1-beta.1
 
