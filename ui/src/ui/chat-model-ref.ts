@@ -106,6 +106,13 @@ export function resolvePreferredServerChatModel(
   }
 
   const trimmedProvider = provider?.trim();
+  if (
+    trimmedProvider &&
+    trimmedModel.toLowerCase().startsWith(`${trimmedProvider.toLowerCase()}/`)
+  ) {
+    return { value: trimmedModel, source: "qualified" };
+  }
+
   const overrideResolution = resolveChatModelOverride(
     trimmedProvider ? { kind: "raw", value: trimmedModel } : createChatModelOverride(trimmedModel),
     catalog,
