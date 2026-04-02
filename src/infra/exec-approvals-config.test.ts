@@ -207,6 +207,48 @@ describe("exec approvals invalid explicit policy fallback", () => {
       askFallback: "defaults.askFallback",
     });
   });
+
+  it("treats null explicit agent fields as unset and still considers wildcard", () => {
+    const resolved = resolveExecApprovalsFromFile({
+      file: {
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "full",
+        },
+        agents: {
+          "*": {
+            security: "deny",
+            ask: "always",
+            askFallback: "deny",
+          },
+          runner: {
+            security: null as unknown as ExecApprovalsAgent["security"],
+            ask: null as unknown as ExecApprovalsAgent["ask"],
+            askFallback: null as unknown as ExecApprovalsAgent["askFallback"],
+          },
+        },
+      },
+      agentId: "runner",
+      overrides: {
+        security: "full",
+        ask: "off",
+        askFallback: "full",
+      },
+    });
+
+    expect(resolved.agent).toMatchObject({
+      security: "deny",
+      ask: "always",
+      askFallback: "deny",
+    });
+    expect(resolved.agentSources).toEqual({
+      security: "agents.*.security",
+      ask: "agents.*.ask",
+      askFallback: "agents.*.askFallback",
+    });
+  });
 });
 
 describe("normalizeExecApprovals handles string allowlist entries (#9790)", () => {

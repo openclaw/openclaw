@@ -493,7 +493,7 @@ function resolveAgentSecurityField(params: {
     fallback: params.fallback,
   });
   const agentValue = params.agent[params.field];
-  if (agentValue !== undefined) {
+  if (agentValue != null) {
     if (isExecSecurity(agentValue)) {
       return {
         value: agentValue,
@@ -503,7 +503,7 @@ function resolveAgentSecurityField(params: {
     return fallbackField;
   }
   const wildcardValue = params.wildcard[params.field];
-  if (wildcardValue !== undefined) {
+  if (wildcardValue != null) {
     if (isExecSecurity(wildcardValue)) {
       return {
         value: wildcardValue,
@@ -526,7 +526,7 @@ function resolveAgentAskField(params: {
     defaults: params.defaults,
     fallback: params.fallback,
   });
-  if (params.agent.ask !== undefined) {
+  if (params.agent.ask != null) {
     if (isExecAsk(params.agent.ask)) {
       return {
         value: params.agent.ask,
@@ -535,7 +535,7 @@ function resolveAgentAskField(params: {
     }
     return fallbackField;
   }
-  if (params.wildcard.ask !== undefined) {
+  if (params.wildcard.ask != null) {
     if (isExecAsk(params.wildcard.ask)) {
       return {
         value: params.wildcard.ask,
