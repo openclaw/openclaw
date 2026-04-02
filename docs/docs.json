@@ -185,6 +185,10 @@
       "destination": "/providers/qianfan"
     },
     {
+      "source": "/gmicloud",
+      "destination": "/providers/gmicloud"
+    },
+    {
       "source": "/mattermost",
       "destination": "/channels/mattermost"
     },
@@ -1223,6 +1227,7 @@
                   "providers/opencode-go",
                   "providers/openrouter",
                   "providers/perplexity-provider",
+                  "providers/gmicloud",
                   "providers/qianfan",
                   "providers/qwen_modelstudio",
                   "providers/qwen",
@@ -1848,6 +1853,7 @@
                   "zh-CN/providers/ollama",
                   "zh-CN/providers/openai",
                   "zh-CN/providers/openrouter",
+                  "zh-CN/providers/gmicloud",
                   "zh-CN/providers/qianfan",
                   "zh-CN/providers/qwen",
                   "zh-CN/providers/synthetic",

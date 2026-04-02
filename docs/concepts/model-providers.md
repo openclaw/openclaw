@@ -242,6 +242,13 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `vercel-ai-gateway/anthropic/claude-opus-4.6`
 - CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
 
+### GMI Cloud
+
+- Provider: `gmicloud`
+- Auth: `GMI_CLOUD_API_KEY`
+- Example model: `gmicloud/anthropic/claude-opus-4.6`
+- CLI: `openclaw onboard --auth-choice gmicloud-api-key`
+
 ### Kilo Gateway
 
 - Provider: `kilocode`
@@ -262,6 +269,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - MiniMax: `minimax` (`MINIMAX_API_KEY`)
 - Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
 - Kimi Coding: `kimi-coding` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
+- GMI Cloud: `gmicloud` (`GMI_CLOUD_API_KEY`)
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
 - Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
 - NVIDIA: `nvidia` (`NVIDIA_API_KEY`)

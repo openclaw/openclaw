@@ -48,6 +48,7 @@ OpenClaw 可以使用许多 LLM 提供商。选择一个提供商，完成身份
 - [OpenAI（API + Codex）](/providers/openai)
 - [OpenCode（Zen + Go）](/providers/opencode)
 - [OpenRouter](/providers/openrouter)
+- [GMI Cloud](/providers/gmicloud)
 - [Qianfan](/providers/qianfan)
 - [Qwen（OAuth）](/providers/qwen)
 - [Together AI](/providers/together)

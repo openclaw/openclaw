@@ -1,0 +1,28 @@
+{
+  "id": "gmicloud",
+  "enabledByDefault": true,
+  "providers": ["gmicloud"],
+  "providerAuthEnvVars": {
+    "gmicloud": ["GMI_CLOUD_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "gmicloud",
+      "method": "api-key",
+      "choiceId": "gmicloud-api-key",
+      "choiceLabel": "GMI Cloud API key",
+      "groupId": "gmicloud",
+      "groupLabel": "GMI Cloud",
+      "groupHint": "API key",
+      "optionKey": "gmicloudApiKey",
+      "cliFlag": "--gmicloud-api-key",
+      "cliOption": "--gmicloud-api-key <key>",
+      "cliDescription": "GMI Cloud API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

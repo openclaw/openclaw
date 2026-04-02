@@ -52,6 +52,10 @@ const pluginRegistrationContractTests: PluginRegistrationContractParams[] = [
     requireGenerateImage: true,
   },
   {
+    pluginId: "gmicloud",
+    providerIds: ["gmicloud"],
+  },
+  {
     pluginId: "groq",
     mediaUnderstandingProviderIds: ["groq"],
   },

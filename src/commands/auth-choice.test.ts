@@ -466,6 +466,16 @@ function createDefaultProviderPlugins() {
       defaultModel: "qianfan/ernie-4.5-8k",
     }),
     createApiKeyProvider({
+      providerId: "gmicloud",
+      label: "GMI Cloud API key",
+      choiceId: "gmicloud-api-key",
+      optionKey: "gmicloudApiKey",
+      flagName: "--gmicloud-api-key",
+      envVar: "GMI_CLOUD_API_KEY",
+      promptMessage: "Enter GMI Cloud API key",
+      defaultModel: "gmicloud/deepseek-ai/DeepSeek-V3-0324",
+    }),
+    createApiKeyProvider({
       providerId: "synthetic",
       label: "Synthetic API key",
       choiceId: "synthetic-api-key",
@@ -588,6 +598,7 @@ describe("applyAuthChoice", () => {
     "OPENCODE_API_KEY",
     "TOGETHER_API_KEY",
     "QIANFAN_API_KEY",
+    "GMI_CLOUD_API_KEY",
     "SYNTHETIC_API_KEY",
     "SSH_TTY",
     "CHUTES_CLIENT_ID",
@@ -963,6 +974,13 @@ describe("applyAuthChoice", () => {
         provider: "litellm",
         expectedModelPrefix: "litellm/",
       },
+      {
+        tokenProvider: " GMICLOUD ",
+        token: "sk-gmicloud-token-provider-test",
+        profileId: "gmicloud:default",
+        provider: "gmicloud",
+        expectedModelPrefix: "gmicloud/",
+      },
     ];
     for (const scenario of scenarios) {
       await setupTempState();
@@ -1079,6 +1097,13 @@ describe("applyAuthChoice", () => {
       profileId: "synthetic:default",
       provider: "synthetic",
       modelPrefix: "synthetic/",
+    },
+    {
+      authChoice: "gmicloud-api-key",
+      tokenProvider: "gmicloud",
+      profileId: "gmicloud:default",
+      provider: "gmicloud",
+      modelPrefix: "gmicloud/",
     },
   ] as const)(
     "uses opts token for $authChoice without prompting",
