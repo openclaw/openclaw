@@ -401,7 +401,7 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
-    const flowId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    const turnId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -424,7 +424,7 @@ export async function runReplyAgent(params: {
       activeSessionStore,
       storePath,
       resolvedVerboseLevel,
-      flowId,
+      turnId,
     });
 
     if (runOutcome.kind === "final") {
@@ -617,7 +617,7 @@ export async function runReplyAgent(params: {
       });
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
       emitDiagnosticEvent({
-        type: "model.usage",
+        type: "turn.summary",
         sessionKey,
         sessionId: followupRun.run.sessionId,
         channel: replyToChannel,
@@ -638,7 +638,7 @@ export async function runReplyAgent(params: {
         },
         costUsd,
         durationMs: Date.now() - runStartedAt,
-        flowId,
+        turnId,
         agentId: resolveAgentIdFromSessionKey(sessionKey),
         triggerKind: followupRun.run.inputProvenance?.kind ?? "user",
         triggerChannel: followupRun.originatingChannel ?? replyToChannel,
