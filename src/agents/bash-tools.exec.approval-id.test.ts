@@ -254,6 +254,7 @@ describe("exec approvals", () => {
   it("reuses approval id as the node runId", async () => {
     let invokeParams: unknown;
     let agentParams: unknown;
+    let preparedPlan: unknown;
 
     mockAcceptedApprovalFlow({
       onAgent: (params) => {
@@ -262,7 +263,21 @@ describe("exec approvals", () => {
       onNodeInvoke: (params) => {
         const invoke = params as { command?: string };
         if (invoke.command === "system.run.prepare") {
-          return buildPreparedSystemRunPayload(params);
+          const prepared = buildPreparedSystemRunPayload(params) as {
+            payload?: { plan?: Record<string, unknown> };
+          };
+          const basePlan = prepared.payload?.plan ?? {};
+          const planWithMutableBinding = {
+            ...basePlan,
+            mutableFileOperand: {
+              argvIndex: 1,
+              path: "/tmp/approved-script.sh",
+              sha256: "approved-script-hash",
+            },
+          };
+          prepared.payload = { ...prepared.payload, plan: planWithMutableBinding };
+          preparedPlan = planWithMutableBinding;
+          return prepared;
         }
         if (invoke.command === "system.run") {
           invokeParams = params;
@@ -300,6 +315,17 @@ describe("exec approvals", () => {
     ).toMatchObject({
       suppressNotifyOnExit: true,
     });
+    await expect
+      .poll(
+        () =>
+          (invokeParams as { params?: { systemRunPlan?: unknown } } | undefined)?.params
+            ?.systemRunPlan,
+        {
+          timeout: 2000,
+          interval: 20,
+        },
+      )
+      .toEqual(preparedPlan);
     await expect.poll(() => agentParams, { timeout: 2_000, interval: 20 }).toBeTruthy();
   });
 
@@ -359,15 +385,25 @@ describe("exec approvals", () => {
   it("preserves explicit workdir for node exec", async () => {
     const remoteWorkdir = "/Users/vv";
     let prepareCwd: string | undefined;
+    let preparedPlan: unknown;
+    let runSystemRunPlan: unknown;
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "node.invoke") {
-        const invoke = params as { command?: string; params?: { cwd?: string } };
+        const invoke = params as {
+          command?: string;
+          params?: { cwd?: string; systemRunPlan?: unknown };
+        };
         if (invoke.command === "system.run.prepare") {
           prepareCwd = invoke.params?.cwd;
-          return buildPreparedSystemRunPayload(params);
+          const prepared = buildPreparedSystemRunPayload(params) as {
+            payload?: { plan?: unknown };
+          };
+          preparedPlan = prepared.payload?.plan;
+          return prepared;
         }
         if (invoke.command === "system.run") {
+          runSystemRunPlan = invoke.params?.systemRunPlan;
           return { payload: { success: true, stdout: "ok" } };
         }
       }
@@ -388,6 +424,7 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(prepareCwd).toBe(remoteWorkdir);
+    expect(runSystemRunPlan).toEqual(preparedPlan);
   });
 
   it("does not forward the gateway default cwd to node exec when workdir is omitted", async () => {
