@@ -424,7 +424,7 @@ describe("sendMessageMatrix mentions", () => {
     });
     expect(
       (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
-    ).toContain('href="https://matrix.to/#/@alice:example.org"');
+    ).toContain('href="https://matrix.to/#/%40alice%3Aexample.org"');
   });
 
   it("keeps bare localpart text as plain text", async () => {

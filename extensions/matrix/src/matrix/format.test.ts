@@ -56,9 +56,21 @@ describe("markdownToMatrixHtml", () => {
       client: createMentionClient(),
     });
 
-    expect(result.html).toContain('href="https://matrix.to/#/@alice:example.org"');
+    expect(result.html).toContain('href="https://matrix.to/#/%40alice%3Aexample.org"');
     expect(result.mentions).toEqual({
       user_ids: ["@alice:example.org"],
+    });
+  });
+
+  it("url-encodes matrix.to hrefs for valid mxids with path characters", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "hello @foo/bar:example.org",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain('href="https://matrix.to/#/%40foo%2Fbar%3Aexample.org"');
+    expect(result.mentions).toEqual({
+      user_ids: ["@foo/bar:example.org"],
     });
   });
 
@@ -90,6 +102,17 @@ describe("markdownToMatrixHtml", () => {
     });
 
     expect(result.html).toContain("@room");
+    expect(result.mentions).toEqual({});
+  });
+
+  it("restores escaped mentions in markdown link labels without linking them", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "[\\@alice:example.org](https://example.com)",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain('<a href="https://example.com">@alice:example.org</a>');
+    expect(result.html).not.toContain("matrix.to");
     expect(result.mentions).toEqual({});
   });
 

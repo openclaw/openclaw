@@ -209,12 +209,16 @@ function mutateInlineTokensWithMentions(params: {
       nextChildren.push(child);
       continue;
     }
-    if (child.type !== "text" || insideLinkDepth > 0 || !child.content) {
+    if (child.type !== "text" || !child.content) {
       nextChildren.push(child);
       continue;
     }
 
     const visibleContent = restoreEscapedMentions(child.content);
+    if (insideLinkDepth > 0) {
+      nextChildren.push(createTextToken(child, visibleContent));
+      continue;
+    }
     const matches = collectMentionCandidates(child.content);
     if (matches.length === 0) {
       nextChildren.push(createTextToken(child, visibleContent));
@@ -247,7 +251,7 @@ function mutateInlineTokensWithMentions(params: {
       nextChildren.push(
         ...createMentionLinkTokens({
           sample: child,
-          href: `https://matrix.to/#/${resolvedUserId}`,
+          href: `https://matrix.to/#/${encodeURIComponent(resolvedUserId)}`,
           label: match.raw,
         }),
       );
