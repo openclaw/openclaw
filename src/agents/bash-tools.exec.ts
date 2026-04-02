@@ -89,21 +89,64 @@ function buildExecForegroundResult(params: {
 function extractScriptTargetFromCommand(
   command: string,
 ): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null {
-  const argv = splitShellArgs(command.trim());
-  if (!argv || argv.length === 0) {
-    return null;
-  }
+  const raw = command.trim();
+  const splitShellArgsPreservingBackslashes = (value: string): string[] | null => {
+    const tokens: string[] = [];
+    let buf = "";
+    let inSingle = false;
+    let inDouble = false;
 
-  let commandIdx = 0;
-  while (commandIdx < argv.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv[commandIdx])) {
-    commandIdx += 1;
-  }
-  const executable = argv[commandIdx]?.toLowerCase();
-  if (!executable) {
-    return null;
-  }
+    const pushToken = () => {
+      if (buf.length > 0) {
+        tokens.push(buf);
+        buf = "";
+      }
+    };
 
-  const args = argv.slice(commandIdx + 1);
+    for (let i = 0; i < value.length; i += 1) {
+      const ch = value[i];
+      if (inSingle) {
+        if (ch === "'") {
+          inSingle = false;
+        } else {
+          buf += ch;
+        }
+        continue;
+      }
+      if (inDouble) {
+        if (ch === '"') {
+          inDouble = false;
+        } else {
+          buf += ch;
+        }
+        continue;
+      }
+      if (ch === "'") {
+        inSingle = true;
+        continue;
+      }
+      if (ch === '"') {
+        inDouble = true;
+        continue;
+      }
+      if (/\s/.test(ch)) {
+        pushToken();
+        continue;
+      }
+      buf += ch;
+    }
+
+    if (inSingle || inDouble) {
+      return null;
+    }
+    pushToken();
+    return tokens;
+  };
+  const hasWindowsPathSyntax = /(?:^|[\s"'`])(?:[A-Za-z]:\\|\.\\|\.\.\\|\\\\)/.test(raw);
+  const candidateArgv = hasWindowsPathSyntax
+    ? [splitShellArgsPreservingBackslashes(raw), splitShellArgs(raw)]
+    : [splitShellArgs(raw)];
+
   const findFirstPythonScriptArg = (tokens: string[]): string | null => {
     const optionsWithSeparateValue = new Set(["-W", "-X", "-Q", "--check-hash-based-pycs"]);
     for (let i = 0; i < tokens.length; i += 1) {
@@ -169,22 +212,44 @@ function extractScriptTargetFromCommand(
     }
     return null;
   };
-
-  if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
-    const script = findFirstPythonScriptArg(args);
-    if (script) {
-      return { kind: "python", relOrAbsPath: script };
+  const extractTargetFromArgv = (
+    argv: string[] | null,
+  ): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null => {
+    if (!argv || argv.length === 0) {
+      return null;
+    }
+    let commandIdx = 0;
+    while (commandIdx < argv.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv[commandIdx])) {
+      commandIdx += 1;
+    }
+    const executable = argv[commandIdx]?.toLowerCase();
+    if (!executable) {
+      return null;
+    }
+    const args = argv.slice(commandIdx + 1);
+    if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
+      const script = findFirstPythonScriptArg(args);
+      if (script) {
+        return { kind: "python", relOrAbsPath: script };
+      }
+      return null;
+    }
+    if (executable === "node") {
+      const script = findFirstNodeScriptArg(args);
+      if (script) {
+        return { kind: "node", relOrAbsPath: script };
+      }
+      return null;
     }
     return null;
-  }
-  if (executable === "node") {
-    const script = findFirstNodeScriptArg(args);
-    if (script) {
-      return { kind: "node", relOrAbsPath: script };
-    }
-    return null;
-  }
+  };
 
+  for (const argv of candidateArgv) {
+    const target = extractTargetFromArgv(argv);
+    if (target) {
+      return target;
+    }
+  }
   return null;
 }
 
