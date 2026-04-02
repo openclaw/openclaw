@@ -172,7 +172,10 @@ export function runBundledPluginPostinstall(params = {}) {
     windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
   });
   if (result.status !== 0) {
-    const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+    const output = [result.error?.message, result.stderr, result.stdout]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
     const detail = output || "npm install failed";
     throw new Error(
       `[postinstall] could not install bundled plugin deps (${missingSpecs.join(", ")}): ${detail}`,

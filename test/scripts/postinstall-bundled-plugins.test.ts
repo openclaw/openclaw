@@ -120,6 +120,40 @@ describe("bundled plugin postinstall", () => {
     );
   });
 
+  it("includes spawn errors when bundled plugin restore cannot start", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "telegram", {
+      dependencies: {
+        grammy: "1.41.1",
+      },
+    });
+
+    expect(() =>
+      runBundledPluginPostinstall({
+        env: { HOME: "/tmp/home" },
+        extensionsDir,
+        packageRoot,
+        npmRunner: createBareNpmRunner([
+          "install",
+          "--omit=dev",
+          "--no-save",
+          "--package-lock=false",
+          "grammy@1.41.1",
+        ]),
+        spawnSync: vi.fn(() => ({
+          status: null,
+          error: new Error("spawn npm ENOENT"),
+          stderr: "",
+          stdout: "",
+        })),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toThrow(
+      "[postinstall] could not install bundled plugin deps (grammy@1.41.1): spawn npm ENOENT",
+    );
+  });
+
   it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
