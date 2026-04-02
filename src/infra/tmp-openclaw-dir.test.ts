@@ -65,6 +65,7 @@ function resolveWithReadOnlyTmpFallback(params: {
     mkdirSync: vi.fn(),
     chmodSync: params.chmodSync,
     getuid: vi.fn(() => 501),
+    platform: "linux",
     tmpdir: vi.fn(() => "/var/fallback"),
     warn: params.warn,
   });
@@ -136,6 +137,7 @@ function resolveWithMocks(params: {
     lstatSync: wrappedLstatSync,
     mkdirSync,
     getuid,
+    platform: "linux",
     tmpdir,
     warn,
   });
@@ -321,11 +323,52 @@ describe("resolvePreferredOpenClawTmpDir", () => {
       mkdirSync: vi.fn(),
       chmodSync: vi.fn(),
       getuid: vi.fn(() => undefined),
+      platform: "linux",
       tmpdir: vi.fn(() => tmpdirPath),
       warn: vi.fn(),
     });
 
     expect(resolved).toBe(fallbackPath);
+  });
+
+  it("prefers the OS temp directory on Windows instead of /tmp/openclaw", () => {
+    const tmpdirPath = "C:\\Users\\tester\\AppData\\Local\\Temp";
+    const fallbackPath = path.join(tmpdirPath, "openclaw");
+    const accessSync = vi.fn();
+    const chmodSync = vi.fn();
+    let fallbackCreated = false;
+    const mkdirSync = vi.fn(() => {
+      fallbackCreated = true;
+    });
+    const lstatSync = vi.fn((target: string) => {
+      if (target === fallbackPath) {
+        if (!fallbackCreated) {
+          throw nodeErrorWithCode("ENOENT");
+        }
+        return makeDirStat({ uid: undefined, mode: 0o40700 });
+      }
+      if (target === POSIX_OPENCLAW_TMP_DIR) {
+        throw new Error("should not probe posix temp dir on Windows");
+      }
+      return makeDirStat({ uid: undefined, mode: 0o40700 });
+    });
+
+    const resolved = resolvePreferredOpenClawTmpDir({
+      accessSync,
+      chmodSync,
+      lstatSync,
+      mkdirSync,
+      getuid: vi.fn(() => undefined),
+      platform: "win32",
+      tmpdir: vi.fn(() => tmpdirPath),
+      warn: vi.fn(),
+    });
+
+    expect(resolved).toBe(fallbackPath);
+    expect(lstatSync).toHaveBeenCalledWith(fallbackPath);
+    expect(accessSync).not.toHaveBeenCalledWith("/tmp", expect.any(Number));
+    expect(mkdirSync).toHaveBeenCalledWith(fallbackPath, expect.any(Object));
+    expect(chmodSync).toHaveBeenCalledWith(fallbackPath, 0o700);
   });
 
   it("repairs fallback directory permissions after create when umask makes it group-writable", () => {

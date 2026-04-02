@@ -78,6 +78,7 @@ import {
   recordInboundReceiptReceived,
   resolveInboundReceiptLedgerPath,
 } from "./inbound-receipt-ledger.js";
+import { isPaperclipIssueRunOwnershipConflictError } from "./paperclip-issues.js";
 
 const cleanupPaths: string[] = [];
 const originalFetch = globalThis.fetch;
@@ -801,6 +802,14 @@ describe("chief-task-ledger", () => {
       taskId: task?.taskId,
       status: "done",
     });
+  });
+
+  it("detects paperclip issue run ownership conflicts as sync drift candidates", () => {
+    expect(
+      isPaperclipIssueRunOwnershipConflictError(
+        new Error('Paperclip request failed (409) /issues/OPE-TEST-1: {"error":"Issue run ownership conflict"}'),
+      ),
+    ).toBe(true);
   });
 
   it("marks legacy terminal local tasks instead of backfilling paperclip authority", async () => {

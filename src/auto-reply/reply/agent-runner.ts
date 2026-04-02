@@ -76,6 +76,9 @@ const LONG_RUNNING_STATUS_DELAY_MS = 60_000;
 const LONG_RUNNING_STATUS_INTERVAL_MS = 5 * 60_000;
 
 type ChiefProgressHeartbeatSnapshot = {
+  taskId?: string;
+  taskHeadline?: string;
+  taskHeadlineKind?: "goal" | "intent" | "success" | "title" | "request";
   phase: string;
   currentOwner: string;
   activeAgents: string[];
@@ -118,6 +121,12 @@ function formatLongRunningStatusMessage(params: {
       "WORKING",
       `still processing after ${String(elapsedSeconds)}s; model/tool work remains active`,
     ),
+    ...(params.snapshot.taskId ? [`\`Task ID\`: \`${params.snapshot.taskId}\``] : []),
+    ...(params.snapshot.taskHeadline
+      ? [
+          `\`${params.snapshot.taskHeadlineKind === "goal" ? "Goal" : params.snapshot.taskHeadlineKind === "intent" ? "Task" : params.snapshot.taskHeadlineKind === "success" ? "Goal" : params.snapshot.taskHeadlineKind === "request" ? "Topic" : "Task"}\`: \`${params.snapshot.taskHeadline}\``,
+        ]
+      : []),
     formatProgressTagLine(
       "STATUS",
       `phase=${params.snapshot.phase}; owner=${params.snapshot.currentOwner}; active=${activeAgents}${releaseGate}`,
@@ -298,6 +307,18 @@ export async function runReplyAgent(params: {
     phase: "executing",
     currentOwner: "chief",
     activeAgents: ["chief"],
+    taskHeadline:
+      opts?.currentGoal ??
+      opts?.intentSummary ??
+      opts?.successCriteria ??
+      (commandBody.trim().slice(0, 220) || undefined),
+    taskHeadlineKind: opts?.currentGoal
+      ? "goal"
+      : opts?.intentSummary
+        ? "intent"
+        : opts?.successCriteria
+          ? "success"
+          : "request",
     latestMilestone: opts?.latestMilestone ?? opts?.intentSummary ?? opts?.currentGoal,
     nextStep: "Continue execution until ready for final review or blocked.",
     releaseGateStatus: opts?.releaseGateStatus,
@@ -426,6 +447,7 @@ export async function runReplyAgent(params: {
           latestMilestone: runtimeOpts.latestMilestone,
           lastUserProgressReportAt: runtimeOpts.lastUserProgressReportAt,
           releaseGateStatus: runtimeOpts.releaseGateStatus,
+          paperclipRunId: runtimeOpts.runId,
           continuityDecision: runtimeOpts.continuityDecision,
           createdByApproval: runtimeOpts.createdByApproval,
         })
@@ -446,7 +468,10 @@ export async function runReplyAgent(params: {
       lastError: undefined,
       releaseGateStatus: args.releaseGateStatus,
     });
-    await recordChiefTaskProgress(args);
+    await recordChiefTaskProgress({
+      ...args,
+      paperclipRunId: args.paperclipRunId ?? runtimeOpts.runId,
+    });
   };
   const trackChiefTaskResult = async (
     args: Parameters<typeof recordChiefTaskResult>[0],
@@ -457,7 +482,10 @@ export async function runReplyAgent(params: {
     if (deferChiefTaskResultTracking) {
       return;
     }
-    await recordChiefTaskResult(args);
+    await recordChiefTaskResult({
+      ...args,
+      paperclipRunId: args.paperclipRunId ?? runtimeOpts.runId,
+    });
   };
   const trackChiefTaskRecovery = async (
     args: Parameters<typeof recordChiefTaskRecovery>[0],
@@ -465,7 +493,10 @@ export async function runReplyAgent(params: {
     if (!shouldTrackChiefTask) {
       return;
     }
-    await recordChiefTaskRecovery(args);
+    await recordChiefTaskRecovery({
+      ...args,
+      paperclipRunId: args.paperclipRunId ?? runtimeOpts.runId,
+    });
   };
   const trackChiefTaskFailure = async (
     args: Parameters<typeof recordChiefTaskFailure>[0],
@@ -473,10 +504,14 @@ export async function runReplyAgent(params: {
     if (!shouldTrackChiefTask) {
       return;
     }
-    await recordChiefTaskFailure(args);
+    await recordChiefTaskFailure({
+      ...args,
+      paperclipRunId: args.paperclipRunId ?? runtimeOpts.runId,
+    });
   };
   const previousOnAgentRunStart = runtimeOpts.onAgentRunStart;
   runtimeOpts.onAgentRunStart = (runId) => {
+    runtimeOpts.runId = runId;
     if (chiefTaskRecordId && !disposeChiefEventProgressListener) {
       disposeChiefEventProgressListener = onAgentEvent((evt) => {
         if (evt.runId !== runId) {
@@ -591,6 +626,16 @@ export async function runReplyAgent(params: {
 
   const chiefTaskRecord = await trackChiefTaskStart();
   chiefTaskRecordId = chiefTaskRecord?.taskId;
+  if (chiefTaskRecordId) {
+    chiefProgressSnapshot.taskId = chiefTaskRecordId;
+    chiefProgressSnapshot.taskHeadline =
+      chiefTaskRecord?.taskHeadline ??
+      chiefTaskRecord?.currentGoal ??
+      chiefTaskRecord?.intentSummary ??
+      chiefTaskRecord?.successCriteria ??
+      chiefTaskRecord?.title;
+    chiefProgressSnapshot.taskHeadlineKind = chiefTaskRecord?.taskHeadlineKind;
+  }
   chiefTaskSessionKeyForProgress = sessionKey ?? queueKey;
   if (chiefTaskRecordId) {
     await trackChiefTaskProgress({

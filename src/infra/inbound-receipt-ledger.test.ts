@@ -396,4 +396,69 @@ describe("inbound-receipt-ledger", () => {
     expect(receipt?.sourceMessageId).toBe("1503");
     expect(receipt?.completedAt).toBe(3_000);
   });
+
+  it("does not reopen a terminal telegram receipt when the same task re-enters executing", async () => {
+    const { cfg } = await makeConfig();
+    const sessionKey = "agent:chief:telegram:direct:523353610";
+    const received = await recordInboundReceiptReceived({
+      cfg,
+      agentId: "chief",
+      sourceType: "telegram",
+      channel: "telegram",
+      accountId: "default",
+      originatingTo: "telegram:523353610",
+      messageId: "1504",
+      sessionKey,
+      threadKey: sessionKey,
+      bodyPreview: "Keep terminal receipts terminal.",
+      bodyText: "Keep terminal receipts terminal.",
+      sourceMessageId: "1504",
+    });
+
+    const task = await recordChiefTaskStart({
+      cfg,
+      agentId: "chief",
+      sessionKey,
+      prompt: "Keep terminal receipts terminal.",
+      sourceChannel: "telegram",
+      sourceMessageId: "1504",
+      receiptId: received?.receiptId,
+      nowMs: 1_000,
+    });
+
+    await recordChiefTaskResult({
+      cfg,
+      agentId: "chief",
+      taskId: task?.taskId,
+      receiptId: received?.receiptId,
+      sessionKey,
+      payloads: [{ text: "[COMPLETE]: done" }],
+      deliveryConfirmed: true,
+      nowMs: 3_000,
+    });
+
+    await syncInboundReceiptFromChiefTask({
+      cfg,
+      task: {
+        taskId: task?.taskId ?? "telegram:agent:chief:telegram:direct:523353610:1504",
+        agentId: "chief",
+        sessionKey,
+        source: "telegram",
+        promptPreview: "Re-entering execution should not reopen the receipt.",
+        sourceMessageId: "1504",
+        receiptId: received?.receiptId,
+        paperclipIssueId: "OPE-TEST-1",
+        status: "in_progress",
+        phase: "executing",
+        lastProgressAt: 4_000,
+      },
+      stage: "executing",
+    });
+
+    const ledger = await loadInboundReceiptLedgerForTest(resolveInboundReceiptLedgerPath(cfg));
+    const receipt = ledger.receipts[received?.receiptId ?? ""];
+    expect(receipt?.status).toBe("done");
+    expect(receipt?.taskId).toBe(task?.taskId);
+    expect(receipt?.completedAt).toBe(3_000);
+  });
 });

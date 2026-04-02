@@ -39,6 +39,13 @@ type AgentDeliveryResult = RunResult & {
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
 };
+type DeliveryTaskContext = {
+  taskId?: string;
+  paperclipIssueId?: string;
+  receiptId?: string;
+  headlineLabel?: "Task" | "Goal" | "Topic";
+  headline?: string;
+};
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
 const TERMINAL_STATUS_TAG_RE =
@@ -69,6 +76,88 @@ function hasTerminalStatusTag(text: string | undefined): boolean {
 
 function formatStatusTagLine(tag: StatusTagName, reason: string): string {
   return `\`[${tag}]: ${reason.trim()}\``;
+}
+
+function normalizeInlineCodeValue(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.replace(/`/g, "'").replace(/\s+/g, " ").trim();
+  return normalized || undefined;
+}
+
+function formatStructuredFieldLine(label: string, value: string | undefined): string | undefined {
+  const normalized = normalizeInlineCodeValue(value);
+  return normalized ? `\`${label}\`: \`${normalized}\`` : undefined;
+}
+
+function resolveDeliveryTaskContext(opts: AgentCommandOpts): DeliveryTaskContext {
+  const headline =
+    normalizeInlineCodeValue(opts.currentGoal) ??
+    normalizeInlineCodeValue(opts.intentSummary) ??
+    normalizeInlineCodeValue(opts.successCriteria) ??
+    normalizeInlineCodeValue(opts.message);
+  return {
+    taskId: normalizeInlineCodeValue(opts.chiefTaskId),
+    paperclipIssueId: normalizeInlineCodeValue(opts.paperclipIssueId),
+    receiptId: normalizeInlineCodeValue(opts.inboundReceiptId),
+    headlineLabel: opts.currentGoal ? "Goal" : opts.intentSummary || opts.successCriteria ? "Task" : "Topic",
+    headline,
+  };
+}
+
+function isTelegramDeliveryTarget(opts: AgentCommandOpts, deliveryChannel?: string): boolean {
+  const candidates = [
+    deliveryChannel,
+    opts.replyChannel,
+    opts.channel,
+    opts.messageChannel,
+    opts.runContext?.messageChannel,
+  ]
+    .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+    .filter(Boolean);
+  return candidates.includes("telegram");
+}
+
+function buildTelegramTaskContextLines(opts: AgentCommandOpts): string[] {
+  const context = resolveDeliveryTaskContext(opts);
+  return [
+    formatStructuredFieldLine("Task ID", context.taskId),
+    formatStructuredFieldLine("Paperclip issue", context.paperclipIssueId),
+    formatStructuredFieldLine("Receipt ID", context.receiptId),
+    context.headlineLabel && context.headline
+      ? formatStructuredFieldLine(context.headlineLabel, context.headline)
+      : undefined,
+  ].filter((value): value is string => Boolean(value));
+}
+
+function ensureTelegramStructuredContext(params: {
+  payloads: ReplyPayload[];
+  opts: AgentCommandOpts;
+  deliveryChannel?: string;
+}): ReplyPayload[] {
+  if (!isTelegramDeliveryTarget(params.opts, params.deliveryChannel)) {
+    return params.payloads;
+  }
+  const contextLines = buildTelegramTaskContextLines(params.opts);
+  if (contextLines.length === 0) {
+    return params.payloads;
+  }
+  const payloads = [...params.payloads];
+  const firstTextIndex = payloads.findIndex((payload) => typeof payload.text === "string");
+  if (firstTextIndex < 0) {
+    return payloads;
+  }
+  const firstPayload = payloads[firstTextIndex]!;
+  const text = firstPayload.text ?? "";
+  if (text.includes("`Task ID`") || text.includes("`Goal`") || text.includes("`Task`") || text.includes("`Topic`")) {
+    return payloads;
+  }
+  payloads[firstTextIndex] = {
+    ...firstPayload,
+    text: [...contextLines, text.trim()].filter(Boolean).join("\n"),
+  };
+  return payloads;
 }
 
 function classifyTerminalPayloadState(payloads: ReplyPayload[]): "waiting" | "blocked" | "complete" {
@@ -148,55 +237,118 @@ function buildTerminalStatus(params: {
   };
 }
 
-function buildNoReplyFallbackPayload(result: AgentDeliveryResult): ReplyPayload {
+function buildNoReplyFallbackPayload(
+  result: AgentDeliveryResult,
+  opts: AgentCommandOpts,
+  deliveryChannel?: string,
+): ReplyPayload {
   const stopReason =
     typeof result.meta?.stopReason === "string" ? result.meta.stopReason : undefined;
   const durationMs =
     typeof result.meta?.durationMs === "number" ? result.meta.durationMs : undefined;
   if (stopReason === "tool_calls" || stopReason === "toolUse") {
     const reason = "đang xử lý, dự kiến cần hơn 60 giây vì model/tool vẫn đang chạy";
-    return {
+    const payload: ReplyPayload = {
       text: [
         "Đang xử lý. Chief sẽ gửi cập nhật an toàn ngay khi có trạng thái phù hợp để báo ra ngoài.",
+        formatStructuredFieldLine("Reason", reason),
+        formatStructuredFieldLine(
+          "Next",
+          "Tiếp tục theo dõi run hiện tại và gửi heartbeat hoặc kết quả cuối ngay khi sẵn sàng",
+        ),
         formatStatusTagLine("WORKING", reason),
-      ].join("\n\n"),
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n"),
     };
+    return ensureTelegramStructuredContext({
+      payloads: [payload],
+      opts,
+      deliveryChannel,
+    })[0]!;
   }
   if (result.meta?.error || result.meta?.aborted) {
-    return {
+    const payload: ReplyPayload = {
       text: [
-        "Lần chạy vừa kết thúc nhưng chưa có cập nhật cuối cùng sẵn sàng để gửi. Chief sẽ tổng hợp lại trạng thái an toàn hoặc yêu cầu chạy tiếp nếu cần.",
+        "Lần chạy vừa kết thúc nhưng chưa có cập nhật cuối cùng sẵn sàng để gửi.",
+        formatStructuredFieldLine(
+          "Reason",
+          "Lần chạy gặp lỗi trước khi tạo được phản hồi cuối có thể gửi cho user",
+        ),
+        formatStructuredFieldLine(
+          "Next",
+          "Tổng hợp lại trạng thái an toàn hoặc khởi tạo nhánh recovery nếu cần",
+        ),
         formatStatusTagLine("STOP", "chưa có cập nhật cuối cùng sẵn sàng để gửi do lần chạy gặp lỗi"),
-      ].join("\n\n"),
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n"),
       isError: true,
     };
+    return ensureTelegramStructuredContext({
+      payloads: [payload],
+      opts,
+      deliveryChannel,
+    })[0]!;
   }
   if (typeof durationMs === "number" && durationMs >= 60_000) {
-    return {
+    const payload: ReplyPayload = {
       text: [
-        "Lần chạy đã kết thúc nhưng chưa tạo được cập nhật cuối cùng sẵn sàng để gửi. Chief sẽ tổng hợp lại trạng thái an toàn hoặc yêu cầu chạy tiếp nếu cần.",
+        "Lần chạy đã kết thúc nhưng chưa tạo được cập nhật cuối cùng sẵn sàng để gửi.",
+        formatStructuredFieldLine("Reason", "Run kết thúc nhưng không sinh được phản hồi cuối có thể giao ra ngoài"),
+        formatStructuredFieldLine(
+          "Next",
+          "Tổng hợp lại tiến độ, blocker, và hành động tiếp theo trước khi gửi tin kế tiếp",
+        ),
         formatStatusTagLine("STOP", "chưa có cập nhật cuối cùng sẵn sàng để gửi"),
-      ].join("\n\n"),
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n"),
       isError: true,
     };
+    return ensureTelegramStructuredContext({
+      payloads: [payload],
+      opts,
+      deliveryChannel,
+    })[0]!;
   }
-  return {
+  const payload: ReplyPayload = {
     text: [
-      "Lần chạy đã kết thúc nhưng chưa có cập nhật cuối cùng sẵn sàng để gửi. Chief sẽ tổng hợp lại trạng thái an toàn hoặc yêu cầu chạy tiếp nếu cần.",
+      "Lần chạy đã kết thúc nhưng chưa có cập nhật cuối cùng sẵn sàng để gửi.",
+      formatStructuredFieldLine("Reason", "Chưa có phản hồi cuối cùng đủ an toàn để phát ra ngoài"),
+      formatStructuredFieldLine(
+        "Next",
+        "Tổng hợp lại trạng thái hiện tại và gửi terminal summary hoặc recovery update",
+      ),
       formatStatusTagLine("STOP", "chưa có cập nhật cuối cùng sẵn sàng để gửi"),
-    ].join("\n\n"),
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join("\n\n"),
     isError: true,
   };
+  return ensureTelegramStructuredContext({
+    payloads: [payload],
+    opts,
+    deliveryChannel,
+  })[0]!;
 }
 
 function ensureTerminalStatusPayloads(params: {
   payloads: ReplyPayload[];
   result: AgentDeliveryResult;
+  opts: AgentCommandOpts;
+  deliveryChannel?: string;
 }): ReplyPayload[] {
   const status = buildTerminalStatus(params);
   const statusLine = formatStatusTagLine(status.tag, status.reason);
-  const payloads =
-    params.payloads.length > 0 ? [...params.payloads] : [buildNoReplyFallbackPayload(params.result)];
+  const payloads = ensureTelegramStructuredContext({
+    payloads:
+      params.payloads.length > 0
+        ? [...params.payloads]
+        : [buildNoReplyFallbackPayload(params.result, params.opts, params.deliveryChannel)],
+    opts: params.opts,
+    deliveryChannel: params.deliveryChannel,
+  });
   const lastTextIndex = (() => {
     for (let index = payloads.length - 1; index >= 0; index -= 1) {
       if (typeof payloads[index]?.text === "string") {
@@ -459,6 +611,8 @@ export async function deliverAgentCommandResult(params: {
   const effectiveReplyPayloads = ensureTerminalStatusPayloads({
     payloads: normalizedReplyPayloads,
     result: deliveryResult,
+    opts,
+    deliveryChannel,
   });
   const normalizedPayloads = normalizeOutboundPayloadsForJson(effectiveReplyPayloads);
   if (opts.json) {

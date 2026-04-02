@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter } from "./console.js";
-import { resetLogger, setLoggerOverride } from "./logger.js";
+import { __test__, resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
@@ -20,6 +21,8 @@ afterEach(() => {
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+  vi.useRealTimers();
+  delete process.env.TZ;
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
@@ -143,5 +146,33 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes the rolling file sink when the local day changes", () => {
+    vi.useFakeTimers();
+    process.env.TZ = "UTC";
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const beforeMidnight = new Date("2026-04-01T23:59:55.000Z");
+    const afterMidnight = new Date("2026-04-02T00:00:05.000Z");
+    const dayOnePath = __test__.defaultRollingPathForDateForTest(beforeMidnight);
+    const dayTwoPath = __test__.defaultRollingPathForDateForTest(afterMidnight);
+
+    fs.rmSync(dayOnePath, { force: true });
+    fs.rmSync(dayTwoPath, { force: true });
+
+    const log = createSubsystemLogger("agent/embedded");
+    vi.setSystemTime(beforeMidnight);
+    log.info("before-midnight");
+
+    vi.setSystemTime(afterMidnight);
+    log.info("after-midnight");
+
+    expect(fs.existsSync(dayOnePath)).toBe(true);
+    expect(fs.existsSync(dayTwoPath)).toBe(true);
+    expect(fs.readFileSync(dayOnePath, "utf-8")).toContain("before-midnight");
+    expect(fs.readFileSync(dayTwoPath, "utf-8")).toContain("after-midnight");
+
+    fs.rmSync(dayOnePath, { force: true });
+    fs.rmSync(dayTwoPath, { force: true });
   });
 });

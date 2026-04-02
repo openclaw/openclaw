@@ -94,6 +94,8 @@ export type AgentCommandOpts = {
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Reuse an existing chief task instead of creating a new tracked task. */
   matchedTaskId?: string;
+  /** Resolved chief tracked-task id for this run once the ledger entry exists. */
+  chiefTaskId?: string;
   /** Explicit Paperclip issue binding for tracked work. */
   paperclipIssueId?: string;
   /** Stable thread key used by continuity evaluation. */

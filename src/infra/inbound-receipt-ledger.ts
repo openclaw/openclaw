@@ -750,6 +750,9 @@ function shouldPreserveReceiptBinding(
   task: ReceiptTaskSync,
   nextStatus: InboundReceiptStatus,
 ): boolean {
+  if (isTerminalReceiptStatus(existing.status) && !isTerminalReceiptStatus(nextStatus)) {
+    return true;
+  }
   const existingTaskId = existing.taskId?.trim();
   const incomingTaskId = task.taskId.trim();
   if (!existingTaskId || existingTaskId === incomingTaskId) {

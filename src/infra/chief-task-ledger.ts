@@ -12,13 +12,14 @@ import {
 import {
   buildPaperclipTrackedIssueDescription,
   ensurePaperclipTrackedIssue,
+  isPaperclipIssueRunOwnershipConflictError,
   isPaperclipIssueNotFoundError,
   isPaperclipRunIdRequiredError,
   updatePaperclipTrackedIssue,
   type PaperclipIssueStatus,
 } from "./paperclip-issues.js";
 
-export const CHIEF_TASK_LEDGER_VERSION = 4;
+export const CHIEF_TASK_LEDGER_VERSION = 5;
 export const CHIEF_TASK_LEDGER_ARCHIVE_VERSION = 1;
 export const CHIEF_TASK_STALE_AFTER_MS = 5 * 60_000;
 export const CHIEF_TASK_RESUME_COOLDOWN_MS = 5 * 60_000;
@@ -59,6 +60,8 @@ export type ChiefTaskReleaseGateStatus =
   | "passed"
   | "blocked";
 
+export type ChiefTaskHeadlineKind = "goal" | "intent" | "success" | "title" | "request";
+
 export type ChiefTaskContinuityEvent = {
   at: number;
   decision: InboundReceiptContinuityDecision;
@@ -93,12 +96,16 @@ export type ChiefTaskRecord = {
   intentSummary?: string;
   currentGoal?: string;
   successCriteria?: string;
+  taskHeadline?: string;
+  taskHeadlineKind?: ChiefTaskHeadlineKind;
   verificationEvidence?: string[];
   riskLevel?: ChiefTaskRiskLevel;
   confidence?: number;
   latestMilestone?: string;
   lastUserProgressReportAt?: number;
   releaseGateStatus?: ChiefTaskReleaseGateStatus;
+  paperclipRunId?: string;
+  syncDriftReason?: string;
   continuityDecision?: InboundReceiptContinuityDecision;
   createdByApproval?: boolean;
   continuityHistory?: ChiefTaskContinuityEvent[];
@@ -368,6 +375,57 @@ function derivePaperclipOriginChannel(source: ChiefTaskSource): "telegram" | "pa
   return "direct";
 }
 
+function isSilentChiefNoReplyText(value: string | undefined): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const normalized =
+    trimmed.startsWith("`") && trimmed.endsWith("`") && trimmed.length > 2
+      ? trimmed.slice(1, -1).trim()
+      : trimmed;
+  return normalized === "NO_REPLY";
+}
+
+function isSilentChiefNoReplyPayloads(payloads: ReplyLike[]): boolean {
+  const texts = payloads
+    .map((payload) => (typeof payload.text === "string" ? payload.text.trim() : ""))
+    .filter(Boolean);
+  return texts.length > 0 && texts.every((text) => isSilentChiefNoReplyText(text));
+}
+
+function resolveChiefTaskHeadlineFromFields(fields: {
+  currentGoal?: string;
+  intentSummary?: string;
+  successCriteria?: string;
+  title?: string;
+  promptPreview?: string;
+}): { kind: ChiefTaskHeadlineKind; text: string } {
+  const candidates: Array<{ kind: ChiefTaskHeadlineKind; value?: string; maxLength: number }> = [
+    { kind: "goal", value: fields.currentGoal, maxLength: 220 },
+    { kind: "intent", value: fields.intentSummary, maxLength: 220 },
+    { kind: "success", value: fields.successCriteria, maxLength: 280 },
+    { kind: "title", value: fields.title, maxLength: 180 },
+    { kind: "request", value: fields.promptPreview, maxLength: 220 },
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizePreview(candidate.value, candidate.maxLength);
+    if (normalized) {
+      return { kind: candidate.kind, text: normalized };
+    }
+  }
+  return { kind: "title", text: "Chief task" };
+}
+
+export function resolveChiefTaskHeadline(
+  task: Pick<ChiefTaskRecord, "currentGoal" | "intentSummary" | "successCriteria" | "title" | "promptPreview">,
+): { kind: ChiefTaskHeadlineKind; text: string } {
+  return resolveChiefTaskHeadlineFromFields(task);
+}
+
 function mapChiefTaskStatusToPaperclipStatus(task: ChiefTaskRecord): PaperclipIssueStatus {
   if (task.status === "done") {
     return "done";
@@ -379,10 +437,13 @@ function mapChiefTaskStatusToPaperclipStatus(task: ChiefTaskRecord): PaperclipIs
 }
 
 function buildPaperclipIssueComment(task: ChiefTaskRecord): string | undefined {
+  const headline = resolveChiefTaskHeadline(task);
   const details = [
+    `Task ${headline.kind}: ${headline.text}`,
     task.latestMilestone ? `Latest milestone: ${task.latestMilestone}` : undefined,
     task.nextStep ? `Next step: ${task.nextStep}` : undefined,
     task.releaseGateStatus ? `Release gate: ${task.releaseGateStatus}` : undefined,
+    task.syncDriftReason ? `Sync drift: ${task.syncDriftReason}` : undefined,
   ]
     .filter(Boolean)
     .join("\n");
@@ -451,6 +512,7 @@ async function ensureChiefTaskAuthority(params: {
   verificationEvidence?: string[];
   sourceMessageId?: string;
   createdByApproval?: boolean;
+  paperclipRunId?: string;
 }): Promise<string | undefined> {
   const existingId = params.paperclipIssueId?.trim();
   if (existingId) {
@@ -488,6 +550,7 @@ async function ensureChiefTaskAuthority(params: {
     title,
     description,
     status: "todo",
+    runId: params.paperclipRunId,
   });
   return created.id;
 }
@@ -507,10 +570,16 @@ function shouldSyncPaperclipIssueForTask(task: ChiefTaskRecord): boolean {
   );
 }
 
-async function syncPaperclipIssueForTask(task: ChiefTaskRecord): Promise<void> {
+type PaperclipSyncOutcome = {
+  ok: boolean;
+  driftReason?: string;
+  issueMissing?: boolean;
+};
+
+async function syncPaperclipIssueForTask(task: ChiefTaskRecord): Promise<PaperclipSyncOutcome> {
   const issueId = task.paperclipIssueId?.trim();
   if (!issueId || !shouldSyncPaperclipIssueForTask(task)) {
-    return;
+    return { ok: true };
   }
   try {
     await updatePaperclipTrackedIssue({
@@ -518,13 +587,52 @@ async function syncPaperclipIssueForTask(task: ChiefTaskRecord): Promise<void> {
       status: mapChiefTaskStatusToPaperclipStatus(task),
       description: buildPaperclipIssueDescriptionFromTask(task),
       comment: buildPaperclipIssueComment(task),
+      runId: task.paperclipRunId,
     });
+    return { ok: true };
   } catch (error) {
-    if (isPaperclipRunIdRequiredError(error) || isPaperclipIssueNotFoundError(error)) {
-      return;
+    if (isPaperclipRunIdRequiredError(error)) {
+      return {
+        ok: false,
+        driftReason:
+          "paperclip terminal sync requires X-Paperclip-Run-Id; local task was terminalized but remote issue still needs sync",
+      };
+    }
+    if (isPaperclipIssueNotFoundError(error)) {
+      return {
+        ok: false,
+        issueMissing: true,
+        driftReason: "paperclip authority issue is missing remotely; local task is keeping the last known issue id",
+      };
+    }
+    if (isPaperclipIssueRunOwnershipConflictError(error)) {
+      return {
+        ok: false,
+        driftReason:
+          "paperclip terminal sync hit an issue run ownership conflict; local task is terminal but the remote issue still belongs to another run",
+      };
     }
     throw error;
   }
+}
+
+function applyPaperclipSyncOutcome(
+  task: ChiefTaskRecord,
+  outcome: PaperclipSyncOutcome | undefined,
+): ChiefTaskRecord {
+  if (!outcome || outcome.ok) {
+    if (!task.syncDriftReason) {
+      return task;
+    }
+    return {
+      ...task,
+      syncDriftReason: undefined,
+    };
+  }
+  return {
+    ...task,
+    syncDriftReason: outcome.driftReason,
+  };
 }
 
 function isContinuableTaskStatus(status: ChiefTaskStatus): boolean {
@@ -563,6 +671,7 @@ function normalizeTaskRecord(taskId: string, task: ChiefTaskRecord): ChiefTaskRe
         .map((value) => (typeof value === "string" ? value.trim() : ""))
         .filter(Boolean)
     : [];
+  const headline = resolveChiefTaskHeadlineFromFields(task);
   return {
     ...task,
     taskId: task.taskId || taskId,
@@ -587,6 +696,15 @@ function normalizeTaskRecord(taskId: string, task: ChiefTaskRecord): ChiefTaskRe
     intentSummary: normalizePreview(task.intentSummary, 220),
     currentGoal: normalizePreview(task.currentGoal, 220),
     successCriteria: normalizePreview(task.successCriteria, 280),
+    taskHeadline: normalizePreview(task.taskHeadline, 280) ?? headline.text,
+    taskHeadlineKind:
+      task.taskHeadlineKind === "goal" ||
+      task.taskHeadlineKind === "intent" ||
+      task.taskHeadlineKind === "success" ||
+      task.taskHeadlineKind === "title" ||
+      task.taskHeadlineKind === "request"
+        ? task.taskHeadlineKind
+        : headline.kind,
     verificationEvidence: normalizeVerificationEvidence(task.verificationEvidence),
     riskLevel: normalizeRiskLevel(task.riskLevel),
     confidence: normalizeConfidence(task.confidence),
@@ -597,6 +715,8 @@ function normalizeTaskRecord(taskId: string, task: ChiefTaskRecord): ChiefTaskRe
         ? task.lastUserProgressReportAt
         : undefined,
     releaseGateStatus: normalizeReleaseGateStatus(task.releaseGateStatus),
+    paperclipRunId: normalizePreview(task.paperclipRunId, 160),
+    syncDriftReason: normalizePreview(task.syncDriftReason, 280),
     continuityDecision:
       task.continuityDecision === "direct_answer" ||
       task.continuityDecision === "attach_existing_task" ||
@@ -849,6 +969,13 @@ function shouldCascadeChiefTaskResult(anchor: ChiefTaskRecord, candidate: ChiefT
     anchor.paperclipIssueId?.trim() &&
     candidate.paperclipIssueId?.trim() &&
     anchor.paperclipIssueId.trim() === candidate.paperclipIssueId.trim()
+  ) {
+    return true;
+  }
+  if (
+    anchor.programId?.trim() &&
+    candidate.programId?.trim() &&
+    anchor.programId.trim() === candidate.programId.trim()
   ) {
     return true;
   }
@@ -1154,6 +1281,7 @@ export async function recordChiefTaskStart(params: {
   latestMilestone?: string;
   lastUserProgressReportAt?: number;
   releaseGateStatus?: ChiefTaskReleaseGateStatus;
+  paperclipRunId?: string;
   continuityDecision?: InboundReceiptContinuityDecision;
   createdByApproval?: boolean;
   nowMs?: number;
@@ -1294,6 +1422,21 @@ export async function recordChiefTaskStart(params: {
       preservedTaskContext?.latestMilestone ??
       previous?.latestMilestone ??
       "Intake completed; execution started.";
+    const resolvedPaperclipRunId =
+      normalizePreview(params.paperclipRunId, 160) ??
+      preservedTaskContext?.paperclipRunId ??
+      previous?.paperclipRunId;
+    const resolvedHeadline = resolveChiefTaskHeadlineFromFields({
+      currentGoal: resolvedCurrentGoal,
+      intentSummary:
+        normalizePreview(params.intentSummary, 220) ??
+        preservedTaskContext?.intentSummary ??
+        previous?.intentSummary,
+      successCriteria: resolvedSuccessCriteria,
+      title: preservedTaskContext?.title ?? normalizeTitle(params.prompt),
+      promptPreview:
+        (preservedTaskContext?.promptPreview ?? normalizePreview(params.prompt)) ?? "Chief task",
+    });
     const resolvedLastUserProgressReportAt =
       typeof params.lastUserProgressReportAt === "number" &&
       Number.isFinite(params.lastUserProgressReportAt)
@@ -1341,6 +1484,7 @@ export async function recordChiefTaskStart(params: {
         params.createdByApproval === true ||
         preservedTaskContext?.createdByApproval === true ||
         previous?.createdByApproval === true,
+      paperclipRunId: resolvedPaperclipRunId,
     });
     const container = deriveTaskContainer(source, paperclipIssueId);
     const next: ChiefTaskRecord = {
@@ -1381,12 +1525,16 @@ export async function recordChiefTaskStart(params: {
         previous?.intentSummary,
       currentGoal: resolvedCurrentGoal,
       successCriteria: resolvedSuccessCriteria,
+      taskHeadline: resolvedHeadline.text,
+      taskHeadlineKind: resolvedHeadline.kind,
       verificationEvidence: resolvedVerificationEvidence,
       riskLevel: resolvedRiskLevel,
       confidence: resolvedConfidence,
       latestMilestone: resolvedLatestMilestone,
       lastUserProgressReportAt: resolvedLastUserProgressReportAt,
       releaseGateStatus: resolvedReleaseGateStatus,
+      paperclipRunId: resolvedPaperclipRunId,
+      syncDriftReason: previous?.syncDriftReason,
       continuityDecision,
       createdByApproval:
         params.createdByApproval === true ||
@@ -1434,10 +1582,16 @@ export async function recordChiefTaskStart(params: {
       },
       stage: "task_created",
     });
+    let syncedNext = next;
     if (next.paperclipIssueId) {
-      await syncPaperclipIssueForTask(next);
+      const syncOutcome = await syncPaperclipIssueForTask(next);
+      syncedNext = applyPaperclipSyncOutcome(next, syncOutcome);
+      if (syncedNext !== next) {
+        ledger.tasks[taskId] = syncedNext;
+        await writeLedger(filePath, ledger);
+      }
     }
-    return next;
+    return syncedNext;
   });
 }
 
@@ -1453,6 +1607,7 @@ export async function recordChiefTaskResult(params: {
   releaseGateStatus?: ChiefTaskReleaseGateStatus;
   latestMilestone?: string;
   lastUserProgressReportAt?: number;
+  paperclipRunId?: string;
   nowMs?: number;
 }): Promise<ChiefTaskRecord | null> {
   if (!isChiefAgentId(params.agentId) || !params.sessionKey.trim()) {
@@ -1484,6 +1639,7 @@ export async function recordChiefTaskResult(params: {
         .filter((value): value is string => Boolean(value))
         .join("\n"),
     );
+    const silentNoReply = isSilentChiefNoReplyPayloads(payloads);
     const inferredStatus = inferChiefTaskStatusFromPayloads(payloads);
     const deliveryConfirmed = params.deliveryConfirmed !== false;
     const previewOrDeliveryEvidence =
@@ -1493,18 +1649,29 @@ export async function recordChiefTaskResult(params: {
           Array.isArray(payload.mediaUrls) && payload.mediaUrls.some((value) => Boolean(value?.trim())),
       ) ||
       (deliveryConfirmed && payloads.length === 0);
+    const invalidTrackedNoReply =
+      requiresConfirmedOutboundDelivery(task) &&
+      !deliveryConfirmed &&
+      (!previewOrDeliveryEvidence || silentNoReply);
+    const resolvedPaperclipRunId =
+      normalizePreview(params.paperclipRunId, 160) ?? task.paperclipRunId;
+    const headline = resolveChiefTaskHeadline(task);
     const verificationEvidence = normalizeVerificationEvidence([
       ...(task.verificationEvidence ?? []),
       ...(params.verificationEvidence ?? []),
       deliveryConfirmed ? "delivery_confirmed" : "delivery_pending",
       previewOrDeliveryEvidence ? "final_preview_present" : "final_preview_missing",
+      ...(silentNoReply ? ["silent_no_reply_detected"] : []),
+      ...(invalidTrackedNoReply ? ["invalid_no_reply_on_resume"] : []),
     ]);
     const status =
-      ((!deliveryConfirmed || !previewOrDeliveryEvidence) &&
+      invalidTrackedNoReply
+        ? "blocked"
+        : ((!deliveryConfirmed || !previewOrDeliveryEvidence) &&
       requiresConfirmedOutboundDelivery(task) &&
       (inferredStatus === "done" || inferredStatus === "awaiting_input" || inferredStatus === "blocked"))
-        ? "in_progress"
-        : inferredStatus;
+          ? "in_progress"
+          : inferredStatus;
     const next: ChiefTaskRecord = {
       ...task,
       status,
@@ -1514,33 +1681,49 @@ export async function recordChiefTaskResult(params: {
       activeAgents: status === "done" ? ["chief"] : task.activeAgents,
       currentOwner: "chief",
       lastResponsePreview: preview ?? task.lastResponsePreview,
+      taskHeadline: task.taskHeadline ?? headline.text,
+      taskHeadlineKind: task.taskHeadlineKind ?? headline.kind,
       verificationEvidence,
       latestMilestone:
         normalizePreview(params.latestMilestone, 220) ??
-        (status === "done"
-          ? "Release gate passed; final delivery completed."
-          : status === "awaiting_input"
-            ? "Chief is waiting for required user input."
-            : status === "blocked"
-              ? "Chief reached a blocker that needs intervention."
-              : task.latestMilestone),
+        (invalidTrackedNoReply
+          ? "Chief ended without a deliverable user-facing terminal reply; recovery summary is required."
+          : status === "done"
+            ? "Release gate passed; final delivery completed."
+            : status === "awaiting_input"
+              ? "Chief is waiting for required user input."
+              : status === "blocked"
+                ? "Chief reached a blocker that needs intervention."
+                : task.latestMilestone),
       releaseGateStatus:
         normalizeReleaseGateStatus(params.releaseGateStatus) ??
-        (status === "done"
-          ? "passed"
-          : status === "blocked"
-            ? "blocked"
-            : status === "awaiting_input"
-              ? task.releaseGateStatus ?? "reviewing"
-              : task.releaseGateStatus),
+        (invalidTrackedNoReply
+          ? "blocked"
+          : status === "done"
+            ? "passed"
+            : status === "blocked"
+              ? "blocked"
+              : status === "awaiting_input"
+                ? task.releaseGateStatus ?? "reviewing"
+                : task.releaseGateStatus),
       lastUserProgressReportAt:
         typeof params.lastUserProgressReportAt === "number" &&
         Number.isFinite(params.lastUserProgressReportAt)
           ? params.lastUserProgressReportAt
           : task.lastUserProgressReportAt,
+      paperclipRunId: resolvedPaperclipRunId,
+      syncDriftReason: task.syncDriftReason,
       ...(status === "done" ? { completedAt: nowMs } : {}),
       ...(status === "done" ? { lastError: undefined } : {}),
-      ...(status !== inferredStatus
+      ...(invalidTrackedNoReply
+        ? {
+            lastError:
+              "Chief run ended without a deliverable terminal reply for this tracked Telegram task.",
+            lastFallbackAction: "invalid_no_reply_on_resume",
+            nextStep:
+              "Send a structured recovery update with `[BLOCKED]`, `[WAITING]`, `[STOP]`, or `[COMPLETE]` instead of NO_REPLY.",
+          }
+        : status !== inferredStatus
         ? {
             nextStep: !deliveryConfirmed
               ? "Await confirmed outbound delivery before terminalizing this Telegram task."
@@ -1607,9 +1790,21 @@ export async function recordChiefTaskResult(params: {
         createdByApproval: next.createdByApproval,
       },
     });
-    await syncPaperclipIssueForTask(next);
+    const nextSyncOutcome = await syncPaperclipIssueForTask(next);
+    const syncedNext = applyPaperclipSyncOutcome(next, nextSyncOutcome);
+    if (syncedNext !== next) {
+      ledger.tasks[next.taskId] = syncedNext;
+    }
     for (const relatedTask of relatedTasks) {
-      const cascaded = ledger.tasks[relatedTask.taskId];
+      const cascadedCurrent = ledger.tasks[relatedTask.taskId];
+      if (!cascadedCurrent) {
+        continue;
+      }
+      const cascadedSyncOutcome = await syncPaperclipIssueForTask(cascadedCurrent);
+      const cascaded = applyPaperclipSyncOutcome(cascadedCurrent, cascadedSyncOutcome);
+      if (cascaded !== cascadedCurrent) {
+        ledger.tasks[relatedTask.taskId] = cascaded;
+      }
       if (!cascaded) {
         continue;
       }
@@ -1636,9 +1831,9 @@ export async function recordChiefTaskResult(params: {
           createdByApproval: cascaded.createdByApproval,
         },
       });
-      await syncPaperclipIssueForTask(cascaded);
     }
-    return next;
+    await writeLedger(filePath, ledger);
+    return ledger.tasks[taskId] ?? syncedNext;
   });
 }
 
@@ -1662,6 +1857,7 @@ export async function recordChiefTaskProgress(params: {
   lastFallbackAction?: string;
   lastCompactionCause?: string;
   nextStep?: string;
+  paperclipRunId?: string;
   nowMs?: number;
 }): Promise<ChiefTaskRecord | null> {
   if (!isChiefAgentId(params.agentId) || !params.sessionKey.trim()) {
@@ -1680,6 +1876,7 @@ export async function recordChiefTaskProgress(params: {
     if (!task) {
       return null;
     }
+    const headline = resolveChiefTaskHeadline(task);
     const next: ChiefTaskRecord = {
       ...task,
       updatedAt: nowMs,
@@ -1697,6 +1894,8 @@ export async function recordChiefTaskProgress(params: {
       lastFallbackAction: params.lastFallbackAction?.trim() || task.lastFallbackAction,
       lastCompactionCause: params.lastCompactionCause?.trim() || task.lastCompactionCause,
       latestMilestone: normalizePreview(params.latestMilestone, 220) ?? task.latestMilestone,
+      taskHeadline: task.taskHeadline ?? headline.text,
+      taskHeadlineKind: task.taskHeadlineKind ?? headline.kind,
       verificationEvidence: normalizeVerificationEvidence([
         ...(task.verificationEvidence ?? []),
         ...(params.verificationEvidence ?? []),
@@ -1711,6 +1910,7 @@ export async function recordChiefTaskProgress(params: {
       releaseGateStatus:
         normalizeReleaseGateStatus(params.releaseGateStatus) ?? task.releaseGateStatus,
       nextStep: normalizePreview(params.nextStep, 220) ?? task.nextStep,
+      paperclipRunId: normalizePreview(params.paperclipRunId, 160) ?? task.paperclipRunId,
     };
     ledger.tasks[taskId] = next;
     ledger.activeBySessionKey[sessionKey] = taskId;
@@ -1741,10 +1941,17 @@ export async function recordChiefTaskProgress(params: {
     if (
       params.releaseGateStatus != null ||
       params.latestMilestone != null ||
+      params.paperclipRunId != null ||
       (params.phase != null &&
         (params.phase === "reviewing" || params.phase === "awaiting_input" || params.phase === "blocked"))
     ) {
-      await syncPaperclipIssueForTask(next);
+      const syncOutcome = await syncPaperclipIssueForTask(next);
+      const syncedNext = applyPaperclipSyncOutcome(next, syncOutcome);
+      if (syncedNext !== next) {
+        ledger.tasks[taskId] = syncedNext;
+        await writeLedger(filePath, ledger);
+        return syncedNext;
+      }
     }
     return next;
   });
@@ -1756,6 +1963,7 @@ export async function recordChiefTaskFailure(params: {
   taskId?: string;
   sessionKey: string;
   error: unknown;
+  paperclipRunId?: string;
   nowMs?: number;
 }): Promise<ChiefTaskRecord | null> {
   if (!isChiefAgentId(params.agentId) || !params.sessionKey.trim()) {
@@ -1785,6 +1993,7 @@ export async function recordChiefTaskFailure(params: {
       latestMilestone: "Chief execution failed and needs recovery.",
       riskLevel: "high",
       releaseGateStatus: "blocked",
+      paperclipRunId: normalizePreview(params.paperclipRunId, 160) ?? task.paperclipRunId,
     };
     ledger.tasks[taskId] = next;
     ledger.activeBySessionKey[sessionKey] = taskId;
@@ -1813,8 +2022,13 @@ export async function recordChiefTaskFailure(params: {
       },
       stage: "executing",
     });
-    await syncPaperclipIssueForTask(next);
-    return next;
+    const syncOutcome = await syncPaperclipIssueForTask(next);
+    const syncedNext = applyPaperclipSyncOutcome(next, syncOutcome);
+    if (syncedNext !== next) {
+      ledger.tasks[taskId] = syncedNext;
+      await writeLedger(filePath, ledger);
+    }
+    return syncedNext;
   });
 }
 
@@ -1825,6 +2039,7 @@ export async function recordChiefTaskRecovery(params: {
   fallbackStage: string;
   action: string;
   activeAgents?: string[];
+  paperclipRunId?: string;
   nowMs?: number;
 }): Promise<ChiefTaskRecord | null> {
   if (!isChiefAgentId(params.agentId) || !params.taskId.trim()) {
@@ -1852,6 +2067,7 @@ export async function recordChiefTaskRecovery(params: {
           ?.map((value) => value.trim())
           .filter(Boolean)
           .slice() ?? task.activeAgents,
+      paperclipRunId: normalizePreview(params.paperclipRunId, 160) ?? task.paperclipRunId,
     };
     ledger.tasks[params.taskId] = next;
     ledger.activeBySessionKey[next.sessionKey] = next.taskId;
@@ -1880,8 +2096,13 @@ export async function recordChiefTaskRecovery(params: {
       },
       stage: "executing",
     });
-    await syncPaperclipIssueForTask(next);
-    return next;
+    const syncOutcome = await syncPaperclipIssueForTask(next);
+    const syncedNext = applyPaperclipSyncOutcome(next, syncOutcome);
+    if (syncedNext !== next) {
+      ledger.tasks[params.taskId] = syncedNext;
+      await writeLedger(filePath, ledger);
+    }
+    return syncedNext;
   });
 }
 
@@ -2003,7 +2224,15 @@ export async function reconcileChiefTaskAuthority(params: {
             createdByApproval: task.createdByApproval,
           },
         });
-        await syncPaperclipIssueForTask(task);
+        const syncOutcome = await syncPaperclipIssueForTask(task);
+        const syncedTask = applyPaperclipSyncOutcome(task, syncOutcome);
+        if (syncedTask !== task) {
+          ledger.tasks[task.taskId] = syncedTask;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await writeLedger(filePath, ledger);
       }
     }
 

@@ -17,6 +17,7 @@ import {
   recordChiefTaskProgress,
   recordChiefTaskRecovery,
   recordChiefTaskResult,
+  resolveChiefTaskHeadline,
   type ChiefTaskRecord,
 } from "./chief-task-ledger.js";
 import { getInboundReceiptRecord, type InboundReceiptRecord } from "./inbound-receipt-ledger.js";
@@ -36,13 +37,16 @@ export type ChiefContinuationResumeResult = {
 };
 
 function buildChiefContinuationPrompt(task: ChiefTaskRecord): string {
+  const headline = resolveChiefTaskHeadline(task);
   const lines = [
     "Resume the unfinished task below and continue it until it is finished, blocked, or clearly awaiting user input.",
     "Do not start unrelated work.",
+    "Do not reply with NO_REPLY for this tracked user-facing task.",
     "",
     `Task ID: ${task.taskId}`,
     `Source: ${task.source}`,
     `Session: ${task.sessionKey}`,
+    `${headline.kind === "goal" ? "Goal" : headline.kind === "intent" ? "Intent" : headline.kind === "success" ? "Success criteria" : headline.kind === "request" ? "Task request" : "Task summary"}: ${headline.text}`,
     `Task summary: ${task.title}`,
     `Original request: ${task.promptPreview}`,
   ];
@@ -56,6 +60,7 @@ function buildChiefContinuationPrompt(task: ChiefTaskRecord): string {
     "",
     "If the task is already complete, provide the final answer only once.",
     "If the task is blocked or waiting for input, say exactly what is missing.",
+    "If you cannot finish, emit a concise terminal summary with the actual blocker, latest milestone, and next step.",
   );
   return lines.join("\n");
 }

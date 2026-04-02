@@ -16,6 +16,7 @@ type ResolvePreferredOpenClawTmpDirOptions = {
   };
   mkdirSync?: (path: string, opts: { recursive: boolean; mode?: number }) => void;
   getuid?: () => number | undefined;
+  platform?: NodeJS.Platform;
   tmpdir?: () => string;
   warn?: (message: string) => void;
 };
@@ -49,6 +50,7 @@ export function resolvePreferredOpenClawTmpDir(
       }
     });
   const tmpdir = typeof options.tmpdir === "function" ? options.tmpdir : getOsTmpDir;
+  const platform = options.platform ?? process.platform;
   const uid = getuid();
 
   const isSecureDirForUser = (st: { mode?: number; uid?: number }): boolean => {
@@ -139,6 +141,12 @@ export function resolvePreferredOpenClawTmpDir(
     }
     return fallbackPath;
   };
+
+  // On Windows, prefer the OS temp root instead of trying to materialize a Unix-style
+  // /tmp/openclaw path that resolves to C:\tmp\openclaw and surprises operators.
+  if (platform === "win32") {
+    return ensureTrustedFallbackDir();
+  }
 
   const existingPreferredState = resolveDirState(POSIX_OPENCLAW_TMP_DIR);
   if (existingPreferredState === "available") {

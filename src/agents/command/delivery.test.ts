@@ -245,6 +245,47 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(delivered.payloads[0]?.text ?? "").toContain("`[STOP]:");
   });
 
+  it("prepends Telegram task context and structured reason fields to no-reply fallbacks", async () => {
+    const runtime = {
+      log: vi.fn(),
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "Hãy sửa lỗi watchdog và paperclip.",
+        channel: "telegram",
+        chiefTaskId: "paperclip:OPE-41",
+        paperclipIssueId: "OPE-41",
+        inboundReceiptId: "telegram|default|telegram:523353610|main|1503|chief",
+        currentGoal: "Fix watchdog/paperclip terminal sync drift",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [],
+      result: createResult({
+        meta: {
+          durationMs: 120_000,
+          stopReason: "stop",
+        },
+      }),
+    });
+
+    expect(delivered.payloads[0]?.text ?? "").toContain("`Task ID`: `paperclip:OPE-41`");
+    expect(delivered.payloads[0]?.text ?? "").toContain("`Paperclip issue`: `OPE-41`");
+    expect(delivered.payloads[0]?.text ?? "").toContain(
+      "`Receipt ID`: `telegram|default|telegram:523353610|main|1503|chief`",
+    );
+    expect(delivered.payloads[0]?.text ?? "").toContain(
+      "`Goal`: `Fix watchdog/paperclip terminal sync drift`",
+    );
+    expect(delivered.payloads[0]?.text ?? "").toContain("`Reason`:");
+    expect(delivered.payloads[0]?.text ?? "").toContain("`Next`:");
+    expect(delivered.payloads[0]?.text ?? "").toContain("`[STOP]:");
+  });
+
   it("emits WORKING status with Vietnamese diacritics for tool-call continuations", async () => {
     const runtime = {
       log: vi.fn(),

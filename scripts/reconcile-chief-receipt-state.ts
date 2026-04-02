@@ -594,6 +594,27 @@ async function main() {
       continue;
     }
     let changed = false;
+    const localTerminal = isTerminalTask(task);
+    const remoteTerminal = taskStatus === "done" || taskStatus === "blocked";
+    if (localTerminal && !remoteTerminal) {
+      const driftReason =
+        normalizePreview(
+          `paperclip issue ${issueId} remains ${issue?.status ?? "in_progress"} while local task is ${task.status}`,
+          220,
+        ) ?? "paperclip_issue_status_drift";
+      if (task.syncDriftReason !== driftReason) {
+        task.syncDriftReason = driftReason;
+        changed = true;
+      }
+      if (changed) {
+        summary.repairedTaskIds.push(task.taskId);
+      }
+      continue;
+    }
+    if (task.syncDriftReason?.trim()) {
+      task.syncDriftReason = undefined;
+      changed = true;
+    }
     const issueProgressAt =
       parseTimestampMs(issue?.completedAt) ??
       parseTimestampMs(issue?.updatedAt) ??

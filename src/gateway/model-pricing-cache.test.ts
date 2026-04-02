@@ -298,4 +298,69 @@ describe("model-pricing-cache", () => {
     stop();
     vi.useRealTimers();
   });
+
+  it("retries after bootstrap HTTP 408 without surfacing a warning-level failure", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: { message: "timeout" },
+          }),
+          {
+            status: 408,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "anthropic/claude-opus-4.6",
+                pricing: {
+                  prompt: "0.000005",
+                  completion: "0.000025",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+
+    const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+    await vi.runAllTicks();
+
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("pricing bootstrap failed"));
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(
+      getCachedGatewayModelPricing({ provider: "anthropic", model: "claude-opus-4-6" }),
+    ).toEqual({
+      input: 5,
+      output: 25,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+
+    stop();
+    vi.useRealTimers();
+  });
 });

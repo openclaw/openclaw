@@ -306,7 +306,7 @@ function logToFile(
 }
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
-  let fileLogger: TsLogger<LogObj> | null = null;
+  const getFileLogger = (): TsLogger<LogObj> => getChildLogger({ subsystem });
 
   const logger: SubsystemLogger = {
     subsystem,
@@ -345,10 +345,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
       }
       if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
+        logToFile(getFileLogger(), level, message, fileMeta);
       }
       if (!consoleEnabled) {
         return;
@@ -397,10 +394,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
       }
       if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
+        logToFile(getFileLogger(), level, message, fileMeta);
       }
       if (!consoleEnabled) {
         return;
@@ -449,10 +443,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
       }
       if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
+        logToFile(getFileLogger(), level, message, fileMeta);
       }
       if (!consoleEnabled) {
         return;
@@ -501,10 +492,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
       }
       if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
+        logToFile(getFileLogger(), level, message, fileMeta);
       }
       if (!consoleEnabled) {
         return;
@@ -553,10 +541,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
       }
       if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
+        logToFile(getFileLogger(), level, message, fileMeta);
       }
       if (!consoleEnabled) {
         return;
@@ -605,10 +590,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
       }
       if (fileEnabled) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, level, message, fileMeta);
+        logToFile(getFileLogger(), level, message, fileMeta);
       }
       if (!consoleEnabled) {
         return;
@@ -637,10 +619,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, "info", message, { raw: true });
+        logToFile(getFileLogger(), "info", message, { raw: true });
       }
       if (
         shouldLogToConsole("info", { level: getConsoleSettings().level }) &&

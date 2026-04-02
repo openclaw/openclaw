@@ -768,6 +768,7 @@ async function agentCommandInternal(
             latestMilestone: opts.latestMilestone,
             lastUserProgressReportAt: opts.lastUserProgressReportAt,
             releaseGateStatus: opts.releaseGateStatus,
+            paperclipRunId: runId,
             continuityDecision: opts.continuityDecision,
             createdByApproval: opts.createdByApproval,
           })
@@ -778,7 +779,10 @@ async function agentCommandInternal(
       if (!shouldTrackChiefTask) {
         return;
       }
-      await recordChiefTaskProgress(args);
+      await recordChiefTaskProgress({
+        ...args,
+        paperclipRunId: args.paperclipRunId ?? runId,
+      });
     };
     const trackChiefTaskResult = async (
       args: Parameters<typeof recordChiefTaskResult>[0],
@@ -786,7 +790,10 @@ async function agentCommandInternal(
       if (!shouldTrackChiefTask) {
         return;
       }
-      await recordChiefTaskResult(args);
+      await recordChiefTaskResult({
+        ...args,
+        paperclipRunId: args.paperclipRunId ?? runId,
+      });
     };
     const trackChiefTaskRecovery = async (
       args: Parameters<typeof recordChiefTaskRecovery>[0],
@@ -794,7 +801,10 @@ async function agentCommandInternal(
       if (!shouldTrackChiefTask) {
         return;
       }
-      await recordChiefTaskRecovery(args);
+      await recordChiefTaskRecovery({
+        ...args,
+        paperclipRunId: args.paperclipRunId ?? runId,
+      });
     };
     const trackChiefTaskFailure = async (
       args: Parameters<typeof recordChiefTaskFailure>[0],
@@ -802,7 +812,10 @@ async function agentCommandInternal(
       if (!shouldTrackChiefTask) {
         return;
       }
-      await recordChiefTaskFailure(args);
+      await recordChiefTaskFailure({
+        ...args,
+        paperclipRunId: args.paperclipRunId ?? runId,
+      });
     };
     const chiefTaskRecord = await trackChiefTaskStart();
     if (chiefTaskRecord?.taskId) {
@@ -1045,11 +1058,13 @@ async function agentCommandInternal(
     }
 
     const payloads = result.payloads ?? [];
+    const trackedDeliveryOpts =
+      chiefTaskRecord?.taskId != null ? { ...opts, chiefTaskId: chiefTaskRecord.taskId } : opts;
     const deliveryResult = await deliverAgentCommandResult({
       cfg,
       deps,
       runtime,
-      opts,
+      opts: trackedDeliveryOpts,
       outboundSession,
       sessionEntry,
       result,

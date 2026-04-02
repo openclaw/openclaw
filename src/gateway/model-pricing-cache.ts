@@ -385,6 +385,13 @@ function isTimeoutLikeError(error: unknown): boolean {
   return /timeout|aborted due to timeout/i.test(String(error));
 }
 
+function isRetryableBootstrapPricingError(error: unknown): boolean {
+  if (isTimeoutLikeError(error)) {
+    return true;
+  }
+  return /OpenRouter \/models failed: HTTP 408/i.test(String(error));
+}
+
 async function runGatewayModelPricingRefresh(
   params: { config: OpenClawConfig; fetchImpl?: typeof fetch },
   mode: "bootstrap" | "refresh",
@@ -392,7 +399,7 @@ async function runGatewayModelPricingRefresh(
   try {
     await refreshGatewayModelPricingCache(params);
   } catch (error: unknown) {
-    if (mode === "bootstrap" && isTimeoutLikeError(error)) {
+    if (mode === "bootstrap" && isRetryableBootstrapPricingError(error)) {
       log.info(
         `pricing bootstrap timed out; continuing without live pricing cache and retrying in ${Math.round(RETRY_TTL_MS / 60_000)}m`,
       );

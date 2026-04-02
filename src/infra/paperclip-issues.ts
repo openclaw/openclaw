@@ -40,6 +40,11 @@ export function isPaperclipIssueNotFoundError(error: unknown): boolean {
   return /Paperclip request failed \(404\)/i.test(message) && /Issue not found/i.test(message);
 }
 
+export function isPaperclipIssueRunOwnershipConflictError(error: unknown): boolean {
+  const message = String(error ?? "");
+  return /Paperclip request failed \(409\)/i.test(message) && /Issue run ownership conflict/i.test(message);
+}
+
 function resolveClaimedKeyPath(): string {
   return path.join(os.homedir(), ".openclaw", "workspace", "paperclip-claimed-api-key.json");
 }
@@ -61,12 +66,15 @@ async function paperclipRequest<T>(params: {
   method: "GET" | "POST" | "PATCH";
   endpoint: string;
   body?: unknown;
+  runId?: string;
 }): Promise<T> {
+  const runId = typeof params.runId === "string" ? params.runId.trim() : "";
   const response = await fetch(`${params.apiUrl ?? DEFAULT_PAPERCLIP_API_URL}${params.endpoint}`, {
     method: params.method,
     headers: {
       Authorization: `Bearer ${params.token}`,
       ...(params.body ? { "Content-Type": "application/json" } : {}),
+      ...(params.method !== "GET" && runId ? { "X-Paperclip-Run-Id": runId } : {}),
     },
     ...(params.body ? { body: JSON.stringify(params.body) } : {}),
   });
@@ -154,6 +162,7 @@ export async function createPaperclipTrackedIssue(params: {
   status?: PaperclipIssueStatus;
   assigneeAgentId?: string;
   apiUrl?: string;
+  runId?: string;
 }): Promise<CreatedPaperclipTrackedIssue> {
   const token = await loadPaperclipApiKey();
   const me = await paperclipRequest<PaperclipAgentMe>({
@@ -171,6 +180,7 @@ export async function createPaperclipTrackedIssue(params: {
     token,
     method: "POST",
     endpoint: `/companies/${companyId}/issues`,
+    runId: params.runId,
     body: {
       title: params.title.trim(),
       description: params.description,
@@ -200,6 +210,7 @@ export async function ensurePaperclipTrackedIssue(params: {
   status?: PaperclipIssueStatus;
   assigneeAgentId?: string;
   apiUrl?: string;
+  runId?: string;
 }): Promise<CreatedPaperclipTrackedIssue> {
   const existingId = params.paperclipIssueId?.trim();
   if (existingId) {
@@ -222,6 +233,7 @@ export async function updatePaperclipTrackedIssue(params: {
   assigneeAgentId?: string;
   comment?: string;
   apiUrl?: string;
+  runId?: string;
 }): Promise<CreatedPaperclipTrackedIssue> {
   const issueId = params.issueId.trim();
   if (!issueId) {
@@ -233,6 +245,7 @@ export async function updatePaperclipTrackedIssue(params: {
     token,
     method: "PATCH",
     endpoint: `/issues/${issueId}`,
+    runId: params.runId,
     body: {
       ...(typeof params.title === "string" ? { title: params.title.trim() } : {}),
       ...(typeof params.description === "string" ? { description: params.description } : {}),
