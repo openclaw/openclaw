@@ -373,15 +373,6 @@ describe("readLineWebhookRequestBody", () => {
 });
 
 describe("createLineWebhookMiddleware", () => {
-  it("rejects startup when channel secret is missing", () => {
-    expect(() =>
-      startLineWebhook({
-        channelSecret: "   ",
-        onEvents: async () => {},
-      }),
-    ).toThrow(/requires a non-empty channel secret/i);
-  });
-
   it.each([
     ["raw string body", JSON.stringify({ events: [{ type: "message" }] })],
     ["raw buffer body", Buffer.from(JSON.stringify({ events: [{ type: "follow" }] }), "utf-8")],

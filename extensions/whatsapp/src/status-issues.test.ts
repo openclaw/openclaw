@@ -65,15 +65,4 @@ describe("collectWhatsAppStatusIssues", () => {
       }),
     ]);
   });
-
-  it("skips disabled accounts", () => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        accountId: "disabled",
-        enabled: false,
-        linked: false,
-      },
-    ]);
-    expect(issues).toEqual([]);
-  });
 });

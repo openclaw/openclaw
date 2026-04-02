@@ -9,6 +9,7 @@ export type { ChannelMessageCapability } from "./message-capabilities.js";
 export type {
   ChannelActionAvailabilityState,
   ChannelApprovalAdapter,
+  ChannelApprovalCapability,
   ChannelApprovalForwardTarget,
   ChannelApprovalInitiatingSurfaceState,
   ChannelAuthAdapter,

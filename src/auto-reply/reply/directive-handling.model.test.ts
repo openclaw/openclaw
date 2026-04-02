@@ -17,6 +17,9 @@ import { persistInlineDirectives } from "./directive-handling.persist.js";
 const liveModelSwitchMocks = vi.hoisted(() => ({
   requestLiveSessionModelSwitch: vi.fn(),
 }));
+const queueMocks = vi.hoisted(() => ({
+  refreshQueuedFollowupSession: vi.fn(),
+}));
 
 // Mock dependencies for directive handling persistence.
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -40,6 +43,11 @@ vi.mock("../../infra/system-events.js", () => ({
 vi.mock("../../agents/live-model-switch.js", () => ({
   requestLiveSessionModelSwitch: (...args: unknown[]) =>
     liveModelSwitchMocks.requestLiveSessionModelSwitch(...args),
+}));
+
+vi.mock("./queue.js", () => ({
+  refreshQueuedFollowupSession: (...args: unknown[]) =>
+    queueMocks.refreshQueuedFollowupSession(...args),
 }));
 
 const TEST_AGENT_DIR = "/tmp/agent";
@@ -75,6 +83,7 @@ beforeEach(() => {
     },
   ]);
   liveModelSwitchMocks.requestLiveSessionModelSwitch.mockReset().mockReturnValue(false);
+  queueMocks.refreshQueuedFollowupSession.mockReset();
 });
 
 afterEach(() => {
@@ -507,7 +516,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text).not.toContain("failed");
   });
 
-  it("requests a live restart when /model mutates an active session", async () => {
+  it("does not request a live restart when /model mutates an active session", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();
 
@@ -518,14 +527,26 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       }),
     );
 
-    expect(liveModelSwitchMocks.requestLiveSessionModelSwitch).toHaveBeenCalledWith({
-      sessionEntry,
-      selection: {
-        provider: "openai",
-        model: "gpt-4o",
-        authProfileId: undefined,
-        authProfileIdSource: undefined,
-      },
+    expect(liveModelSwitchMocks.requestLiveSessionModelSwitch).not.toHaveBeenCalled();
+  });
+
+  it("retargets queued followups when /model mutates session state", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const sessionEntry = createSessionEntry();
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+      }),
+    );
+
+    expect(queueMocks.refreshQueuedFollowupSession).toHaveBeenCalledWith({
+      key: sessionKey,
+      nextProvider: "openai",
+      nextModel: "gpt-4o",
+      nextAuthProfileId: undefined,
+      nextAuthProfileIdSource: undefined,
     });
   });
 

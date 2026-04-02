@@ -481,6 +481,55 @@ Notes:
   </Accordion>
 </AccordionGroup>
 
+## Exec approvals in Slack
+
+Exec approval prompts can route natively through Slack using interactive buttons and interactions, instead of falling back to the Web UI or terminal. Approver authorization is enforced: only users identified as approvers can approve or deny requests through Slack.
+
+This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
+
+Config path:
+
+- `channels.slack.execApprovals.enabled`
+- `channels.slack.execApprovals.approvers` (optional; falls back to `commands.ownerAllowFrom` when possible)
+- `channels.slack.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
+- `agentFilter`, `sessionFilter`
+
+Slack auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one
+approver resolves. Set `enabled: false` to disable Slack as a native approval client explicitly.
+Set `enabled: true` to force native approvals on when approvers resolve.
+
+Default behavior with no explicit Slack exec approval config:
+
+```json5
+{
+  commands: {
+    ownerAllowFrom: ["slack:U12345678"],
+  },
+}
+```
+
+Explicit Slack-native config is only needed when you want to override approvers, add filters, or
+opt into origin-chat delivery:
+
+```json5
+{
+  channels: {
+    slack: {
+      execApprovals: {
+        enabled: true,
+        approvers: ["U12345678"],
+        target: "both",
+      },
+    },
+  },
+}
+```
+
+Shared `approvals.exec` forwarding is separate. Use it only when approval prompts must also route
+to other chats or explicit out-of-band targets.
+
+Same-chat `/approve` also works in Slack channels and DMs that already support commands. See [Exec approvals](/tools/exec-approvals) for the full approval forwarding model.
+
 ## Troubleshooting
 
 <AccordionGroup>

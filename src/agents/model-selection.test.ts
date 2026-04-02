@@ -284,7 +284,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -304,7 +304,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -323,7 +323,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -342,7 +342,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -350,6 +350,47 @@ describe("model-selection", () => {
           model: "anthropic/claude-sonnet-4-6",
         }),
       ).toBe("vercel-ai-gateway");
+    });
+
+    it("infers provider from configured provider catalogs when allowlist is absent", () => {
+      const cfg = {
+        models: {
+          providers: {
+            "qwen-dashscope": {
+              models: [{ id: "qwen-max" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "qwen-max",
+        }),
+      ).toBe("qwen-dashscope");
+    });
+
+    it("returns undefined when provider catalog matches are ambiguous", () => {
+      const cfg = {
+        models: {
+          providers: {
+            "qwen-dashscope": {
+              models: [{ id: "qwen-max" }],
+            },
+            modelstudio: {
+              models: [{ id: "qwen-max" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "qwen-max",
+        }),
+      ).toBeUndefined();
     });
   });
 

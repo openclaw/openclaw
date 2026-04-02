@@ -2,6 +2,8 @@
 
 export {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalDecision,
   type ExecApprovalRequest,
   type ExecApprovalRequestPayload,
@@ -19,6 +21,7 @@ export {
 export { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
 export {
   doesApprovalRequestMatchChannelAccount,
+  resolveApprovalRequestOriginTarget,
   resolveApprovalRequestAccountId,
   resolveApprovalRequestSessionTarget,
   resolveExecApprovalSessionTarget,
@@ -35,7 +38,22 @@ export {
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
 export { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers.js";
-export { createApproverRestrictedNativeApprovalAdapter } from "./approval-delivery-helpers.js";
+export {
+  createChannelExecApprovalProfile,
+  isChannelExecApprovalClientEnabledFromConfig,
+  isChannelExecApprovalTargetRecipient,
+} from "./approval-client-helpers.js";
+export {
+  createChannelApproverDmTargetResolver,
+  createChannelNativeOriginTargetResolver,
+} from "./approval-native-helpers.js";
+export { createChannelNativeApprovalRuntime } from "../infra/approval-native-runtime.js";
+export {
+  createApproverRestrictedNativeApprovalAdapter,
+  createApproverRestrictedNativeApprovalCapability,
+  createChannelApprovalCapability,
+  splitChannelApprovalCapability,
+} from "./approval-delivery-helpers.js";
 export { resolveApprovalApprovers } from "./approval-approvers.js";
 export {
   matchesApprovalRequestFilters,

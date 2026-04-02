@@ -400,8 +400,9 @@ function parseHostForAddressChecks(
     return null;
   }
   const normalizedHost = host.trim().toLowerCase();
-  if (normalizedHost === "localhost") {
-    return { isLocalhost: true, unbracketedHost: normalizedHost };
+  const canonicalHost = normalizedHost.replace(/\.+$/, "");
+  if (canonicalHost === "localhost") {
+    return { isLocalhost: true, unbracketedHost: canonicalHost };
   }
   return {
     isLocalhost: false,
