@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ProviderPlugin, WebSearchProviderPlugin } from "../types.js";
+import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "../types.js";
 
 type Lazy<T> = T | (() => T);
 
@@ -130,5 +130,48 @@ export function installWebSearchProviderContractSuite(params: {
     if (provider.runSetup) {
       expect(typeof provider.runSetup).toBe("function");
     }
+  });
+}
+
+export function installWebFetchProviderContractSuite(params: {
+  provider: Lazy<WebFetchProviderPlugin>;
+  credentialValue: Lazy<unknown>;
+}) {
+  it("satisfies the base web fetch provider contract", () => {
+    const provider = resolveLazy(params.provider);
+    const credentialValue = resolveLazy(params.credentialValue);
+
+    expect(provider.id).toMatch(/^[a-z0-9][a-z0-9-]*$/);
+    expect(provider.label.trim()).not.toBe("");
+    expect(provider.hint.trim()).not.toBe("");
+    expect(provider.placeholder.trim()).not.toBe("");
+    expect(provider.signupUrl.startsWith("https://")).toBe(true);
+    if (provider.docsUrl) {
+      expect(provider.docsUrl.startsWith("http")).toBe(true);
+    }
+
+    expect(provider.envVars).toEqual([...new Set(provider.envVars)]);
+    expect(provider.envVars.every((entry) => entry.trim().length > 0)).toBe(true);
+
+    const fetchConfigTarget: Record<string, unknown> = {};
+    provider.setCredentialValue(fetchConfigTarget, credentialValue);
+    expect(provider.getCredentialValue(fetchConfigTarget)).toEqual(credentialValue);
+
+    const config = {
+      tools: {
+        web: {
+          fetch: {
+            provider: provider.id,
+            ...fetchConfigTarget,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const tool = provider.createTool({ config, fetchConfig: fetchConfigTarget });
+
+    expect(tool).not.toBeNull();
+    expect(tool?.description.trim()).not.toBe("");
+    expect(tool?.parameters).toEqual(expect.any(Object));
+    expect(typeof tool?.execute).toBe("function");
   });
 }

@@ -10,6 +10,7 @@ import {
   resolveSlackStreamingMode,
   resolveTelegramPreviewStreamMode,
 } from "../config/discord-preview-streaming.js";
+import { migrateLegacyWebFetchConfig } from "../config/legacy-web-fetch.js";
 import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
 import { LEGACY_TALK_PROVIDER_ID, normalizeTalkSection } from "../config/talk.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../infra/google-api-base-url.js";
@@ -447,6 +448,11 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   if (webSearchMigration.changes.length > 0) {
     next = webSearchMigration.config;
     changes.push(...webSearchMigration.changes);
+  }
+  const webFetchMigration = migrateLegacyWebFetchConfig(next);
+  if (webFetchMigration.changes.length > 0) {
+    next = webFetchMigration.config;
+    changes.push(...webFetchMigration.changes);
   }
 
   const normalizeBrowserSsrFPolicyAlias = () => {
