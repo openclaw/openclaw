@@ -24,8 +24,13 @@ import {
 } from "@buape/carbon";
 import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
 import {
+  DISCORD_COMPONENT_CUSTOM_ID_KEY,
+  DISCORD_MODAL_CUSTOM_ID_KEY,
   buildDiscordComponentCustomId as buildDiscordComponentCustomIdImpl,
   buildDiscordModalCustomId as buildDiscordModalCustomIdImpl,
+  parseDiscordComponentCustomId,
+  parseDiscordComponentCustomIdForCarbon,
+  parseDiscordModalCustomId,
   parseDiscordModalCustomIdForCarbon as parseDiscordModalCustomIdForCarbonImpl,
 } from "./component-custom-id.js";
 export { buildDiscordComponentCustomId, buildDiscordModalCustomId } from "./component-custom-id.js";
