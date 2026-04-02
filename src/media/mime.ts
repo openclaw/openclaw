@@ -36,6 +36,10 @@ const EXT_BY_MIME: Record<string, string> = {
   "text/csv": ".csv",
   "text/plain": ".txt",
   "text/markdown": ".md",
+  "text/html": ".html",
+  "text/xml": ".xml",
+  "text/css": ".css",
+  "application/xml": ".xml",
 };
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -43,6 +47,8 @@ const MIME_BY_EXT: Record<string, string> = {
   // Additional extension aliases
   ".jpeg": "image/jpeg",
   ".js": "text/javascript",
+  ".htm": "text/html",
+  ".xml": "text/xml", // pin text/xml as canonical (application/xml also maps to .xml in EXT_BY_MIME)
 };
 
 const AUDIO_FILE_EXTENSIONS = new Set([
