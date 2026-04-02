@@ -28,6 +28,19 @@ function toTelegramButtonStyle(
   return style === "danger" || style === "success" || style === "primary" ? style : undefined;
 }
 
+function rewriteTelegramApprovalAlias(value: string): string {
+  if (!value.endsWith(" allow-always")) {
+    return value;
+  }
+  const approvePrefixMatch = value.match(
+    /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+allow-always$/i,
+  );
+  if (!approvePrefixMatch) {
+    return value;
+  }
+  return value.slice(0, -"allow-always".length) + "always";
+}
+
 function chunkInteractiveButtons(
   buttons: readonly InteractiveReplyButton[],
   rows: TelegramInlineButton[][],
@@ -35,6 +48,10 @@ function chunkInteractiveButtons(
   for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
     const row = buttons
       .slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE)
+      .map((button) => ({
+        ...button,
+        value: rewriteTelegramApprovalAlias(button.value),
+      }))
       .filter((button) => fitsTelegramCallbackData(button.value))
       .map((button) => ({
         text: button.label,
