@@ -6,19 +6,11 @@
 
 import { Type } from "@sinclair/typebox";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
-import { ContextArchive, createContextArchive } from "../context-engine/archive.js";
+import { ContextArchive, createContextArchive } from "../../context-engine/archive.js";
 
-// Archive manager instance cache
-const archiveInstances = new Map<string, ContextArchive>();
-
-/**
- * Get or create archive manager
- */
+// Simple helper - reconstruct on demand instead of caching
 function getArchive(sessionId: string): ContextArchive {
-  if (!archiveInstances.has(sessionId)) {
-    archiveInstances.set(sessionId, createContextArchive(sessionId));
-  }
-  return archiveInstances.get(sessionId)!;
+  return createContextArchive(sessionId);
 }
 
 const importanceEnum = ["high", "medium", "low"] as const;
@@ -27,7 +19,7 @@ const recallModeEnum = ["summary", "full", "key_points"] as const;
 /**
  * Create compress_context tool
  */
-export function createCompressContextTool(): AnyAgentTool {
+export function createCompressContextTool(sessionId: string): AnyAgentTool {
   return {
     name: "compress_context",
     description: `Compress and archive a range of messages from the current context.
@@ -81,8 +73,7 @@ You should provide a meaningful summary that captures:
       const keyDecisions = params.key_decisions as string[] | undefined;
       const messageRange = params.message_range as { start: number; end: number };
 
-      // Use a default session ID for now
-      const archive = getArchive("default");
+      const archive = getArchive(sessionId);
       const result = await archive.archive({
         topic,
         summary,
@@ -104,7 +95,7 @@ You should provide a meaningful summary that captures:
 /**
  * Create list_archives tool
  */
-export function createListArchivesTool(): AnyAgentTool {
+export function createListArchivesTool(sessionId: string): AnyAgentTool {
   return {
     name: "list_archives",
     description: `List archived contexts from previous compressions.
@@ -129,7 +120,7 @@ Returns a list of archives with their paths, topics, and token counts.`,
       const topicKeyword = readStringParam(params, "topic_keyword");
       const limit = (params.limit as number) ?? 10;
 
-      const archive = getArchive("default");
+      const archive = getArchive(sessionId);
       const result = await archive.list({
         date,
         topic_keyword: topicKeyword,
@@ -147,7 +138,7 @@ Returns a list of archives with their paths, topics, and token counts.`,
 /**
  * Create recall_archive tool
  */
-export function createRecallArchiveTool(): AnyAgentTool {
+export function createRecallArchiveTool(sessionId: string): AnyAgentTool {
   return {
     name: "recall_archive",
     description: `Recall and restore content from an archived context.
@@ -175,7 +166,7 @@ Use this when you need to reference previous discussions that were archived.`,
       const archivePath = readStringParam(params, "archive_path", { required: true });
       const mode = (params.mode as "summary" | "full" | "key_points") ?? "summary";
 
-      const archive = getArchive("default");
+      const archive = getArchive(sessionId);
       const result = await archive.recall(archivePath, mode);
 
       return jsonResult({
@@ -187,11 +178,14 @@ Use this when you need to reference previous discussions that were archived.`,
 }
 
 /**
- * Create all context tools
+ * Create all context tools for a session
  */
-export function createContextTools(): AnyAgentTool[] {
-  return [createCompressContextTool(), createListArchivesTool(), createRecallArchiveTool()];
+export function createContextTools(sessionId: string): AnyAgentTool[] {
+  return [
+    createCompressContextTool(sessionId),
+    createListArchivesTool(sessionId),
+    createRecallArchiveTool(sessionId),
+  ];
 }
 
-export const contextTools = createContextTools();
-export default contextTools;
+export default createContextTools;
