@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearAllIndexedDbState, seedDatabase } from "./idb-persistence.test-helpers.js";
 
 const { withFileLockMock } = vi.hoisted(() => ({
   withFileLockMock: vi.fn(
@@ -19,55 +20,6 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
 });
 
 let persistIdbToDisk: typeof import("./idb-persistence.js").persistIdbToDisk;
-
-async function clearAllIndexedDbState(): Promise<void> {
-  const databases = await indexedDB.databases();
-  await Promise.all(
-    databases
-      .map((entry) => entry.name)
-      .filter((name): name is string => Boolean(name))
-      .map(
-        (name) =>
-          new Promise<void>((resolve, reject) => {
-            const req = indexedDB.deleteDatabase(name);
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
-            req.onblocked = () => resolve();
-          }),
-      ),
-  );
-}
-
-async function seedDatabase(params: {
-  name: string;
-  version?: number;
-  storeName: string;
-  records: Array<{ key: IDBValidKey; value: unknown }>;
-}): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const req = indexedDB.open(params.name, params.version ?? 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(params.storeName)) {
-        db.createObjectStore(params.storeName);
-      }
-    };
-    req.onsuccess = () => {
-      const db = req.result;
-      const tx = db.transaction(params.storeName, "readwrite");
-      const store = tx.objectStore(params.storeName);
-      for (const record of params.records) {
-        store.put(record.value, record.key);
-      }
-      tx.oncomplete = () => {
-        db.close();
-        resolve();
-      };
-      tx.onerror = () => reject(tx.error);
-    };
-    req.onerror = () => reject(req.error);
-  });
-}
 
 beforeAll(async () => {
   ({ persistIdbToDisk } = await import("./idb-persistence.js"));
