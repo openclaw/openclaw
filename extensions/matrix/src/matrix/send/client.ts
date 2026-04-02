@@ -1,10 +1,21 @@
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
-import { withResolvedRuntimeMatrixClient } from "../client-bootstrap.js";
 import type { MatrixClient } from "../sdk.js";
 
 const getCore = () => getMatrixRuntime();
+
+type MatrixSendClientRuntime = Pick<
+  typeof import("../client-bootstrap.js"),
+  "withResolvedRuntimeMatrixClient"
+>;
+
+let matrixSendClientRuntimePromise: Promise<MatrixSendClientRuntime> | null = null;
+
+async function loadMatrixSendClientRuntime(): Promise<MatrixSendClientRuntime> {
+  matrixSendClientRuntimePromise ??= import("../client-bootstrap.js");
+  return await matrixSendClientRuntimePromise;
+}
 
 export function resolveMediaMaxBytes(
   accountId?: string | null,
@@ -28,6 +39,10 @@ export async function withResolvedMatrixSendClient<T>(
   },
   run: (client: MatrixClient) => Promise<T>,
 ): Promise<T> {
+  if (opts.client) {
+    return await run(opts.client);
+  }
+  const { withResolvedRuntimeMatrixClient } = await loadMatrixSendClientRuntime();
   return await withResolvedRuntimeMatrixClient(
     {
       ...opts,
@@ -51,6 +66,10 @@ export async function withResolvedMatrixControlClient<T>(
   },
   run: (client: MatrixClient) => Promise<T>,
 ): Promise<T> {
+  if (opts.client) {
+    return await run(opts.client);
+  }
+  const { withResolvedRuntimeMatrixClient } = await loadMatrixSendClientRuntime();
   return await withResolvedRuntimeMatrixClient(
     {
       ...opts,
