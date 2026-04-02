@@ -26,6 +26,7 @@ import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
+  OLLAMA_LOCAL_AUTH_MARKER,
 } from "./model-auth-markers.js";
 import {
   requireApiKey,
@@ -304,6 +305,16 @@ function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
   return { mode: "aws-sdk", source: "aws-sdk default chain" };
 }
 
+function shouldDeferSyntheticOllamaProfileAuth(params: {
+  provider: string;
+  resolvedApiKey: string | undefined;
+}): boolean {
+  return (
+    normalizeProviderId(params.provider) === "ollama" &&
+    params.resolvedApiKey?.trim() === OLLAMA_LOCAL_AUTH_MARKER
+  );
+}
+
 export async function resolveApiKeyForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -345,6 +356,7 @@ export async function resolveApiKeyForProvider(params: {
     provider,
     preferredProfile,
   });
+  let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   for (const candidate of order) {
     try {
       const resolved = await resolveApiKeyForProfile({
@@ -363,6 +375,16 @@ export async function resolveApiKeyForProvider(params: {
           source: `profile:${candidate}`,
           mode: resolvedMode,
         };
+        if (
+          !deferredAuthProfileResult &&
+          shouldDeferSyntheticOllamaProfileAuth({
+            provider,
+            resolvedApiKey: resolved.apiKey,
+          })
+        ) {
+          deferredAuthProfileResult = result;
+          continue;
+        }
         return result;
       }
     } catch (err) {
@@ -387,6 +409,10 @@ export async function resolveApiKeyForProvider(params: {
   if (customKey) {
     const result = { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" as const };
     return result;
+  }
+
+  if (deferredAuthProfileResult) {
+    return deferredAuthProfileResult;
   }
 
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
