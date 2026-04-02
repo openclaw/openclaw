@@ -8,6 +8,7 @@ const gatewayClientRequest = vi.fn();
 const gatewayClientStopAndWait = vi.fn();
 let lastGatewayClientOptions: Record<string, unknown> | undefined;
 let mockGatewayMethods: string[] = [];
+let gatewayClientStartImpl: ((opts: Record<string, unknown>) => void) | undefined;
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
@@ -33,13 +34,15 @@ vi.mock("../gateway/client.js", () => {
     }
 
     start() {
+      if (gatewayClientStartImpl) {
+        gatewayClientStartImpl(lastGatewayClientOptions ?? {});
+        return;
+      }
       void (
         lastGatewayClientOptions?.onHelloOk as
           | ((hello: { features?: { methods?: string[] } }) => void)
           | undefined
-      )?.({
-        features: { methods: mockGatewayMethods },
-      });
+      )?.({ features: { methods: mockGatewayMethods } });
     }
 
     request(...args: unknown[]) {
@@ -78,6 +81,7 @@ describe("logs cli", () => {
     gatewayClientStopAndWait.mockReset();
     lastGatewayClientOptions = undefined;
     mockGatewayMethods = [];
+    gatewayClientStartImpl = undefined;
     vi.restoreAllMocks();
   });
 
@@ -159,7 +163,7 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("output stdout closed");
   });
 
-  it("reuses a connected gateway client while following logs", async () => {
+  it("falls back to logs.tail polling when follow streaming is unavailable", async () => {
     resolveGatewayClientConnection.mockResolvedValueOnce({
       clientOptions: {
         url: "ws://127.0.0.1:18789",
@@ -193,6 +197,7 @@ describe("logs cli", () => {
       }),
     );
     expect(gatewayClientRequest).toHaveBeenCalledWith("logs.tail", {
+      file: undefined,
       cursor: undefined,
       limit: 200,
       maxBytes: 250_000,
@@ -202,7 +207,7 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("output stdout closed");
   });
 
-  it("uses streaming follow when the gateway advertises logs.subscribe", async () => {
+  it("uses logs.subscribe when the gateway advertises follow streaming", async () => {
     mockGatewayMethods = ["logs.subscribe", "logs.unsubscribe"];
     resolveGatewayClientConnection.mockResolvedValueOnce({
       clientOptions: {
@@ -212,13 +217,12 @@ describe("logs cli", () => {
         message: "Gateway URL: ws://127.0.0.1:18789",
       },
     });
-    gatewayClientRequest
-      .mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        cursor: 1,
-        lines: ["line one"],
-      })
-      .mockResolvedValueOnce({});
+    gatewayClientRequest.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 1,
+      lines: ["line one"],
+      subscribed: true,
+    });
     gatewayClientStopAndWait.mockResolvedValueOnce(undefined);
 
     const stderrWrites: string[] = [];
@@ -235,6 +239,7 @@ describe("logs cli", () => {
     await runLogsCli(["logs", "--follow"]);
 
     expect(gatewayClientRequest).toHaveBeenNthCalledWith(1, "logs.subscribe", {
+      file: undefined,
       cursor: undefined,
       limit: 200,
       maxBytes: 250_000,
@@ -242,6 +247,72 @@ describe("logs cli", () => {
     expect(gatewayClientRequest).toHaveBeenNthCalledWith(2, "logs.unsubscribe");
     expect(callGatewayFromCli).not.toHaveBeenCalled();
     expect(stderrWrites.join("")).toContain("output stdout closed");
+  });
+
+  it("keeps retrying follow startup until the gateway appears", async () => {
+    vi.useFakeTimers();
+    try {
+      resolveGatewayClientConnection.mockResolvedValue({
+        clientOptions: {
+          url: "ws://127.0.0.1:18789",
+        },
+        connectionDetails: {
+          message: "Gateway URL: ws://127.0.0.1:18789",
+        },
+      });
+      let startAttempts = 0;
+      gatewayClientStartImpl = (opts) => {
+        startAttempts += 1;
+        if (startAttempts < 3) {
+          void (opts.onConnectError as ((err: Error) => void) | undefined)?.(
+            new Error("connect ECONNREFUSED 127.0.0.1:18789"),
+          );
+          return;
+        }
+        void (
+          opts.onHelloOk as ((hello: { features?: { methods?: string[] } }) => void) | undefined
+        )?.({
+          features: { methods: [] },
+        });
+      };
+      gatewayClientRequest.mockResolvedValueOnce({
+        file: "/tmp/openclaw.log",
+        lines: ["line one"],
+      });
+      gatewayClientStopAndWait.mockResolvedValue(undefined);
+
+      const stderrWrites: string[] = [];
+      vi.spyOn(process.stdout, "write").mockImplementation(() => {
+        const err = new Error("EPIPE") as NodeJS.ErrnoException;
+        err.code = "EPIPE";
+        throw err;
+      });
+      vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+        stderrWrites.push(String(chunk));
+        return true;
+      });
+
+      const runPromise = runLogsCli(["logs", "--follow"]);
+      await vi.advanceTimersByTimeAsync(4_000);
+      await runPromise;
+
+      expect(resolveGatewayClientConnection).toHaveBeenCalledTimes(3);
+      expect(startAttempts).toBe(3);
+      expect(gatewayClientRequest).toHaveBeenCalledWith("logs.tail", {
+        file: undefined,
+        cursor: undefined,
+        limit: 200,
+        maxBytes: 250_000,
+      });
+      const stderr = stderrWrites.join("");
+      expect(stderr).toContain("Gateway not reachable yet; waiting for it before following logs.");
+      expect(stderr).toContain("Retrying every 2s. Press Ctrl+C to stop.");
+      expect(stderr).toContain(
+        "Still waiting for gateway (connect ECONNREFUSED 127.0.0.1:18789). Retrying in 2s...",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   describe("formatLogTimestamp", () => {

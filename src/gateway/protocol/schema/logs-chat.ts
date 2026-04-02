@@ -3,6 +3,7 @@ import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from 
 
 export const LogsTailParamsSchema = Type.Object(
   {
+    file: Type.Optional(Type.String()),
     cursor: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
     maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
@@ -24,6 +25,7 @@ export const LogsTailResultSchema = Type.Object(
 
 export const LogsSubscribeParamsSchema = Type.Object(
   {
+    file: Type.Optional(Type.String()),
     cursor: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
     maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),

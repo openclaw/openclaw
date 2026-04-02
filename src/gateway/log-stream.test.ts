@@ -53,7 +53,7 @@ describe("gateway log streaming", () => {
     }
   });
 
-  test("returns the initial tail and then pushes live appended log events", async () => {
+  test("returns the initial tail and then pushes file-backed appended log events", async () => {
     const file = await createLogFile();
     await fs.writeFile(file, '{"time":"2026-01-01T00:00:00.000Z","0":"backlog line"}\n', "utf8");
     setLoggerOverride({ level: "info", consoleLevel: "silent", file });
@@ -65,6 +65,8 @@ describe("gateway log streaming", () => {
         await connectOk(ws, { scopes: ["operator.read"] });
         const subscribeRes = await rpcReq<{
           subscribed?: boolean;
+          file?: string;
+          cursor?: number;
           lines?: string[];
         }>(ws, "logs.subscribe", {
           limit: 200,
@@ -79,12 +81,14 @@ describe("gateway log streaming", () => {
         const eventPromise = onceMessage<{
           type?: string;
           event?: string;
-          payload?: { lines?: string[] };
-        }>(ws, (message) => message.type === "event" && message.event === "logs.appended", 10_000);
+          payload?: { file?: string; cursor?: number; lines?: string[] };
+        }>(ws, (message) => message.type === "event" && message.event === "logs.appended", 4_000);
 
         getLogger().info("streamed log line");
 
         const event = await eventPromise;
+        expect(event.payload?.file).toBe(file);
+        expect(typeof event.payload?.cursor).toBe("number");
         expect(event.payload?.lines?.some((line) => line.includes("streamed log line"))).toBe(true);
       } finally {
         ws.close();
@@ -117,7 +121,7 @@ describe("gateway log streaming", () => {
           onceMessage(
             ws,
             (message) => message.type === "event" && message.event === "logs.appended",
-            300,
+            1_500,
           ),
         ).rejects.toThrow("timeout");
       } finally {

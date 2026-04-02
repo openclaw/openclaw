@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
-import { resolveGatewayClientConnection } from "../gateway/call.js";
+import { buildGatewayConnectionDetails, resolveGatewayClientConnection } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
@@ -13,15 +13,6 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
-type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
-
-let logsCliRuntimePromise: Promise<LogsCliRuntimeModule> | undefined;
-
-async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
-  logsCliRuntimePromise ??= import("./logs-cli.runtime.js");
-  return logsCliRuntimePromise;
-}
-
 type LogsTailPayload = {
   file?: string;
   cursor?: number;
@@ -32,9 +23,7 @@ type LogsTailPayload = {
   localFallback?: boolean;
 };
 
-type LogsAppendedPayload = {
-  lines?: string[];
-};
+type LogsAppendedPayload = LogsTailPayload;
 
 type LogsCliOptions = {
   limit?: string;
@@ -51,7 +40,7 @@ type LogsCliOptions = {
   expectFinal?: boolean;
 };
 
-const LOCAL_FALLBACK_NOTICE = "Gateway pairing required; reading local log file instead.";
+const FOLLOW_CONNECT_RETRY_INTERVAL_MS = 2_000;
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) {
@@ -63,56 +52,20 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 
 async function fetchLogs(
   opts: LogsCliOptions,
+  file: string | undefined,
   cursor: number | undefined,
   showProgress: boolean,
 ): Promise<LogsTailPayload> {
   const limit = parsePositiveInt(opts.limit, 200);
   const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
-  try {
-    const payload = await callGatewayFromCli(
-      "logs.tail",
-      opts,
-      { cursor, limit, maxBytes },
-      { progress: showProgress },
-    );
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Unexpected logs.tail response");
-    }
-    return payload as LogsTailPayload;
-  } catch (error) {
-    if (!shouldUseLocalLogsFallback(opts, error)) {
-      throw error;
-    }
-    return {
-      ...(await readConfiguredLogTail({ cursor, limit, maxBytes })),
-      localFallback: true,
-    };
-  }
-}
-
-function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
-function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
-  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
-  if (!message.includes("pairing required")) {
-    return false;
-  }
-  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
-    return false;
-  }
-  const connection = buildGatewayConnectionDetails();
-  if (connection.urlSource !== "local loopback") {
-    return false;
-  }
-  try {
-    return isLoopbackHost(new URL(connection.url).hostname);
-  } catch {
-    return false;
+  const payload = await callGatewayFromCli(
+    "logs.tail",
+    opts,
+    { file, cursor, limit, maxBytes },
+    { progress: showProgress },
+  );
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Unexpected logs.tail response");
   }
 }
 
@@ -166,17 +119,25 @@ function createAsyncQueue<T>() {
         waiters.push({ resolve, reject });
       });
     },
+    reset: () => {
+      failure = null;
+    },
   };
 }
 
 async function fetchLogsWithClient(
   client: GatewayClient,
   opts: LogsCliOptions,
+  file: string | undefined,
   cursor: number | undefined,
+  includeFile: boolean,
 ): Promise<LogsTailPayload> {
   const limit = parsePositiveInt(opts.limit, 200);
   const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
-  const payload = await client.request("logs.tail", { cursor, limit, maxBytes });
+  const payload = await client.request(
+    "logs.tail",
+    includeFile ? { file, cursor, limit, maxBytes } : { cursor, limit, maxBytes },
+  );
   if (!payload || typeof payload !== "object") {
     throw new Error("Unexpected logs.tail response");
   }
@@ -186,8 +147,11 @@ async function fetchLogsWithClient(
 async function createFollowLogsClient(opts: LogsCliOptions): Promise<{
   client: GatewayClient;
   methods: Set<string>;
-  waitUntilReady: () => Promise<void>;
-  subscribeToStream: (cursor: number | undefined) => Promise<LogsTailPayload>;
+  waitUntilReady: (opts?: { timeoutMs?: number; keepAlive?: boolean }) => Promise<void>;
+  subscribeToStream: (
+    file: string | undefined,
+    cursor: number | undefined,
+  ) => Promise<LogsTailPayload>;
   nextStreamPayload: () => Promise<LogsTailPayload>;
 }> {
   const timeoutMs = parsePositiveInt(opts.timeout, 30_000);
@@ -202,10 +166,11 @@ async function createFollowLogsClient(opts: LogsCliOptions): Promise<{
 
   let connected = false;
   let ready = createDeferred<void>();
-  let methods = new Set<string>();
+  const methods = new Set<string>();
   const streamQueue = createAsyncQueue<LogsTailPayload>();
 
   const resetReady = () => {
+    void ready.promise.catch(() => {});
     ready = createDeferred<void>();
   };
 
@@ -213,7 +178,11 @@ async function createFollowLogsClient(opts: LogsCliOptions): Promise<{
     ...clientOptions,
     onHelloOk: (hello) => {
       connected = true;
-      methods = new Set(Array.isArray(hello.features?.methods) ? hello.features.methods : []);
+      methods.clear();
+      for (const method of Array.isArray(hello.features?.methods) ? hello.features.methods : []) {
+        methods.add(method);
+      }
+      streamQueue.reset();
       ready.resolve();
     },
     onConnectError: (err) => {
@@ -227,29 +196,54 @@ async function createFollowLogsClient(opts: LogsCliOptions): Promise<{
       }
       const payload = evt.payload as LogsAppendedPayload | undefined;
       streamQueue.push({
+        file: payload?.file,
+        cursor: payload?.cursor,
+        size: payload?.size,
         lines: Array.isArray(payload?.lines) ? payload.lines : [],
+        truncated: payload?.truncated,
+        reset: payload?.reset,
       });
     },
-    onClose: () => {
+    onClose: (code, reason) => {
+      const wasConnected = connected;
       connected = false;
-      resetReady();
-      streamQueue.fail(new Error("gateway log stream disconnected"));
+      const closeError = new Error(
+        reason ? `gateway closed (${code}): ${reason}` : `gateway closed (${code})`,
+      ) as Error & { followRetryable?: boolean };
+      closeError.followRetryable = code !== 1008;
+      ready.reject(closeError);
+      if (wasConnected) {
+        resetReady();
+        streamQueue.fail(new Error("gateway log stream disconnected"));
+        return;
+      }
+      streamQueue.fail(closeError);
     },
   });
 
-  const waitUntilReady = async () => {
+  const waitUntilReady = async (opts?: { timeoutMs?: number; keepAlive?: boolean }) => {
     if (connected) {
       return;
     }
+    const effectiveTimeoutMs =
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : timeoutMs;
     let timer: NodeJS.Timeout | null = null;
     try {
       await Promise.race([
         ready.promise,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            reject(new Error(`gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`));
-          }, timeoutMs);
-          timer.unref?.();
+            reject(
+              new Error(
+                `gateway timeout after ${effectiveTimeoutMs}ms\n${connectionDetails.message}`,
+              ),
+            );
+          }, effectiveTimeoutMs);
+          if (!opts?.keepAlive) {
+            timer.unref?.();
+          }
         }),
       ]);
     } finally {
@@ -260,30 +254,216 @@ async function createFollowLogsClient(opts: LogsCliOptions): Promise<{
   };
 
   client.start();
-  await waitUntilReady();
-
-  async function subscribeToStream(cursor: number | undefined): Promise<LogsTailPayload> {
-    const limit = parsePositiveInt(opts.limit, 200);
-    const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
-    const payload = await client.request("logs.subscribe", {
-      cursor,
-      limit,
-      maxBytes,
-    });
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Unexpected logs.subscribe response");
-    }
-    return payload as LogsTailPayload;
+  try {
+    await waitUntilReady();
+  } catch (err) {
+    client.stop();
+    throw err;
   }
 
   return {
     client,
     methods,
     waitUntilReady,
-    subscribeToStream,
+    subscribeToStream: async (file, cursor) => {
+      const limit = parsePositiveInt(opts.limit, 200);
+      const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
+      const payload = await client.request("logs.subscribe", { file, cursor, limit, maxBytes });
+      if (!payload || typeof payload !== "object") {
+        throw new Error("Unexpected logs.subscribe response");
+      }
+      return payload as LogsTailPayload;
+    },
     nextStreamPayload: async () => await streamQueue.next(),
   };
 }
+
+function supportsStreamingFollow(methods: ReadonlySet<string>): boolean {
+  return methods.has("logs.subscribe") && methods.has("logs.unsubscribe");
+}
+
+async function waitForFollowClientReconnect(params: {
+  followClient: {
+    waitUntilReady: (opts?: { timeoutMs?: number; keepAlive?: boolean }) => Promise<void>;
+  };
+  opts: LogsCliOptions;
+  rich: boolean;
+  jsonMode: boolean;
+  retryMs: number;
+  emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean;
+  errorLine: (text: string) => boolean;
+}): Promise<void> {
+  for (;;) {
+    try {
+      await params.followClient.waitUntilReady({
+        timeoutMs: params.retryMs,
+        keepAlive: true,
+      });
+      return;
+    } catch (err) {
+      if (!isRetryableFollowStartupError(err)) {
+        throw err;
+      }
+      emitFollowStartupRetryNotice({
+        err,
+        opts: params.opts,
+        firstFailure: false,
+        rich: params.rich,
+        jsonMode: params.jsonMode,
+        retryMs: params.retryMs,
+        emitJsonLine: params.emitJsonLine,
+        errorLine: params.errorLine,
+      });
+      await delay(params.retryMs);
+    }
+  }
+}
+
+function isRetryableFollowStartupError(err: unknown): boolean {
+  if (err && typeof err === "object" && "followRetryable" in err) {
+    const retryable = (err as { followRetryable?: unknown }).followRetryable;
+    if (typeof retryable === "boolean") {
+      return retryable;
+    }
+  }
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    message.includes("connect failed") ||
+    message.includes("econnrefused") ||
+    message.includes("econnreset") ||
+    message.includes("ehostunreach") ||
+    message.includes("enetunreach") ||
+    message.includes("enotfound") ||
+    message.includes("eai_again") ||
+    message.includes("etimedout") ||
+    message.includes("socket hang up") ||
+    message.includes("gateway timeout after") ||
+    message.includes("abnormal closure") ||
+    message.includes("gateway closed") ||
+    message.includes("gateway log stream disconnected") ||
+    message.includes("gateway not connected") ||
+    message.includes("gateway client stopped")
+  );
+}
+
+function formatRetryDelayLabel(retryMs: number): string {
+  return retryMs % 1000 === 0 ? `${retryMs / 1000}s` : `${retryMs}ms`;
+}
+
+function summarizeRetryErrorText(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.split(/\r?\n/u, 1)[0]?.trim().replace(/\s+/gu, " ");
+}
+
+function emitFollowStartupRetryNotice(params: {
+  err: unknown;
+  opts: LogsCliOptions;
+  firstFailure: boolean;
+  rich: boolean;
+  jsonMode: boolean;
+  retryMs: number;
+  emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean;
+  errorLine: (text: string) => boolean;
+}): void {
+  const { err, opts, firstFailure, rich, jsonMode, retryMs, emitJsonLine, errorLine } = params;
+  const details = buildGatewayConnectionDetails({ url: opts.url });
+  const errorText = err instanceof Error ? err.message : String(err);
+  const retryErrorText = summarizeRetryErrorText(err);
+  const delayLabel = formatRetryDelayLabel(retryMs);
+
+  if (jsonMode) {
+    emitJsonLine(
+      firstFailure
+        ? {
+            type: "notice",
+            message: "Gateway not reachable yet; waiting for it before following logs.",
+            error: errorText,
+            details,
+            retryMs,
+            retrying: true,
+          }
+        : {
+            type: "notice",
+            message: "Still waiting for gateway before following logs.",
+            error: retryErrorText,
+            retryMs,
+            retrying: true,
+          },
+      true,
+    );
+    return;
+  }
+
+  if (firstFailure) {
+    errorLine(
+      colorize(
+        rich,
+        theme.warn,
+        "Gateway not reachable yet; waiting for it before following logs.",
+      ),
+    );
+    errorLine(details.message);
+    errorLine(colorize(rich, theme.muted, `Reason: ${errorText}`));
+    errorLine(colorize(rich, theme.muted, `Retrying every ${delayLabel}. Press Ctrl+C to stop.`));
+    return;
+  }
+
+  errorLine(
+    colorize(
+      rich,
+      theme.muted,
+      `Still waiting for gateway (${retryErrorText}). Retrying in ${delayLabel}...`,
+    ),
+  );
+}
+
+async function connectFollowLogsClientWithRetry(params: {
+  opts: LogsCliOptions;
+  rich: boolean;
+  jsonMode: boolean;
+  emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean;
+  errorLine: (text: string) => boolean;
+}): Promise<{
+  client: GatewayClient;
+  methods: Set<string>;
+  waitUntilReady: (opts?: { timeoutMs?: number; keepAlive?: boolean }) => Promise<void>;
+  subscribeToStream: (
+    file: string | undefined,
+    cursor: number | undefined,
+  ) => Promise<LogsTailPayload>;
+  nextStreamPayload: () => Promise<LogsTailPayload>;
+}> {
+  const retryMs = FOLLOW_CONNECT_RETRY_INTERVAL_MS;
+  let firstFailure = true;
+
+  for (;;) {
+    try {
+      return await createFollowLogsClient(params.opts);
+    } catch (err) {
+      if (!isRetryableFollowStartupError(err)) {
+        throw err;
+      }
+      emitFollowStartupRetryNotice({
+        err,
+        opts: params.opts,
+        firstFailure,
+        rich: params.rich,
+        jsonMode: params.jsonMode,
+        retryMs,
+        emitJsonLine: params.emitJsonLine,
+        errorLine: params.errorLine,
+      });
+      firstFailure = false;
+      await delay(retryMs);
+    }
+  }
+}
+
+export const __testing = {
+  isRetryableFollowStartupError,
+  supportsStreamingFollow,
+  waitForFollowClientReconnect,
+};
 
 function emitLogsPayload(params: {
   payload: LogsTailPayload;
@@ -393,9 +573,18 @@ export function formatLogTimestamp(
   }
 
   if (mode === "pretty") {
-    return formatTimestamp(parsed, { style: "short", timeZone: localTime ? undefined : "UTC" });
+    if (!localTime) {
+      const match =
+        /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+      if (match) {
+        const [, , time, offsetRaw] = match;
+        return `${time}${offsetRaw === "Z" ? "+00:00" : offsetRaw}`;
+      }
+      return value;
+    }
+    return formatTimestamp(parsed, { style: "short" });
   }
-  return localTime ? formatTimestamp(parsed, { style: "long" }) : parsed.toISOString();
+  return localTime ? formatTimestamp(parsed, { style: "long" }) : value;
 }
 
 function formatLogLine(
@@ -467,7 +656,7 @@ function createLogWriters() {
   };
 }
 
-async function emitGatewayError(
+function emitGatewayError(
   err: unknown,
   opts: LogsCliOptions,
   mode: "json" | "text",
@@ -475,12 +664,11 @@ async function emitGatewayError(
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
   errorLine: (text: string) => boolean,
 ) {
-  const runtime = await loadLogsCliRuntime();
+  const details = buildGatewayConnectionDetails({ url: opts.url });
   const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
   const errorText = formatErrorMessage(err);
 
-  const details = runtime.buildGatewayConnectionDetails({ url: opts.url });
   if (mode === "json") {
     if (
       !emitJsonLine(
@@ -504,6 +692,11 @@ async function emitGatewayError(
   }
   if (!errorLine(details.message)) {
     return;
+  }
+  if (errorText.trim()) {
+    if (!errorLine(colorize(rich, theme.muted, `Reason: ${summarizeRetryErrorText(err)}`))) {
+      return;
+    }
   }
   errorLine(colorize(rich, theme.muted, hint));
 }
@@ -531,6 +724,7 @@ export function registerLogsCli(program: Command) {
   logs.action(async (opts: LogsCliOptions) => {
     const { logLine, errorLine, emitJsonLine } = createLogWriters();
     const interval = parsePositiveInt(opts.interval, 1000);
+    let currentFile: string | undefined;
     let cursor: number | undefined;
     let first = true;
     const jsonMode = Boolean(opts.json);
@@ -538,41 +732,25 @@ export function registerLogsCli(program: Command) {
     const rich = isRich() && opts.color !== false;
     const localTime =
       Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));
-    const followClient = opts.follow ? await createFollowLogsClient(opts) : null;
-    const supportsStreamingFollow =
-      followClient &&
-      followClient.methods.has("logs.subscribe") &&
-      followClient.methods.has("logs.unsubscribe");
+    let followClient: Awaited<ReturnType<typeof connectFollowLogsClientWithRetry>> | null = null;
 
     try {
-      if (supportsStreamingFollow) {
-        try {
-          const payload = await followClient.subscribeToStream(cursor);
-          if (
-            !emitLogsPayload({
-              payload,
-              first,
-              jsonMode,
-              pretty,
-              rich,
-              localTime,
-              emitJsonLine,
-              logLine,
-              errorLine,
-            })
-          ) {
-            return;
-          }
-          cursor =
-            typeof payload.cursor === "number" && Number.isFinite(payload.cursor)
-              ? payload.cursor
-              : cursor;
-          first = false;
-          while (true) {
-            const streamedPayload = await followClient.nextStreamPayload();
+      if (opts.follow) {
+        followClient = await connectFollowLogsClientWithRetry({
+          opts,
+          rich,
+          jsonMode,
+          emitJsonLine,
+          errorLine,
+        });
+      }
+      while (true) {
+        if (followClient && supportsStreamingFollow(followClient.methods)) {
+          try {
+            const payload = await followClient.subscribeToStream(currentFile, cursor);
             if (
               !emitLogsPayload({
-                payload: streamedPayload,
+                payload,
                 first,
                 jsonMode,
                 pretty,
@@ -585,35 +763,106 @@ export function registerLogsCli(program: Command) {
             ) {
               return;
             }
+            currentFile =
+              typeof payload.file === "string" && payload.file.trim().length > 0
+                ? payload.file
+                : currentFile;
+            cursor =
+              typeof payload.cursor === "number" && Number.isFinite(payload.cursor)
+                ? payload.cursor
+                : cursor;
             first = false;
-          }
-        } catch (err) {
-          emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
-          process.exit(1);
-          return;
-        }
-      }
 
-      while (true) {
+            for (;;) {
+              const streamedPayload = await followClient.nextStreamPayload();
+              if (
+                !emitLogsPayload({
+                  payload: streamedPayload,
+                  first,
+                  jsonMode,
+                  pretty,
+                  rich,
+                  localTime,
+                  emitJsonLine,
+                  logLine,
+                  errorLine,
+                })
+              ) {
+                return;
+              }
+              currentFile =
+                typeof streamedPayload.file === "string" && streamedPayload.file.trim().length > 0
+                  ? streamedPayload.file
+                  : currentFile;
+              cursor =
+                typeof streamedPayload.cursor === "number" &&
+                Number.isFinite(streamedPayload.cursor)
+                  ? streamedPayload.cursor
+                  : cursor;
+              first = false;
+            }
+          } catch (err) {
+            if (opts.follow && isRetryableFollowStartupError(err)) {
+              emitFollowStartupRetryNotice({
+                err,
+                opts,
+                firstFailure: false,
+                rich,
+                jsonMode,
+                retryMs: FOLLOW_CONNECT_RETRY_INTERVAL_MS,
+                emitJsonLine,
+                errorLine,
+              });
+              await delay(FOLLOW_CONNECT_RETRY_INTERVAL_MS);
+              await waitForFollowClientReconnect({
+                followClient,
+                opts,
+                rich,
+                jsonMode,
+                retryMs: FOLLOW_CONNECT_RETRY_INTERVAL_MS,
+                emitJsonLine,
+                errorLine,
+              });
+              continue;
+            }
+            emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
+            process.exit(1);
+            return;
+          }
+        }
+
         let payload: LogsTailPayload;
         // Show progress spinner only on first fetch, not during follow polling
         const showProgress = first && !opts.follow;
         try {
           if (followClient) {
             await followClient.waitUntilReady();
-            payload = await fetchLogsWithClient(followClient.client, opts, cursor);
+            payload = await fetchLogsWithClient(
+              followClient.client,
+              opts,
+              currentFile,
+              cursor,
+              supportsStreamingFollow(followClient.methods),
+            );
           } else {
-            payload = await fetchLogs(opts, cursor, showProgress);
+            payload = await fetchLogs(opts, currentFile, cursor, showProgress);
           }
         } catch (err) {
-          await emitGatewayError(
-            err,
-            opts,
-            jsonMode ? "json" : "text",
-            rich,
-            emitJsonLine,
-            errorLine,
-          );
+          if (opts.follow && isRetryableFollowStartupError(err)) {
+            emitFollowStartupRetryNotice({
+              err,
+              opts,
+              firstFailure: false,
+              rich,
+              jsonMode,
+              retryMs: FOLLOW_CONNECT_RETRY_INTERVAL_MS,
+              emitJsonLine,
+              errorLine,
+            });
+            await delay(FOLLOW_CONNECT_RETRY_INTERVAL_MS);
+            continue;
+          }
+          emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
           process.exit(1);
           return;
         }
@@ -632,6 +881,10 @@ export function registerLogsCli(program: Command) {
         ) {
           return;
         }
+        currentFile =
+          typeof payload.file === "string" && payload.file.trim().length > 0
+            ? payload.file
+            : currentFile;
         cursor =
           typeof payload.cursor === "number" && Number.isFinite(payload.cursor)
             ? payload.cursor
@@ -643,10 +896,16 @@ export function registerLogsCli(program: Command) {
         }
         await delay(interval);
       }
+    } catch (err) {
+      emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
+      process.exit(1);
+      return;
     } finally {
       if (followClient) {
-        if (supportsStreamingFollow) {
-          await followClient.client.request("logs.unsubscribe").catch(() => {});
+        if (supportsStreamingFollow(followClient.methods)) {
+          await Promise.resolve()
+            .then(async () => await followClient.client.request("logs.unsubscribe"))
+            .catch(() => {});
         }
         await followClient.client.stopAndWait().catch(() => {
           followClient.client.stop();

@@ -1,4 +1,5 @@
-import { readConfiguredLogTail } from "../../logging/log-tail.js";
+import { getResolvedLoggerSettings } from "../../logging.js";
+import { readLogSlice, resolveLogFile } from "../log-tail.js";
 import {
   ErrorCodes,
   errorShape,
@@ -7,6 +8,9 @@ import {
   validateLogsTailParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+const DEFAULT_LIMIT = 500;
+const DEFAULT_MAX_BYTES = 250_000;
 
 export const logsHandlers: GatewayRequestHandlers = {
   "logs.tail": async ({ params, respond }) => {
@@ -22,9 +26,13 @@ export const logsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const p = params as { cursor?: number; limit?: number; maxBytes?: number };
+    const p = params as { file?: string; cursor?: number; limit?: number; maxBytes?: number };
+    const configuredFile = getResolvedLoggerSettings().file;
     try {
-      const result = await readConfiguredLogTail({
+      const file = await resolveLogFile(configuredFile);
+      const result = await readLogSlice({
+        file,
+        previousFile: p.file,
         cursor: p.cursor,
         limit: p.limit,
         maxBytes: p.maxBytes,
@@ -61,29 +69,38 @@ export const logsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    if (!context.subscribeLogEvents(connId, { paused: true })) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "logs.subscribe could not register the connection"),
-      );
-      return;
-    }
-
-    const p = params as { cursor?: number; limit?: number; maxBytes?: number };
+    const p = params as { file?: string; cursor?: number; limit?: number; maxBytes?: number };
+    const limit = p.limit ?? DEFAULT_LIMIT;
+    const maxBytes = p.maxBytes ?? DEFAULT_MAX_BYTES;
     const configuredFile = getResolvedLoggerSettings().file;
     try {
       const file = await resolveLogFile(configuredFile);
       const result = await readLogSlice({
         file,
+        previousFile: p.file,
         cursor: p.cursor,
-        limit: p.limit ?? DEFAULT_LIMIT,
-        maxBytes: p.maxBytes ?? DEFAULT_MAX_BYTES,
+        limit,
+        maxBytes,
       });
+      if (
+        !context.subscribeLogEvents(connId, {
+          paused: true,
+          file,
+          cursor: result.cursor,
+          limit,
+          maxBytes,
+        })
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "logs.subscribe could not register the connection"),
+        );
+        return;
+      }
       respond(true, { subscribed: true, file, ...result }, undefined);
       context.activateLogEvents(connId);
     } catch (err) {
-      context.unsubscribeLogEvents(connId);
       respond(
         false,
         undefined,
