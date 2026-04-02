@@ -15,7 +15,10 @@ type LspSession = {
   serverName: string;
   process: ChildProcess;
   requestId: number;
-  pendingRequests: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>;
+  pendingRequests: Map<
+    number,
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+  >;
   buffer: string;
   initialized: boolean;
   capabilities: LspServerCapabilities;
@@ -87,18 +90,18 @@ function parseLspMessages(buffer: string): { messages: unknown[]; remaining: str
 function sendRequest(session: LspSession, method: string, params?: unknown): Promise<unknown> {
   const id = ++session.requestId;
   return new Promise((resolve, reject) => {
-    session.pendingRequests.set(id, { resolve, reject });
     const message = { jsonrpc: "2.0", id, method, params };
     const encoded = encodeLspMessage(message);
     session.process.stdin?.write(encoded, "utf-8");
 
     // Timeout after 10 seconds
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       if (session.pendingRequests.has(id)) {
         session.pendingRequests.delete(id);
         reject(new Error(`LSP request ${method} timed out`));
       }
     }, 10_000);
+    session.pendingRequests.set(id, { resolve, reject, timer });
   });
 }
 
@@ -116,6 +119,7 @@ function handleIncomingData(session: LspSession, chunk: string) {
     if ("id" in record && typeof record.id === "number") {
       const pending = session.pendingRequests.get(record.id);
       if (pending) {
+        clearTimeout(pending.timer);
         session.pendingRequests.delete(record.id);
         if ("error" in record) {
           pending.reject(new Error(JSON.stringify(record.error)));
@@ -168,6 +172,7 @@ async function disposeSession(session: LspSession) {
     }
   }
   for (const [, pending] of session.pendingRequests) {
+    clearTimeout(pending.timer);
     pending.reject(new Error("LSP session disposed"));
   }
   session.pendingRequests.clear();
