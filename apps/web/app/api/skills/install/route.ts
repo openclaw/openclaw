@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
-import { parseSkillFrontmatter, readSkillsLock, writeSkillsLock } from "@/lib/skills";
+import { discoverSkillsInRepo, parseSkillFrontmatter, readSkillsLock, selectSkillForSlug, writeSkillsLock } from "@/lib/skills";
 import { resolveWorkspaceRoot } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
@@ -35,27 +35,13 @@ async function resolveDefaultBranch(source: string): Promise<string> {
   return repo.default_branch?.trim() || "main";
 }
 
-function ensureSkillPathIsSafe(rootDir: string, childName: string): string {
-  const resolvedPath = resolve(rootDir, childName);
-  if (!resolvedPath.startsWith(rootDir + "/")) {
-    throw new Error("Invalid skill path");
-  }
-  return resolvedPath;
-}
-
 function resolveExtractedSkillDir(repoRoot: string, slug: string): string {
-  const nestedSkillDir = ensureSkillPathIsSafe(repoRoot, slug);
-  const nestedSkillFile = join(nestedSkillDir, "SKILL.md");
-  if (existsSync(nestedSkillFile)) {
-    return nestedSkillDir;
+  const candidates = discoverSkillsInRepo(repoRoot);
+  const result = selectSkillForSlug(candidates, slug);
+  if (!result.skill) {
+    throw new Error(result.reason);
   }
-
-  const rootSkillFile = join(repoRoot, "SKILL.md");
-  if (existsSync(rootSkillFile)) {
-    return repoRoot;
-  }
-
-  throw new Error("Installed files did not include SKILL.md");
+  return result.skill.dir;
 }
 
 export async function POST(req: Request) {

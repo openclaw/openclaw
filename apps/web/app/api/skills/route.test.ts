@@ -230,10 +230,17 @@ describe("skills browse and install APIs", () => {
       });
 
       vi.mocked(readdirSync).mockImplementation((dir) => {
-        if (String(dir) === "/tmp/skills-sh-extract-123") {
+        const d = String(dir);
+        if (d === "/tmp/skills-sh-extract-123") {
           return [{
             isDirectory: () => true,
             name: "nextjs-seo-optimizer-main",
+          }] as never;
+        }
+        if (d === "/tmp/skills-sh-extract-123/nextjs-seo-optimizer-main/skills") {
+          return [{
+            isDirectory: () => true,
+            name: "nextjs-seo-optimizer",
           }] as never;
         }
         return [] as never;
@@ -242,7 +249,8 @@ describe("skills browse and install APIs", () => {
       vi.mocked(existsSync).mockImplementation((filePath) => {
         const file = String(filePath);
         return (
-          file === "/tmp/skills-sh-extract-123/nextjs-seo-optimizer-main/nextjs-seo-optimizer/SKILL.md"
+          file === "/tmp/skills-sh-extract-123/nextjs-seo-optimizer-main/skills"
+          || file === "/tmp/skills-sh-extract-123/nextjs-seo-optimizer-main/skills/nextjs-seo-optimizer/SKILL.md"
           || file === "/tmp/workspace/skills/nextjs-seo-optimizer/SKILL.md"
           || file === "/tmp/workspace/.skills/lock.json"
         );
@@ -288,7 +296,7 @@ describe("skills browse and install APIs", () => {
       );
       expect(mkdirSync).toHaveBeenCalledWith("/tmp/workspace/skills", { recursive: true });
       expect(cpSync).toHaveBeenCalledWith(
-        "/tmp/skills-sh-extract-123/nextjs-seo-optimizer-main/nextjs-seo-optimizer",
+        "/tmp/skills-sh-extract-123/nextjs-seo-optimizer-main/skills/nextjs-seo-optimizer",
         "/tmp/workspace/skills/nextjs-seo-optimizer",
         { recursive: true, force: true },
       );
@@ -296,6 +304,313 @@ describe("skills browse and install APIs", () => {
         "/tmp/workspace/.skills/lock.json",
         expect.stringContaining("\"installedFrom\": \"skills.sh\""),
       );
+    });
+
+    it("installs a root-level SKILL.md repo (single skill at repo root)", async () => {
+      const { cpSync, existsSync, readFileSync, readdirSync } = await import("node:fs");
+
+      vi.mocked(global.fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === "https://api.github.com/repos/someone/my-skill") {
+          return new Response(JSON.stringify({ default_branch: "main" }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url === "https://codeload.github.com/someone/my-skill/tar.gz/refs/heads/main") {
+          return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+
+      vi.mocked(readdirSync).mockImplementation((dir) => {
+        if (String(dir) === "/tmp/skills-sh-extract-123") {
+          return [{ isDirectory: () => true, name: "my-skill-main" }] as never;
+        }
+        return [] as never;
+      });
+
+      vi.mocked(existsSync).mockImplementation((filePath) => {
+        const file = String(filePath);
+        return (
+          file === "/tmp/skills-sh-extract-123/my-skill-main/SKILL.md"
+          || file === "/tmp/workspace/skills/my-skill/SKILL.md"
+          || file === "/tmp/workspace/.skills/lock.json"
+        );
+      });
+
+      vi.mocked(readFileSync).mockReturnValue("{}" as never);
+
+      const { POST } = await import("./install/route.js");
+      const response = await POST(new Request("http://localhost/api/skills/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: "my-skill", source: "someone/my-skill" }),
+      }));
+      const json = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(json.ok).toBe(true);
+      expect(cpSync).toHaveBeenCalledWith(
+        "/tmp/skills-sh-extract-123/my-skill-main",
+        "/tmp/workspace/skills/my-skill",
+        { recursive: true, force: true },
+      );
+    });
+
+    it("installs a skill from skills/ subdirectory when slug matches", async () => {
+      const { cpSync, existsSync, readFileSync, readdirSync } = await import("node:fs");
+
+      vi.mocked(global.fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === "https://api.github.com/repos/acme/skill-pack") {
+          return new Response(JSON.stringify({ default_branch: "main" }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url === "https://codeload.github.com/acme/skill-pack/tar.gz/refs/heads/main") {
+          return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+
+      vi.mocked(readdirSync).mockImplementation((dir) => {
+        const d = String(dir);
+        if (d === "/tmp/skills-sh-extract-123") {
+          return [{ isDirectory: () => true, name: "skill-pack-main" }] as never;
+        }
+        if (d === "/tmp/skills-sh-extract-123/skill-pack-main/skills") {
+          return [
+            { isDirectory: () => true, name: "nextjs" },
+            { isDirectory: () => true, name: "react" },
+          ] as never;
+        }
+        return [] as never;
+      });
+
+      vi.mocked(existsSync).mockImplementation((filePath) => {
+        const file = String(filePath);
+        return (
+          file === "/tmp/skills-sh-extract-123/skill-pack-main/skills"
+          || file === "/tmp/skills-sh-extract-123/skill-pack-main/skills/nextjs/SKILL.md"
+          || file === "/tmp/skills-sh-extract-123/skill-pack-main/skills/react/SKILL.md"
+          || file === "/tmp/workspace/skills/nextjs/SKILL.md"
+          || file === "/tmp/workspace/.skills/lock.json"
+        );
+      });
+
+      vi.mocked(readFileSync).mockReturnValue("{}" as never);
+
+      const { POST } = await import("./install/route.js");
+      const response = await POST(new Request("http://localhost/api/skills/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: "nextjs", source: "acme/skill-pack" }),
+      }));
+      const json = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(json.ok).toBe(true);
+      expect(json.slug).toBe("nextjs");
+      expect(cpSync).toHaveBeenCalledWith(
+        "/tmp/skills-sh-extract-123/skill-pack-main/skills/nextjs",
+        "/tmp/workspace/skills/nextjs",
+        { recursive: true, force: true },
+      );
+    });
+
+    it("installs from agent-style directory (e.g. .claude/skills/)", async () => {
+      const { cpSync, existsSync, readFileSync, readdirSync } = await import("node:fs");
+
+      vi.mocked(global.fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === "https://api.github.com/repos/dev/agent-skills") {
+          return new Response(JSON.stringify({ default_branch: "main" }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url === "https://codeload.github.com/dev/agent-skills/tar.gz/refs/heads/main") {
+          return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+
+      vi.mocked(readdirSync).mockImplementation((dir) => {
+        const d = String(dir);
+        if (d === "/tmp/skills-sh-extract-123") {
+          return [{ isDirectory: () => true, name: "agent-skills-main" }] as never;
+        }
+        if (d === "/tmp/skills-sh-extract-123/agent-skills-main/.claude/skills") {
+          return [{ isDirectory: () => true, name: "debugging" }] as never;
+        }
+        return [] as never;
+      });
+
+      vi.mocked(existsSync).mockImplementation((filePath) => {
+        const file = String(filePath);
+        return (
+          file === "/tmp/skills-sh-extract-123/agent-skills-main/.claude/skills"
+          || file === "/tmp/skills-sh-extract-123/agent-skills-main/.claude/skills/debugging/SKILL.md"
+          || file === "/tmp/workspace/skills/debugging/SKILL.md"
+          || file === "/tmp/workspace/.skills/lock.json"
+        );
+      });
+
+      vi.mocked(readFileSync).mockReturnValue("{}" as never);
+
+      const { POST } = await import("./install/route.js");
+      const response = await POST(new Request("http://localhost/api/skills/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: "debugging", source: "dev/agent-skills" }),
+      }));
+      const json = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(json.ok).toBe(true);
+      expect(cpSync).toHaveBeenCalledWith(
+        "/tmp/skills-sh-extract-123/agent-skills-main/.claude/skills/debugging",
+        "/tmp/workspace/skills/debugging",
+        { recursive: true, force: true },
+      );
+    });
+
+    it("installs a single discovered skill even if folder name differs from slug", async () => {
+      const { cpSync, existsSync, readFileSync, readdirSync } = await import("node:fs");
+
+      vi.mocked(global.fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === "https://api.github.com/repos/author/cool-skill") {
+          return new Response(JSON.stringify({ default_branch: "main" }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url === "https://codeload.github.com/author/cool-skill/tar.gz/refs/heads/main") {
+          return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+
+      vi.mocked(readdirSync).mockImplementation((dir) => {
+        const d = String(dir);
+        if (d === "/tmp/skills-sh-extract-123") {
+          return [{ isDirectory: () => true, name: "cool-skill-main" }] as never;
+        }
+        if (d === "/tmp/skills-sh-extract-123/cool-skill-main/skills") {
+          return [{ isDirectory: () => true, name: "actual-skill-name" }] as never;
+        }
+        return [] as never;
+      });
+
+      vi.mocked(existsSync).mockImplementation((filePath) => {
+        const file = String(filePath);
+        return (
+          file === "/tmp/skills-sh-extract-123/cool-skill-main/skills"
+          || file === "/tmp/skills-sh-extract-123/cool-skill-main/skills/actual-skill-name/SKILL.md"
+          || file === "/tmp/workspace/skills/different-slug/SKILL.md"
+          || file === "/tmp/workspace/.skills/lock.json"
+        );
+      });
+
+      vi.mocked(readFileSync).mockReturnValue("{}" as never);
+
+      const { POST } = await import("./install/route.js");
+      const response = await POST(new Request("http://localhost/api/skills/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: "different-slug", source: "author/cool-skill" }),
+      }));
+      const json = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(json.ok).toBe(true);
+      expect(cpSync).toHaveBeenCalledWith(
+        "/tmp/skills-sh-extract-123/cool-skill-main/skills/actual-skill-name",
+        "/tmp/workspace/skills/different-slug",
+        { recursive: true, force: true },
+      );
+    });
+
+    it("returns a clear error for multi-skill package with no slug match", async () => {
+      const { existsSync, readFileSync, readdirSync } = await import("node:fs");
+
+      vi.mocked(global.fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === "https://api.github.com/repos/acme/multi-skills") {
+          return new Response(JSON.stringify({ default_branch: "main" }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url === "https://codeload.github.com/acme/multi-skills/tar.gz/refs/heads/main") {
+          return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+
+      vi.mocked(readdirSync).mockImplementation((dir) => {
+        const d = String(dir);
+        if (d === "/tmp/skills-sh-extract-123") {
+          return [{ isDirectory: () => true, name: "multi-skills-main" }] as never;
+        }
+        if (d === "/tmp/skills-sh-extract-123/multi-skills-main/skills") {
+          return [
+            { isDirectory: () => true, name: "skill-a" },
+            { isDirectory: () => true, name: "skill-b" },
+          ] as never;
+        }
+        return [] as never;
+      });
+
+      vi.mocked(existsSync).mockImplementation((filePath) => {
+        const file = String(filePath);
+        return (
+          file === "/tmp/skills-sh-extract-123/multi-skills-main/skills"
+          || file === "/tmp/skills-sh-extract-123/multi-skills-main/skills/skill-a/SKILL.md"
+          || file === "/tmp/skills-sh-extract-123/multi-skills-main/skills/skill-b/SKILL.md"
+        );
+      });
+
+      vi.mocked(readFileSync).mockReturnValue("{}" as never);
+
+      const { POST } = await import("./install/route.js");
+      const response = await POST(new Request("http://localhost/api/skills/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: "nonexistent", source: "acme/multi-skills" }),
+      }));
+      const json = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(json.ok).toBe(false);
+      expect(json.error).toContain("multiple skills");
+      expect(json.error).toContain("skill-a");
+      expect(json.error).toContain("skill-b");
+    });
+
+    it("returns an error when no SKILL.md files exist in the repo", async () => {
+      const { existsSync, readFileSync, readdirSync } = await import("node:fs");
+
+      vi.mocked(global.fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === "https://api.github.com/repos/empty/repo") {
+          return new Response(JSON.stringify({ default_branch: "main" }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url === "https://codeload.github.com/empty/repo/tar.gz/refs/heads/main") {
+          return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+
+      vi.mocked(readdirSync).mockImplementation((dir) => {
+        if (String(dir) === "/tmp/skills-sh-extract-123") {
+          return [{ isDirectory: () => true, name: "repo-main" }] as never;
+        }
+        return [] as never;
+      });
+
+      vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(readFileSync).mockReturnValue("{}" as never);
+
+      const { POST } = await import("./install/route.js");
+      const response = await POST(new Request("http://localhost/api/skills/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: "anything", source: "empty/repo" }),
+      }));
+      const json = await response.json();
+
+      expect(response.status).toBe(500);
+      expect(json.ok).toBe(false);
+      expect(json.error).toContain("does not contain any SKILL.md");
     });
   });
 });
