@@ -1,5 +1,6 @@
 import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -49,12 +50,24 @@ export function buildExecApprovalFollowupPrompt(resultText: string): string {
   ].join("\n");
 }
 
+function isExecDeniedResult(resultText: string): boolean {
+  return resultText.trim().startsWith("Exec denied (");
+}
+
+function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boolean {
+  return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey);
+}
+
 export async function sendExecApprovalFollowup(
   params: ExecApprovalFollowupParams,
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   const resultText = params.resultText.trim();
   if (!resultText) {
+    return false;
+  }
+  const isDenied = isExecDeniedResult(resultText);
+  if (isDenied && shouldSuppressExecDeniedFollowup(sessionKey)) {
     return false;
   }
 
@@ -102,7 +115,7 @@ export async function sendExecApprovalFollowup(
     return true;
   }
 
-  if (deliveryTarget.deliver) {
+  if (deliveryTarget.deliver && !isDenied) {
     await sendMessage({
       channel: deliveryTarget.channel,
       to: deliveryTarget.to ?? "",
@@ -113,6 +126,10 @@ export async function sendExecApprovalFollowup(
       idempotencyKey: `exec-approval-followup:${params.approvalId}`,
     });
     return true;
+  }
+
+  if (isDenied) {
+    return false;
   }
 
   throw new Error("Session key or deliverable origin route is required");

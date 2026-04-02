@@ -14,6 +14,10 @@ export {
   isCloudflareOrHtmlErrorPage,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../internal-events.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
@@ -745,6 +749,47 @@ function stripFinalTagsFromText(text: unknown): string {
   return normalized.replace(FINAL_TAG_RE, "");
 }
 
+function stripDelimitedBlock(text: string, begin: string, end: string): string {
+  let next = text;
+  for (;;) {
+    const start = next.indexOf(begin);
+    if (start === -1) {
+      return next;
+    }
+    const finish = next.indexOf(end, start + begin.length);
+    const before = next.slice(0, start).trimEnd();
+    if (finish === -1) {
+      return before;
+    }
+    const after = next.slice(finish + end.length).trimStart();
+    next = before && after ? `${before}\n\n${after}` : `${before}${after}`;
+  }
+}
+
+function stripInternalRuntimeContext(text: string): string {
+  if (!text) {
+    return text;
+  }
+
+  let next = stripDelimitedBlock(
+    text,
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    INTERNAL_RUNTIME_CONTEXT_END,
+  );
+
+  const legacyHeaderIndex = next.indexOf("OpenClaw runtime context (internal):");
+  if (legacyHeaderIndex !== -1) {
+    return next.slice(0, legacyHeaderIndex).trimEnd();
+  }
+
+  const legacyTaskIndex = next.indexOf("[Internal task completion event]");
+  if (legacyTaskIndex !== -1) {
+    return next.slice(0, legacyTaskIndex).trimEnd();
+  }
+
+  return next;
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -955,7 +1000,7 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(raw);
+  const stripped = stripInternalRuntimeContext(stripFinalTagsFromText(raw));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";

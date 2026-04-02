@@ -73,4 +73,19 @@ describe("task status formatting", () => {
     );
     expect(formatTaskStatusDetail(task)?.endsWith("…")).toBe(true);
   });
+
+  it("strips leaked internal runtime context from task details", () => {
+    const task = makeTask({
+      status: "failed",
+      error: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+    });
+
+    expect(formatTaskStatusDetail(task)).toBeUndefined();
+  });
 });

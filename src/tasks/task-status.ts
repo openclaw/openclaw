@@ -1,3 +1,4 @@
+import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/errors.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
@@ -56,7 +57,15 @@ export function formatTaskStatusDetail(task: TaskRecord): string | undefined {
   if (!raw) {
     return undefined;
   }
-  return truncateTaskStatusText(raw, TASK_STATUS_DETAIL_MAX_CHARS);
+  const sanitized = sanitizeUserFacingText(raw, {
+    errorContext: task.status !== "running" && task.status !== "queued",
+  })
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  return truncateTaskStatusText(sanitized, TASK_STATUS_DETAIL_MAX_CHARS);
 }
 
 export type TaskStatusSnapshot = {

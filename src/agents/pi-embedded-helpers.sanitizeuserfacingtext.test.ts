@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -173,6 +174,36 @@ describe("sanitizeUserFacingText", () => {
   it("preserves trailing whitespace and internal newlines", () => {
     expect(sanitizeUserFacingText("Hello\n\nWorld\n")).toBe("Hello\n\nWorld\n");
     expect(sanitizeUserFacingText("Line 1\nLine 2")).toBe("Line 1\nLine 2");
+  });
+
+  it("strips marked internal runtime context blocks but keeps real reply text", () => {
+    const input = [
+      INTERNAL_RUNTIME_CONTEXT_BEGIN,
+      "OpenClaw runtime context (internal):",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "[Internal task completion event]",
+      "source: subagent",
+      "Action:",
+      "Reply to the user in your own words.",
+      INTERNAL_RUNTIME_CONTEXT_END,
+      "",
+      "Done. Clean answer only.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Done. Clean answer only.");
+  });
+
+  it("drops legacy unmarked internal runtime context when it leaks into user-facing text", () => {
+    const input = [
+      "OpenClaw runtime context (internal):",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "[Internal task completion event]",
+      "source: subagent",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("");
   });
 
   it.each(["\n\n", "  \n  "])("returns empty for whitespace-only input: %j", (input) => {

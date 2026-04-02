@@ -16,6 +16,9 @@ export type AgentTaskCompletionInternalEvent = {
 
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
+export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+export const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+
 function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): string {
   const lines = [
     "[Internal task completion event]",
@@ -54,9 +57,11 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
     return "";
   }
   return [
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
     "OpenClaw runtime context (internal):",
     "This context is runtime-generated, not user-authored. Keep internal details private.",
     "",
     blocks.join("\n\n---\n\n"),
+    INTERNAL_RUNTIME_CONTEXT_END,
   ].join("\n");
 }

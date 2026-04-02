@@ -138,6 +138,37 @@ describe("exec approval followup", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("suppresses denied followups for subagent sessions", async () => {
+    await expect(
+      sendExecApprovalFollowup({
+        approvalId: "req-denied-subagent",
+        sessionKey: "agent:main:subagent:test",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+        resultText: "Exec denied (gateway id=req-denied-subagent, approval-timeout): uname -a",
+      }),
+    ).resolves.toBe(false);
+
+    expect(callGatewayTool).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror raw denied followups without a session", async () => {
+    await expect(
+      sendExecApprovalFollowup({
+        approvalId: "req-denied-nosession",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+        resultText: "Exec denied (gateway id=req-denied-nosession, approval-timeout): uname -a",
+      }),
+    ).resolves.toBe(false);
+
+    expect(callGatewayTool).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("throws when neither a session nor a deliverable route is available", async () => {
     await expect(
       sendExecApprovalFollowup({
