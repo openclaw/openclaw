@@ -88,4 +88,68 @@ describe("resolveElevatedPermissions", () => {
       },
     });
   });
+
+  it("uses channels.discord.allowFrom as fallback for elevated auth", () => {
+    const result = resolveElevatedPermissions({
+      cfg: {
+        channels: {
+          discord: {
+            allowFrom: ["123456"],
+          },
+        },
+        tools: {
+          elevated: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      provider: "discord",
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        SenderId: "123456",
+        From: "discord:123456",
+      } as MsgContext,
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.allowed).toBe(true);
+    expect(result.failures).toHaveLength(0);
+  });
+
+  it("treats explicit empty tools.elevated.allowFrom.discord as override, not fallback", () => {
+    const result = resolveElevatedPermissions({
+      cfg: {
+        channels: {
+          discord: {
+            allowFrom: ["123456"],
+          },
+        },
+        tools: {
+          elevated: {
+            enabled: true,
+            allowFrom: {
+              discord: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      provider: "discord",
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        SenderId: "123456",
+        From: "discord:123456",
+      } as MsgContext,
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.allowed).toBe(false);
+    expect(result.failures).toContainEqual({
+      gate: "allowFrom",
+      key: "tools.elevated.allowFrom.discord",
+    });
+  });
 });

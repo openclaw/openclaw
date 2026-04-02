@@ -15,6 +15,59 @@ import {
 } from "./elevated-allowlist-matcher.js";
 export { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 
+type ChannelAllowFromConfig = {
+  allowFrom?: Array<string | number>;
+  dm?: {
+    allowFrom?: Array<string | number>;
+  };
+  accounts?: Record<
+    string,
+    {
+      allowFrom?: Array<string | number>;
+      dm?: {
+        allowFrom?: Array<string | number>;
+      };
+    }
+  >;
+};
+
+export function resolveElevatedChannelFallbackAllowFrom(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  accountId?: string;
+}): Array<string | number> | undefined {
+  const normalizedProvider = normalizeChannelId(params.provider);
+  const providerId = normalizedProvider ?? String(params.provider).trim().toLowerCase();
+  const pluginFallback = normalizedProvider
+    ? getChannelPlugin(normalizedProvider)?.elevated?.allowFromFallback?.({
+        cfg: params.cfg,
+        accountId: params.accountId,
+      })
+    : undefined;
+  if (pluginFallback && pluginFallback.length > 0) {
+    return pluginFallback;
+  }
+  if (providerId !== "discord") {
+    return pluginFallback;
+  }
+
+  const channelConfig = (params.cfg.channels as Record<string, ChannelAllowFromConfig> | undefined)
+    ?.discord;
+  if (!channelConfig) {
+    return pluginFallback;
+  }
+
+  const accountId = params.accountId?.trim();
+  const accountConfig = accountId ? channelConfig.accounts?.[accountId] : undefined;
+  return (
+    accountConfig?.allowFrom ??
+    accountConfig?.dm?.allowFrom ??
+    channelConfig.allowFrom ??
+    channelConfig.dm?.allowFrom ??
+    pluginFallback
+  );
+}
+
 function resolveElevatedAllowList(
   allowFrom: AgentElevatedAllowFromConfig | undefined,
   provider: string,
@@ -191,13 +244,11 @@ export function resolveElevatedPermissions(params: {
     return { enabled, allowed: false, failures };
   }
 
-  const normalizedProvider = normalizeChannelId(params.provider);
-  const fallbackAllowFrom = normalizedProvider
-    ? getChannelPlugin(normalizedProvider)?.elevated?.allowFromFallback?.({
-        cfg: params.cfg,
-        accountId: params.ctx.AccountId,
-      })
-    : undefined;
+  const fallbackAllowFrom = resolveElevatedChannelFallbackAllowFrom({
+    cfg: params.cfg,
+    provider: params.provider,
+    accountId: params.ctx.AccountId,
+  });
   const formatAllowFrom = resolveAllowFromFormatter({
     cfg: params.cfg,
     provider: params.provider,
