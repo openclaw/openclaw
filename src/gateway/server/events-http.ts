@@ -1,9 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ResolvedGatewayAuth } from "../server/auth.js";
+import { authorizeGatewayHttpRequestOrReply } from "../server/auth.js";
 import { setSseHeaders, sendJson, sendMethodNotAllowed } from "../http-common.js";
 import { readJsonBody } from "../hooks.js";
 import { resolveClientIp } from "../net.js";
 
 type EventsHttpOptions = {
+  auth: ResolvedGatewayAuth;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
 };
@@ -163,15 +166,30 @@ function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
     return { allowed: false, retryAfter: Math.max(1, Math.ceil(retryAfterMs / 1000)) };
   }
   recent.push(now);
-  rateLimitTimestamps.set(ip, recent);
+  if (recent.length === 0) {
+    rateLimitTimestamps.delete(ip);
+  } else {
+    rateLimitTimestamps.set(ip, recent);
+  }
   return { allowed: true };
 }
 
 export async function handleEventsHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: EventsHttpOptions = {},
+  opts: EventsHttpOptions,
 ): Promise<boolean> {
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    req,
+    res,
+    auth: opts.auth,
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
+  });
+  if (!requestAuth) {
+    return true;
+  }
+
   const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
   const pathname = url.pathname;
 

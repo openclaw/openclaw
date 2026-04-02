@@ -505,6 +505,7 @@ export function createGatewayHttpServer(opts: {
       }
       if (
         await handleEventsHttpRequest(req, res, {
+          auth: resolvedAuth,
           trustedProxies,
           allowRealIpFallback,
         })
