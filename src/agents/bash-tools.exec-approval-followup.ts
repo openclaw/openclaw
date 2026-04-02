@@ -1,4 +1,7 @@
-import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
+import {
+  resolveExternalBestEffortDeliveryTarget,
+  type ExternalBestEffortDeliveryTarget,
+} from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -116,6 +119,72 @@ function buildSessionResumeFallbackPrefix(): string {
   return "Automatic session resume failed, so sending the status directly.\n\n";
 }
 
+function canDirectSendDeniedFollowup(sessionError: unknown): boolean {
+  return sessionError !== null;
+}
+
+function buildAgentFollowupArgs(params: {
+  approvalId: string;
+  sessionKey: string;
+  resultText: string;
+  deliveryTarget: ExternalBestEffortDeliveryTarget;
+  sessionOnlyOriginChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
+}) {
+  const { deliveryTarget, sessionOnlyOriginChannel } = params;
+  return {
+    sessionKey: params.sessionKey,
+    message: buildExecApprovalFollowupPrompt(params.resultText),
+    deliver: deliveryTarget.deliver,
+    ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
+    channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
+    to: deliveryTarget.deliver
+      ? deliveryTarget.to
+      : sessionOnlyOriginChannel
+        ? params.turnSourceTo
+        : undefined,
+    accountId: deliveryTarget.deliver
+      ? deliveryTarget.accountId
+      : sessionOnlyOriginChannel
+        ? params.turnSourceAccountId
+        : undefined,
+    threadId: deliveryTarget.deliver
+      ? deliveryTarget.threadId
+      : sessionOnlyOriginChannel
+        ? params.turnSourceThreadId
+        : undefined,
+    idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+  };
+}
+
+async function sendDirectFollowupFallback(params: {
+  approvalId: string;
+  deliveryTarget: ExternalBestEffortDeliveryTarget;
+  resultText: string;
+  sessionError: unknown;
+}): Promise<boolean> {
+  const directText = formatDirectExecApprovalFollowupText(params.resultText, {
+    allowDenied: canDirectSendDeniedFollowup(params.sessionError),
+  });
+  if (!params.deliveryTarget.deliver || !directText) {
+    return false;
+  }
+
+  const prefix = params.sessionError ? buildSessionResumeFallbackPrefix() : "";
+  await sendMessage({
+    channel: params.deliveryTarget.channel,
+    to: params.deliveryTarget.to ?? "",
+    accountId: params.deliveryTarget.accountId,
+    threadId: params.deliveryTarget.threadId,
+    content: `${prefix}${directText}`,
+    agentId: undefined,
+    idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+  });
+  return true;
+}
+
 export async function sendExecApprovalFollowup(
   params: ExecApprovalFollowupParams,
 ): Promise<boolean> {
@@ -148,29 +217,16 @@ export async function sendExecApprovalFollowup(
       await callGatewayTool(
         "agent",
         { timeoutMs: 60_000 },
-        {
+        buildAgentFollowupArgs({
+          approvalId: params.approvalId,
           sessionKey,
-          message: buildExecApprovalFollowupPrompt(resultText),
-          deliver: deliveryTarget.deliver,
-          ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
-          channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
-          to: deliveryTarget.deliver
-            ? deliveryTarget.to
-            : sessionOnlyOriginChannel
-              ? params.turnSourceTo
-              : undefined,
-          accountId: deliveryTarget.deliver
-            ? deliveryTarget.accountId
-            : sessionOnlyOriginChannel
-              ? params.turnSourceAccountId
-              : undefined,
-          threadId: deliveryTarget.deliver
-            ? deliveryTarget.threadId
-            : sessionOnlyOriginChannel
-              ? params.turnSourceThreadId
-              : undefined,
-          idempotencyKey: `exec-approval-followup:${params.approvalId}`,
-        },
+          resultText,
+          deliveryTarget,
+          sessionOnlyOriginChannel,
+          turnSourceTo: params.turnSourceTo,
+          turnSourceAccountId: params.turnSourceAccountId,
+          turnSourceThreadId: params.turnSourceThreadId,
+        }),
         { expectFinal: true },
       );
       return true;
@@ -179,20 +235,14 @@ export async function sendExecApprovalFollowup(
     }
   }
 
-  const directText = formatDirectExecApprovalFollowupText(resultText, {
-    allowDenied: sessionError !== null,
-  });
-  if (deliveryTarget.deliver && directText) {
-    const prefix = sessionError ? buildSessionResumeFallbackPrefix() : "";
-    await sendMessage({
-      channel: deliveryTarget.channel,
-      to: deliveryTarget.to ?? "",
-      accountId: deliveryTarget.accountId,
-      threadId: deliveryTarget.threadId,
-      content: `${prefix}${directText}`,
-      agentId: undefined,
-      idempotencyKey: `exec-approval-followup:${params.approvalId}`,
-    });
+  if (
+    await sendDirectFollowupFallback({
+      approvalId: params.approvalId,
+      deliveryTarget,
+      resultText,
+      sessionError,
+    })
+  ) {
     return true;
   }
 
