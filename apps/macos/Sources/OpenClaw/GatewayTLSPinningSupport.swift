@@ -5,9 +5,16 @@ import Security
 
 enum GatewayTLSPinningSupport {
     static func storeKey(host: String, port: Int) -> String? {
-        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmedHost.isEmpty, port > 0 else { return nil }
-        return "\(trimmedHost):\(port)"
+        guard let canonicalHost = self.canonicalHost(host), port > 0 else { return nil }
+        return "\(canonicalHost):\(port)"
+    }
+
+    private static func canonicalHost(_ host: String) -> String? {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let withoutTrailingDot = trimmedHost.hasSuffix(".") ? String(trimmedHost.dropLast()) : trimmedHost
+        let normalizedHost = withoutTrailingDot.lowercased()
+        guard !normalizedHost.isEmpty else { return nil }
+        return normalizedHost
     }
 
     static func storeKey(url: URL) -> String? {
