@@ -296,6 +296,21 @@ describe("runBtwSideQuestion", () => {
     expect(result).toEqual({ text: "Final answer." });
   });
 
+  it("strips empty tools arrays from BTW payloads before sending", async () => {
+    mockDoneAnswer("Final answer.");
+
+    await runSideQuestion();
+
+    const [, , options] = streamSimpleMock.mock.calls[0] ?? [];
+    const onPayload = (options as { onPayload?: (payload: unknown) => void })?.onPayload;
+    const payloadWithEmptyTools = { messages: [], tools: [] as unknown[] };
+
+    const result = onPayload?.(payloadWithEmptyTools);
+
+    expect(payloadWithEmptyTools).not.toHaveProperty("tools");
+    expect(result).toBeUndefined();
+  });
+
   it("forces provider reasoning off even when the session think level is adaptive", async () => {
     streamSimpleMock.mockImplementation((_model, _input, options?: { reasoning?: unknown }) => {
       return options?.reasoning === undefined

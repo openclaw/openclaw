@@ -307,6 +307,14 @@ export async function runBtwSideQuestion(
       // reasoning off so we reliably receive answer text instead of thinking-only output.
       reasoning: undefined,
       signal: params.opts?.abortSignal,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object" && "tools" in payload) {
+          const p = payload as { tools?: unknown[] };
+          if (Array.isArray(p.tools) && p.tools.length === 0) {
+            delete p.tools;
+          }
+        }
+      },
     },
   );
 
