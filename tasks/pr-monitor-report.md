@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-02  
+**Last updated:** 2026-04-02  
 **Contributor:** suboss87  
 **Repo:** openclaw/openclaw  
 **Note:** GitHub API not available (no `gh` CLI or `mcp__github__*` tools). Analysis performed via git inspection of the fork remote (`suboss87/openclaw`).
@@ -12,9 +12,9 @@
 | PR | Branch | Status | Merge Conflicts | Actions Taken |
 |----|--------|--------|-----------------|---------------|
 | #45911 | fix/telegram-approval-callback-fallback | **MERGED** | N/A | None |
-| #45584 | feat/cron-fresh-session-option | Open | ~~Yes~~ → Resolved | Rebased onto main, force-pushed |
-| #54363 | fix/chat-send-button-contrast | Open | Yes — **Obsolete** | None (see notes) |
-| #54730 | fix/subagent-identity-fallback | Open | ~~Yes~~ → Resolved | Rebased onto main, force-pushed |
+| #45584 | feat/cron-fresh-session-option | Open, clean | No | None needed |
+| #54363 | fix/chat-send-button-contrast | Open, **conflict** | Yes — obsolete fix | None (see notes) |
+| #54730 | fix/subagent-identity-fallback | Open, clean | No | None needed |
 
 ---
 
@@ -32,9 +32,14 @@ The commit was authored by a maintainer (Ayaan Zaidi) with the upstream squash-m
 
 ---
 
-### #45584 — feat/cron-fresh-session-option — Open, Rebased
+### #45584 — feat/cron-fresh-session-option — Open, Clean
 
-**Contribution:** Single commit (`55edd323f`) by suboss87 adding a `freshSession` boolean to cron job config. Touches:
+**Branch tip:** `cb7f5c9630 feat(cron): add freshSession option to control session reuse per job`  
+**Merge base with main:** `89065a6b2e` (chore: add PR monitor report)  
+**Commits ahead of main:** 1  
+**Commits behind main:** 1 (only `3921ccaf96 chore(tasks): update PR monitor report` — no conflict)
+
+**Contribution:** Adds a `freshSession` boolean to cron job config. Touches:
 - `src/cron/isolated-agent/run.ts`
 - `src/cron/isolated-agent/session.test.ts`
 - `src/cron/isolated-agent/run.skill-filter.test.ts`
@@ -42,69 +47,74 @@ The commit was authored by a maintainer (Ayaan Zaidi) with the upstream squash-m
 - `src/cron/types-shared.ts`
 - `src/gateway/protocol/schema/cron.ts`
 
-**Conflict situation:** Branch was 3+ weeks behind main (merge-base 2026-03-13). Cherry-pick onto current main applied cleanly with auto-merge.
-
-**Action taken:** Rebased branch onto current main via cherry-pick. Force-pushed to `origin/feat/cron-fresh-session-option`.
-- Old tip: `55edd323fd3df7b582a48fb174d5f46ed1e7a186`
-- New tip: `cb7f5c963...` (clean cherry-pick on main)
-
-**Needs human attention:** Cannot post rebase comment to PR (no GitHub access). Maintainer should note rebase and re-run CI.
+**Status:** Branch is clean (rebased in previous run). Only divergence from main is the tasks report file — no conflicts.  
+**Action taken this run:** None.  
+**Needs human attention:** Cannot check CI or review comments (no GitHub API). Maintainer should verify CI is green.
 
 ---
 
 ### #54363 — fix/chat-send-button-contrast — Open, Needs Human Attention
 
-**Contribution:** Single commit (`76c2ea44d`) by suboss87 fixing WCAG AA contrast on `.chat-send-btn` icon by changing `color: var(--text-strong)` → `color: #fff` against `background: var(--muted-strong)`.
+**Branch tip:** `76c2ea44d8 fix(ui): improve chat send button icon contrast in light theme`  
+**Merge base with main:** `6472949f25` (fix(plugins): normalize bundled provider ids — old commit from ~Mar 25)  
+**Commits ahead of main:** 1  
+**Commits behind main:** many (branch is significantly behind)
 
-**Conflict situation:** The upstream main redesigned `.chat-send-btn` after the PR was opened:
-- **PR target (old):** `background: var(--muted-strong); color: var(--text-strong)`
-- **Current main:** `background: var(--accent); color: var(--accent-foreground)`
+**Contribution:** Single commit changing `.chat-send-btn` `color` from `var(--text-strong)` → `#fff` to fix WCAG AA contrast against `var(--muted-strong)` background.
 
-The button now uses the `--accent` / `--accent-foreground` color pair, which is designed for sufficient contrast. The PR's fix (hardcoding `#fff` against `--muted-strong`) no longer applies to the current code.
+**Conflict analysis:** `git cherry-pick` of this commit onto current main results in a **content conflict** in `ui/src/styles/chat/layout.css`. The upstream button was redesigned — comparison:
 
-**Action taken:** None. The PR fix is obsolete as written. Cannot auto-resolve because:
-1. The button's background color changed, making the original fix inapplicable.
-2. If the new `var(--accent-foreground)` still has a contrast problem in light theme, it needs a fresh analysis and different fix.
+| Property | PR branch | Current main |
+|----------|-----------|--------------|
+| `background` | `var(--muted-strong)` | `var(--accent)` |
+| `color` | `#fff` (hardcoded) | `var(--accent-foreground)` |
+| `:hover` background | `var(--muted)` | `var(--accent-hover)` |
+
+The PR's contrast fix targets a color scheme that no longer exists in main. The `--accent`/`--accent-foreground` pair was introduced as part of a button redesign.
+
+**Action taken this run:** None. Auto-resolving this conflict would require deciding whether `var(--accent-foreground)` already meets WCAG AA, which requires visual/color analysis, not just a code merge.
 
 **Needs human attention:**
-- Verify whether the new `var(--accent)` + `var(--accent-foreground)` button meets WCAG AA contrast.
-- If yes: close PR #54363 as the issue was fixed differently.
-- If no: update PR with a revised fix targeting the new color scheme.
+1. Verify whether the new `var(--accent)` + `var(--accent-foreground)` button meets WCAG AA (4.5:1) in light theme.
+2. If yes: close PR #54363 — the issue was fixed differently by the redesign.
+3. If no: update PR with a revised fix targeting the new `--accent`/`--accent-foreground` color scheme.
 
 ---
 
-### #54730 — fix/subagent-identity-fallback — Open, Rebased
+### #54730 — fix/subagent-identity-fallback — Open, Clean
 
-**Contribution:** Two commits by suboss87:
-1. `11cc40e01` — `fix(ui): prefer per-agent identity for subagents over global ui.assistant`
-   - Adds `isDefaultAgent` logic to `resolveAssistantIdentity()` so subagents use their own configured identity rather than the global `ui.assistant` setting
-   - Adds 70 lines of tests in `assistant-identity.test.ts`
-2. `bf6f12db3` — `refactor: hoist resolveDefaultAgentId to avoid redundant call`
-   - Addresses Greptile review feedback; extracts `defaultAgentId` to avoid calling `resolveDefaultAgentId` twice
+**Branch tip:** `8fb20f890e refactor: hoist resolveDefaultAgentId to avoid redundant call`  
+**Merge base with main:** `89065a6b2e` (chore: add PR monitor report)  
+**Commits ahead of main:** 2  
+**Commits behind main:** 1 (only `3921ccaf96 chore(tasks): update PR monitor report` — no conflict)
 
-**Conflict situation:** The refactor commit (`bf6f12db3`) conflicted because it was based on the fix commit's intermediate state. The fix commit itself applied cleanly to current main.
+**Contribution:** Two commits:
+1. `7870292d6c` — `fix(ui): prefer per-agent identity for subagents over global ui.assistant`  
+   Adds `isDefaultAgent` logic to `resolveAssistantIdentity()` so subagents use their own configured identity rather than the global `ui.assistant` setting. Adds ~70 lines of tests.
+2. `8fb20f890e` — `refactor: hoist resolveDefaultAgentId to avoid redundant call`  
+   Addresses Greptile review feedback; extracts `defaultAgentId` to avoid calling `resolveDefaultAgentId` twice.
 
-**Action taken:** Rebased both commits in order (fix first, then refactor) onto current main via cherry-pick. Both applied cleanly in sequence.
-- Old branch tip: `bf6f12db328ec33549563463e04b9ee1cb38fee3`
-- New branch tip: `8fb20f890...` (two clean cherry-picks on main)
-- Force-pushed to `origin/fix/subagent-identity-fallback`
-
-**Needs human attention:** Cannot post rebase comment to PR (no GitHub access). Maintainer should note rebase and re-run CI.
+**Status:** Branch is clean (rebased in previous run). Only divergence from main is the tasks report file — no conflicts.  
+**Action taken this run:** None.  
+**Needs human attention:** Cannot check CI or review comments (no GitHub API). Maintainer should verify CI is green.
 
 ---
 
-## Actions Taken Summary
+## Actions Taken This Run
 
-1. **PR #45584** — Rebased `feat/cron-fresh-session-option` onto current `main`. Force-pushed to `origin/feat/cron-fresh-session-option`.
-2. **PR #54730** — Rebased `fix/subagent-identity-fallback` (2 commits) onto current `main`. Force-pushed to `origin/fix/subagent-identity-fallback`.
+No actions taken. All rebases from the previous run are still clean.
+
+---
 
 ## PRs Requiring Human Attention
 
 | PR | Reason |
 |----|--------|
-| openclaw/openclaw#45584 | Needs CI re-run after rebase; maintainer should note rebase in PR |
-| openclaw/openclaw#54363 | Conflict is structural (button redesigned in main); needs human decision on whether fix is still needed |
-| openclaw/openclaw#54730 | Needs CI re-run after rebase; maintainer should note rebase in PR |
+| openclaw/openclaw#45584 | Cannot verify CI/review status (no GitHub API) |
+| openclaw/openclaw#54363 | Structural conflict; needs human decision on WCAG status of redesigned button |
+| openclaw/openclaw#54730 | Cannot verify CI/review status (no GitHub API) |
+
+---
 
 ## Blocker: No GitHub API Access
 
@@ -115,3 +125,12 @@ Cannot perform the following without `gh` CLI or `mcp__github__*` tools:
 - Resolve bot review conversations
 
 PR statuses above are inferred from git history analysis only.
+
+---
+
+## Run History
+
+| Date | #45911 | #45584 | #54363 | #54730 | Actions |
+|------|--------|--------|--------|--------|---------|
+| 2026-04-02 (run 1) | MERGED | Rebased onto main | Flagged obsolete | Rebased onto main | Rebased #45584 + #54730 |
+| 2026-04-02 (run 2) | MERGED | Clean (no new conflicts) | Still conflicted | Clean (no new conflicts) | None |
