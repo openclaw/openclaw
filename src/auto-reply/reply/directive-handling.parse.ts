@@ -21,6 +21,8 @@ export type InlineDirectives = {
   hasThinkDirective: boolean;
   thinkLevel?: ThinkLevel;
   rawThinkLevel?: string;
+  /** Think level from a one-shot `/think <level> <body>` message. Not persisted to session. */
+  oneShotThinkLevel?: ThinkLevel;
   hasVerboseDirective: boolean;
   verboseLevel?: VerboseLevel;
   rawVerboseLevel?: string;
@@ -158,6 +160,7 @@ export function parseInlineDirectives(
     hasThinkDirective,
     thinkLevel,
     rawThinkLevel,
+    oneShotThinkLevel: undefined,
     hasVerboseDirective,
     verboseLevel,
     rawVerboseLevel,

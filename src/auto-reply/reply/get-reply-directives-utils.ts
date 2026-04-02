@@ -23,6 +23,7 @@ export function clearInlineDirectives(cleaned: string): InlineDirectives {
     hasThinkDirective: false,
     thinkLevel: undefined,
     rawThinkLevel: undefined,
+    oneShotThinkLevel: undefined,
     hasVerboseDirective: false,
     verboseLevel: undefined,
     rawVerboseLevel: undefined,
@@ -51,6 +52,21 @@ export function clearInlineDirectives(cleaned: string): InlineDirectives {
     rawDrop: undefined,
     hasQueueOptions: false,
   };
+}
+
+export function normalizeInlineDirectivesForMessage(params: {
+  directives: InlineDirectives;
+  allowInlineStatus: boolean;
+  oneShotThinkLevel?: InlineDirectives["oneShotThinkLevel"];
+}): InlineDirectives {
+  // Clear ALL directives for mixed directive+body messages, matching existing behavior.
+  // Only oneShotThinkLevel is attached; other directives (verbose, model, queue, etc.)
+  // are not preserved to avoid accidental session pollution.
+  const cleared = clearInlineDirectives(params.directives.cleaned);
+  if (params.oneShotThinkLevel !== undefined) {
+    return { ...cleared, oneShotThinkLevel: params.oneShotThinkLevel };
+  }
+  return params.allowInlineStatus ? { ...cleared, hasStatusDirective: true } : cleared;
 }
 
 export function clearExecInlineDirectives(directives: InlineDirectives): InlineDirectives {

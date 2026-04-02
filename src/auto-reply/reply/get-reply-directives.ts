@@ -15,10 +15,14 @@ import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
 import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
-import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
+import {
+  clearExecInlineDirectives,
+  normalizeInlineDirectivesForMessage,
+} from "./get-reply-directives-utils.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import { prepareOneShotThinkText, resolveOneShotThinkLevel } from "./one-shot-think.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { stripInlineStatus } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
@@ -273,21 +277,36 @@ export async function resolveReplyDirectives(params: {
     parsedDirectives.hasModelDirective ||
     parsedDirectives.hasQueueDirective;
   if (hasInlineDirective) {
+    // parsedDirectives.cleaned is the text after directive tokens are extracted.
+    // Strip structural prefixes + mentions once; reuse for both one-shot checks.
     const stripped = stripStructuralPrefixes(parsedDirectives.cleaned);
     const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;
     if (noMentions.trim().length > 0) {
-      const directiveOnlyCheck = parseInlineDirectives(noMentions, {
+      // Re-parse the cleaned tail so repeated or out-of-order directive-only chains
+      // are not mistaken for directive+body messages.
+      const directiveOnlyTail = parseInlineDirectives(noMentions, {
         modelAliases: configuredAliases,
+        allowStatusDirective,
       });
-      if (directiveOnlyCheck.cleaned.trim().length > 0) {
+      if (directiveOnlyTail.cleaned.trim().length > 0) {
+        const oneShotCtx = {
+          commandText,
+          ctx,
+          cfg,
+          agentId,
+          isGroup,
+          hasThinkDirective: parsedDirectives.hasThinkDirective,
+          thinkLevel: parsedDirectives.thinkLevel,
+        };
+        const preparedText = prepareOneShotThinkText(oneShotCtx);
+        const oneShotThinkLevel = resolveOneShotThinkLevel(oneShotCtx, preparedText);
         const allowInlineStatus =
           parsedDirectives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender;
-        parsedDirectives = allowInlineStatus
-          ? {
-              ...clearInlineDirectives(parsedDirectives.cleaned),
-              hasStatusDirective: true,
-            }
-          : clearInlineDirectives(parsedDirectives.cleaned);
+        parsedDirectives = normalizeInlineDirectivesForMessage({
+          directives: parsedDirectives,
+          allowInlineStatus,
+          oneShotThinkLevel,
+        });
       }
     }
   }
@@ -298,6 +317,7 @@ export async function resolveReplyDirectives(params: {
     : {
         ...parsedDirectives,
         hasThinkDirective: false,
+        oneShotThinkLevel: undefined,
         hasVerboseDirective: false,
         hasFastDirective: false,
         hasReasoningDirective: false,
@@ -378,8 +398,13 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
+  // thinkLevel: session-persistent directive (pure `/think <level>` command).
+  // oneShotThinkLevel: non-persistent, set when `/think <level> <body>` has message text.
+  // In one-shot path, thinkLevel is cleared by clearInlineDirectives; oneShotThinkLevel carries it.
   const resolvedThinkLevel =
-    directives.thinkLevel ?? (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
+    directives.thinkLevel ??
+    directives.oneShotThinkLevel ??
+    (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
   const resolvedFastMode =
     directives.fastMode ??
     resolveFastModeState({
