@@ -33,6 +33,49 @@ function writeStore(store: Record<string, unknown>) {
 }
 
 describe("slack native approval adapter", () => {
+  it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
+    const cfg = buildConfig({
+      execApprovals: {
+        enabled: false,
+        approvers: ["U123APPROVER"],
+        target: "channel",
+      },
+    });
+
+    expect(
+      slackNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+        cfg,
+        accountId: "default",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "enabled" });
+    expect(
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request: {
+          id: "req-disabled-1",
+          request: {
+            command: "echo hi",
+            turnSourceChannel: "slack",
+            turnSourceTo: "channel:C123",
+            turnSourceAccountId: "default",
+            sessionKey: "agent:main:slack:channel:c123",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1000,
+        },
+      }),
+    ).toEqual({
+      enabled: false,
+      preferredSurface: "origin",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
+      notifyOriginWhenDmOnly: true,
+    });
+  });
+
   it("describes native slack approval delivery capabilities", () => {
     const capabilities = slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
       cfg: buildConfig(),

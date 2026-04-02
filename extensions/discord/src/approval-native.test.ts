@@ -21,6 +21,47 @@ function writeStore(store: Record<string, unknown>) {
 }
 
 describe("createDiscordNativeApprovalAdapter", () => {
+  it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
+    const adapter = createDiscordNativeApprovalAdapter({
+      enabled: false,
+      approvers: ["555555555"],
+      target: "channel",
+    } as never);
+
+    expect(
+      adapter.auth?.getActionAvailabilityState?.({
+        cfg: NATIVE_APPROVAL_CFG as never,
+        accountId: "main",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "enabled" });
+    expect(
+      adapter.native?.describeDeliveryCapabilities({
+        cfg: NATIVE_APPROVAL_CFG as never,
+        accountId: "main",
+        approvalKind: "exec",
+        request: {
+          id: "approval-1",
+          request: {
+            command: "pwd",
+            turnSourceChannel: "discord",
+            turnSourceTo: "channel:123456789",
+            turnSourceAccountId: "main",
+            sessionKey: "agent:main:discord:channel:123456789",
+          },
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        },
+      }),
+    ).toEqual({
+      enabled: false,
+      preferredSurface: "origin",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
+      notifyOriginWhenDmOnly: true,
+    });
+  });
+
   it("honors ownerAllowFrom fallback when gating approval requests", () => {
     expect(
       shouldHandleDiscordApprovalRequest({

@@ -106,7 +106,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         accountId: "disabled",
         action: "approve",
       }),
-    ).toEqual({ kind: "disabled" });
+    ).toEqual({ kind: "enabled" });
     expect(hasConfiguredDmRoute.hasConfiguredDmRoute({ cfg: {} as never })).toBe(true);
     expect(nativeCapabilities).toEqual({
       enabled: true,
@@ -115,6 +115,30 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       supportsApproverDmSurface: true,
       notifyOriginWhenDmOnly: false,
     });
+  });
+
+  it("reports enabled when approvers exist even if native delivery is off (#59620)", () => {
+    const adapter = createApproverRestrictedNativeApprovalAdapter({
+      channel: "telegram",
+      channelLabel: "Telegram",
+      listAccountIds: () => ["default"],
+      hasApprovers: () => true,
+      isExecAuthorizedSender: () => true,
+      isNativeDeliveryEnabled: () => false,
+      resolveNativeDeliveryMode: () => "both",
+    });
+    const getActionAvailabilityState = adapter.auth.getActionAvailabilityState;
+    if (!getActionAvailabilityState) {
+      throw new Error("approval availability helper unavailable");
+    }
+
+    expect(
+      getActionAvailabilityState({
+        cfg: {} as never,
+        accountId: "default",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "enabled" });
   });
 
   it("suppresses forwarding fallback only for matching native-delivery surfaces", () => {

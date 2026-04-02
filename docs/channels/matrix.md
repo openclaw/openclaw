@@ -590,6 +590,7 @@ Current behavior:
 - The current trigger message is not included in `InboundHistory`; it stays in the main inbound body for that turn.
 - Retries of the same Matrix event reuse the original history snapshot instead of drifting forward to newer room messages.
 - Fetched room context (including reply and thread context lookups) is filtered by sender allowlists (`groupAllowFrom`), so non-allowlisted messages are excluded from agent context.
+- This filtering is channel-level hardening behavior. Other channels may still expose supplemental context as received.
 
 ## DM and room policy example
 
