@@ -1,3 +1,5 @@
+import { FailoverError } from "../../agents/failover-error.js";
+import { classifyFailoverReason } from "../../agents/pi-embedded-helpers.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -214,6 +216,22 @@ export function createCronPromptExecutor(params: {
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
+        // Treat finish_reason:error as a fallback-triggering failure. (#59524)
+        if (result.meta.stopReason === "error") {
+          const errorText =
+            result.meta.error?.message ??
+            result.payloads?.find((p) => p.isError)?.text ??
+            "";
+          const derivedReason = classifyFailoverReason(errorText) ?? "overloaded";
+          throw new FailoverError(
+            errorText || "Provider finish_reason: error",
+            {
+              reason: derivedReason,
+              provider: providerOverride,
+              model: modelOverride,
+            },
+          );
+        }
         return result;
       },
     });

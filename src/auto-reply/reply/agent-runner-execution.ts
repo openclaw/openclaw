@@ -11,11 +11,13 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { FailoverError } from "../../agents/failover-error.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  classifyFailoverReason,
   isCompactionFailureError,
   isContextOverflowError,
   isBillingErrorMessage,
@@ -1252,6 +1254,22 @@ export async function runAgentTurnWithFallback(params: {
                 result.meta?.agentMeta?.compactionCount ?? 0,
               );
               attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
+              // Treat finish_reason:error as a fallback-triggering failure. (#59524)
+              if (result.meta.stopReason === "error") {
+                const errorText =
+                  result.meta.error?.message ??
+                  result.payloads?.find((p) => p.isError)?.text ??
+                  "";
+                const derivedReason = classifyFailoverReason(errorText) ?? "overloaded";
+                throw new FailoverError(
+                  errorText || "Provider finish_reason: error",
+                  {
+                    reason: derivedReason,
+                    provider,
+                    model,
+                  },
+                );
+              }
               return result;
             } catch (err) {
               if (rollbackFallbackCandidateSelection) {

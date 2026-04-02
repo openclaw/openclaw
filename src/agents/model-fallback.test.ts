@@ -6,6 +6,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { FailoverError } from "./failover-error.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
@@ -454,6 +455,69 @@ describe("runWithModelFallback", () => {
     });
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("continues fallback chain when run throws FailoverError for finish_reason:error (#59524)", async () => {
+    const cfg = makeCfg();
+    // Simulates what agent-command.ts throws when result.meta.stopReason === "error"
+    // and classifyFailoverReason returns null (unknown provider error → defaults to "overloaded")
+    const finishReasonError = new FailoverError("Provider finish_reason: error", {
+      reason: "overloaded",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(finishReasonError)
+      .mockResolvedValueOnce("ok from fallback");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      run,
+    });
+
+    expect(result.result).toBe("ok from fallback");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      reason: "overloaded",
+      error: "Provider finish_reason: error",
+    });
+  });
+
+  it("derives failover reason from error payload when stopReason is error (#59524)", async () => {
+    const cfg = makeCfg();
+    // Simulates a rate-limit error detected via classifyFailoverReason on the error text
+    const rateLimitError = new FailoverError("429 Rate limit exceeded", {
+      reason: "rate_limit",
+      provider: "openai",
+      model: "gpt-5.2",
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce("ok from fallback");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.2",
+      run,
+    });
+
+    expect(result.result).toBe("ok from fallback");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.2",
+      reason: "rate_limit",
+      error: "429 Rate limit exceeded",
+    });
   });
 
   it("falls back on auth errors", async () => {

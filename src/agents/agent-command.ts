@@ -36,6 +36,8 @@ import {
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
+import { FailoverError } from "./failover-error.js";
+import { classifyFailoverReason } from "./pi-embedded-helpers.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
@@ -884,7 +886,7 @@ async function agentCommandInternal(
           run: async (providerOverride, modelOverride, runOptions) => {
             const isFallbackRetry = fallbackAttemptIndex > 0;
             fallbackAttemptIndex += 1;
-            return attemptExecutionRuntime.runAgentAttempt({
+            const result = await attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
               cfg,
@@ -922,6 +924,26 @@ async function agentCommandInternal(
                 }
               },
             });
+            // Treat provider-level finish_reason:error as a failed attempt so the
+            // fallback chain continues to the next candidate. The provider returned
+            // HTTP 200 but signalled failure via stopReason; the fallback loop only
+            // detects failures via thrown exceptions. (#59524)
+            if (result.meta.stopReason === "error") {
+              const errorText =
+                result.meta.error?.message ??
+                result.payloads?.find((p) => p.isError)?.text ??
+                "";
+              const derivedReason = classifyFailoverReason(errorText) ?? "overloaded";
+              throw new FailoverError(
+                errorText || "Provider finish_reason: error",
+                {
+                  reason: derivedReason,
+                  provider: providerOverride,
+                  model: modelOverride,
+                },
+              );
+            }
+            return result;
           },
         });
         result = fallbackResult.result;
