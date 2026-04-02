@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.3.30",
+  "version": "2026.4.1-beta.1",
   "description": "OpenClaw Discord channel plugin",
   "type": "module",
   "dependencies": {
@@ -8,13 +8,13 @@
     "@discordjs/voice": "^0.19.2",
     "discord-api-types": "^0.38.43",
     "https-proxy-agent": "^8.0.0",
-    "opusscript": "^0.1.1"
+    "opusscript": "^0.0.8"
   },
   "devDependencies": {
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.30"
+    "openclaw": ">=2026.4.1-beta.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -40,7 +40,7 @@
     "install": {
       "npmSpec": "@openclaw/discord",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.3.30"
+      "minHostVersion": ">=2026.4.1"
     },
     "bundle": {
       "stageRuntimeDependencies": true

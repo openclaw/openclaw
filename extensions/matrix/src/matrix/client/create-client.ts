@@ -1,14 +1,31 @@
 import fs from "node:fs";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
-import { MatrixClient } from "../sdk.js";
+import type { MatrixClient } from "../sdk.js";
 import { resolveValidatedMatrixHomeserverUrl } from "./config.js";
-import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import {
   maybeMigrateLegacyStorage,
   resolveMatrixStoragePaths,
   writeStorageMeta,
 } from "./storage.js";
+
+type MatrixCreateClientRuntimeDeps = {
+  MatrixClient: typeof import("../sdk.js").MatrixClient;
+  ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+};
+
+let matrixCreateClientRuntimeDepsPromise: Promise<MatrixCreateClientRuntimeDeps> | undefined;
+
+async function loadMatrixCreateClientRuntimeDeps(): Promise<MatrixCreateClientRuntimeDeps> {
+  matrixCreateClientRuntimeDepsPromise ??= Promise.all([
+    import("../sdk.js"),
+    import("./logging.js"),
+  ]).then(([sdkModule, loggingModule]) => ({
+    MatrixClient: sdkModule.MatrixClient,
+    ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
+  }));
+  return await matrixCreateClientRuntimeDepsPromise;
+}
 
 export async function createMatrixClient(params: {
   homeserver: string;
@@ -25,6 +42,8 @@ export async function createMatrixClient(params: {
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<MatrixClient> {
+  const { MatrixClient, ensureMatrixSdkLoggingConfigured } =
+    await loadMatrixCreateClientRuntimeDeps();
   ensureMatrixSdkLoggingConfigured();
   const env = process.env;
   const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
@@ -57,7 +76,7 @@ export async function createMatrixClient(params: {
 
   const cryptoDatabasePrefix = `openclaw-matrix-${storagePaths.accountKey}-${storagePaths.tokenHash}`;
 
-  return new MatrixClient(homeserver, params.accessToken, undefined, undefined, {
+  return new MatrixClient(homeserver, params.accessToken, {
     userId: matrixClientUserId,
     password: params.password,
     deviceId: params.deviceId,

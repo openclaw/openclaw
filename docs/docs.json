@@ -879,6 +879,10 @@
     {
       "source": "/gateway/trusted-proxy",
       "destination": "/gateway/trusted-proxy-auth"
+    },
+    {
+      "source": "/automation/clawflow",
+      "destination": "/automation/taskflow"
     }
   ],
   "navigation": {
@@ -984,6 +988,7 @@
                   "channels/msteams",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/qqbot",
                   "channels/signal",
                   "channels/slack",
                   "channels/synology-chat",
@@ -1121,6 +1126,7 @@
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
                   "automation/tasks",
+                  "automation/taskflow",
                   "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
@@ -1154,6 +1160,7 @@
                       "tools/grok-search",
                       "tools/kimi-search",
                       "tools/perplexity-search",
+                      "tools/searxng-search",
                       "tools/tavily"
                     ]
                   },
@@ -1366,11 +1373,7 @@
                   },
                   {
                     "group": "Node features",
-                    "pages": [
-                      "nodes/talk",
-                      "nodes/voicewake",
-                      "nodes/location-command"
-                    ]
+                    "pages": ["nodes/talk", "nodes/voicewake", "nodes/location-command"]
                   }
                 ]
               },
@@ -1436,6 +1439,7 @@
                       "cli/approvals",
                       "cli/browser",
                       "cli/cron",
+                      "cli/flows",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox"

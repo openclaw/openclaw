@@ -18,6 +18,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { migrateLegacyConfig } from "../config/legacy-migrate.js";
+import { migrateLegacyXSearchConfig } from "../config/legacy-x-search.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
@@ -162,15 +163,16 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   agentDirs?: string[];
+  includeAuthStoreRefs?: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
   /** Test override for discovered loadable plugins and their origins. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
-  const sourceConfig = structuredClone(params.config);
-  const resolvedConfig = structuredClone(
-    migrateLegacyConfig(params.config).config ?? params.config,
-  );
+  const migrated = migrateLegacyConfig(params.config);
+  const migratedConfig = migrated.config ?? migrateLegacyXSearchConfig(params.config).config;
+  const sourceConfig = structuredClone(migratedConfig);
+  const resolvedConfig = structuredClone(migratedConfig);
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
     resolveLoadablePluginOrigins({ config: sourceConfig, env: runtimeEnv });
@@ -185,20 +187,22 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     loadablePluginOrigins,
   });
 
+  const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
+  const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
   const candidateDirs = params.agentDirs?.length
     ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))]
     : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
-
-  const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
-  for (const agentDir of candidateDirs) {
-    const store = structuredClone(loadAuthStore(agentDir));
-    collectAuthStoreAssignments({
-      store,
-      context,
-      agentDir,
-    });
-    authStores.push({ agentDir, store });
+  if (includeAuthStoreRefs) {
+    for (const agentDir of candidateDirs) {
+      const store = structuredClone(loadAuthStore(agentDir));
+      collectAuthStoreAssignments({
+        store,
+        context,
+        agentDir,
+      });
+      authStores.push({ agentDir, store });
+    }
   }
 
   if (context.assignments.length > 0) {

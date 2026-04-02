@@ -55,7 +55,8 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
     return;
   }
   const config = loadConfig();
-  const resolvedConfig = applyPluginAutoEnable({ config, env: process.env }).config;
+  const autoEnabled = applyPluginAutoEnable({ config, env: process.env });
+  const resolvedConfig = autoEnabled.config;
   const workspaceDir = resolveAgentWorkspaceDir(
     resolvedConfig,
     resolveDefaultAgentId(resolvedConfig),
@@ -92,6 +93,8 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
   };
   loadOpenClawPlugins({
     config: resolvedConfig,
+    activationSourceConfig: config,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     logger,
     throwOnLoadError: true,
@@ -107,3 +110,9 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
   });
   pluginRegistryLoaded = scope;
 }
+
+export const __testing = {
+  resetPluginRegistryLoadedForTests(): void {
+    pluginRegistryLoaded = "none";
+  },
+};

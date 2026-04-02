@@ -173,6 +173,27 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
+  <Accordion title="Why are there two exec approval configs for chat approvals?">
+    They control different layers:
+
+    - `approvals.exec`: forwards approval prompts to chat destinations
+    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client
+
+    The host exec policy is still the real approval gate. Chat config only controls where approval
+    prompts appear and how people can answer them.
+
+    In most setups you do **not** need both:
+
+    - If the chat already supports commands and replies, same-chat `/approve` works through the shared path.
+    - If a supported native channel can infer approvers safely, OpenClaw now auto-enables DM-first native approvals when `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
+    - Use `approvals.exec` only when prompts must also be forwarded to other chats or explicit ops rooms.
+    - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you explicitly want approval prompts posted back into the originating room/topic.
+
+    Short version: forwarding is for routing, native client config is for richer channel-specific UX.
+    See [Exec Approvals](/tools/exec-approvals).
+
+  </Accordion>
+
   <Accordion title="What runtime do I need?">
     Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
   </Accordion>
@@ -2784,6 +2805,8 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     - The target channel supports outbound media and isn't blocked by allowlists.
     - The file is within the provider's size limits (images are resized to max 2048px).
+    - `tools.fs.workspaceOnly=true` keeps local-path sends limited to workspace, temp/media-store, and sandbox-validated files.
+    - `tools.fs.workspaceOnly=false` lets `MEDIA:` send host-local files the agent can already read, but only for media plus safe document types (images, audio, video, PDF, and Office docs). Plain text and secret-like files are still blocked.
 
     See [Images](/nodes/images).
 

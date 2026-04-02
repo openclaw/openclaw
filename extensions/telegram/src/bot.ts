@@ -17,7 +17,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -439,7 +439,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     try {
-      const store = loadSessionStore(storePath);
+      const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath);
       const entry = store[sessionKey];
       if (entry?.groupActivation === "always") {
         return false;

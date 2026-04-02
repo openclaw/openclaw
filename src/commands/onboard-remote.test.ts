@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { createWizardPrompter } from "./test-wizard-helpers.js";
 
 const discoverGatewayBeacons = vi.hoisted(() => vi.fn<() => Promise<GatewayBonjourBeacon[]>>());
@@ -24,8 +25,6 @@ vi.mock("../infra/widearea-dns.js", () => ({
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary,
 }));
-
-const { promptRemoteGatewayConfig } = await import("./onboard-remote.js");
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   return createWizardPrompter(overrides, { defaultSelect: "" });
@@ -138,7 +137,7 @@ describe("promptRemoteGatewayConfig", () => {
     const manualUrl = "wss://manual.example.com:18789";
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Gateway WebSocket URL") {
-        expect(params.initialValue).toBe("wss://evil.example:443");
+        expect(params.initialValue).toBe("ws://127.0.0.1:18789");
         return manualUrl;
       }
       return "";

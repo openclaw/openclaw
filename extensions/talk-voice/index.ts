@@ -101,7 +101,10 @@ function asProviderBaseUrl(value: unknown): string | undefined {
 
 const TALK_ADMIN_SCOPE = "operator.admin";
 
-function requiresAdminToSetVoice(channel: string, gatewayClientScopes?: readonly string[]): boolean {
+function requiresAdminToSetVoice(
+  channel: string,
+  gatewayClientScopes?: readonly string[],
+): boolean {
   if (Array.isArray(gatewayClientScopes)) {
     return !gatewayClientScopes.includes(TALK_ADMIN_SCOPE);
   }
