@@ -251,13 +251,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
-  "tools.web.x_search.enabled": "Enable X Search Tool",
-  "tools.web.x_search.apiKey": "xAI API Key", // pragma: allowlist secret
-  "tools.web.x_search.model": "X Search Model",
-  "tools.web.x_search.inlineCitations": "X Search Inline Citations",
-  "tools.web.x_search.maxTurns": "X Search Max Turns",
-  "tools.web.x_search.timeoutSeconds": "X Search Timeout (sec)",
-  "tools.web.x_search.cacheTtlMinutes": "X Search Cache TTL (min)",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
