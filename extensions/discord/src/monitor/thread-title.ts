@@ -74,15 +74,6 @@ async function completeThreadTitle(params: {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), params.timeoutMs);
   try {
-    const options: NonNullable<
-      Parameters<typeof completeWithPreparedSimpleCompletionModel>[0]["options"]
-    > = {
-      maxTokens: DISCORD_THREAD_TITLE_MAX_TOKENS,
-      signal: controller.signal,
-    };
-    if (shouldSendThreadTitleTemperature(params.model)) {
-      options.temperature = DISCORD_THREAD_TITLE_TEMPERATURE;
-    }
     return await completeWithPreparedSimpleCompletionModel({
       model: params.model,
       auth: params.auth,
@@ -96,7 +87,13 @@ async function completeThreadTitle(params: {
           },
         ],
       },
-      options,
+      options: {
+        maxTokens: DISCORD_THREAD_TITLE_MAX_TOKENS,
+        ...(shouldSendThreadTitleTemperature(params.model)
+          ? { temperature: DISCORD_THREAD_TITLE_TEMPERATURE }
+          : {}),
+        signal: controller.signal,
+      },
     });
   } finally {
     clearTimeout(timer);
