@@ -26,14 +26,24 @@ export function enforceEmbeddingMaxInputTokens(
       continue;
     }
 
+    const hasOffset = "startOffset" in chunk && "endOffset" in chunk;
+    let offsetCursor = hasOffset ? (chunk as { startOffset: number }).startOffset : 0;
     for (const text of splitTextToUtf8ByteLimit(chunk.text, maxInputTokens)) {
-      out.push({
+      const splitChunk: MemoryChunk = {
         startLine: chunk.startLine,
         endLine: chunk.endLine,
         text,
         hash: hashText(text),
         embeddingInput: { text },
-      });
+      };
+      if (hasOffset) {
+        (splitChunk as MemoryChunk & { startOffset: number; endOffset: number }).startOffset =
+          offsetCursor;
+        (splitChunk as MemoryChunk & { startOffset: number; endOffset: number }).endOffset =
+          offsetCursor + text.length - 1;
+      }
+      offsetCursor += text.length;
+      out.push(splitChunk);
     }
   }
 

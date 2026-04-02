@@ -173,6 +173,11 @@ export abstract class MemoryManagerSyncOps {
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
 
+  protected abstract indexSessionFileIncremental(
+    entry: SessionFileEntry,
+    options: { source: MemorySource; content: string },
+  ): Promise<void>;
+
   protected async ensureVectorReady(dimensions?: number): Promise<boolean> {
     if (!this.vector.enabled) {
       return false;
@@ -907,7 +912,8 @@ export abstract class MemoryManagerSyncOps {
         this.resetSessionDelta(absPath, entry.size);
         return;
       }
-      await this.indexFile(entry, { source: "sessions", content: entry.content });
+      // Use incremental indexing for session files to avoid full reindex
+      await this.indexSessionFileIncremental(entry, { source: "sessions", content: entry.content });
       this.resetSessionDelta(absPath, entry.size);
       if (params.progress) {
         params.progress.completed += 1;

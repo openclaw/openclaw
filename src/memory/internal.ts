@@ -415,6 +415,107 @@ export function chunkMarkdown(
   return chunks;
 }
 
+export type ChunkWithOffset = MemoryChunk & {
+  startOffset: number;
+  endOffset: number;
+};
+
+/**
+ * Like chunkMarkdown but also records character offsets for each chunk.
+ * This enables incremental indexing: only new/changed chunks need re-processing.
+ */
+export function chunkMarkdownWithOffset(
+  content: string,
+  chunking: { tokens: number; overlap: number },
+): ChunkWithOffset[] {
+  const lines = content.split("\n");
+  if (lines.length === 0) {
+    return [];
+  }
+  const maxChars = Math.max(32, chunking.tokens * 4);
+  const overlapChars = Math.max(0, chunking.overlap * 4);
+  const chunks: ChunkWithOffset[] = [];
+
+  let current: Array<{ line: string; lineNo: number }> = [];
+  let currentChars = 0;
+  let charOffset = 0;
+
+  const flush = () => {
+    if (current.length === 0) {
+      return;
+    }
+    const firstEntry = current[0];
+    const lastEntry = current[current.length - 1];
+    if (!firstEntry || !lastEntry) {
+      return;
+    }
+    const text = current.map((entry) => entry.line).join("\n");
+    const startLine = firstEntry.lineNo;
+    const endLine = lastEntry.lineNo;
+    const startOffset = charOffset;
+    const endOffset = charOffset + currentChars - 2;
+    chunks.push({
+      startLine,
+      endLine,
+      text,
+      hash: hashText(text),
+      embeddingInput: buildTextEmbeddingInput(text),
+      startOffset,
+      endOffset,
+    });
+    charOffset += currentChars - 1;
+  };
+
+  const carryOverlap = () => {
+    if (overlapChars <= 0 || current.length === 0) {
+      current = [];
+      currentChars = 0;
+      return;
+    }
+    let acc = 0;
+    const kept: Array<{ line: string; lineNo: number }> = [];
+    for (let i = current.length - 1; i >= 0; i -= 1) {
+      const entry = current[i];
+      if (!entry) {
+        continue;
+      }
+      acc += entry.line.length + 1;
+      kept.unshift(entry);
+      if (acc >= overlapChars) {
+        break;
+      }
+    }
+    const overlapCharCount = kept.reduce((sum, entry) => sum + entry.line.length + 1, 0);
+    charOffset -= overlapCharCount;
+    current = kept;
+    currentChars = overlapCharCount;
+  };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    const lineNo = i + 1;
+    const segments: string[] = [];
+    if (line.length === 0) {
+      segments.push("");
+    } else {
+      for (let start = 0; start < line.length; start += maxChars) {
+        segments.push(line.slice(start, start + maxChars));
+      }
+    }
+    for (const segment of segments) {
+      const lineSize = segment.length + 1;
+      if (currentChars + lineSize > maxChars && current.length > 0) {
+        flush();
+        carryOverlap();
+      }
+      current.push({ line: segment, lineNo });
+      currentChars += lineSize;
+    }
+  }
+  flush();
+  return chunks;
+}
+
 /**
  * Remap chunk startLine/endLine from content-relative positions to original
  * source file positions using a lineMap.  Each entry in lineMap gives the

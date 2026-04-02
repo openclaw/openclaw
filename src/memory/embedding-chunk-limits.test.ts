@@ -99,4 +99,32 @@ describe("embedding chunk limits", () => {
     expect(out.length).toBeGreaterThan(1);
     expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8000)).toBe(true);
   });
+
+  it("preserves startOffset/endOffset when splitting chunks with offsets", () => {
+    const provider = createProvider(100);
+    const input = {
+      startLine: 5,
+      endLine: 10,
+      text: "a".repeat(250),
+      hash: "ignored",
+      startOffset: 1000,
+      endOffset: 1249,
+    };
+
+    const out = enforceEmbeddingMaxInputTokens(provider, [input]);
+    expect(out.length).toBeGreaterThan(1);
+
+    // Verify each split chunk has correct offsets
+    let expectedOffset = 1000;
+    for (const chunk of out) {
+      const chunkWithOffset = chunk as typeof input;
+      expect(chunkWithOffset.startOffset).toBe(expectedOffset);
+      expect(chunkWithOffset.endOffset).toBe(expectedOffset + chunk.text.length - 1);
+      expectedOffset += chunk.text.length;
+    }
+
+    // Verify the last chunk ends at the original endOffset
+    const lastChunk = out[out.length - 1] as typeof input;
+    expect(lastChunk.endOffset).toBe(1249);
+  });
 });

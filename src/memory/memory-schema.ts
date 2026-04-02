@@ -33,7 +33,9 @@ export function ensureMemoryIndexSchema(params: {
       model TEXT NOT NULL,
       text TEXT NOT NULL,
       embedding TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      start_offset INTEGER NOT NULL DEFAULT 0,
+      end_offset INTEGER NOT NULL DEFAULT 0
     );
   `);
   if (params.cacheEnabled) {
@@ -79,8 +81,13 @@ export function ensureMemoryIndexSchema(params: {
 
   ensureColumn(params.db, "files", "source", "TEXT NOT NULL DEFAULT 'memory'");
   ensureColumn(params.db, "chunks", "source", "TEXT NOT NULL DEFAULT 'memory'");
+  ensureColumn(params.db, "chunks", "start_offset", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(params.db, "chunks", "end_offset", "INTEGER NOT NULL DEFAULT 0");
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`);
+  params.db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_chunks_offset ON chunks(path, source, start_offset, end_offset);`,
+  );
 
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }
