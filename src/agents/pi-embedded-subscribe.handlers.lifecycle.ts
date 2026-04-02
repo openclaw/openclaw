@@ -11,6 +11,7 @@ import {
   hasAssistantVisibleReply,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
 export {
@@ -100,24 +101,55 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     });
   }
 
-  ctx.flushBlockReplyBuffer();
-  const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
-  if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
-    ctx.emitBlockReply(pendingToolMediaReply);
-  }
-  // Flush the reply pipeline so the response reaches the channel before
-  // compaction wait blocks the run.  This mirrors the pattern used by
-  // handleToolExecutionStart and ensures delivery is not held hostage to
-  // long-running compaction (#35074).
-  void ctx.params.onBlockReplyFlush?.();
+  const finalizeAgentEnd = () => {
+    ctx.state.blockState.thinking = false;
+    ctx.state.blockState.final = false;
+    ctx.state.blockState.inlineCode = createInlineCodeState();
 
-  ctx.state.blockState.thinking = false;
-  ctx.state.blockState.final = false;
-  ctx.state.blockState.inlineCode = createInlineCodeState();
+    if (ctx.state.pendingCompactionRetry > 0) {
+      ctx.resolveCompactionRetry();
+    } else {
+      ctx.maybeResolveCompactionWait();
+    }
+  };
 
-  if (ctx.state.pendingCompactionRetry > 0) {
-    ctx.resolveCompactionRetry();
-  } else {
-    ctx.maybeResolveCompactionWait();
+  const flushPendingMediaAndChannel = () => {
+    const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
+    if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
+      ctx.emitBlockReply(pendingToolMediaReply);
+    }
+
+    const postMediaFlushResult = ctx.flushBlockReplyBuffer();
+    if (isPromiseLike<void>(postMediaFlushResult)) {
+      return postMediaFlushResult.then(() => {
+        const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+        if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+          return onBlockReplyFlushResult;
+        }
+      });
+    }
+
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+      return onBlockReplyFlushResult;
+    }
+  };
+
+  const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+  if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
+    return flushBlockReplyBufferResult
+      .then(() => flushPendingMediaAndChannel())
+      .finally(() => {
+        finalizeAgentEnd();
+      });
   }
+
+  const flushPendingMediaAndChannelResult = flushPendingMediaAndChannel();
+  if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
+    return flushPendingMediaAndChannelResult.finally(() => {
+      finalizeAgentEnd();
+    });
+  }
+
+  finalizeAgentEnd();
 }
