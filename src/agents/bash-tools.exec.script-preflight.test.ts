@@ -501,6 +501,35 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("does not fail closed when script-like text is in a separate command segment", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-separate-script-hint-segment", {
+        command: "echo bad.py; python --version",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).toContain("bad.py");
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
+  it("does not fail closed when script hints appear outside the interpreter segment with &&", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(path.join(tmp, "sample.py"), "print('ok')", "utf-8");
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const result = await tool.execute("call-interpreter-version-and-list", {
+        command: "python --version && ls *.py",
+        workdir: tmp,
+      });
+      const text = result.content.find((block) => block.type === "text")?.text ?? "";
+      expect(text).toContain("sample.py");
+      expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
   it("does not fail closed when shell operator characters are escaped", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });

@@ -474,7 +474,9 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   hasInterpreterInvocation: boolean;
   hasComplexSyntax: boolean;
   hasProcessSubstitution: boolean;
-  hasScriptHint: boolean;
+  hasAnyScriptHint: boolean;
+  hasInterpreterSegmentScriptHint: boolean;
+  hasInterpreterPipelineCarrier: boolean;
   isDirectInterpreterCommand: boolean;
 } {
   const raw = command.trim();
@@ -513,6 +515,32 @@ function shouldFailClosedInterpreterPreflight(command: string): {
         hasProcessSubstitution: false,
         hasScriptHint: false,
       };
+  const hasInterpreterAndScriptHintInSameSegment = (rawText: string): boolean => {
+    const segments = rawText.split(/(?<!\\)\|\||(?<!\\)&&|(?<!\\)[|;\n\r]/u);
+    return segments.some((segment) => {
+      const hasInterpreterInvocationInSegment =
+        /(?:^|\b(?:if|then|do|elif|else|while|until|time)\s+)\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
+          segment,
+        );
+      if (!hasInterpreterInvocationInSegment) {
+        return false;
+      }
+      return /(?:^|[\s()<>])[^"'`\s|&;()<>]+\.(?:py|js)(?=$|[\s()<>])/i.test(segment);
+    });
+  };
+  const hasInterpreterPipelineCarrier = Boolean(
+    /(?<!\\)\|\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
+      unquotedRaw,
+    ) ||
+    (nestedUnquoted &&
+      /(?<!\\)\|\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
+        nestedUnquoted,
+      )),
+  );
+  const hasInterpreterSegmentScriptHint =
+    hasInterpreterAndScriptHintInSameSegment(unquotedRaw) ||
+    (nestedUnquoted.length > 0 && hasInterpreterAndScriptHintInSameSegment(nestedUnquoted));
+  const hasAnyScriptHint = topLevel.hasScriptHint || nested.hasScriptHint;
   const hasShellWrappedInterpreterInvocation =
     (nested.hasPython || nested.hasNode) &&
     (nested.hasScriptHint || nested.hasComplexSyntax || nested.hasProcessSubstitution);
@@ -532,7 +560,9 @@ function shouldFailClosedInterpreterPreflight(command: string): {
     hasInterpreterInvocation,
     hasComplexSyntax: topLevel.hasComplexSyntax || hasShellWrappedInterpreterInvocation,
     hasProcessSubstitution: topLevel.hasProcessSubstitution || nested.hasProcessSubstitution,
-    hasScriptHint: topLevel.hasScriptHint || nested.hasScriptHint,
+    hasAnyScriptHint,
+    hasInterpreterSegmentScriptHint,
+    hasInterpreterPipelineCarrier,
     isDirectInterpreterCommand,
   };
 }
@@ -547,13 +577,17 @@ async function validateScriptFileForShellBleed(params: {
       hasInterpreterInvocation,
       hasComplexSyntax,
       hasProcessSubstitution,
-      hasScriptHint,
+      hasAnyScriptHint,
+      hasInterpreterSegmentScriptHint,
+      hasInterpreterPipelineCarrier,
       isDirectInterpreterCommand,
     } = shouldFailClosedInterpreterPreflight(params.command);
     if (
       hasInterpreterInvocation &&
       hasComplexSyntax &&
-      (hasScriptHint || (hasProcessSubstitution && isDirectInterpreterCommand))
+      (hasInterpreterSegmentScriptHint ||
+        (hasInterpreterPipelineCarrier && hasAnyScriptHint) ||
+        (hasProcessSubstitution && isDirectInterpreterCommand))
     ) {
       // Fail closed when interpreter-driven script execution is ambiguous; otherwise
       // attackers can route script content through forms our fast parser cannot validate.
