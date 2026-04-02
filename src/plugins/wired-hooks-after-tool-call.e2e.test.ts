@@ -267,9 +267,55 @@ describe("after_tool_call hook wiring", () => {
       expect.objectContaining({
         toolName: "exec",
         toolCallId: "tg-tool-call-1",
+        resultChars: 2,
       }),
     );
     expect(body.toolDetail).toMatch(/git status/i);
+  });
+
+  it("reports D0 production tracked tool lifecycle through the backend bridge for main sessions", async () => {
+    const ctx = createToolHandlerCtx({
+      runId: "main-run-1",
+      sessionKey: "agent:main:main",
+      sessionId: "ephemeral-main-1",
+      agentId: "main",
+    });
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "main-tool-call-1",
+        args: { path: "/tmp/main.txt" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "read",
+        toolCallId: "main-tool-call-1",
+        isError: false,
+        result: { content: [{ type: "text", text: "main-ok" }] },
+      } as never,
+    );
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const body = JSON.parse(String(init?.body));
+    expect(body).toEqual(
+      expect.objectContaining({
+        toolName: "read",
+        toolCallId: "main-tool-call-1",
+        sessionKey: "agent:main:main",
+        sessionId: "ephemeral-main-1",
+        resultChars: 7,
+      }),
+    );
   });
 
   it("does not block tool completion when the TG analytics bridge fetch hangs", async () => {

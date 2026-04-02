@@ -3,6 +3,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 type D0ToolLifecyclePayload = {
   toolName: string;
   toolDetail?: string;
+  resultChars?: number;
   status: "success" | "error";
   runId: string;
   toolCallId?: string;
@@ -28,6 +29,19 @@ function isTelegramAgentSession(sessionKey: string | undefined): boolean {
   return Boolean(parsed?.rest.startsWith("telegram:"));
 }
 
+function isD0TrackedSession(sessionKey: string | undefined): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  return (
+    parsed.agentId === "main" &&
+    (parsed.rest === "main" ||
+      parsed.rest.startsWith("main:") ||
+      parsed.rest.startsWith("telegram:"))
+  );
+}
+
 export async function reportD0ToolLifecycle(
   payload: D0ToolLifecyclePayload,
   context: D0ToolLifecycleContext,
@@ -35,8 +49,9 @@ export async function reportD0ToolLifecycle(
   const backendBaseUrl = trimToUndefined(process.env.D0_BACKEND_INTERNAL_URL);
   const gatewayToken = trimToUndefined(process.env.OPENCLAW_GATEWAY_TOKEN);
   const sessionKey = payload.sessionKey ?? context.sessionKey;
+  const sessionIsAllowed = isTelegramAgentSession(sessionKey) || isD0TrackedSession(sessionKey);
 
-  if (!backendBaseUrl || !gatewayToken || !isTelegramAgentSession(sessionKey)) {
+  if (!backendBaseUrl || !gatewayToken || !sessionIsAllowed) {
     return false;
   }
 
@@ -58,6 +73,7 @@ export async function reportD0ToolLifecycle(
         sessionId: payload.sessionId ?? context.sessionId,
         durationMs: payload.durationMs,
         error: payload.error,
+        resultChars: payload.resultChars,
         occurredAt: payload.occurredAt ?? new Date().toISOString(),
       }),
     },
