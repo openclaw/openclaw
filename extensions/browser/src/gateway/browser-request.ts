@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   ErrorCodes,
   applyBrowserProxyPaths,
@@ -17,6 +18,8 @@ import {
   type GatewayRequestHandlers,
   type NodeSession,
 } from "../core-api.js";
+
+const logBrowserProxy = createSubsystemLogger("browser-proxy");
 
 type BrowserRequestParams = {
   method?: string;
@@ -183,11 +186,25 @@ export async function handleBrowserGatewayRequest({
 
   if (nodeTarget) {
     const allowlist = resolveNodeCommandAllowlist(cfg, nodeTarget);
-    const allowed = isNodeCommandAllowed({
-      command: "browser.proxy",
-      declaredCommands: nodeTarget.commands,
-      allowlist,
-    });
+    // When a node advertises the "browser" capability but its declared commands
+    // list is empty (handshake serialisation bug), fall back to the capability
+    // check so the browser proxy request is not rejected.
+    const hasBrowserCap =
+      Array.isArray(nodeTarget.caps) && nodeTarget.caps.includes("browser");
+    const capsFallback =
+      hasBrowserCap && nodeTarget.commands.length === 0 && allowlist.has("browser.proxy");
+    if (capsFallback) {
+      logBrowserProxy.warn(
+        `browser.proxy authorized via caps fallback — node ${nodeTarget.nodeId} declared no commands (possible handshake bug)`,
+      );
+    }
+    const allowed = capsFallback
+        ? ({ ok: true } as const)
+        : isNodeCommandAllowed({
+            command: "browser.proxy",
+            declaredCommands: nodeTarget.commands,
+            allowlist,
+          });
     if (!allowed.ok) {
       const platform = nodeTarget.platform ?? "unknown";
       const hint = `node command not allowed: ${allowed.reason} (platform: ${platform}, command: browser.proxy)`;

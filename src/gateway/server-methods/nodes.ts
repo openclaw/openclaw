@@ -931,11 +931,25 @@ export const nodeHandlers: GatewayRequestHandlers = {
       }
       const cfg = loadConfig();
       const allowlist = resolveNodeCommandAllowlist(cfg, nodeSession);
-      const allowed = isNodeCommandAllowed({
-        command,
-        declaredCommands: nodeSession.commands,
-        allowlist,
-      });
+      // When a node advertises the "browser" capability but its declared
+      // commands list is empty (handshake serialisation bug), allow the
+      // browser.proxy command if it passes the allowlist check.
+      const hasBrowserCap =
+        Array.isArray(nodeSession.caps) && nodeSession.caps.includes("browser");
+      const capsFallback =
+        hasBrowserCap && command === "browser.proxy" && nodeSession.commands.length === 0 && allowlist.has("browser.proxy");
+      if (capsFallback) {
+        context.logGateway.warn(
+          `browser.proxy authorized via caps fallback — node ${nodeId} declared no commands (possible handshake bug)`,
+        );
+      }
+      const allowed = capsFallback
+          ? ({ ok: true } as const)
+          : isNodeCommandAllowed({
+              command,
+              declaredCommands: nodeSession.commands,
+              allowlist,
+            });
       if (!allowed.ok) {
         const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession);
         respond(
