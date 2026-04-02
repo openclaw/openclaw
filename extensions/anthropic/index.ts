@@ -62,6 +62,25 @@ const ANTHROPIC_OAUTH_ALLOWLIST = [
   "anthropic/claude-haiku-4-5",
 ] as const;
 
+/**
+ * Check whether any configured Anthropic auth profile uses OAuth or
+ * setup-token mode. Both use sk-ant-oat-* tokens that require the
+ * oauth-2025-04-20 beta header for Bearer auth to succeed.
+ */
+function hasOAuthAnthropicProfile(
+  config:
+    | { auth?: { profiles?: Record<string, { provider?: string; mode?: string }> } }
+    | undefined,
+): boolean {
+  const profiles = config?.auth?.profiles;
+  if (!profiles) {
+    return false;
+  }
+  return Object.values(profiles).some(
+    (p) => p.provider === PROVIDER_ID && (p.mode === "oauth" || p.mode === "token"),
+  );
+}
+
 function resolveAnthropic46ForwardCompatModel(params: {
   ctx: ProviderResolveDynamicModelContext;
   dashModelId: string;
@@ -453,10 +472,14 @@ export default definePluginEntry({
       isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
       wrapStreamFn: (ctx) => {
         let streamFn = ctx.streamFn;
-        const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
-        if (anthropicBetas?.length) {
-          streamFn = createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas);
-        }
+        const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId) ?? [];
+        // Always apply the beta wrapper so PI_AI_DEFAULT_ANTHROPIC_BETAS (or
+        // PI_AI_OAUTH_ANTHROPIC_BETAS for OAuth users) are injected. Without
+        // this, pi-ai's mergeHeaders (Object.assign, last-wins) can strip the
+        // required betas that pi-ai's createClient would normally set.
+        // See openclaw#19789 for the original motivation.
+        const isOAuth = hasOAuthAnthropicProfile(ctx.config);
+        streamFn = createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas, isOAuth);
         const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
         if (serviceTier) {
           streamFn = createAnthropicServiceTierWrapper(streamFn, serviceTier);

@@ -128,10 +128,16 @@ export function resolveAnthropicBetas(
 export function createAnthropicBetaHeadersWrapper(
   baseStreamFn: StreamFn | undefined,
   betas: string[],
+  isOAuthSetupTime?: boolean,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
+    // Use the setup-time flag as primary signal; fall back to runtime apiKey
+    // detection for callers that still pass apiKey through options.
+    // Prior to the extension refactor, options.apiKey was populated at this
+    // layer — it no longer is (resolved deeper in the sdk.js streamFn), so
+    // the setup-time flag is now the reliable path.
+    const isOauth = isOAuthSetupTime ?? isAnthropicOAuthApiKey(options?.apiKey);
     const requestedContext1m = betas.includes(ANTHROPIC_CONTEXT_1M_BETA);
     const effectiveBetas =
       isOauth && requestedContext1m
