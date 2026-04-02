@@ -367,17 +367,39 @@ export class AcpxRuntime implements AcpRuntime {
     logContext: string;
   }): Promise<AcpxJsonObject[]> {
     const resumeSessionId = resolveResumeSessionIdFromDetail(params.detail);
+    if (!resumeSessionId) {
+      this.logger?.warn?.(
+        `acpx ensureSession repairing dead named session with fresh session owner: session=${params.sessionName} cwd=${params.cwd} ${params.logContext}`,
+      );
+      return await this.createNamedSession({
+        agent: params.agent,
+        cwd: params.cwd,
+        sessionName: params.sessionName,
+      });
+    }
     this.logger?.warn?.(
-      resumeSessionId
-        ? `acpx ensureSession repairing dead named session by resuming backend session: session=${params.sessionName} cwd=${params.cwd} resumeSessionId=${resumeSessionId} ${params.logContext}`
-        : `acpx ensureSession repairing dead named session with fresh session owner: session=${params.sessionName} cwd=${params.cwd} ${params.logContext}`,
+      `acpx ensureSession repairing dead named session by resuming backend session: session=${params.sessionName} cwd=${params.cwd} resumeSessionId=${resumeSessionId} ${params.logContext}`,
     );
-    return await this.createNamedSession({
-      agent: params.agent,
-      cwd: params.cwd,
-      sessionName: params.sessionName,
-      ...(resumeSessionId ? { resumeSessionId } : {}),
-    });
+    try {
+      return await this.createNamedSession({
+        agent: params.agent,
+        cwd: params.cwd,
+        sessionName: params.sessionName,
+        resumeSessionId,
+      });
+    } catch (error) {
+      if (!(error instanceof AcpRuntimeError) || error.code !== "ACP_SESSION_INIT_FAILED") {
+        throw error;
+      }
+      this.logger?.warn?.(
+        `acpx ensureSession dead-session resume repair failed; retrying with fresh session owner: session=${params.sessionName} cwd=${params.cwd} resumeSessionId=${resumeSessionId} error=${summarizeLogText(error.message) || "<empty>"} ${params.logContext}`,
+      );
+      return await this.createNamedSession({
+        agent: params.agent,
+        cwd: params.cwd,
+        sessionName: params.sessionName,
+      });
+    }
   }
 
   private async shouldReplaceEnsuredSession(params: {

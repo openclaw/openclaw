@@ -317,6 +317,54 @@ describe("AcpxRuntime", () => {
     });
   });
 
+  it("falls back to a fresh named session when queue owner resume repair uses a stale session id", async () => {
+    const previousResumeFailure = process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME;
+    const previousStatus = process.env.MOCK_ACPX_STATUS_STATUS;
+    const previousSummary = process.env.MOCK_ACPX_STATUS_SUMMARY;
+    process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME = "1";
+    process.env.MOCK_ACPX_STATUS_STATUS = "dead";
+    process.env.MOCK_ACPX_STATUS_SUMMARY = "queue owner unavailable";
+
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:dead-session-stale-resume",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const newEntries = logs.filter((entry) => entry.kind === "new");
+      expect(newEntries).toHaveLength(2);
+      const firstArgs = ((newEntries[0]?.args as string[]) ?? []).slice();
+      const secondArgs = ((newEntries[1]?.args as string[]) ?? []).slice();
+      const firstResumeFlagIndex = firstArgs.indexOf("--resume-session");
+      expect(firstResumeFlagIndex).toBeGreaterThanOrEqual(0);
+      expect(firstArgs[firstResumeFlagIndex + 1]).toBe(
+        "sid-agent:codex:acp:dead-session-stale-resume",
+      );
+      expect(secondArgs.indexOf("--resume-session")).toBe(-1);
+    } finally {
+      if (previousResumeFailure === undefined) {
+        delete process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME;
+      } else {
+        process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME = previousResumeFailure;
+      }
+      if (previousStatus === undefined) {
+        delete process.env.MOCK_ACPX_STATUS_STATUS;
+      } else {
+        process.env.MOCK_ACPX_STATUS_STATUS = previousStatus;
+      }
+      if (previousSummary === undefined) {
+        delete process.env.MOCK_ACPX_STATUS_SUMMARY;
+      } else {
+        process.env.MOCK_ACPX_STATUS_SUMMARY = previousSummary;
+      }
+    }
+  });
+
   it("creates a fresh named session after ensure failure when status indicates an unrecoverable failure", async () => {
     await expectSessionEnsureFallback({
       sessionKey: "agent:codex:acp:ensure-fallback-dead-unrecoverable",

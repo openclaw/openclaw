@@ -256,6 +256,38 @@ describe("telegramPlugin threading", () => {
   });
 });
 
+describe("telegramPlugin bindings", () => {
+  it("preserves topic and direct command conversation routing", () => {
+    expect(
+      telegramPlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        threadId: "77",
+        originatingTo: "-1001",
+      }),
+    ).toEqual({
+      conversationId: "-1001:topic:77",
+      parentConversationId: "-1001",
+    });
+
+    expect(
+      telegramPlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        originatingTo: "12345",
+      }),
+    ).toEqual({
+      conversationId: "12345",
+      parentConversationId: "12345",
+    });
+
+    expect(
+      telegramPlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        originatingTo: "-1001",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("telegramPlugin duplicate token guard", () => {
   it("marks secondary account as not configured when token is shared", async () => {
     const cfg = createCfg();
