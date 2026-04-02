@@ -16,6 +16,7 @@ import {
   waitForWaConnection,
   webAuthExists,
 } from "./session.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 
@@ -177,7 +178,7 @@ export async function startWebLoginWithQr(
     clearTimeout(qrTimer);
     await resetActiveLogin(account.accountId);
     return {
-      message: `Failed to start WhatsApp login: ${String(err)}`,
+      message: `Failed to start WhatsApp login: ${formatErrorMessage(err)}`,
     };
   }
   const login: ActiveLogin = {
@@ -205,7 +206,7 @@ export async function startWebLoginWithQr(
     clearTimeout(qrTimer);
     await resetActiveLogin(account.accountId);
     return {
-      message: `Failed to get QR: ${String(err)}`,
+      message: `Failed to get QR: ${formatErrorMessage(err)}`,
     };
   }
 

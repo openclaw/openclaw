@@ -79,7 +79,7 @@ export function formatError(err: unknown): string {
     return err;
   }
   if (!err || typeof err !== "object") {
-    return String(err);
+    return formatErrorMessage(err);
   }
 
   const boom =

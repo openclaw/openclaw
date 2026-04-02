@@ -11,6 +11,7 @@ import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
@@ -114,7 +115,7 @@ export async function sendMessageWhatsApp(
     return { messageId, toJid: jid };
   } catch (err) {
     logger.error(
-      { err: String(err), to: redactedTo, hasMedia: Boolean(options.mediaUrl) },
+      { err: formatErrorMessage(err), to: redactedTo, hasMedia: Boolean(options.mediaUrl) },
       "failed to send via web session",
     );
     throw err;
@@ -157,7 +158,7 @@ export async function sendReactionWhatsApp(
     logger.info({ chatJid: redactedJid, messageId, emoji }, "sent reaction");
   } catch (err) {
     logger.error(
-      { err: String(err), chatJid: redactedChatJid, messageId, emoji },
+      { err: formatErrorMessage(err), chatJid: redactedChatJid, messageId, emoji },
       "failed to send reaction via web session",
     );
     throw err;
@@ -198,7 +199,7 @@ export async function sendPollWhatsApp(
     logger.info({ jid: redactedJid, messageId }, "sent poll");
     return { messageId, toJid: jid };
   } catch (err) {
-    logger.error({ err: String(err), to: redactedTo }, "failed to send poll via web session");
+    logger.error({ err: formatErrorMessage(err), to: redactedTo }, "failed to send poll via web session");
     throw err;
   }
 }

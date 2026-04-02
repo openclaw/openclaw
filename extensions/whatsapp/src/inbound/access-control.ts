@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { isSelfChatMode, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "../accounts.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type InboundAccessControlResult = {
   allowed: boolean;
@@ -193,7 +194,7 @@ export async function checkInboundAccessControl(params: {
             await params.sock.sendMessage(params.remoteJid, { text });
           },
           onReplyError: (err) => {
-            logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
+            logVerbose(`whatsapp pairing reply failed for ${candidate}: ${formatErrorMessage(err)}`);
           },
         });
       }

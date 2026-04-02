@@ -21,6 +21,7 @@ import {
   resolveWebCredsPath,
 } from "./auth-store.js";
 import { formatError, getStatusCode } from "./session-errors.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 export { formatError, getStatusCode } from "./session-errors.js";
 
 export {
@@ -47,7 +48,7 @@ function enqueueSaveCreds(
   const next = prev
     .then(() => safeSaveCreds(authDir, saveCreds, logger))
     .catch((err) => {
-      logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
+      logger.warn({ error: formatErrorMessage(err) }, "WhatsApp creds save queue error");
     })
     .finally(() => {
       if (credsSaveQueues.get(authDir) === next) credsSaveQueues.delete(authDir);
@@ -90,7 +91,7 @@ async function safeSaveCreds(
       // best-effort on platforms that support it
     }
   } catch (err) {
-    logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
+    logger.warn({ error: formatErrorMessage(err) }, "failed saving WhatsApp creds");
   }
 }
 
@@ -156,7 +157,7 @@ export async function createWaSocket(
           console.log(success("WhatsApp Web connected."));
         }
       } catch (err) {
-        sessionLogger.error({ error: String(err) }, "connection.update handler error");
+        sessionLogger.error({ error: formatErrorMessage(err) }, "connection.update handler error");
       }
     },
   );
@@ -164,7 +165,7 @@ export async function createWaSocket(
   // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process
   if (sock.ws && typeof (sock.ws as unknown as { on?: unknown }).on === "function") {
     sock.ws.on("error", (err: Error) => {
-      sessionLogger.error({ error: String(err) }, "WebSocket error");
+      sessionLogger.error({ error: formatErrorMessage(err) }, "WebSocket error");
     });
   }
 

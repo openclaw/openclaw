@@ -15,6 +15,7 @@ import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tool
 import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
 import { loginWeb } from "./login.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const channel = "whatsapp" as const;
 
@@ -337,7 +338,7 @@ export const whatsappSetupWizard: ChannelSetupWizard = {
       try {
         await loginWeb(false, undefined, runtime, accountId);
       } catch (error) {
-        runtime.error(`WhatsApp login failed: ${String(error)}`);
+        runtime.error(`WhatsApp login failed: ${formatErrorMessage(error)}`);
         await prompter.note(`Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`, "WhatsApp help");
       }
     } else if (!linked) {
