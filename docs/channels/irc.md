@@ -34,7 +34,7 @@ IRC ships as an extension plugin, but it is configured in the main config under 
 
 Note: This configuration does not use TLS. Before attempting to connect with TLS, add `TLS: true` and switch the `port` value to `6697`
 
-3. Start/restart gateway:
+5. Start/restart gateway:
 
 ```bash
 openclaw gateway run
