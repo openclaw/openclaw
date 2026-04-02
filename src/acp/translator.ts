@@ -1078,7 +1078,13 @@ export class AcpGatewayAgent implements Agent {
     pending.reject(error);
   }
 
-  private clearPendingDisconnectState(pending: PendingPrompt): void {
+  private clearPendingDisconnectState(
+    pending: PendingPrompt,
+    disconnectContext: DisconnectContext,
+  ): void {
+    if (pending.disconnectContext !== disconnectContext) {
+      return;
+    }
     pending.disconnectContext = undefined;
   }
 
@@ -1150,7 +1156,7 @@ export class AcpGatewayAgent implements Agent {
           );
           return false;
         }
-        this.clearPendingDisconnectState(pending);
+        this.clearPendingDisconnectState(pending, disconnectContext);
         return false;
       }
       return true;
@@ -1180,7 +1186,7 @@ export class AcpGatewayAgent implements Agent {
         );
         return false;
       }
-      this.clearPendingDisconnectState(currentPending);
+      this.clearPendingDisconnectState(currentPending, disconnectContext);
       return false;
     }
     return true;
