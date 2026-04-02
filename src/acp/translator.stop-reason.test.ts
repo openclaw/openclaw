@@ -392,4 +392,45 @@ describe("acp translator stop reason mapping", () => {
       vi.useRealTimers();
     }
   });
+
+  it("rejects a superseded pre-ack prompt when a newer prompt has replaced the session entry", async () => {
+    const sessionId = "session-1";
+    const sessionKey = "agent:main:main";
+    let promptCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "chat.send") {
+        return {};
+      }
+      promptCount += 1;
+      if (promptCount === 1) {
+        throw new Error("gateway closed (1006): connection lost");
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    sessionStore.createSession({
+      sessionId,
+      sessionKey,
+      cwd: "/tmp",
+    });
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const firstPrompt = agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "first" }],
+      _meta: {},
+    } as unknown as PromptRequest);
+    await Promise.resolve();
+
+    const secondPrompt = agent.prompt({
+      sessionId,
+      prompt: [{ type: "text", text: "second" }],
+      _meta: {},
+    } as unknown as PromptRequest);
+
+    await expect(firstPrompt).rejects.toThrow("gateway closed (1006): connection lost");
+    await expect(Promise.race([secondPrompt, Promise.resolve("pending")])).resolves.toBe("pending");
+  });
 });

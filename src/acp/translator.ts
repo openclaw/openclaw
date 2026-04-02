@@ -727,7 +727,8 @@ export class AcpGatewayAgent implements Agent {
       };
 
       void sendWithProvenanceFallback().catch((err) => {
-        if (isGatewayCloseError(err) && this.pendingPrompts.has(params.sessionId)) {
+        const currentPending = this.pendingPrompts.get(params.sessionId);
+        if (isGatewayCloseError(err) && currentPending?.idempotencyKey === runId) {
           return;
         }
         this.pendingPrompts.delete(params.sessionId);
