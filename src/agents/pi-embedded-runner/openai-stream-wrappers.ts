@@ -6,7 +6,10 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../codex-native-web-search.js";
-import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
+import {
+  resolveProviderRequestAttributionHeaders,
+  resolveProviderRequestPolicy,
+} from "../provider-attribution.js";
 import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
@@ -22,48 +25,18 @@ const OPENAI_REASONING_COMPAT_PROVIDERS = new Set([
   "azure-openai-responses",
 ]);
 
-function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return false;
-  }
-
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return (
-      host === "api.openai.com" || host === "chatgpt.com" || host.endsWith(".openai.azure.com")
-    );
-  } catch {
-    const normalized = baseUrl.toLowerCase();
-    return (
-      normalized.includes("api.openai.com") ||
-      normalized.includes("chatgpt.com") ||
-      normalized.includes(".openai.azure.com")
-    );
-  }
-}
-
-function isOpenAIPublicApiBaseUrl(baseUrl: unknown): boolean {
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return false;
-  }
-
-  try {
-    return new URL(baseUrl).hostname.toLowerCase() === "api.openai.com";
-  } catch {
-    return baseUrl.toLowerCase().includes("api.openai.com");
-  }
-}
-
-function isOpenAICodexBaseUrl(baseUrl: unknown): boolean {
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return false;
-  }
-
-  try {
-    return new URL(baseUrl).hostname.toLowerCase() === "chatgpt.com";
-  } catch {
-    return baseUrl.toLowerCase().includes("chatgpt.com");
-  }
+function resolveOpenAIRequestPolicy(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}) {
+  return resolveProviderRequestPolicy({
+    provider: typeof model.provider === "string" ? model.provider : undefined,
+    api: typeof model.api === "string" ? model.api : undefined,
+    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+    capability: "llm",
+    transport: "stream",
+  });
 }
 
 function shouldApplyOpenAIAttributionHeaders(model: {
@@ -71,21 +44,10 @@ function shouldApplyOpenAIAttributionHeaders(model: {
   provider?: unknown;
   baseUrl?: unknown;
 }): "openai" | "openai-codex" | undefined {
-  if (
-    model.provider === "openai" &&
-    (model.api === "openai-completions" || model.api === "openai-responses") &&
-    isOpenAIPublicApiBaseUrl(model.baseUrl)
-  ) {
-    return "openai";
-  }
-  if (
-    model.provider === "openai-codex" &&
-    (model.api === "openai-codex-responses" || model.api === "openai-responses") &&
-    isOpenAICodexBaseUrl(model.baseUrl)
-  ) {
-    return "openai-codex";
-  }
-  return undefined;
+  const attributionProvider = resolveOpenAIRequestPolicy(model).attributionProvider;
+  return attributionProvider === "openai" || attributionProvider === "openai-codex"
+    ? attributionProvider
+    : undefined;
 }
 
 function shouldApplyOpenAIServiceTier(model: {
@@ -93,17 +55,18 @@ function shouldApplyOpenAIServiceTier(model: {
   provider?: unknown;
   baseUrl?: unknown;
 }): boolean {
+  const policy = resolveOpenAIRequestPolicy(model);
   if (
     model.provider === "openai" &&
     model.api === "openai-responses" &&
-    isOpenAIPublicApiBaseUrl(model.baseUrl)
+    policy.endpointClass === "openai-public"
   ) {
     return true;
   }
   if (
     model.provider === "openai-codex" &&
     (model.api === "openai-codex-responses" || model.api === "openai-responses") &&
-    isOpenAICodexBaseUrl(model.baseUrl)
+    policy.endpointClass === "openai-codex"
   ) {
     return true;
   }
@@ -128,7 +91,7 @@ function shouldForceResponsesStore(model: {
   if (!OPENAI_RESPONSES_PROVIDERS.has(model.provider)) {
     return false;
   }
-  return isDirectOpenAIBaseUrl(model.baseUrl);
+  return resolveOpenAIRequestPolicy(model).usesKnownNativeOpenAIEndpoint;
 }
 
 function parsePositiveInteger(value: unknown): number | undefined {
@@ -193,10 +156,12 @@ function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unkno
   }
   // Missing baseUrl means pi-ai will use the default OpenAI endpoint, so keep
   // prompt cache fields for that direct path.
-  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
-    return false;
-  }
-  return !isDirectOpenAIBaseUrl(model.baseUrl);
+  return resolveProviderRequestPolicy({
+    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+    api: typeof model.api === "string" ? model.api : undefined,
+    transport: "stream",
+    capability: "llm",
+  }).usesExplicitProxyLikeEndpoint;
 }
 
 function shouldApplyOpenAIReasoningCompatibility(model: {
@@ -577,7 +542,13 @@ export function createOpenAIAttributionHeadersWrapper(
       ...options,
       headers: {
         ...options?.headers,
-        ...resolveProviderAttributionHeaders(attributionProvider),
+        ...resolveProviderRequestAttributionHeaders({
+          provider: attributionProvider,
+          api: typeof model.api === "string" ? model.api : undefined,
+          baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+          capability: "llm",
+          transport: "stream",
+        }),
       },
     });
   };
