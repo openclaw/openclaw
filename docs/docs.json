@@ -1157,7 +1157,8 @@
                       "tools/kimi-search",
                       "tools/perplexity-search",
                       "tools/searxng-search",
-                      "tools/tavily"
+                      "tools/tavily",
+                      "tools/tinyfish"
                     ]
                   },
                   "tools/btw",

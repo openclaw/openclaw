@@ -13,13 +13,14 @@ export {
   resolveBrowserControlAuth,
   resolveProfile,
 } from "./browser-config.js";
+export { closeTrackedBrowserTabsForSessions, movePathToTrash } from "./browser-maintenance.js";
 import {
   createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "browser",
     artifactBasename: "runtime-api.js",
   });
@@ -71,11 +72,6 @@ export const browserTabAction: FacadeModule["browserTabAction"] = ((...args) =>
   loadFacadeModule()["browserTabAction"](...args)) as FacadeModule["browserTabAction"];
 export const browserTabs: FacadeModule["browserTabs"] = ((...args) =>
   loadFacadeModule()["browserTabs"](...args)) as FacadeModule["browserTabs"];
-export const closeTrackedBrowserTabsForSessions: FacadeModule["closeTrackedBrowserTabsForSessions"] =
-  ((...args) =>
-    loadFacadeModule()["closeTrackedBrowserTabsForSessions"](
-      ...args,
-    )) as FacadeModule["closeTrackedBrowserTabsForSessions"];
 export const createBrowserControlContext: FacadeModule["createBrowserControlContext"] = ((
   ...args
 ) =>
@@ -139,8 +135,6 @@ export const isPersistentBrowserProfileMutation: FacadeModule["isPersistentBrows
     loadFacadeModule()["isPersistentBrowserProfileMutation"](
       ...args,
     )) as FacadeModule["isPersistentBrowserProfileMutation"];
-export const movePathToTrash: FacadeModule["movePathToTrash"] = ((...args) =>
-  loadFacadeModule()["movePathToTrash"](...args)) as FacadeModule["movePathToTrash"];
 export const normalizeBrowserFormField: FacadeModule["normalizeBrowserFormField"] = ((...args) =>
   loadFacadeModule()["normalizeBrowserFormField"](
     ...args,
