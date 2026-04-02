@@ -69,17 +69,28 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (activeProviders.length > 0) {
-    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
-  }
+
+  // Always attempt capability loader when cfg is available so that speech-only
+  // plugins like elevenlabs are discovered even when the main registry already
+  // contains a different provider (e.g. openai registers both model + speech).
   const loadOptions =
     params.cfg === undefined
       ? undefined
       : {
           config: resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg }),
         };
-  const registry = resolveRuntimePluginRegistry(loadOptions);
-  return (registry?.[params.key] ?? []).map(
-    (entry) => entry.provider,
-  ) as CapabilityProviderForKey<K>[];
+  const capabilityRegistry = loadOptions ? resolveRuntimePluginRegistry(loadOptions) : undefined;
+  const capabilityProviders = capabilityRegistry?.[params.key] ?? [];
+
+  // Merge: active providers first, then capability-only providers not already present.
+  const seenIds = new Set(activeProviders.map((entry) => entry.provider?.id).filter(Boolean));
+  const merged = [
+    ...activeProviders,
+    ...capabilityProviders.filter((entry) => !seenIds.has(entry.provider?.id)),
+  ];
+
+  if (merged.length > 0) {
+    return merged.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+  }
+  return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
 }
