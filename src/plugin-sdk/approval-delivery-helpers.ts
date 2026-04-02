@@ -127,9 +127,6 @@ function buildApproverRestrictedNativeApprovalCapability(
             (resolvedAccountId === undefined
               ? input.target.accountId?.trim()
               : resolvedAccountId.trim()) || undefined;
-          if (input.approvalKind === "plugin") {
-            return false;
-          }
           return params.isNativeDeliveryEnabled({ cfg: input.cfg, accountId });
         },
       },

@@ -225,7 +225,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
           },
         } as never,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
 
