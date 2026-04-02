@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { writeBundleProbeMcpServer } from "./bundle-mcp.test-harness.js";
 import { PersistentMcpManager } from "./persistent-mcp-manager.js";
 
@@ -470,8 +470,6 @@ describe("PersistentMcpManager – failure and retry", () => {
     const stateDir = await makeStateDir();
     const serverScript = path.join(stateDir, "probe-server.mjs");
 
-    // Patch _doInit to fail on first call only.
-    let callCount = 0;
     const mgr = makeManager({
       stateDir,
       cfg: {

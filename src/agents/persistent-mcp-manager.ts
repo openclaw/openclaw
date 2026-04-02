@@ -52,7 +52,7 @@ function attachStderrLogging(
   }
   const onData = (chunk: Buffer | string) => {
     const message = String(chunk).trim();
-    if (!message) return;
+    if (!message) { return; }
     for (const line of message.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (trimmed) {
@@ -69,11 +69,11 @@ function attachStderrLogging(
 }
 
 async function killStaleProcess(pid: number, starttime: number | undefined): Promise<void> {
-  if (!isPidAlive(pid)) return;
+  if (!isPidAlive(pid)) { return; }
 
   // PID recycle guard: if starttime is not available (platform doesn't support it),
   // skip the kill entirely to avoid terminating an unrelated process that reused the PID.
-  if (starttime === undefined) return;
+  if (starttime === undefined) { return; }
 
   const currentStarttime = getProcessStartTime(pid);
   if (currentStarttime !== null && currentStarttime !== starttime) {
@@ -147,7 +147,7 @@ export class PersistentMcpManager {
   getPersistentServerNames(): Set<string> {
     const names = new Set<string>();
     const servers = this.cfg?.mcp?.servers;
-    if (!servers) return names;
+    if (!servers) { return names; }
     for (const [name, srv] of Object.entries(servers)) {
       if (isRecord(srv) && srv.persistent === true) {
         names.add(name);
@@ -171,8 +171,8 @@ export class PersistentMcpManager {
    * `createPersistentConfiguredMcpProjection` are kept as defensive guards.
    */
   async ensureReady(): Promise<void> {
-    if (this.state === "disposed") return;
-    if (this.state === "ready") return;
+    if (this.state === "disposed") { return; }
+    if (this.state === "ready") { return; }
 
     if (this.initPromise) {
       await this.initPromise;
@@ -184,11 +184,11 @@ export class PersistentMcpManager {
       () => {
         this.initPromise = null;
         // Guard: dispose() may have run while init was in flight.
-        if (this.state !== "disposed") this.state = "ready";
+        if (this.state !== "disposed") { this.state = "ready"; }
       },
       (err) => {
         this.initPromise = null;
-        if (this.state !== "disposed") this.state = "failed";
+        if (this.state !== "disposed") { this.state = "failed"; }
         this.log.warn(`persistent-mcp: initialization failed: ${String(err)}`);
       },
     );
@@ -197,13 +197,13 @@ export class PersistentMcpManager {
 
   private async _doInit(): Promise<void> {
     const servers = this.cfg?.mcp?.servers;
-    if (!servers) return;
+    if (!servers) { return; }
 
     for (const [serverName, rawServer] of Object.entries(servers)) {
-      if (!isRecord(rawServer) || rawServer.persistent !== true) continue;
+      if (!isRecord(rawServer) || rawServer.persistent !== true) { continue; }
 
       const existing = this.handles.get(serverName);
-      if (existing && existing.state === "ready") continue;
+      if (existing && existing.state === "ready") { continue; }
 
       await this._startServer(serverName, rawServer);
     }
@@ -303,6 +303,7 @@ export class PersistentMcpManager {
 
     // Register disconnect/error handlers BEFORE connect() so the SDK chains them
     // correctly (SDK saves the pre-existing callbacks and calls them first).
+    // eslint-disable-next-line unicorn/prefer-add-event-listener -- MCP Transport interface uses callback properties, not EventTarget
     transport.onclose = () => {
       if (handle.state === "ready") {
         handle.state = "failed";
@@ -312,6 +313,7 @@ export class PersistentMcpManager {
         void deleteLockFile(lockPath);
       }
     };
+    // eslint-disable-next-line unicorn/prefer-add-event-listener -- MCP Transport interface uses callback properties, not EventTarget
     transport.onerror = (err) => {
       if (handle.state === "ready") {
         handle.state = "failed";
@@ -370,17 +372,17 @@ export class PersistentMcpManager {
    * If the handle exists but is failed, triggers a lazy reconnect.
    */
   async getReadyClient(serverName: string): Promise<Client | null> {
-    if (this.state === "disposed") return null;
+    if (this.state === "disposed") { return null; }
 
     const handle = this.handles.get(serverName);
 
-    if (handle?.state === "ready") return handle.client;
+    if (handle?.state === "ready") { return handle.client; }
 
     // A concurrent caller is already starting this server — await it.
     if (handle?.startPromise) {
       await handle.startPromise.catch(() => {});
       const refreshed = this.handles.get(serverName);
-      if (refreshed?.state === "ready") return refreshed.client;
+      if (refreshed?.state === "ready") { return refreshed.client; }
       return null;
     }
 
@@ -391,7 +393,7 @@ export class PersistentMcpManager {
       if (rawServer) {
         await this._startServer(serverName, rawServer);
         const refreshed = this.handles.get(serverName);
-        if (refreshed?.state === "ready") return refreshed.client;
+        if (refreshed?.state === "ready") { return refreshed.client; }
       }
     }
 
@@ -399,7 +401,7 @@ export class PersistentMcpManager {
   }
 
   async dispose(): Promise<void> {
-    if (this.state === "disposed") return;
+    if (this.state === "disposed") { return; }
     this.state = "disposed";
 
     // Wait for any in-progress init to settle before disposing.
