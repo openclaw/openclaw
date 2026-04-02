@@ -320,7 +320,6 @@ function buildPluginRequestStages(params: {
     return [];
   }
   let pluginGatewayAuthSatisfied = false;
-  let pluginRequestAuth: AuthorizedGatewayHttpRequest | undefined;
   let pluginRequestOperatorScopes: string[] | undefined;
   return [
     {
@@ -350,7 +349,6 @@ function buildPluginRequestStages(params: {
           return true;
         }
         pluginGatewayAuthSatisfied = true;
-        pluginRequestAuth = requestAuth;
         pluginRequestOperatorScopes = resolvePluginRouteRuntimeOperatorScopes(
           params.req,
           requestAuth,
@@ -366,7 +364,6 @@ function buildPluginRequestStages(params: {
         return (
           params.handlePluginRequest?.(params.req, params.res, pathContext, {
             gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
-            gatewayRequestAuth: pluginRequestAuth,
             gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
           }) ?? false
         );
