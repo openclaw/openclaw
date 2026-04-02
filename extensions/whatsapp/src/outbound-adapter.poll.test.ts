@@ -18,13 +18,7 @@ vi.mock("./send.js", () => ({
 let whatsappOutbound: typeof import("./outbound-adapter.js").whatsappOutbound;
 
 describe("whatsappOutbound sendPoll", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    hoisted.sendPollWhatsApp.mockReset();
-    hoisted.sendPollWhatsApp.mockResolvedValue({
-      messageId: "poll-1",
-      toJid: "1555@s.whatsapp.net",
-    });
+  beforeAll(async () => {
     ({ whatsappOutbound } = await import("./outbound-adapter.js"));
   });
 
