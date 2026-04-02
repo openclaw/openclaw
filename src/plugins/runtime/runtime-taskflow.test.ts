@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getFlowById, resetFlowRegistryForTests } from "../../tasks/flow-registry.js";
+import { getTaskFlowById, resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import { getTaskById, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 
@@ -30,7 +30,7 @@ vi.mock("../../agents/subagent-control.js", () => ({
 
 afterEach(() => {
   resetTaskRegistryForTests();
-  resetFlowRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
   vi.clearAllMocks();
 });
 
@@ -146,7 +146,7 @@ describe("runtime TaskFlow", () => {
       parentFlowId: created.flowId,
       ownerKey: "agent:main:main",
     });
-    expect(getFlowById(created.flowId)).toMatchObject({
+    expect(getTaskFlowById(created.flowId)).toMatchObject({
       flowId: created.flowId,
     });
     expect(ownerTaskFlow.getTaskSummary(created.flowId)).toMatchObject({
