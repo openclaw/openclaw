@@ -206,11 +206,13 @@ function resolveTelegramDispatcherPolicy(params: {
         ? {
             mode: "explicit-proxy",
             proxyUrl: explicitProxyUrl,
+            allowPrivateProxy: true,
             proxyTls: { ...connect },
           }
         : {
             mode: "explicit-proxy",
             proxyUrl: explicitProxyUrl,
+            allowPrivateProxy: true,
           },
       mode: "explicit-proxy",
     };

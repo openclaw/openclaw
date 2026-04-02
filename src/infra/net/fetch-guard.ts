@@ -112,7 +112,13 @@ async function assertExplicitProxyAllowed(
   }
   await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
     lookupFn,
-    policy,
+    policy:
+      dispatcherPolicy.allowPrivateProxy === true
+        ? {
+            ...policy,
+            allowPrivateNetwork: true,
+          }
+        : policy,
   });
 }
 
