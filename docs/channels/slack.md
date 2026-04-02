@@ -527,6 +527,7 @@ top-level `approvals.exec` config is present.
 </Warning>
 
 **Approver resolution order:**
+
 1. `channels.slack.execApprovals.approvers` — explicit list (recommended)
 2. `commands.ownerAllowFrom` — fallback if no explicit approvers are set
 
