@@ -52,4 +52,33 @@ describe("parseAt — time-only strings (HH:MM / HH:MM:SS)", () => {
     expect(parseAt("not-a-time")).toBeNull();
     expect(parseAt("")).toBeNull();
   });
+
+  it("returns null (not throws) when --tz is an invalid IANA timezone", () => {
+    // Regression: previously Intl.DateTimeFormat threw a RangeError on bad
+    // timezone, breaking parseAt's contract of returning null on bad input.
+    expect(() => parseAt("09:00", "Bad/Zone")).not.toThrow();
+    expect(parseAt("09:00", "Bad/Zone")).toBeNull();
+    expect(parseAt("09:00", "Asia/Shanghaix")).toBeNull();
+  });
+
+  it("result date is today\'s wall-clock date in the given timezone", () => {
+    const result = parseAt("09:00", "Asia/Shanghai");
+    expect(result).not.toBeNull();
+    const d = new Date(result!);
+    // Get today\'s date string in Shanghai (YYYY-MM-DD)
+    const todayInSH = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+      .format(new Date())
+      .replaceAll("/", "-");
+    // The UTC ISO string should start with the correct Shanghai date
+    // (allowing for the -8h UTC offset so day may appear as prev day in UTC)
+    const utcIso = d.toISOString().slice(0, 10);
+    const shDateMs = new Date(`${todayInSH}T09:00:00+08:00`).getTime();
+    expect(Math.abs(d.getTime() - shDateMs)).toBeLessThan(1000);
+    void utcIso; // used for debugging context only
+  });
 });

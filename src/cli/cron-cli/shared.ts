@@ -111,15 +111,21 @@ function getUtcDateString(): string {
 /**
  * Returns the current date string (YYYY-MM-DD) in the given IANA timezone.
  */
-function getTodayDateInTimeZone(timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
-  return `${get("year")}-${get("month")}-${get("day")}`;
+function getTodayDateInTimeZone(timeZone: string): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+    return `${get("year")}-${get("month")}-${get("day")}`;
+  } catch {
+    // Invalid IANA timezone — propagate null so parseAt can return null
+    // and the CLI can report a normal "Invalid --at" validation error.
+    return null;
+  }
 }
 
 /**
@@ -150,6 +156,9 @@ export function parseAt(input: string, tz?: string): string | null {
     // Build an offset-less ISO datetime for today at the requested time,
     // then resolve it in the given timezone (or UTC when no tz supplied).
     const todayStr = tz ? getTodayDateInTimeZone(tz) : getUtcDateString();
+    if (todayStr === null) {
+      return null; // invalid timezone — caller will surface "Invalid --at"
+    }
     const offsetlessDt = `${todayStr}T${hh}:${mm}:${ss}`;
     if (tz) {
       return parseOffsetlessIsoDateTimeInTimeZone(offsetlessDt, tz);
