@@ -334,11 +334,11 @@ describe("createDiffsHttpHandler", () => {
       expectedStatusCode: 404,
     },
     {
-      name: "blocks trusted-proxy loopback requests without client-origin headers by default",
+      name: "allows direct loopback viewer access when trusted proxies are configured",
       request: localReq,
       trustedProxies: ["127.0.0.1"],
       allowRemoteViewer: false,
-      expectedStatusCode: 404,
+      expectedStatusCode: 200,
     },
     {
       name: "allows remote access when allowRemoteViewer is enabled",

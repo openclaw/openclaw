@@ -203,20 +203,27 @@ function resolveViewerAccess(
   localRequest: boolean;
 } {
   const proxyHintsPresent = hasProxyForwardingHints(req);
+  const remoteKey = normalizeRemoteClientKey(req.socket?.remoteAddress);
+  // Keep direct same-host access working even when proxy support is configured.
+  const directLoopbackRequest = !proxyHintsPresent && isLoopbackClientIp(remoteKey);
+  if (directLoopbackRequest) {
+    return { remoteKey, localRequest: true };
+  }
+
   const clientIp =
     proxyHintsPresent || (params.trustedProxies?.length ?? 0) > 0
-      ? // Reuse gateway proxy trust rules and fail closed when a trusted proxy hop
-        // does not provide usable client-origin headers.
+      ? // Reuse gateway proxy trust rules for proxied requests and fail closed
+        // when a trusted proxy hop does not provide usable client-origin headers.
         resolveRequestClientIp(
           req,
           params.trustedProxies ? [...params.trustedProxies] : undefined,
           params.allowRealIpFallback === true,
         )
       : req.socket?.remoteAddress;
-  const remoteKey = normalizeRemoteClientKey(clientIp ?? req.socket?.remoteAddress);
-  const localRequest =
-    !proxyHintsPresent && typeof clientIp === "string" && isLoopbackClientIp(remoteKey);
-  return { remoteKey, localRequest };
+  return {
+    remoteKey: normalizeRemoteClientKey(clientIp ?? req.socket?.remoteAddress),
+    localRequest: false,
+  };
 }
 
 function recordRemoteFailure(
