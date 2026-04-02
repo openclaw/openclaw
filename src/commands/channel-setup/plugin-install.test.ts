@@ -38,6 +38,11 @@ vi.mock("../../channels/plugins/catalog.js", async (importOriginal) => {
   };
 });
 
+const loadPluginManifestRegistry = vi.fn();
+vi.mock("../../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: (...args: unknown[]) => loadPluginManifestRegistry(...args),
+}));
+
 vi.mock("../../plugins/bundled-sources.js", () => ({
   findBundledPluginSourceInMap: ({
     bundled,
@@ -117,6 +122,7 @@ beforeEach(() => {
   }));
   resolveBundledPluginSources.mockReturnValue(new Map());
   getChannelPluginCatalogEntry.mockReturnValue(undefined);
+  loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -540,6 +546,33 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.not.objectContaining({
         onlyPluginIds: expect.anything(),
+      }),
+    );
+  });
+
+  it("scopes snapshots by a unique discovered manifest match when catalog mapping is missing", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "custom-telegram-plugin", channels: ["telegram"] }],
+      diagnostics: [],
+    });
+
+    loadChannelSetupPluginRegistrySnapshotForChannel({
+      cfg,
+      runtime,
+      channel: "telegram",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        workspaceDir: "/tmp/openclaw-workspace",
+        cache: false,
+        onlyPluginIds: ["custom-telegram-plugin"],
+        includeSetupOnlyChannelPlugins: true,
+        activate: false,
       }),
     );
   });

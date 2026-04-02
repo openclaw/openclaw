@@ -23,11 +23,12 @@ function addAccountAuthDirs(
   accountId: string,
   account: WhatsAppAccountConfig | undefined,
   accountsRoot: string,
+  env: NodeJS.ProcessEnv,
 ): void {
   authDirs.add(path.join(accountsRoot, normalizeAccountId(accountId)));
   const configuredAuthDir = account?.authDir?.trim();
   if (configuredAuthDir) {
-    authDirs.add(resolveUserPath(configuredAuthDir));
+    authDirs.add(resolveUserPath(configuredAuthDir, env));
   }
 }
 
@@ -40,7 +41,7 @@ function listWhatsAppAuthDirs(
   const channel = resolveWhatsAppChannelConfig(cfg);
   const authDirs = new Set<string>([oauthDir, path.join(accountsRoot, DEFAULT_ACCOUNT_ID)]);
 
-  addAccountAuthDirs(authDirs, DEFAULT_ACCOUNT_ID, undefined, accountsRoot);
+  addAccountAuthDirs(authDirs, DEFAULT_ACCOUNT_ID, undefined, accountsRoot, env);
 
   if (channel?.defaultAccount?.trim()) {
     addAccountAuthDirs(
@@ -48,6 +49,7 @@ function listWhatsAppAuthDirs(
       channel.defaultAccount,
       channel.accounts?.[channel.defaultAccount],
       accountsRoot,
+      env,
     );
   }
 
@@ -59,6 +61,7 @@ function listWhatsAppAuthDirs(
         accountId,
         isRecord(value) ? value : undefined,
         accountsRoot,
+        env,
       );
     }
   }
