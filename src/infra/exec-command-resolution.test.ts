@@ -307,6 +307,48 @@ describe("exec-command-resolution", () => {
     expect(deep.allowlistEval.allowlistSatisfied).toBe(false);
   });
 
+  it("uses host platform path semantics for wrapper script matching when platform is omitted", () => {
+    const cwd = process.platform === "win32" ? "C:\\temp" : "/tmp";
+    const scriptPath = process.platform === "win32" ? "C:\\scripts\\run.ps1" : "/tmp/run.sh";
+    const argv = ["bash", scriptPath];
+    const analysis = {
+      ok: true as const,
+      segments: [
+        {
+          raw: argv.join(" "),
+          argv,
+          resolution: resolveCommandResolutionFromArgv(
+            argv,
+            cwd,
+            {},
+            {
+              platform: process.platform,
+              resolutionMode: "virtual",
+            },
+          ),
+        },
+      ],
+    };
+
+    const allowlist = [{ pattern: scriptPath }];
+    const withExplicitPlatform = evaluateExecAllowlist({
+      analysis,
+      allowlist,
+      safeBins: normalizeSafeBins([]),
+      cwd,
+      platform: process.platform,
+    });
+    const withDefaultPlatform = evaluateExecAllowlist({
+      analysis,
+      allowlist,
+      safeBins: normalizeSafeBins([]),
+      cwd,
+    });
+
+    expect(withExplicitPlatform.allowlistSatisfied).toBe(true);
+    expect(withDefaultPlatform.allowlistSatisfied).toBe(withExplicitPlatform.allowlistSatisfied);
+  });
+
   it("resolves allowlist candidate paths from unresolved raw executables", () => {
     const homeCandidatePath = resolveExecutionTargetCandidatePath(
       {

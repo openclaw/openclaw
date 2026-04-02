@@ -38,8 +38,12 @@ function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
 }
 
+function isPathWindowsPlatform(platform?: string | null): boolean {
+  return isWindowsPlatform(platform ?? process.platform);
+}
+
 function getPathModuleForPlatform(platform?: string | null): typeof path.posix {
-  return isWindowsPlatform(platform) ? path.win32 : path.posix;
+  return isPathWindowsPlatform(platform) ? path.win32 : path.posix;
 }
 
 export function normalizeSafeBins(entries?: readonly string[]): Set<string> {
@@ -424,7 +428,9 @@ function evaluateSegments(
           {
             rawExecutable: shellScriptCandidatePath,
             resolvedPath: shellScriptCandidatePath,
-            executableName: path.basename(shellScriptCandidatePath),
+            executableName: getPathModuleForPlatform(params.platform).basename(
+              shellScriptCandidatePath,
+            ),
           },
           { platform: params.platform },
         )
