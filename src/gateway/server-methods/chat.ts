@@ -93,10 +93,19 @@ import type {
 } from "./types.js";
 
 /**
- * Filter fallback models against the agent allowlist.
- * Only include fallbacks that are in the allowed set.
+ * Filter and canonicalize image model fallbacks in one step.
+ * This combines allowlist filtering with provider-aware canonicalization.
+ *
+ * @param fallbacks - Raw fallback model strings from config
+ * @param cfg - OpenClaw config for allowlist lookup
+ * @param agentId - Agent ID for per-agent allowlist
+ * @param aliasIndex - Model alias index for resolution
+ * @param defaultProvider - Agent's default provider
+ * @param defaultModel - Agent's default model
+ * @param imageModelProvider - Pre-computed image model provider (avoids re-resolution)
+ * @returns Filtered and canonicalized fallback keys in "provider/model" format
  */
-function filterFallbacksByAllowlist(params: {
+function prepareImageModelFallbacks(params: {
   fallbacks: string[];
   cfg: OpenClawConfig;
   agentId?: string;
@@ -107,6 +116,11 @@ function filterFallbacksByAllowlist(params: {
 }): string[] {
   const { fallbacks, cfg, agentId, aliasIndex, defaultProvider, defaultModel, imageModelProvider } =
     params;
+
+  if (fallbacks.length === 0) {
+    return [];
+  }
+
   const providerForResolution = imageModelProvider ?? defaultProvider;
   const { allowAny, allowedKeys } = buildAllowedModelSet({
     cfg,
@@ -115,123 +129,34 @@ function filterFallbacksByAllowlist(params: {
     defaultModel,
     agentId,
   });
-  if (allowAny) {
-    return fallbacks.filter((fb) => fb?.trim());
-  }
-  return fallbacks.filter((fb) => {
-    if (!fb?.trim()) {
-      return false;
-    }
-    const resolved = resolveModelRefFromString({
-      raw: fb.trim(),
-      defaultProvider: providerForResolution,
-      aliasIndex,
-    });
-    if (!resolved) {
-      return allowedKeys.has(fb.trim());
-    }
-    const key = modelKey(resolved.ref.provider, resolved.ref.model);
-    return allowedKeys.has(key) || allowedKeys.has(fb.trim());
-  });
-}
-
-/**
- * Canonicalize fallback model strings by resolving them with the image model's provider.
- * This ensures fallbacks are resolved in the correct provider context when the image model
- * lives on a different provider than the global default.
- */
-function canonicalizeFallbacks(params: {
-  fallbacks: string[];
-  imageModelRaw: string;
-  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
-  agentDefaultProvider: string;
-  /** Pre-computed image model provider (avoids re-resolving imageModelRaw with wrong context) */
-  imageModelProvider?: string;
-}): string[] {
-  const { fallbacks, imageModelRaw, aliasIndex, agentDefaultProvider, imageModelProvider } = params;
-
-  // Use the pre-computed imageModelProvider if available (avoids losing inferred provider context)
-  // Otherwise, resolve the image model to get its provider
-  let fallbackDefaultProvider: string;
-  if (imageModelProvider) {
-    // Use the pre-computed provider directly (already inferred from fallback chain or primary)
-    fallbackDefaultProvider = imageModelProvider;
-  } else {
-    // Fallback: resolve imageModelRaw to derive provider (may lose context for providerless primaries)
-    const imageModelResolved = resolveModelRefFromString({
-      raw: imageModelRaw.trim(),
-      defaultProvider: agentDefaultProvider,
-      aliasIndex,
-    });
-    fallbackDefaultProvider = imageModelResolved?.ref.provider ?? agentDefaultProvider;
-  }
 
   return fallbacks
     .map((fb) => {
-      if (!fb?.trim()) {
+      const trimmed = fb?.trim();
+      if (!trimmed) {
         return null;
       }
+
       const resolved = resolveModelRefFromString({
-        raw: fb.trim(),
-        defaultProvider: fallbackDefaultProvider,
+        raw: trimmed,
+        defaultProvider: providerForResolution,
         aliasIndex,
       });
+
       if (!resolved) {
-        // Return the raw string if resolution fails
-        return fb.trim();
+        if (!allowAny && !allowedKeys.has(trimmed)) {
+          return null;
+        }
+        return trimmed;
       }
-      // Return canonical provider/model format
-      return modelKey(resolved.ref.provider, resolved.ref.model);
+
+      const key = modelKey(resolved.ref.provider, resolved.ref.model);
+      if (!allowAny && !allowedKeys.has(key) && !allowedKeys.has(trimmed)) {
+        return null;
+      }
+      return key;
     })
     .filter((fb): fb is string => fb !== null);
-}
-
-/**
- * Filter and canonicalize image model fallbacks in one step.
- * This combines allowlist filtering with provider-aware canonicalization.
- */
-function prepareImageModelFallbacks(params: {
-  fallbacks: string[];
-  imageModelPrimary: string;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
-  defaultProvider: string;
-  defaultModel?: string;
-  imageModelProvider?: string;
-}): string[] {
-  const {
-    fallbacks,
-    imageModelPrimary,
-    cfg,
-    agentId,
-    aliasIndex,
-    defaultProvider,
-    defaultModel,
-    imageModelProvider,
-  } = params;
-
-  if (fallbacks.length === 0) {
-    return [];
-  }
-
-  const filtered = filterFallbacksByAllowlist({
-    fallbacks,
-    cfg,
-    agentId,
-    aliasIndex,
-    defaultProvider,
-    defaultModel,
-    imageModelProvider,
-  });
-
-  return canonicalizeFallbacks({
-    fallbacks: filtered,
-    imageModelRaw: imageModelPrimary,
-    aliasIndex,
-    agentDefaultProvider: defaultProvider,
-    imageModelProvider,
-  });
 }
 
 type TranscriptAppendResult = {
@@ -2080,7 +2005,6 @@ export const chatHandlers: GatewayRequestHandlers = {
             imageModelOverride = resolvedImageModelPrimary;
             imageModelFallbacks = prepareImageModelFallbacks({
               fallbacks: effectiveImageModelFallbacks,
-              imageModelPrimary,
               cfg,
               agentId,
               aliasIndex: imageFallbackAliasIndex,
@@ -2102,7 +2026,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           imageModelOverride = resolvedImageModelPrimary;
           imageModelFallbacks = prepareImageModelFallbacks({
             fallbacks: effectiveImageModelFallbacks,
-            imageModelPrimary,
             cfg,
             agentId,
             aliasIndex: imageFallbackAliasIndex,
