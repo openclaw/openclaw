@@ -42,6 +42,7 @@ const {
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,
   formatFileOperations,
+  resolveCompactionRequestAuth,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
@@ -1940,4 +1941,57 @@ describe("readWorkspaceContextForSummary", () => {
       });
     },
   );
+});
+
+describe("resolveCompactionRequestAuth", () => {
+  const model = createAnthropicModelFixture({ provider: "codex-lb", id: "gpt-5.4" });
+
+  it("prefers getApiKeyAndHeaders when available", async () => {
+    await expect(
+      resolveCompactionRequestAuth({
+        model,
+        modelRegistry: {
+          getApiKeyAndHeaders: vi.fn(async () => ({
+            ok: true,
+            apiKey: "sk-from-headers",
+            headers: { Authorization: "Bearer sk-from-headers" },
+          })),
+          getApiKeyForProvider: vi.fn(async () => "sk-provider"),
+        } as unknown as ExtensionContext["modelRegistry"],
+      }),
+    ).resolves.toEqual({
+      apiKey: "sk-from-headers",
+      headers: { Authorization: "Bearer sk-from-headers" },
+    });
+  });
+
+  it("uses getApiKeyForProvider and preserves model headers when legacy getApiKey is absent", async () => {
+    await expect(
+      resolveCompactionRequestAuth({
+        model: createAnthropicModelFixture({
+          provider: "codex-lb",
+          id: "gpt-5.4",
+          headers: { "chatgpt-account-id": "proxy_codex-lb" },
+        }),
+        modelRegistry: {
+          getApiKeyForProvider: vi.fn(async (provider: string) =>
+            provider === "codex-lb" ? "sk-provider" : undefined,
+          ),
+        } as unknown as ExtensionContext["modelRegistry"],
+        modelHeaders: { "chatgpt-account-id": "proxy_codex-lb" },
+      }),
+    ).resolves.toEqual({
+      apiKey: "sk-provider",
+      headers: { "chatgpt-account-id": "proxy_codex-lb" },
+    });
+  });
+
+  it("throws a readable error when no supported auth method exists", async () => {
+    await expect(
+      resolveCompactionRequestAuth({
+        model,
+        modelRegistry: {} as ExtensionContext["modelRegistry"],
+      }),
+    ).rejects.toThrow("ctx.modelRegistry has no supported request auth method.");
+  });
 });

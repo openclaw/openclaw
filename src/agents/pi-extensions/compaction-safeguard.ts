@@ -70,6 +70,19 @@ type ToolFailure = {
   meta?: string;
 };
 
+type CompactionRequestAuth = {
+  apiKey?: string;
+  headers?: Record<string, string>;
+};
+
+type ModelRegistryCompat = {
+  getApiKey?: (model: NonNullable<ExtensionContext["model"]>) => Promise<string | undefined>;
+  getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
+  getApiKeyAndHeaders?: (
+    model: NonNullable<ExtensionContext["model"]>,
+  ) => Promise<{ ok: boolean; apiKey?: string; headers?: Record<string, string>; error?: string }>;
+};
+
 function clampNonNegativeInt(value: unknown, fallback: number): number {
   const normalized = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   return Math.max(0, Math.floor(normalized));
@@ -122,6 +135,47 @@ function formatToolFailureMeta(details: unknown): string | undefined {
 
 function extractToolResultText(content: unknown): string {
   return collectTextContentBlocks(content).join("\n");
+}
+
+async function resolveCompactionRequestAuth(params: {
+  model: NonNullable<ExtensionContext["model"]>;
+  modelRegistry: ExtensionContext["modelRegistry"];
+  modelHeaders?: Record<string, string>;
+}): Promise<CompactionRequestAuth | null> {
+  const registry = params.modelRegistry as ModelRegistryCompat;
+
+  if (typeof registry.getApiKeyAndHeaders === "function") {
+    const resolved = await registry.getApiKeyAndHeaders(params.model);
+    if (!resolved.ok) {
+      throw new Error(resolved.error || "Request auth lookup failed.");
+    }
+    const headers =
+      resolved.headers && Object.keys(resolved.headers).length > 0
+        ? { ...resolved.headers }
+        : params.modelHeaders;
+    if (resolved.apiKey || headers) {
+      return { apiKey: resolved.apiKey, headers };
+    }
+    return null;
+  }
+
+  if (typeof registry.getApiKeyForProvider === "function") {
+    const apiKey = await registry.getApiKeyForProvider(params.model.provider);
+    if (apiKey || params.modelHeaders) {
+      return { apiKey, headers: params.modelHeaders };
+    }
+    return null;
+  }
+
+  if (typeof registry.getApiKey === "function") {
+    const apiKey = await registry.getApiKey(params.model);
+    if (apiKey || params.modelHeaders) {
+      return { apiKey, headers: params.modelHeaders };
+    }
+    return null;
+  }
+
+  throw new Error("ctx.modelRegistry has no supported request auth method.");
 }
 
 function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
@@ -618,9 +672,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       model.headers && typeof model.headers === "object" && !Array.isArray(model.headers)
         ? model.headers
         : undefined;
-    let apiKey = "";
+    let resolvedAuth: CompactionRequestAuth | null = null;
     try {
-      apiKey = (await ctx.modelRegistry.getApiKey(model)) ?? "";
+      resolvedAuth = await resolveCompactionRequestAuth({
+        model,
+        modelRegistry: ctx.modelRegistry,
+        modelHeaders,
+      });
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       log.warn(`Compaction safeguard: request auth unavailable; cancelling compaction. ${error}`);
@@ -630,7 +688,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       return { cancel: true };
     }
-    const headers = modelHeaders && Object.keys(modelHeaders).length > 0 ? modelHeaders : undefined;
+    const apiKey = resolvedAuth?.apiKey ?? "";
+    const headers = resolvedAuth?.headers;
     if (!apiKey && !headers) {
       log.warn(
         "Compaction safeguard: no request auth available; cancelling compaction to preserve history.",
@@ -928,6 +987,7 @@ export const __testing = {
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,
   formatFileOperations,
+  resolveCompactionRequestAuth,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
