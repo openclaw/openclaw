@@ -42,6 +42,7 @@ describe("switchChatSession", () => {
     const state = {
       sessionKey: "agent:alpha:main",
       chatMessage: "draft",
+      chatMessages: [{ role: "assistant", content: "stale" }],
       chatStream: "stream",
       chatQueue: [{ id: "queued" }],
       chatRunId: "run-1",
@@ -60,6 +61,7 @@ describe("switchChatSession", () => {
 
     expect(state.sessionKey).toBe("agent:beta:main");
     expect(state.chatMessage).toBe("");
+    expect(state.chatMessages).toEqual([]);
     expect(state.chatStream).toBeNull();
     expect(state.chatQueue).toEqual([]);
     expect(state.chatRunId).toBeNull();
