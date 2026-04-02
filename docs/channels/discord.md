@@ -395,6 +395,7 @@ Example:
 
     - `user:<id>`
     - `<@id>` mention
+    - bot sender IDs should be listed as bare IDs in `allowFrom`; `bot:` is not a recognized prefix
 
     Bare numeric IDs are ambiguous and rejected unless an explicit user/channel target kind is provided.
 
@@ -1186,6 +1187,8 @@ openclaw logs --follow
 
     If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
     Prefer `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot.
+    For guild messaging, `guilds.<id>.users` is the primary gate: if that allowlist is non-empty, the sending bot ID must be listed there before `allowBots` matters.
+    `allowFrom` does not recognize a `bot:` prefix; use the raw bot user ID or add the bot to `guilds.<id>.users`.
 
   </Accordion>
 
