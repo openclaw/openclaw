@@ -475,6 +475,48 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("clarifies inbound-thread binding regression case with acp", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-acp-thread-1",
+      targetSessionKey: "agent:codex-acp:mattermost:channel:CHAN1",
+      targetKind: "session",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "channel:CHAN1",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {},
+    } satisfies SessionBindingRecord);
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      SessionKey: "agent:main:mattermost:channel:CHAN1:thread:post-root",
+      AccountId: "default",
+      MessageThreadId: undefined,
+      OriginatingChannel: "mattermost",
+      OriginatingTo: "channel:CHAN1",
+      To: "channel:CHAN1",
+      ExplicitDeliverRoute: true,
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "mattermost",
+        to: "channel:CHAN1",
+        threadId: "post-root",
+      }),
+    );
+  });
+
   it("does not resurrect a cleared route thread from origin metadata", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
