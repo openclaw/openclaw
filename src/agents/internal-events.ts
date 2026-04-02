@@ -1,3 +1,9 @@
+import {
+  escapeInternalRuntimeContextDelimiters,
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "./internal-runtime-context.js";
+
 export type AgentInternalEventType = "task_completion";
 
 export type AgentTaskCompletionInternalEvent = {
@@ -16,27 +22,17 @@ export type AgentTaskCompletionInternalEvent = {
 
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
-export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
-export const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-
-const ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN = "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]";
-const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]";
-
-function escapeInternalContextDelimiters(value: string): string {
-  return value
-    .replaceAll(INTERNAL_RUNTIME_CONTEXT_BEGIN, ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN)
-    .replaceAll(INTERNAL_RUNTIME_CONTEXT_END, ESCAPED_INTERNAL_RUNTIME_CONTEXT_END);
-}
+export { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END };
 
 function sanitizeSingleLineField(value: string, fallback: string): string {
-  const sanitized = escapeInternalContextDelimiters(value)
+  const sanitized = escapeInternalRuntimeContextDelimiters(value)
     .replace(/\r?\n+/g, " ")
     .trim();
   return sanitized || fallback;
 }
 
 function sanitizeMultilineField(value: string, fallback: string): string {
-  const sanitized = escapeInternalContextDelimiters(value).replace(/\r\n/g, "\n").trim();
+  const sanitized = escapeInternalRuntimeContextDelimiters(value).replace(/\r\n/g, "\n").trim();
   return sanitized || fallback;
 }
 
