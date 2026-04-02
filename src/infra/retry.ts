@@ -172,10 +172,20 @@ const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
 };
 
 const isRateLimitLikeError = (err: unknown): boolean => {
+  const responseStatus = asFiniteNumber(
+    (err as { response?: { status?: unknown; statusCode?: unknown } } | null | undefined)?.response
+      ?.status,
+  );
+  const responseStatusCode = asFiniteNumber(
+    (err as { response?: { status?: unknown; statusCode?: unknown } } | null | undefined)?.response
+      ?.statusCode,
+  );
   const status =
     asFiniteNumber((err as { status?: unknown } | null | undefined)?.status) ??
     asFiniteNumber((err as { statusCode?: unknown } | null | undefined)?.statusCode) ??
-    asFiniteNumber((err as { code?: unknown } | null | undefined)?.code);
+    asFiniteNumber((err as { code?: unknown } | null | undefined)?.code) ??
+    responseStatus ??
+    responseStatusCode;
   if (status === 429) {
     return true;
   }
