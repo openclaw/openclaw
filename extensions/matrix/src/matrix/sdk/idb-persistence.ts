@@ -248,16 +248,20 @@ export async function persistIdbToDisk(params?: {
 }): Promise<void> {
   const snapshotPath = params?.snapshotPath ?? resolveDefaultIdbSnapshotPath();
   try {
-    const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
-    if (snapshot.length === 0) return;
     fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
-    await withFileLock(snapshotPath, IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
+    const persistedCount = await withFileLock(snapshotPath, IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
+      const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
+      if (snapshot.length === 0) {
+        return 0;
+      }
       fs.writeFileSync(snapshotPath, JSON.stringify(snapshot));
       fs.chmodSync(snapshotPath, 0o600);
+      return snapshot.length;
     });
+    if (persistedCount === 0) return;
     LogService.debug(
       "IdbPersistence",
-      `Persisted ${snapshot.length} IndexedDB database(s) to ${snapshotPath}`,
+      `Persisted ${persistedCount} IndexedDB database(s) to ${snapshotPath}`,
     );
   } catch (err) {
     LogService.warn("IdbPersistence", "Failed to persist IndexedDB snapshot:", err);
