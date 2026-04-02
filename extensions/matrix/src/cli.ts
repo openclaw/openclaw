@@ -29,6 +29,10 @@ import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
 
+export function resetMatrixCliStateForTests(): void {
+  matrixCliExitScheduled = false;
+}
+
 function scheduleMatrixCliExit(): void {
   if (matrixCliExitScheduled || process.env.VITEST) {
     return;
@@ -158,6 +162,7 @@ async function addMatrixAccount(params: {
   name?: string;
   avatarUrl?: string;
   homeserver?: string;
+  proxy?: string;
   userId?: string;
   accessToken?: string;
   password?: string;
@@ -177,6 +182,7 @@ async function addMatrixAccount(params: {
     avatarUrl: params.avatarUrl,
     homeserver: params.homeserver,
     allowPrivateNetwork: params.allowPrivateNetwork,
+    proxy: params.proxy,
     userId: params.userId,
     accessToken: params.accessToken,
     password: params.password,
@@ -675,6 +681,7 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--name <name>", "Optional display name for this account")
     .option("--avatar-url <url>", "Optional Matrix avatar URL (mxc:// or http(s) URL)")
     .option("--homeserver <url>", "Matrix homeserver URL")
+    .option("--proxy <url>", "Optional HTTP(S) proxy URL for Matrix requests")
     .option(
       "--allow-private-network",
       "Allow Matrix homeserver traffic to private/internal hosts for this account",
@@ -696,6 +703,7 @@ export function registerMatrixCli(params: { program: Command }): void {
         name?: string;
         avatarUrl?: string;
         homeserver?: string;
+        proxy?: string;
         allowPrivateNetwork?: boolean;
         userId?: string;
         accessToken?: string;
@@ -715,6 +723,7 @@ export function registerMatrixCli(params: { program: Command }): void {
               name: options.name,
               avatarUrl: options.avatarUrl,
               homeserver: options.homeserver,
+              proxy: options.proxy,
               allowPrivateNetwork: options.allowPrivateNetwork === true,
               userId: options.userId,
               accessToken: options.accessToken,

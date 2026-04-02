@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -11,15 +12,10 @@ vi.mock("../../config/config.js", () => ({
   replaceConfigFile: (...args: unknown[]) => mocks.replaceConfigFile(...args),
 }));
 
-let loadValidConfigOrThrow: typeof import("./shared.js").loadValidConfigOrThrow;
-let updateConfig: typeof import("./shared.js").updateConfig;
-
 describe("models/shared", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     mocks.readConfigFileSnapshot.mockClear();
     mocks.replaceConfigFile.mockClear();
-    ({ loadValidConfigOrThrow, updateConfig } = await import("./shared.js"));
   });
 
   it("returns config when snapshot is valid", async () => {

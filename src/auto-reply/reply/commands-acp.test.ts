@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
-import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const hoisted = vi.hoisted(() => {
@@ -110,6 +114,185 @@ const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
 const { __testing: acpResetTargetTesting } = await import("./acp-reset-target.js");
+const { createTaskRecord, resetTaskRegistryForTests } =
+  await import("../../tasks/task-registry.js");
+
+function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim().replace(/^telegram:/i, "");
+  if (!trimmed) {
+    return undefined;
+  }
+  const topicMatch = /^(.*):topic:\d+$/i.exec(trimmed);
+  return (topicMatch?.[1] ?? trimmed).trim() || undefined;
+}
+
+function parseDiscordConversationIdForTest(
+  targets: Array<string | undefined | null>,
+): string | undefined {
+  for (const rawTarget of targets) {
+    const target = rawTarget?.trim();
+    if (!target) {
+      continue;
+    }
+    const mentionMatch = /^<#(\d+)>$/.exec(target);
+    if (mentionMatch?.[1]) {
+      return mentionMatch[1];
+    }
+    if (/^channel:/i.test(target)) {
+      return target;
+    }
+  }
+  return undefined;
+}
+
+function parseDiscordParentChannelFromSessionKeyForTest(raw?: string | null): string | undefined {
+  const sessionKey = raw?.trim().toLowerCase() ?? "";
+  const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
+  return match?.[1] ? `channel:${match[1]}` : undefined;
+}
+
+function setMinimalAcpCommandRegistryForTests(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          bindings: {
+            resolveCommandConversation: ({
+              threadId,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const chatId = [originatingTo, commandTo, fallbackTo]
+                .map((candidate) => parseTelegramChatIdForTest(candidate))
+                .find(Boolean);
+              if (!chatId) {
+                return null;
+              }
+              if (threadId) {
+                return {
+                  conversationId: `${chatId}:topic:${threadId}`,
+                  parentConversationId: chatId,
+                };
+              }
+              if (chatId.startsWith("-")) {
+                return null;
+              }
+              return { conversationId: chatId, parentConversationId: chatId };
+            },
+          },
+        },
+      },
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
+          bindings: {
+            resolveCommandConversation: ({
+              threadId,
+              threadParentId,
+              parentSessionKey,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              threadParentId?: string;
+              parentSessionKey?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              if (threadId) {
+                const parentConversationId =
+                  (threadParentId?.trim()
+                    ? `channel:${threadParentId.trim().replace(/^channel:/i, "")}`
+                    : undefined) ??
+                  parseDiscordParentChannelFromSessionKeyForTest(parentSessionKey) ??
+                  parseDiscordConversationIdForTest([originatingTo, commandTo, fallbackTo]);
+                return {
+                  conversationId: threadId,
+                  ...(parentConversationId && parentConversationId !== threadId
+                    ? { parentConversationId }
+                    : {}),
+                };
+              }
+              const conversationId = parseDiscordConversationIdForTest([
+                originatingTo,
+                commandTo,
+                fallbackTo,
+              ]);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = [originatingTo, commandTo, fallbackTo]
+                .map((candidate) => candidate?.trim())
+                .find((candidate) => candidate && candidate.length > 0);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+          bindings: {
+            resolveCommandConversation: ({
+              threadId,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const roomId = [originatingTo, commandTo, fallbackTo]
+                .map((candidate) => candidate?.trim().replace(/^room:/i, ""))
+                .find((candidate) => candidate && candidate.length > 0);
+              if (!threadId || !roomId) {
+                return null;
+              }
+              return {
+                conversationId: threadId,
+                parentConversationId: roomId,
+              };
+            },
+          },
+        },
+      },
+    ]),
+  );
+}
 
 type FakeBinding = {
   bindingId: string;
@@ -497,8 +680,9 @@ async function runInternalAcpCommand(params: {
 
 describe("/acp command", () => {
   beforeEach(() => {
-    setDefaultChannelPluginRegistryForTests();
+    setMinimalAcpCommandRegistryForTests();
     acpManagerTesting.resetAcpSessionManagerForTests();
+    resetTaskRegistryForTests();
     acpResetTargetTesting.setDepsForTest({
       getSessionBindingService: () => createAcpCommandSessionBindingService() as never,
     });
@@ -957,7 +1141,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           accountId: "default",
-          conversationId: "!room:example.org",
+          conversationId: "room:!room:example.org",
         }),
       }),
     );
@@ -985,7 +1169,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           accountId: "default",
-          conversationId: "!room:example.org",
+          conversationId: "room:!room:example.org",
         }),
       }),
     );
@@ -1031,7 +1215,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "feishu",
           accountId: "default",
-          conversationId: "ou_sender_1",
+          conversationId: "user:ou_sender_1",
         }),
       }),
     );
@@ -1086,7 +1270,9 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain("spawnAcpSessions=true");
     expect(hoisted.closeMock).toHaveBeenCalledTimes(2);
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
     expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "sessions.patch" }),
     );
@@ -1276,12 +1462,24 @@ describe("/acp command", () => {
         lastUpdatedAt: Date.now(),
       },
     });
+    createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: defaultAcpSessionKey,
+      runId: "acp-run-1",
+      task: "Inspect ACP backlog",
+      status: "running",
+      progressSummary: "Fetching the latest runtime state",
+    });
     const result = await runThreadAcpCommand("/acp status", baseCfg);
 
     expect(result?.reply?.text).toContain("ACP status:");
     expect(result?.reply?.text).toContain(`session: ${defaultAcpSessionKey}`);
     expect(result?.reply?.text).toContain("agent session id: codex-sid-1");
     expect(result?.reply?.text).toContain("acpx session id: acpx-sid-1");
+    expect(result?.reply?.text).toContain("taskStatus: running");
+    expect(result?.reply?.text).toContain("taskProgress: Fetching the latest runtime state");
     expect(result?.reply?.text).toContain("capabilities:");
     expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
   });

@@ -22,6 +22,7 @@ export type TaskDeliveryStatus =
 export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
 
 export type TaskTerminalOutcome = "succeeded" | "blocked";
+export type TaskScopeKind = "session" | "system";
 
 export type TaskStatusCounts = Record<TaskStatus, number>;
 export type TaskRuntimeCounts = Record<TaskRuntime, number>;
@@ -43,12 +44,19 @@ export type TaskEventRecord = {
   summary?: string;
 };
 
+export type TaskDeliveryState = {
+  taskId: string;
+  requesterOrigin?: DeliveryContext;
+  lastNotifiedEventAt?: number;
+};
+
 export type TaskRecord = {
   taskId: string;
   runtime: TaskRuntime;
   sourceId?: string;
   requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
+  ownerKey: string;
+  scopeKind: TaskScopeKind;
   childSessionKey?: string;
   parentTaskId?: string;
   agentId?: string;
@@ -67,10 +75,9 @@ export type TaskRecord = {
   progressSummary?: string;
   terminalSummary?: string;
   terminalOutcome?: TaskTerminalOutcome;
-  recentEvents?: TaskEventRecord[];
-  lastNotifiedEventAt?: number;
 };
 
 export type TaskRegistrySnapshot = {
   tasks: TaskRecord[];
+  deliveryStates: TaskDeliveryState[];
 };

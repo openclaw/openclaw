@@ -3,14 +3,15 @@ import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
-import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
+import type { TaskRegistryStoreSnapshot } from "./task-registry.store.js";
+import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 type TaskRegistryRow = {
   task_id: string;
   runtime: TaskRecord["runtime"];
   source_id: string | null;
-  requester_session_key: string;
-  requester_origin_json: string | null;
+  owner_key: string;
+  scope_kind: TaskRecord["scopeKind"];
   child_session_key: string | null;
   parent_task_id: string | null;
   agent_id: string | null;
@@ -29,15 +30,27 @@ type TaskRegistryRow = {
   progress_summary: string | null;
   terminal_summary: string | null;
   terminal_outcome: TaskRecord["terminalOutcome"] | null;
-  recent_events_json: string | null;
+};
+
+type TaskDeliveryStateRow = {
+  task_id: string;
+  requester_origin_json: string | null;
   last_notified_event_at: number | bigint | null;
+};
+
+type TableInfoRow = {
+  name: string;
 };
 
 type TaskRegistryStatements = {
   selectAll: StatementSync;
-  replaceRow: StatementSync;
+  selectAllDeliveryStates: StatementSync;
+  upsertRow: StatementSync;
+  replaceDeliveryState: StatementSync;
   deleteRow: StatementSync;
+  deleteDeliveryState: StatementSync;
   clearRows: StatementSync;
+  clearDeliveryStates: StatementSync;
 };
 
 type TaskRegistryDatabase = {
@@ -49,7 +62,7 @@ type TaskRegistryDatabase = {
 let cachedDatabase: TaskRegistryDatabase | null = null;
 const TASK_REGISTRY_DIR_MODE = 0o700;
 const TASK_REGISTRY_FILE_MODE = 0o600;
-const TASK_REGISTRY_SIDEcar_SUFFIXES = ["", "-shm", "-wal"] as const;
+const TASK_REGISTRY_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
   if (typeof value === "bigint") {
@@ -74,19 +87,17 @@ function parseJsonValue<T>(raw: string | null): T | undefined {
 }
 
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
-  const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
-  const recentEvents = parseJsonValue<TaskEventRecord[]>(row.recent_events_json);
   const startedAt = normalizeNumber(row.started_at);
   const endedAt = normalizeNumber(row.ended_at);
   const lastEventAt = normalizeNumber(row.last_event_at);
   const cleanupAfter = normalizeNumber(row.cleanup_after);
-  const lastNotifiedEventAt = normalizeNumber(row.last_notified_event_at);
   return {
     taskId: row.task_id,
     runtime: row.runtime,
     ...(row.source_id ? { sourceId: row.source_id } : {}),
-    requesterSessionKey: row.requester_session_key,
-    ...(requesterOrigin ? { requesterOrigin } : {}),
+    requesterSessionKey: row.scope_kind === "system" ? "" : row.owner_key,
+    ownerKey: row.owner_key,
+    scopeKind: row.scope_kind,
     ...(row.child_session_key ? { childSessionKey: row.child_session_key } : {}),
     ...(row.parent_task_id ? { parentTaskId: row.parent_task_id } : {}),
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
@@ -105,7 +116,15 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     ...(row.progress_summary ? { progressSummary: row.progress_summary } : {}),
     ...(row.terminal_summary ? { terminalSummary: row.terminal_summary } : {}),
     ...(row.terminal_outcome ? { terminalOutcome: row.terminal_outcome } : {}),
-    ...(recentEvents?.length ? { recentEvents } : {}),
+  };
+}
+
+function rowToTaskDeliveryState(row: TaskDeliveryStateRow): TaskDeliveryState {
+  const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
+  const lastNotifiedEventAt = normalizeNumber(row.last_notified_event_at);
+  return {
+    taskId: row.task_id,
+    ...(requesterOrigin ? { requesterOrigin } : {}),
     ...(lastNotifiedEventAt != null ? { lastNotifiedEventAt } : {}),
   };
 }
@@ -115,8 +134,8 @@ function bindTaskRecord(record: TaskRecord) {
     task_id: record.taskId,
     runtime: record.runtime,
     source_id: record.sourceId ?? null,
-    requester_session_key: record.requesterSessionKey,
-    requester_origin_json: serializeJson(record.requesterOrigin),
+    owner_key: record.ownerKey,
+    scope_kind: record.scopeKind,
     child_session_key: record.childSessionKey ?? null,
     parent_task_id: record.parentTaskId ?? null,
     agent_id: record.agentId ?? null,
@@ -135,8 +154,14 @@ function bindTaskRecord(record: TaskRecord) {
     progress_summary: record.progressSummary ?? null,
     terminal_summary: record.terminalSummary ?? null,
     terminal_outcome: record.terminalOutcome ?? null,
-    recent_events_json: serializeJson(record.recentEvents),
-    last_notified_event_at: record.lastNotifiedEventAt ?? null,
+  };
+}
+
+function bindTaskDeliveryState(state: TaskDeliveryState) {
+  return {
+    task_id: state.taskId,
+    requester_origin_json: serializeJson(state.requesterOrigin),
+    last_notified_event_at: state.lastNotifiedEventAt ?? null,
   };
 }
 
@@ -147,8 +172,8 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         task_id,
         runtime,
         source_id,
-        requester_session_key,
-        requester_origin_json,
+        owner_key,
+        scope_kind,
         child_session_key,
         parent_task_id,
         agent_id,
@@ -166,19 +191,25 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         error,
         progress_summary,
         terminal_summary,
-        terminal_outcome,
-        recent_events_json,
-        last_notified_event_at
+        terminal_outcome
       FROM task_runs
       ORDER BY created_at ASC, task_id ASC
     `),
-    replaceRow: db.prepare(`
-      INSERT OR REPLACE INTO task_runs (
+    selectAllDeliveryStates: db.prepare(`
+      SELECT
+        task_id,
+        requester_origin_json,
+        last_notified_event_at
+      FROM task_delivery_state
+      ORDER BY task_id ASC
+    `),
+    upsertRow: db.prepare(`
+      INSERT INTO task_runs (
         task_id,
         runtime,
         source_id,
-        requester_session_key,
-        requester_origin_json,
+        owner_key,
+        scope_kind,
         child_session_key,
         parent_task_id,
         agent_id,
@@ -196,15 +227,13 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         error,
         progress_summary,
         terminal_summary,
-        terminal_outcome,
-        recent_events_json,
-        last_notified_event_at
+        terminal_outcome
       ) VALUES (
         @task_id,
         @runtime,
         @source_id,
-        @requester_session_key,
-        @requester_origin_json,
+        @owner_key,
+        @scope_kind,
         @child_session_key,
         @parent_task_id,
         @agent_id,
@@ -222,14 +251,84 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         @error,
         @progress_summary,
         @terminal_summary,
-        @terminal_outcome,
-        @recent_events_json,
+        @terminal_outcome
+      )
+      ON CONFLICT(task_id) DO UPDATE SET
+        runtime = excluded.runtime,
+        source_id = excluded.source_id,
+        owner_key = excluded.owner_key,
+        scope_kind = excluded.scope_kind,
+        child_session_key = excluded.child_session_key,
+        parent_task_id = excluded.parent_task_id,
+        agent_id = excluded.agent_id,
+        run_id = excluded.run_id,
+        label = excluded.label,
+        task = excluded.task,
+        status = excluded.status,
+        delivery_status = excluded.delivery_status,
+        notify_policy = excluded.notify_policy,
+        created_at = excluded.created_at,
+        started_at = excluded.started_at,
+        ended_at = excluded.ended_at,
+        last_event_at = excluded.last_event_at,
+        cleanup_after = excluded.cleanup_after,
+        error = excluded.error,
+        progress_summary = excluded.progress_summary,
+        terminal_summary = excluded.terminal_summary,
+        terminal_outcome = excluded.terminal_outcome
+    `),
+    replaceDeliveryState: db.prepare(`
+      INSERT OR REPLACE INTO task_delivery_state (
+        task_id,
+        requester_origin_json,
+        last_notified_event_at
+      ) VALUES (
+        @task_id,
+        @requester_origin_json,
         @last_notified_event_at
       )
     `),
     deleteRow: db.prepare(`DELETE FROM task_runs WHERE task_id = ?`),
+    deleteDeliveryState: db.prepare(`DELETE FROM task_delivery_state WHERE task_id = ?`),
     clearRows: db.prepare(`DELETE FROM task_runs`),
+    clearDeliveryStates: db.prepare(`DELETE FROM task_delivery_state`),
   };
+}
+
+function hasTaskRunsColumn(db: DatabaseSync, columnName: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(task_runs)`).all() as TableInfoRow[];
+  return rows.some((row) => row.name === columnName);
+}
+
+function migrateLegacyOwnerColumns(db: DatabaseSync) {
+  if (!hasTaskRunsColumn(db, "owner_key")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN owner_key TEXT;`);
+  }
+  if (!hasTaskRunsColumn(db, "scope_kind")) {
+    db.exec(`ALTER TABLE task_runs ADD COLUMN scope_kind TEXT NOT NULL DEFAULT 'session';`);
+  }
+  if (hasTaskRunsColumn(db, "requester_session_key")) {
+    db.exec(`
+      UPDATE task_runs
+      SET owner_key = requester_session_key
+      WHERE owner_key IS NULL
+    `);
+  }
+  db.exec(`
+    UPDATE task_runs
+    SET owner_key = CASE
+      WHEN trim(COALESCE(owner_key, '')) <> '' THEN trim(owner_key)
+      ELSE 'system:' || runtime || ':' || COALESCE(NULLIF(source_id, ''), task_id)
+    END
+  `);
+  db.exec(`
+    UPDATE task_runs
+    SET scope_kind = CASE
+      WHEN scope_kind = 'system' THEN 'system'
+      WHEN owner_key LIKE 'system:%' THEN 'system'
+      ELSE 'session'
+    END
+  `);
 }
 
 function ensureSchema(db: DatabaseSync) {
@@ -238,8 +337,8 @@ function ensureSchema(db: DatabaseSync) {
       task_id TEXT PRIMARY KEY,
       runtime TEXT NOT NULL,
       source_id TEXT,
-      requester_session_key TEXT NOT NULL,
-      requester_origin_json TEXT,
+      owner_key TEXT NOT NULL,
+      scope_kind TEXT NOT NULL,
       child_session_key TEXT,
       parent_task_id TEXT,
       agent_id TEXT,
@@ -257,8 +356,14 @@ function ensureSchema(db: DatabaseSync) {
       error TEXT,
       progress_summary TEXT,
       terminal_summary TEXT,
-      terminal_outcome TEXT,
-      recent_events_json TEXT,
+      terminal_outcome TEXT
+    );
+  `);
+  migrateLegacyOwnerColumns(db);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_delivery_state (
+      task_id TEXT PRIMARY KEY,
+      requester_origin_json TEXT,
       last_notified_event_at INTEGER
     );
   `);
@@ -267,6 +372,7 @@ function ensureSchema(db: DatabaseSync) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_status ON task_runs(runtime, status);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_cleanup_after ON task_runs(cleanup_after);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_at);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);`);
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);`,
   );
@@ -276,7 +382,7 @@ function ensureTaskRegistryPermissions(pathname: string) {
   const dir = resolveTaskRegistryDir(process.env);
   mkdirSync(dir, { recursive: true, mode: TASK_REGISTRY_DIR_MODE });
   chmodSync(dir, TASK_REGISTRY_DIR_MODE);
-  for (const suffix of TASK_REGISTRY_SIDEcar_SUFFIXES) {
+  for (const suffix of TASK_REGISTRY_SIDECAR_SUFFIXES) {
     const candidate = `${pathname}${suffix}`;
     if (!existsSync(candidate)) {
       continue;
@@ -323,31 +429,69 @@ function withWriteTransaction(write: (statements: TaskRegistryStatements) => voi
   }
 }
 
-export function loadTaskRegistrySnapshotFromSqlite(): Map<string, TaskRecord> {
+export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
   const { statements } = openTaskRegistryDatabase();
-  const rows = statements.selectAll.all() as TaskRegistryRow[];
-  return new Map(rows.map((row) => [row.task_id, rowToTaskRecord(row)]));
+  const taskRows = statements.selectAll.all() as TaskRegistryRow[];
+  const deliveryRows = statements.selectAllDeliveryStates.all() as TaskDeliveryStateRow[];
+  return {
+    tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
+    deliveryStates: new Map(deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)])),
+  };
 }
 
-export function saveTaskRegistrySnapshotToSqlite(tasks: ReadonlyMap<string, TaskRecord>) {
+export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapshot) {
   withWriteTransaction((statements) => {
+    statements.clearDeliveryStates.run();
     statements.clearRows.run();
-    for (const task of tasks.values()) {
-      statements.replaceRow.run(bindTaskRecord(task));
+    for (const task of snapshot.tasks.values()) {
+      statements.upsertRow.run(bindTaskRecord(task));
+    }
+    for (const state of snapshot.deliveryStates.values()) {
+      statements.replaceDeliveryState.run(bindTaskDeliveryState(state));
     }
   });
 }
 
 export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
   const store = openTaskRegistryDatabase();
-  store.statements.replaceRow.run(bindTaskRecord(task));
-  ensureTaskRegistryPermissions(store.path);
+  store.statements.upsertRow.run(bindTaskRecord(task));
+}
+
+export function upsertTaskWithDeliveryStateToSqlite(params: {
+  task: TaskRecord;
+  deliveryState?: TaskDeliveryState;
+}) {
+  withWriteTransaction((statements) => {
+    statements.upsertRow.run(bindTaskRecord(params.task));
+    if (params.deliveryState) {
+      statements.replaceDeliveryState.run(bindTaskDeliveryState(params.deliveryState));
+    } else {
+      statements.deleteDeliveryState.run(params.task.taskId);
+    }
+  });
 }
 
 export function deleteTaskRegistryRecordFromSqlite(taskId: string) {
   const store = openTaskRegistryDatabase();
   store.statements.deleteRow.run(taskId);
-  ensureTaskRegistryPermissions(store.path);
+  store.statements.deleteDeliveryState.run(taskId);
+}
+
+export function deleteTaskAndDeliveryStateFromSqlite(taskId: string) {
+  withWriteTransaction((statements) => {
+    statements.deleteRow.run(taskId);
+    statements.deleteDeliveryState.run(taskId);
+  });
+}
+
+export function upsertTaskDeliveryStateToSqlite(state: TaskDeliveryState) {
+  const store = openTaskRegistryDatabase();
+  store.statements.replaceDeliveryState.run(bindTaskDeliveryState(state));
+}
+
+export function deleteTaskDeliveryStateFromSqlite(taskId: string) {
+  const store = openTaskRegistryDatabase();
+  store.statements.deleteDeliveryState.run(taskId);
 }
 
 export function closeTaskRegistrySqliteStore() {

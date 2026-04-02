@@ -369,6 +369,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
+      teamId,
       peer: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
         id: isDirectMessage ? senderId : conversationId,
@@ -459,12 +460,23 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           fetchThreadReplies(graphToken, groupId, conversationId, activity.replyToId),
         ]);
         const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
-        const formatted = formatThreadContext(allMessages, activity.id);
+        const threadMessages =
+          groupPolicy === "allowlist"
+            ? allMessages.filter((msg) => {
+                return resolveMSTeamsAllowlistMatch({
+                  allowFrom: effectiveGroupAllowFrom,
+                  senderId: msg.from?.user?.id ?? "",
+                  senderName: msg.from?.user?.displayName,
+                  allowNameMatching,
+                }).allowed;
+              })
+            : allMessages;
+        const formatted = formatThreadContext(threadMessages, activity.id);
         if (formatted) {
           threadContext = formatted;
         }
       } catch (err) {
-        log.debug?.("failed to fetch thread history", { error: String(err) });
+        log.debug?.("failed to fetch thread history", { error: formatUnknownError(err) });
         // Graceful degradation: thread history is an optional enhancement.
       }
     }
@@ -554,7 +566,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
       ctx: ctxPayload,
       onRecordError: (err) => {
-        logVerboseMessage(`msteams: failed updating session meta: ${String(err)}`);
+        logVerboseMessage(`msteams: failed updating session meta: ${formatUnknownError(err)}`);
       },
     });
 
@@ -631,12 +643,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         });
       }
     } catch (err) {
-      log.error("dispatch failed", { error: String(err) });
-      runtime.error?.(`msteams dispatch failed: ${String(err)}`);
+      log.error("dispatch failed", { error: formatUnknownError(err) });
+      runtime.error?.(`msteams dispatch failed: ${formatUnknownError(err)}`);
       try {
-        await context.sendActivity(
-          `⚠️ Agent failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        await context.sendActivity("⚠️ Something went wrong. Please try again.");
       } catch {
         // Best effort.
       }
@@ -697,7 +707,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       });
     },
     onError: (err) => {
-      runtime.error?.(`msteams debounce flush failed: ${String(err)}`);
+      runtime.error?.(`msteams debounce flush failed: ${formatUnknownError(err)}`);
     },
   });
 

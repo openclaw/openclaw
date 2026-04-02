@@ -2,9 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSlackAutoThreadId } from "../../plugin-sdk/slack.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
@@ -14,64 +12,6 @@ import {
 
 const cfg = {} as OpenClawConfig;
 const maybeIt = process.platform === "win32" ? it.skip : it;
-
-function createToolContext(
-  overrides: Partial<ChannelThreadingToolContext> = {},
-): ChannelThreadingToolContext {
-  return {
-    currentChannelId: "C123",
-    currentThreadTs: "thread-1",
-    replyToMode: "all",
-    ...overrides,
-  };
-}
-
-describe("message action threading helpers", () => {
-  it("resolves Slack auto-thread ids only for matching active channels", () => {
-    expect(
-      resolveSlackAutoThreadId({
-        to: "#c123",
-        toolContext: createToolContext(),
-      }),
-    ).toBe("thread-1");
-    expect(
-      resolveSlackAutoThreadId({
-        to: "channel:C999",
-        toolContext: createToolContext(),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveSlackAutoThreadId({
-        to: "user:U123",
-        toolContext: createToolContext(),
-      }),
-    ).toBeUndefined();
-  });
-
-  it("skips Slack auto-thread ids when reply mode or context blocks them", () => {
-    expect(
-      resolveSlackAutoThreadId({
-        to: "C123",
-        toolContext: createToolContext({
-          replyToMode: "first",
-          hasRepliedRef: { value: true },
-        }),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveSlackAutoThreadId({
-        to: "C123",
-        toolContext: createToolContext({ replyToMode: "off" }),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveSlackAutoThreadId({
-        to: "C123",
-        toolContext: createToolContext({ currentThreadTs: undefined }),
-      }),
-    ).toBeUndefined();
-  });
-});
 
 describe("message action media helpers", () => {
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {
@@ -91,7 +31,9 @@ describe("message action media helpers", () => {
       }),
     ).toEqual({
       mode: "host",
-      localRoots: ["/tmp/a"],
+      mediaAccess: {
+        localRoots: ["/tmp/a"],
+      },
     });
   });
 

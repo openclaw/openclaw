@@ -2,13 +2,23 @@ import { loadConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
+  cancelTaskById,
+  getTaskById,
+  updateTaskNotifyPolicyById,
+} from "../tasks/runtime-internal.js";
+import {
   listTaskAuditFindings,
   summarizeTaskAuditFindings,
   type TaskAuditCode,
   type TaskAuditFinding,
   type TaskAuditSeverity,
 } from "../tasks/task-registry.audit.js";
-import { cancelTaskById, getTaskById, updateTaskNotifyPolicyById } from "../tasks/task-registry.js";
+import {
+  getInspectableTaskAuditSummary,
+  getInspectableTaskRegistrySummary,
+  previewTaskRegistryMaintenance,
+  runTaskRegistryMaintenance,
+} from "../tasks/task-registry.maintenance.js";
 import {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,
@@ -225,7 +235,7 @@ export async function tasksShowCommand(
     `result: ${task.terminalOutcome ?? "n/a"}`,
     `delivery: ${task.deliveryStatus}`,
     `notify: ${task.notifyPolicy}`,
-    `requesterSessionKey: ${task.requesterSessionKey}`,
+    `ownerKey: ${task.ownerKey}`,
     `childSessionKey: ${task.childSessionKey ?? "n/a"}`,
     `parentTaskId: ${task.parentTaskId ?? "n/a"}`,
     `agentId: ${task.agentId ?? "n/a"}`,
@@ -240,14 +250,6 @@ export async function tasksShowCommand(
     ...(task.error ? [`error: ${task.error}`] : []),
     ...(task.progressSummary ? [`progressSummary: ${task.progressSummary}`] : []),
     ...(task.terminalSummary ? [`terminalSummary: ${task.terminalSummary}`] : []),
-    ...(task.recentEvents?.length
-      ? task.recentEvents.map(
-          (event, index) =>
-            `recentEvent[${index}]: ${new Date(event.at).toISOString()} ${event.kind}${
-              event.summary ? ` ${event.summary}` : ""
-            }`,
-        )
-      : []),
   ];
   for (const line of lines) {
     runtime.log(line);
@@ -374,5 +376,55 @@ export async function tasksAuditCommand(
   const rich = isRich();
   for (const line of formatAuditRows(displayed, rich)) {
     runtime.log(line);
+  }
+}
+
+export async function tasksMaintenanceCommand(
+  opts: { json?: boolean; apply?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const auditBefore = getInspectableTaskAuditSummary();
+  const maintenance = opts.apply
+    ? await runTaskRegistryMaintenance()
+    : previewTaskRegistryMaintenance();
+  const summary = getInspectableTaskRegistrySummary();
+  const auditAfter = opts.apply ? getInspectableTaskAuditSummary() : auditBefore;
+
+  if (opts.json) {
+    runtime.log(
+      JSON.stringify(
+        {
+          mode: opts.apply ? "apply" : "preview",
+          maintenance,
+          tasks: summary,
+          auditBefore,
+          auditAfter,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  runtime.log(
+    info(
+      `Task maintenance (${opts.apply ? "applied" : "preview"}): ${maintenance.reconciled} reconcile · ${maintenance.cleanupStamped} cleanup stamp · ${maintenance.pruned} prune`,
+    ),
+  );
+  runtime.log(
+    info(
+      `${opts.apply ? "Task health after apply" : "Task health"}: ${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${auditAfter.errors} audit errors · ${auditAfter.warnings} audit warnings`,
+    ),
+  );
+  if (opts.apply) {
+    runtime.log(
+      info(
+        `Task health before apply: ${auditBefore.errors} audit errors · ${auditBefore.warnings} audit warnings`,
+      ),
+    );
+  }
+  if (!opts.apply) {
+    runtime.log("Dry run only. Re-run with `openclaw tasks maintenance --apply` to write changes.");
   }
 }

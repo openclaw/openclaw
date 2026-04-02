@@ -1,12 +1,13 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildProgram } from "./build-program.js";
 import type { ProgramContext } from "./context.js";
 
-const registerProgramCommandsMock = vi.fn();
-const createProgramContextMock = vi.fn();
-const configureProgramHelpMock = vi.fn();
-const registerPreActionHooksMock = vi.fn();
-const setProgramContextMock = vi.fn();
+const registerProgramCommandsMock = vi.hoisted(() => vi.fn());
+const createProgramContextMock = vi.hoisted(() => vi.fn());
+const configureProgramHelpMock = vi.hoisted(() => vi.fn());
+const registerPreActionHooksMock = vi.hoisted(() => vi.fn());
+const setProgramContextMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./command-registry.js", () => ({
   registerProgramCommands: registerProgramCommandsMock,
@@ -27,8 +28,6 @@ vi.mock("./preaction.js", () => ({
 vi.mock("./program-context.js", () => ({
   setProgramContext: setProgramContextMock,
 }));
-
-const { buildProgram } = await import("./build-program.js");
 
 describe("buildProgram", () => {
   beforeEach(() => {

@@ -525,6 +525,11 @@ If the gateway is unavailable or does not support plugin approvals, the tool cal
 
 Runs after the built-in install security scan and before installation continues. OpenClaw fires this hook for interactive skill installs as well as plugin bundle, package, and single-file installs.
 
+Default behavior differs by target type:
+
+- Plugin installs fail closed on built-in scan `critical` findings and scan errors unless the operator explicitly uses `openclaw plugins install --dangerously-force-unsafe-install`.
+- Skill installs still surface built-in scan findings and scan errors as warnings and continue by default.
+
 Return fields:
 
 - **`findings`**: Additional scan findings to surface as warnings
@@ -602,7 +607,7 @@ Compaction lifecycle hooks exposed through the plugin hook runner:
 
 ### Complete Plugin Hook Reference
 
-All 27 hooks registered via the Plugin SDK. Hooks marked **sequential** run in priority order and can modify results; **parallel** hooks are fire-and-forget.
+All 28 hooks registered via the Plugin SDK. Hooks marked **sequential** run in priority order and can modify results; **parallel** hooks are fire-and-forget.
 
 #### Model and prompt hooks
 
@@ -611,6 +616,7 @@ All 27 hooks registered via the Plugin SDK. Hooks marked **sequential** run in p
 | `before_model_resolve` | Before model/provider lookup                 | Sequential | `{ modelOverride?, providerOverride? }`                    |
 | `before_prompt_build`  | After model resolved, session messages ready | Sequential | `{ systemPrompt?, prependContext?, appendSystemContext? }` |
 | `before_agent_start`   | Legacy combined hook (prefer the two above)  | Sequential | Union of both result shapes                                |
+| `before_agent_reply`   | After inline actions, before the LLM runs    | Sequential | `{ handled: boolean, reply?, reason? }`                    |
 | `llm_input`            | Immediately before the LLM API call          | Parallel   | `void`                                                     |
 | `llm_output`           | Immediately after LLM response received      | Parallel   | `void`                                                     |
 

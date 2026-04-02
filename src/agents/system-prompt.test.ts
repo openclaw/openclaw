@@ -149,6 +149,62 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("tells the agent not to execute /approve through exec", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain(
+      "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
+    );
+  });
+
+  it("keeps manual /approve instructions for non-native approval channels", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "signal" },
+    });
+
+    expect(prompt).toContain(
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
+    );
+    expect(prompt).not.toContain("allow-once|allow-always|deny");
+  });
+
+  it("tells native approval channels not to duplicate plain chat /approve instructions", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "telegram" },
+    });
+
+    expect(prompt).toContain(
+      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
+    );
+    expect(prompt).toContain(
+      "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
+    );
+    expect(prompt).not.toContain(
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
+    );
+  });
+
+  it("treats webchat as a native approval surface", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "webchat" },
+    });
+
+    expect(prompt).toContain(
+      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
+    );
+    expect(prompt).toContain(
+      "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
+    );
+    expect(prompt).not.toContain(
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
+    );
+  });
+
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

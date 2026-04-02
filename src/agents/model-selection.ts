@@ -6,8 +6,8 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
-import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
+import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
+import { normalizeXaiModelId } from "../plugin-sdk/xai-model-id.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -219,25 +219,52 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   if (!model) {
     return undefined;
   }
-  const configuredModels = params.cfg.agents?.defaults?.models;
-  if (!configuredModels) {
-    return undefined;
-  }
   const normalized = model.toLowerCase();
   const providers = new Set<string>();
-  for (const key of Object.keys(configuredModels)) {
-    const ref = key.trim();
-    if (!ref || !ref.includes("/")) {
-      continue;
+  const addProvider = (provider: string) => {
+    const normalizedProvider = normalizeProviderId(provider);
+    if (!normalizedProvider) {
+      return;
     }
-    const parsed = parseModelRef(ref, DEFAULT_PROVIDER, {
-      allowPluginNormalization: false,
-    });
-    if (!parsed) {
-      continue;
+    providers.add(normalizedProvider);
+  };
+  const configuredModels = params.cfg.agents?.defaults?.models;
+  if (configuredModels) {
+    for (const key of Object.keys(configuredModels)) {
+      const ref = key.trim();
+      if (!ref || !ref.includes("/")) {
+        continue;
+      }
+      const parsed = parseModelRef(ref, DEFAULT_PROVIDER, {
+        allowPluginNormalization: false,
+      });
+      if (!parsed) {
+        continue;
+      }
+      if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
+        addProvider(parsed.provider);
+        if (providers.size > 1) {
+          return undefined;
+        }
+      }
     }
-    if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
-      providers.add(parsed.provider);
+  }
+  const configuredProviders = params.cfg.models?.providers;
+  if (configuredProviders) {
+    for (const [providerId, providerConfig] of Object.entries(configuredProviders)) {
+      const models = providerConfig?.models;
+      if (!Array.isArray(models)) {
+        continue;
+      }
+      for (const entry of models) {
+        const modelId = entry?.id?.trim();
+        if (!modelId) {
+          continue;
+        }
+        if (modelId === model || modelId.toLowerCase() === normalized) {
+          addProvider(providerId);
+        }
+      }
       if (providers.size > 1) {
         return undefined;
       }
@@ -440,8 +467,8 @@ export function resolveSubagentConfiguredModelSelection(params: {
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
   return (
     normalizeModelSelection(agentConfig?.subagents?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model) ??
-    normalizeModelSelection(agentConfig?.model)
+    normalizeModelSelection(agentConfig?.model) ??
+    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model)
   );
 }
 
