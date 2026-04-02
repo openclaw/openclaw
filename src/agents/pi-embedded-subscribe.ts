@@ -3,6 +3,7 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { setReplyPayloadMetadata } from "../auto-reply/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
@@ -112,12 +113,19 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>>[0],
+    options?: { assistantMessageIndex?: number },
   ) => {
     if (!params.onBlockReply) {
       return;
     }
     try {
-      const maybeTask = params.onBlockReply(payload);
+      const taggedPayload =
+        options?.assistantMessageIndex !== undefined
+          ? setReplyPayloadMetadata(payload, {
+              assistantMessageIndex: options.assistantMessageIndex,
+            })
+          : payload;
+      const maybeTask = params.onBlockReply(taggedPayload);
       if (!isPromiseLike<void>(maybeTask)) {
         return;
       }
@@ -132,8 +140,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       log.warn(`block reply callback failed: ${String(err)}`);
     }
   };
-  const emitBlockReply = (payload: BlockReplyPayload) => {
-    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, payload));
+  const emitBlockReply = (
+    payload: BlockReplyPayload,
+    options?: { assistantMessageIndex?: number },
+  ) => {
+    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, payload), options);
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -504,7 +515,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     return output;
   };
 
-  const emitBlockChunk = (text: string) => {
+  const emitBlockChunk = (text: string, options?: { assistantMessageIndex?: number }) => {
     if (state.suppressBlockChunks || params.silentExpected) {
       return;
     }
@@ -551,14 +562,19 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       return;
     }
-    emitBlockReply({
-      text: cleanedText,
-      mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    });
+    emitBlockReply(
+      {
+        text: cleanedText,
+        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+        audioAsVoice,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+      },
+      {
+        assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
+      },
+    );
   };
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>
@@ -566,15 +582,17 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const consumePartialReplyDirectives = (text: string, options?: { final?: boolean }) =>
     partialReplyDirectiveAccumulator.consume(text, options);
 
-  const flushBlockReplyBuffer = (): void | Promise<void> => {
+  const flushBlockReplyBuffer = (options?: {
+    assistantMessageIndex?: number;
+  }): void | Promise<void> => {
     if (!params.onBlockReply) {
       return;
     }
     if (blockChunker?.hasBuffered()) {
-      blockChunker.drain({ force: true, emit: emitBlockChunk });
+      blockChunker.drain({ force: true, emit: (text) => emitBlockChunk(text, options) });
       blockChunker.reset();
     } else if (state.blockBuffer.length > 0) {
-      emitBlockChunk(state.blockBuffer);
+      emitBlockChunk(state.blockBuffer, options);
       state.blockBuffer = "";
     }
     if (pendingBlockReplyTasks.size === 0) {

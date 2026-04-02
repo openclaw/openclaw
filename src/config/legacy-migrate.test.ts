@@ -286,6 +286,38 @@ describe("legacy migrate tts provider shape", () => {
   });
 });
 
+describe("legacy migrate x_search auth", () => {
+  it("moves only legacy x_search auth into plugin-owned xai config", () => {
+    const res = migrateLegacyConfig({
+      tools: {
+        web: {
+          x_search: {
+            apiKey: "xai-legacy-key",
+            enabled: true,
+            model: "grok-4-1-fast",
+          },
+        },
+      },
+    });
+
+    expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(res.config?.plugins?.entries?.xai).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "xai-legacy-key",
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
+    ]);
+  });
+});
+
 describe("legacy migrate heartbeat config", () => {
   it("moves top-level heartbeat into agents.defaults.heartbeat", () => {
     const res = migrateLegacyConfig({

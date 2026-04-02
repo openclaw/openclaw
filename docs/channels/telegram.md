@@ -810,7 +810,7 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `channels.telegram.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`
 
-    Approvers must be numeric Telegram user IDs. Telegram becomes an exec approval client when `enabled` is true and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's numeric owner config (`allowFrom` and direct-message `defaultTo`). Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
+    Approvers must be numeric Telegram user IDs. Telegram auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's numeric owner config (`allowFrom` and direct-message `defaultTo`). Set `enabled: false` to disable Telegram as a native approval client explicitly. Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
 
     Telegram also renders the shared approval buttons used by other chat channels. The native Telegram adapter mainly adds approver DM routing, channel/topic fanout, and typing hints before delivery.
 

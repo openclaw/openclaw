@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "../runtime-api.js";
+import { formatUnknownError } from "./errors.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { TeamsHttpStream } from "./streaming-message.js";
@@ -28,7 +29,7 @@ export function createTeamsReplyStreamController(params: {
         sendActivity: (activity) => params.context.sendActivity(activity),
         feedbackLoopEnabled: params.feedbackLoopEnabled,
         onError: (err) => {
-          params.log.debug?.(`stream error: ${err instanceof Error ? err.message : String(err)}`);
+          params.log.debug?.(`stream error: ${formatUnknownError(err)}`);
         },
       })
     : undefined;

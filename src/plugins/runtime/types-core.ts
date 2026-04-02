@@ -103,6 +103,14 @@ export type PluginRuntimeCore = {
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };
+  tasks: {
+    runs: import("./runtime-tasks.js").PluginRuntimeTaskRuns;
+    flows: import("./runtime-tasks.js").PluginRuntimeTaskFlows;
+    /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
+    flow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
+  };
+  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
+  taskFlow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
   modelAuth: {
     /** Resolve auth for a model. Only provider/model and optional cfg are used. */
     getApiKeyForModel: (params: {

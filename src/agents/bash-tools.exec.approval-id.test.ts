@@ -93,25 +93,31 @@ function expectPendingApprovalText(
     host: "gateway" | "node";
     nodeId?: string;
     interactive?: boolean;
+    allowedDecisions?: string;
+    cwdText?: string;
   },
 ) {
   expect(result.details.status).toBe("approval-pending");
   const details = result.details as { approvalId: string; approvalSlug: string };
   const pendingText = getResultText(result);
   expect(pendingText).toContain(
-    `Reply with: /approve ${details.approvalSlug} allow-once|allow-always|deny`,
+    `Reply with: /approve ${details.approvalSlug} ${options.allowedDecisions ?? "allow-once|allow-always|deny"}`,
   );
   expect(pendingText).toContain(`full ${details.approvalId}`);
   expect(pendingText).toContain(`Host: ${options.host}`);
   if (options.nodeId) {
     expect(pendingText).toContain(`Node: ${options.nodeId}`);
   }
-  expect(pendingText).toContain(`CWD: ${process.cwd()}`);
+  expect(pendingText).toContain(`CWD: ${options.cwdText ?? process.cwd()}`);
   expect(pendingText).toContain("Command:\n```sh\n");
   expect(pendingText).toContain(options.command);
   if (options.interactive) {
     expect(pendingText).toContain("Mode: foreground (interactive approvals available).");
-    expect(pendingText).toContain("Background mode requires pre-approved policy");
+    expect(pendingText).toContain(
+      (options.allowedDecisions ?? "").includes("allow-always")
+        ? "Background mode requires pre-approved policy"
+        : "Background mode requires an effective policy that allows pre-approval",
+    );
   }
   return details;
 }
@@ -277,6 +283,8 @@ describe("exec approvals", () => {
       host: "node",
       nodeId: "node-1",
       interactive: true,
+      allowedDecisions: "allow-once|deny",
+      cwdText: "(node default)",
     });
     const approvalId = details.approvalId;
 
@@ -333,6 +341,7 @@ describe("exec approvals", () => {
 
     const tool = createExecTool({
       host: "node",
+      security: "allowlist",
       ask: "on-miss",
       approvalRunningNoticeMs: 0,
     });
@@ -378,6 +387,43 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(prepareCwd).toBe(remoteWorkdir);
+  });
+
+  it("does not forward the gateway default cwd to node exec when workdir is omitted", async () => {
+    const gatewayWorkspace = "/gateway/workspace";
+    let prepareHasCwd = false;
+    let prepareCwd: string | undefined;
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string; params?: { cwd?: string } };
+        if (invoke.command === "system.run.prepare") {
+          prepareHasCwd = Object.hasOwn(invoke.params ?? {}, "cwd");
+          prepareCwd = invoke.params?.cwd;
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      cwd: gatewayWorkspace,
+    });
+
+    const result = await tool.execute("call-node-default-cwd", {
+      command: "/bin/pwd",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(prepareHasCwd).toBe(false);
+    expect(prepareCwd).toBeUndefined();
   });
 
   it("honors ask=off for elevated gateway exec without prompting", async () => {
@@ -460,6 +506,13 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
+    expect(result.details).toMatchObject({
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    expect(getResultText(result)).toContain("Reply with: /approve ");
+    expect(getResultText(result)).toContain("allow-once|deny");
+    expect(getResultText(result)).not.toContain("allow-once|allow-always|deny");
+    expect(getResultText(result)).toContain("Allow Always is unavailable");
   });
 
   it("keeps ask=always prompts for static allowlist entries without allow-always trust", async () => {
@@ -528,6 +581,9 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
+    expect(result.details).toMatchObject({
+      allowedDecisions: ["allow-once", "deny"],
+    });
     expect(calls).toContain("exec.approval.request");
   });
 
@@ -1115,7 +1171,7 @@ describe("exec approvals", () => {
     const tool = createExecTool({
       host: "gateway",
       ask: "always",
-      security: "full",
+      security: "allowlist",
       trigger: "cron",
       approvalRunningNoticeMs: 0,
     });
@@ -1195,6 +1251,11 @@ describe("exec approvals", () => {
   });
 
   it("explains cron no-route denials with a host-policy fix hint", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "full", ask: "always", askFallback: "deny" },
+      agents: {},
+    });
     mockNoApprovalRouteRegistration();
 
     const tool = createExecTool({
@@ -1240,6 +1301,7 @@ describe("exec approvals", () => {
     expectPendingApprovalText(result, {
       command: "npm view diver name version description",
       host: "gateway",
+      allowedDecisions: "allow-once|deny",
     });
   });
 
@@ -1278,6 +1340,7 @@ describe("exec approvals", () => {
     const details = expectPendingApprovalText(result, {
       command: "npm view diver name version description",
       host: "gateway",
+      allowedDecisions: "allow-once|deny",
     });
     expect(getResultText(result)).toContain(`/approve ${details.approvalSlug} allow-once`);
     expect(getResultText(result)).not.toContain(getExecApprovalApproverDmNoticeText());

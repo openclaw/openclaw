@@ -9,7 +9,10 @@ vi.mock("../infra/agent-events.js", () => ({
 
 function createContext(
   lastAssistant: unknown,
-  overrides?: { onAgentEvent?: (event: unknown) => void },
+  overrides?: {
+    onAgentEvent?: (event: unknown) => void;
+    onBlockReplyFlush?: () => void | Promise<void>;
+  },
 ): EmbeddedPiSubscribeContext {
   const onBlockReply = vi.fn();
   return {
@@ -19,6 +22,7 @@ function createContext(
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
       onBlockReply,
+      onBlockReplyFlush: overrides?.onBlockReplyFlush,
     },
     state: {
       lastAssistant: lastAssistant as EmbeddedPiSubscribeContext["state"]["lastAssistant"],
@@ -178,5 +182,46 @@ describe("handleAgentEnd", () => {
     });
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+
+  it("resolves compaction wait before awaiting an async block reply flush", async () => {
+    let resolveFlush: (() => void) | undefined;
+    const ctx = createContext(undefined);
+    ctx.flushBlockReplyBuffer = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveFlush = resolve;
+          }),
+      )
+      .mockImplementation(() => {});
+
+    const endPromise = handleAgentEnd(ctx);
+
+    expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
+    expect(ctx.resolveCompactionRetry).not.toHaveBeenCalled();
+
+    resolveFlush?.();
+    await endPromise;
+  });
+
+  it("resolves compaction wait before awaiting an async channel flush", async () => {
+    let resolveChannelFlush: (() => void) | undefined;
+    const onBlockReplyFlush = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveChannelFlush = resolve;
+        }),
+    );
+    const ctx = createContext(undefined, { onBlockReplyFlush });
+
+    const endPromise = handleAgentEnd(ctx);
+
+    expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+
+    resolveChannelFlush?.();
+    await endPromise;
   });
 });

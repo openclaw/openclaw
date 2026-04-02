@@ -1,7 +1,18 @@
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import type { BaseProbeResult } from "../runtime-api.js";
-import { createMatrixClient, isBunRuntime } from "./client.js";
+import { isBunRuntime } from "./client/runtime.js";
+
+type MatrixProbeRuntimeDeps = Pick<typeof import("./client.js"), "createMatrixClient">;
+
+let matrixProbeRuntimeDepsPromise: Promise<MatrixProbeRuntimeDeps> | undefined;
+
+async function loadMatrixProbeRuntimeDeps(): Promise<MatrixProbeRuntimeDeps> {
+  matrixProbeRuntimeDepsPromise ??= import("./client.js").then((clientModule) => ({
+    createMatrixClient: clientModule.createMatrixClient,
+  }));
+  return await matrixProbeRuntimeDepsPromise;
+}
 
 export type MatrixProbe = BaseProbeResult & {
   status?: number | null;
@@ -48,6 +59,7 @@ export async function probeMatrix(params: {
     };
   }
   try {
+    const { createMatrixClient } = await loadMatrixProbeRuntimeDeps();
     const inputUserId = params.userId?.trim() || undefined;
     const client = await createMatrixClient({
       homeserver: params.homeserver,
