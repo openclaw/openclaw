@@ -1,3 +1,4 @@
+import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -94,29 +95,14 @@ export const MODELSTUDIO_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
   },
 ];
 
-function normalizeModelStudioBaseUrl(baseUrl: string | undefined): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    const url = new URL(trimmed);
-    url.hash = "";
-    url.search = "";
-    return url.toString().replace(/\/+$/, "").toLowerCase();
-  } catch {
-    return trimmed.replace(/\/+$/, "").toLowerCase();
-  }
-}
-
 export function isNativeModelStudioBaseUrl(baseUrl: string | undefined): boolean {
-  const normalized = normalizeModelStudioBaseUrl(baseUrl);
-  return (
-    normalized === MODELSTUDIO_BASE_URL ||
-    normalized === MODELSTUDIO_CN_BASE_URL ||
-    normalized === MODELSTUDIO_STANDARD_CN_BASE_URL ||
-    normalized === MODELSTUDIO_STANDARD_GLOBAL_BASE_URL
-  );
+  return resolveProviderRequestCapabilities({
+    provider: "modelstudio",
+    api: "openai-completions",
+    baseUrl,
+    capability: "llm",
+    transport: "stream",
+  }).supportsNativeStreamingUsageCompat;
 }
 
 function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderConfig {

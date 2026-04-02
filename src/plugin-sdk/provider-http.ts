@@ -13,6 +13,9 @@ export {
 } from "../media-understanding/shared.js";
 export type {
   ProviderAttributionPolicy,
+  ProviderRequestCapabilities,
+  ProviderRequestCapabilitiesInput,
+  ProviderRequestCompatibilityFamily,
   ProviderEndpointClass,
   ProviderEndpointResolution,
   ProviderRequestCapability,
@@ -22,5 +25,6 @@ export type {
 } from "../agents/provider-attribution.js";
 export {
   resolveProviderEndpoint,
+  resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
 } from "../agents/provider-attribution.js";

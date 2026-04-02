@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { usesMoonshotThinkingPayloadCompatStatic } from "../moonshot-provider-compat.js";
+import { resolveProviderRequestCapabilities } from "../provider-attribution.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
@@ -27,16 +27,13 @@ export function shouldApplyMoonshotPayloadCompat(params: {
   modelId: string;
 }): boolean {
   const normalizedProvider = normalizeProviderId(params.provider);
-  const normalizedModelId = params.modelId.trim().toLowerCase();
-
-  if (usesMoonshotThinkingPayloadCompatStatic(normalizedProvider)) {
-    return true;
-  }
-
   return (
-    normalizedProvider === "ollama" &&
-    normalizedModelId.startsWith("kimi-k") &&
-    normalizedModelId.includes(":cloud")
+    resolveProviderRequestCapabilities({
+      provider: normalizedProvider,
+      modelId: params.modelId,
+      capability: "llm",
+      transport: "stream",
+    }).compatibilityFamily === "moonshot"
   );
 }
 

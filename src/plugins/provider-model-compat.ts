@@ -1,4 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 
 function extractModelCompat(
@@ -68,15 +69,6 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
   return model.api === "openai-completions";
 }
 
-function isOpenAINativeEndpoint(baseUrl: string): boolean {
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return host === "api.openai.com";
-  } catch {
-    return false;
-  }
-}
-
 function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
@@ -100,7 +92,15 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   }
 
   const compat = model.compat ?? undefined;
-  const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
+  const needsForce = baseUrl
+    ? resolveProviderRequestCapabilities({
+        provider: typeof model.provider === "string" ? model.provider : undefined,
+        api: model.api,
+        baseUrl,
+        capability: "llm",
+        transport: "stream",
+      }).endpointClass !== "openai-public"
+    : false;
   if (!needsForce) {
     return model;
   }
