@@ -914,6 +914,16 @@ vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRout
 
 const { DiscordMessageListener, DiscordReactionListener } = await import("./monitor/listeners.js");
 
+/**
+ * Fire-and-forget reaction handlers chain several async operations
+ * (fetchChannel, authorization, message.fetch) that all resolve immediately
+ * via mocks.  A macrotask boundary ensures all pending microtasks have settled
+ * before assertions run.
+ */
+async function flushReactionHandlerWork() {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
 function makeReactionEvent(overrides?: {
   guildId?: string;
   channelId?: string;
@@ -1043,6 +1053,7 @@ describe("discord DM reaction handling", () => {
       );
 
       await listener.handle(data, client);
+      await flushReactionHandlerWork();
 
       expect(enqueueSystemEventSpy, testCase.name).toHaveBeenCalledOnce();
       const [text, opts] = enqueueSystemEventSpy.mock.calls[0];
@@ -1062,6 +1073,7 @@ describe("discord DM reaction handling", () => {
     );
 
     await listener.handle(data, client);
+    await flushReactionHandlerWork();
 
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
@@ -1077,6 +1089,7 @@ describe("discord DM reaction handling", () => {
     );
 
     await listener.handle(data, client);
+    await flushReactionHandlerWork();
 
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
@@ -1092,6 +1105,7 @@ describe("discord DM reaction handling", () => {
     );
 
     await listener.handle(data, client);
+    await flushReactionHandlerWork();
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
   });
@@ -1104,6 +1118,7 @@ describe("discord DM reaction handling", () => {
     );
 
     await listener.handle(data, client);
+    await flushReactionHandlerWork();
 
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
@@ -1120,6 +1135,7 @@ describe("discord DM reaction handling", () => {
     );
 
     await listener.handle(data, client);
+    await flushReactionHandlerWork();
 
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
@@ -1143,6 +1159,7 @@ describe("discord DM reaction handling", () => {
     );
 
     await listener.handle(data, client);
+    await flushReactionHandlerWork();
 
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
     expect(resolveAgentRouteMock).not.toHaveBeenCalled();
@@ -1184,6 +1201,7 @@ describe("discord DM reaction handling", () => {
     );
 
     await listener.handle(data, client);
+    await flushReactionHandlerWork();
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
     const [text] = enqueueSystemEventSpy.mock.calls[0];
@@ -1199,6 +1217,7 @@ describe("discord DM reaction handling", () => {
     const listener = new DiscordReactionListener(makeReactionListenerParams());
 
     await listener.handle(data, client);
+    await flushReactionHandlerWork();
 
     expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
     const routeArgs = (resolveAgentRouteMock.mock.calls[0]?.[0] ?? {}) as {
@@ -1219,6 +1238,7 @@ describe("discord DM reaction handling", () => {
     const listener = new DiscordReactionListener(makeReactionListenerParams());
 
     await listener.handle(data, client);
+    await flushReactionHandlerWork();
 
     expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
     const routeArgs = (resolveAgentRouteMock.mock.calls[0]?.[0] ?? {}) as {
@@ -1337,6 +1357,7 @@ describe("discord reaction notification modes", () => {
       const listener = new DiscordReactionListener(makeReactionListenerParams({ guildEntries }));
 
       await listener.handle(data, client);
+      await flushReactionHandlerWork();
 
       expect(messageFetch, testCase.name).toHaveBeenCalledTimes(testCase.expectedMessageFetchCalls);
       expect(enqueueSystemEventSpy, testCase.name).toHaveBeenCalledTimes(

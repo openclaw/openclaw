@@ -233,13 +233,19 @@ export class DiscordReactionListener extends MessageReactionAddListener {
 
   async handle(data: DiscordReactionEvent, client: Client) {
     this.params.onEvent?.();
-    await runDiscordReactionHandler({
+    // Fire-and-forget: hand off to the handler without blocking the
+    // Carbon listener.  Per-session ordering is owned by the inbound
+    // worker queue, so the listener no longer serializes reaction events.
+    void runDiscordReactionHandler({
       data,
       client,
       action: "added",
       handlerParams: this.params,
       listener: this.constructor.name,
       event: this.type,
+    }).catch((err) => {
+      const logger = this.params.logger ?? discordEventQueueLog;
+      logger.error(danger(`discord reaction-add handler failed: ${String(err)}`));
     });
   }
 }
@@ -251,13 +257,18 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
 
   async handle(data: DiscordReactionEvent, client: Client) {
     this.params.onEvent?.();
-    await runDiscordReactionHandler({
+    // Fire-and-forget: same pattern as DiscordMessageListener and the
+    // add-reaction path above.
+    void runDiscordReactionHandler({
       data,
       client,
       action: "removed",
       handlerParams: this.params,
       listener: this.constructor.name,
       event: this.type,
+    }).catch((err) => {
+      const logger = this.params.logger ?? discordEventQueueLog;
+      logger.error(danger(`discord reaction-remove handler failed: ${String(err)}`));
     });
   }
 }
