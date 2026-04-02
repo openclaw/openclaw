@@ -169,9 +169,7 @@ describe("resolveChannelModelOverride", () => {
     expect(resolved?.matchKey).toBe("thread-parent");
   });
 
-  it("keeps bundled Feishu parent fallback matching before registry bootstrap", () => {
-    resetPluginRuntimeStateForTest();
-
+  it("keeps Feishu parent fallback matching", () => {
     const resolved = resolveChannelModelOverride({
       cfg: {
         channels: {

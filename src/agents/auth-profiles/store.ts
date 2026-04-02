@@ -689,8 +689,8 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
   if (newMtime !== null) {
     runtimeSnapshotMtimes.set(runtimeKey, newMtime);
   }
-  staleRuntimeAuthStoreSnapshotKeys.delete(runtimeKey);
   if (runtimeAuthStoreSnapshots.has(runtimeKey)) {
+    staleRuntimeAuthStoreSnapshotKeys.delete(runtimeKey);
     runtimeAuthStoreSnapshots.set(runtimeKey, cloneAuthProfileStore(payload));
   }
 }
