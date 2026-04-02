@@ -286,6 +286,42 @@ describe("createLineNodeWebhookHandler", () => {
     );
   });
 
+  it("releases authenticated requests before event processing completes", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    let releaseAuthenticated!: () => void;
+    const bot = {
+      handleWebhook: vi.fn(
+        async () =>
+          await new Promise<void>((resolve) => {
+            releaseAuthenticated = resolve;
+          }),
+      ),
+    };
+    const onRequestAuthenticated = vi.fn();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: SECRET,
+      bot,
+      runtime,
+      readBody: async () => rawBody,
+      onRequestAuthenticated,
+    });
+
+    const { res } = createRes();
+    const request = runSignedPost({ handler, rawBody, secret: SECRET, res });
+
+    await vi.waitFor(() => {
+      expect(onRequestAuthenticated).toHaveBeenCalledTimes(1);
+      expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+    });
+
+    expect(res.headersSent).toBe(false);
+    releaseAuthenticated();
+    await request;
+
+    expect(res.statusCode).toBe(200);
+  });
+
   it("returns 500 when event processing fails and does not acknowledge with 200", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     const { secret } = createPostWebhookTestHarness(rawBody);
@@ -337,15 +373,6 @@ describe("readLineWebhookRequestBody", () => {
 });
 
 describe("createLineWebhookMiddleware", () => {
-  it("rejects startup when channel secret is missing", () => {
-    expect(() =>
-      startLineWebhook({
-        channelSecret: "   ",
-        onEvents: async () => {},
-      }),
-    ).toThrow(/requires a non-empty channel secret/i);
-  });
-
   it.each([
     ["raw string body", JSON.stringify({ events: [{ type: "message" }] })],
     ["raw buffer body", Buffer.from(JSON.stringify({ events: [{ type: "follow" }] }), "utf-8")],

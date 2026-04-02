@@ -1,5 +1,13 @@
 import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
+import { sendMessage } from "../infra/outbound/message.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import {
+  formatExecDeniedUserMessage,
+  isExecDeniedResultText,
+  parseExecApprovalResultText,
+} from "./exec-approval-result.js";
+import { sanitizeUserFacingText } from "./pi-embedded-helpers/errors.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -28,22 +36,84 @@ function buildExecDeniedFollowupPrompt(resultText: string): string {
   ].join("\n");
 }
 
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "unknown error";
+  }
+}
+
 export function buildExecApprovalFollowupPrompt(resultText: string): string {
   const trimmed = resultText.trim();
-  if (trimmed.startsWith("Exec denied (")) {
+  if (isExecDeniedResultText(trimmed)) {
     return buildExecDeniedFollowupPrompt(trimmed);
   }
   return [
     "An async command the user already approved has completed.",
     "Do not run the command again.",
+    "If the task requires more steps, continue from this result before replying to the user.",
+    "Only ask the user for help if you are actually blocked.",
     "",
     "Exact completion details:",
     trimmed,
     "",
-    "Reply to the user in a helpful way.",
+    "Continue the task if needed, then reply to the user in a helpful way.",
     "If it succeeded, share the relevant output.",
     "If it failed, explain what went wrong.",
   ].join("\n");
+}
+
+function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boolean {
+  return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey);
+}
+
+function formatDirectExecApprovalFollowupText(
+  resultText: string,
+  opts: { allowDenied?: boolean } = {},
+): string | null {
+  const parsed = parseExecApprovalResultText(resultText);
+  if (parsed.kind === "other" && !parsed.raw) {
+    return null;
+  }
+  if (parsed.kind === "denied") {
+    return opts.allowDenied ? formatExecDeniedUserMessage(parsed.raw) : null;
+  }
+
+  if (parsed.kind === "finished") {
+    const metadata = parsed.metadata.toLowerCase();
+    const body = sanitizeUserFacingText(parsed.body, {
+      errorContext: !metadata.includes("code 0"),
+    }).trim();
+
+    let prefix = "";
+    if (!body) {
+      prefix = metadata.includes("code 0")
+        ? "Background command finished."
+        : metadata.includes("signal")
+          ? "Background command stopped unexpectedly."
+          : "Background command finished with an error.";
+    }
+
+    return body ? `${prefix ? `${prefix}\n\n` : ""}${body}` : prefix || null;
+  }
+
+  if (parsed.kind === "completed") {
+    const body = sanitizeUserFacingText(parsed.body, { errorContext: true }).trim();
+    return body || "Background command finished.";
+  }
+
+  return sanitizeUserFacingText(parsed.raw, { errorContext: true }).trim() || null;
+}
+
+function buildSessionResumeFallbackPrefix(): string {
+  return "Automatic session resume failed, so sending the status directly.\n\n";
 }
 
 export async function sendExecApprovalFollowup(
@@ -51,7 +121,11 @@ export async function sendExecApprovalFollowup(
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   const resultText = params.resultText.trim();
-  if (!sessionKey || !resultText) {
+  if (!resultText) {
+    return false;
+  }
+  const isDenied = isExecDeniedResultText(resultText);
+  if (isDenied && shouldSuppressExecDeniedFollowup(sessionKey)) {
     return false;
   }
 
@@ -67,34 +141,66 @@ export async function sendExecApprovalFollowup(
       ? normalizedTurnSourceChannel
       : undefined;
 
-  await callGatewayTool(
-    "agent",
-    { timeoutMs: 60_000 },
-    {
-      sessionKey,
-      message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: deliveryTarget.deliver,
-      ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
-      channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
-      to: deliveryTarget.deliver
-        ? deliveryTarget.to
-        : sessionOnlyOriginChannel
-          ? params.turnSourceTo
-          : undefined,
-      accountId: deliveryTarget.deliver
-        ? deliveryTarget.accountId
-        : sessionOnlyOriginChannel
-          ? params.turnSourceAccountId
-          : undefined,
-      threadId: deliveryTarget.deliver
-        ? deliveryTarget.threadId
-        : sessionOnlyOriginChannel
-          ? params.turnSourceThreadId
-          : undefined,
-      idempotencyKey: `exec-approval-followup:${params.approvalId}`,
-    },
-    { expectFinal: true },
-  );
+  let sessionError: unknown = null;
 
-  return true;
+  if (sessionKey) {
+    try {
+      await callGatewayTool(
+        "agent",
+        { timeoutMs: 60_000 },
+        {
+          sessionKey,
+          message: buildExecApprovalFollowupPrompt(resultText),
+          deliver: deliveryTarget.deliver,
+          ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
+          channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
+          to: deliveryTarget.deliver
+            ? deliveryTarget.to
+            : sessionOnlyOriginChannel
+              ? params.turnSourceTo
+              : undefined,
+          accountId: deliveryTarget.deliver
+            ? deliveryTarget.accountId
+            : sessionOnlyOriginChannel
+              ? params.turnSourceAccountId
+              : undefined,
+          threadId: deliveryTarget.deliver
+            ? deliveryTarget.threadId
+            : sessionOnlyOriginChannel
+              ? params.turnSourceThreadId
+              : undefined,
+          idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+        },
+        { expectFinal: true },
+      );
+      return true;
+    } catch (err) {
+      sessionError = err;
+    }
+  }
+
+  const directText = formatDirectExecApprovalFollowupText(resultText, {
+    allowDenied: sessionError !== null,
+  });
+  if (deliveryTarget.deliver && directText) {
+    const prefix = sessionError ? buildSessionResumeFallbackPrefix() : "";
+    await sendMessage({
+      channel: deliveryTarget.channel,
+      to: deliveryTarget.to ?? "",
+      accountId: deliveryTarget.accountId,
+      threadId: deliveryTarget.threadId,
+      content: `${prefix}${directText}`,
+      agentId: undefined,
+      idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+    });
+    return true;
+  }
+
+  if (sessionError) {
+    throw new Error(`Session followup failed: ${formatUnknownError(sessionError)}`);
+  }
+  if (isDenied) {
+    return false;
+  }
+  throw new Error("Session key or deliverable origin route is required");
 }

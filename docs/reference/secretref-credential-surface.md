@@ -39,11 +39,6 @@ Scope intent:
 - `plugins.entries.firecrawl.config.webSearch.apiKey`
 - `plugins.entries.tavily.config.webSearch.apiKey`
 - `tools.web.search.apiKey`
-- `tools.web.search.gemini.apiKey`
-- `tools.web.search.grok.apiKey`
-- `tools.web.search.kimi.apiKey`
-- `tools.web.search.perplexity.apiKey`
-- `tools.web.x_search.apiKey`
 - `gateway.auth.password`
 - `gateway.auth.token`
 - `gateway.remote.token`
@@ -99,8 +94,8 @@ Scope intent:
 
 ### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
 
-- `profiles.*.keyRef` (`type: "api_key"`)
-- `profiles.*.tokenRef` (`type: "token"`)
+- `profiles.*.keyRef` (`type: "api_key"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
+- `profiles.*.tokenRef` (`type: "token"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
 
 [//]: # "secretref-supported-list-end"
 
@@ -109,6 +104,7 @@ Notes:
 - Auth-profile plan targets require `agentId`.
 - Plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`).
 - Auth-profile refs are included in runtime resolution and audit coverage.
+- OAuth policy guard: `auth.profiles.<id>.mode = "oauth"` cannot be combined with SecretRef inputs for that profile. Startup/reload and auth-profile resolution fail fast when this policy is violated.
 - For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces.
 - Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
 - For web search:
@@ -128,8 +124,10 @@ Out-of-scope credentials include:
 - `hooks.gmail.pushToken`
 - `hooks.mappings[].sessionKey`
 - `auth-profiles.oauth.*`
-- `discord.threadBindings.*.webhookToken`
-- `whatsapp.creds.json`
+- `channels.discord.threadBindings.webhookToken`
+- `channels.discord.accounts.*.threadBindings.webhookToken`
+- `channels.whatsapp.creds.json`
+- `channels.whatsapp.accounts.*.creds.json`
 
 [//]: # "secretref-unsupported-list-end"
 

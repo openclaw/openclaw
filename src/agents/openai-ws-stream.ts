@@ -22,13 +22,13 @@
  */
 
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import * as piAi from "@mariozechner/pi-ai";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStream,
   StopReason,
 } from "@mariozechner/pi-ai";
+import * as piAi from "@mariozechner/pi-ai";
 import {
   OpenAIWebSocketManager,
   type FunctionToolDefinition,
@@ -42,6 +42,7 @@ import {
 } from "./openai-ws-message-conversion.js";
 import { log } from "./pi-embedded-runner/logger.js";
 import { resolveOpenAITextVerbosity } from "./pi-embedded-runner/openai-stream-wrappers.js";
+import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
   buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
@@ -459,7 +460,10 @@ export function createOpenAIWebSocketStreamFn(
       if (streamOpts?.toolChoice !== undefined) {
         extraParams.tool_choice = streamOpts.toolChoice;
       }
-      if (streamOpts?.reasoningEffort || streamOpts?.reasoningSummary) {
+      if (
+        streamOpts?.reasoningEffort !== "none" &&
+        (streamOpts?.reasoningEffort || streamOpts?.reasoningSummary)
+      ) {
         const reasoning: { effort?: string; summary?: string } = {};
         if (streamOpts.reasoningEffort !== undefined) {
           reasoning.effort = streamOpts.reasoningEffort as string;
@@ -482,13 +486,19 @@ export function createOpenAIWebSocketStreamFn(
 
       // Respect compat.supportsStore — providers like Gemini reject unknown
       // fields such as `store` with a 400 error.  Fixes #39086.
-      const supportsStore = (model as { compat?: { supportsStore?: boolean } }).compat
-        ?.supportsStore;
+      const supportsResponsesStoreField = resolveProviderRequestPolicyConfig({
+        provider: typeof model.provider === "string" ? model.provider : undefined,
+        api: typeof model.api === "string" ? model.api : undefined,
+        baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+        compat: (model as { compat?: { supportsStore?: boolean } }).compat,
+        capability: "llm",
+        transport: "websocket",
+      }).capabilities.supportsResponsesStoreField;
 
       const payload: Record<string, unknown> = {
         type: "response.create",
         model: model.id,
-        ...(supportsStore !== false ? { store: false } : {}),
+        ...(supportsResponsesStoreField ? { store: false } : {}),
         input: turnInput.inputItems,
         instructions: context.systemPrompt ?? undefined,
         tools: tools.length > 0 ? tools : undefined,

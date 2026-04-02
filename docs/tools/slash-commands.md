@@ -78,8 +78,9 @@ Text + native (when enabled):
 - `/tools [compact|verbose]` (show what the current agent can use right now; `verbose` adds descriptions)
 - `/skill <name> [input]` (run a skill by name)
 - `/status` (show current status; includes provider usage/quota for the current model provider when available)
+- `/tasks` (list background tasks for the current session; shows active and recent task details with agent-local fallback counts)
 - `/allowlist` (list/add/remove allowlist entries)
-- `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
+- `/approve <id> <decision>` (resolve exec approval prompts; use the pending approval message for the available decisions)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/btw <question>` (ask an ephemeral side question about the current session without changing future session context; see [/tools/btw](/tools/btw))
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
@@ -146,6 +147,7 @@ Notes:
 - `/fast` is provider-specific: OpenAI/OpenAI Codex map it to `service_tier=priority` on native Responses endpoints, while direct public Anthropic requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, map it to `service_tier=auto` or `standard_only`. See [OpenAI](/providers/openai) and [Anthropic](/providers/anthropic).
 - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose` is `on` or `full`.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
+- `/model` persists the new session model immediately, but it does not interrupt a busy run. The current turn finishes first, then queued or future work uses the updated model.
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
 - **Group mention gating:** command-only messages from allowlisted senders bypass mention requirements.
 - **Inline shortcuts (allowlisted senders only):** certain commands also work when embedded in a normal message and are stripped before the model sees the remaining text.

@@ -28,24 +28,48 @@ shared `message` tool in core. Your plugin owns:
 - **Config** — account resolution and setup wizard
 - **Security** — DM policy and allowlists
 - **Pairing** — DM approval flow
+- **Session grammar** — how provider-specific conversation ids map to base chats, thread ids, and parent fallbacks
 - **Outbound** — sending text, media, and polls to the platform
 - **Threading** — how replies are threaded
 
-Core owns the shared message tool, prompt wiring, session bookkeeping, and
-dispatch.
+Core owns the shared message tool, prompt wiring, the outer session-key shape,
+generic `:thread:` bookkeeping, and dispatch.
+
+If your platform stores extra scope inside conversation ids, keep that parsing
+in the plugin with `messaging.resolveSessionConversation(...)`. That is the
+canonical hook for mapping `rawId` to the base conversation id, optional thread
+id, explicit `baseConversationId`, and any `parentConversationCandidates`.
+When you return `parentConversationCandidates`, keep them ordered from the
+narrowest parent to the broadest/base conversation.
+
+Bundled plugins that need the same parsing before the channel registry boots
+can also expose a top-level `session-key-api.ts` file with a matching
+`resolveSessionConversation(...)` export. Core uses that bootstrap-safe surface
+only when the runtime plugin registry is not available yet.
+
+`messaging.resolveParentConversationCandidates(...)` remains available as a
+legacy compatibility fallback when a plugin only needs parent fallbacks on top
+of the generic/raw id. If both hooks exist, core uses
+`resolveSessionConversation(...).parentConversationCandidates` first and only
+falls back to `resolveParentConversationCandidates(...)` when the canonical hook
+omits them.
 
 ## Approvals and channel capabilities
 
 Most channel plugins do not need approval-specific code.
 
 - Core owns same-chat `/approve`, shared approval button payloads, and generic fallback delivery.
-- Use `auth.authorizeActorAction` or `auth.getActionAvailabilityState` only when approval auth differs from normal chat auth.
+- Prefer one `approvalCapability` object on the channel plugin when the channel needs approval-specific behavior.
+- `approvalCapability.authorizeActorAction` and `approvalCapability.getActionAvailabilityState` are the canonical approval-auth seam.
 - Use `outbound.shouldSuppressLocalPayloadPrompt` or `outbound.beforeDeliverPayload` for channel-specific payload lifecycle behavior such as hiding duplicate local approval prompts or sending typing indicators before delivery.
-- Use `approvals.delivery` only for native approval routing or fallback suppression.
-- Use `approvals.render` only when a channel truly needs custom approval payloads instead of the shared renderer.
+- Use `approvalCapability.delivery` only for native approval routing or fallback suppression.
+- Use `approvalCapability.render` only when a channel truly needs custom approval payloads instead of the shared renderer.
 - If a channel can infer stable owner-like DM identities from existing config, use `createResolvedApproverActionAuthAdapter` from `openclaw/plugin-sdk/approval-runtime` to restrict same-chat `/approve` without adding approval-specific core logic.
+- If a channel needs native approval delivery, keep channel code focused on target normalization and transport hooks. Use `createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`, `createChannelApproverDmTargetResolver`, `createApproverRestrictedNativeApprovalCapability`, and `createChannelNativeApprovalRuntime` from `openclaw/plugin-sdk/approval-runtime` so core owns request filtering, routing, dedupe, expiry, and gateway subscription.
+- Native approval channels must route both `accountId` and `approvalKind` through those helpers. `accountId` keeps multi-account approval policy scoped to the right bot account, and `approvalKind` keeps exec vs plugin approval behavior available to the channel without hardcoded branches in core.
+- `createApproverRestrictedNativeApprovalAdapter` still exists as a compatibility wrapper, but new code should prefer the capability builder and expose `approvalCapability` on the plugin.
 
-For Slack, Matrix, Microsoft Teams, and similar chat channels, the default path is usually enough: core handles approvals and the plugin just exposes normal outbound and auth capabilities.
+Auth-only channels can usually stop at the default path: core handles approvals and the plugin just exposes outbound/auth capabilities. Native approval channels such as Matrix, Slack, Telegram, and custom chat transports should use the shared native helpers instead of rolling their own approval lifecycle.
 
 ## Walkthrough
 

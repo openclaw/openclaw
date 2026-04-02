@@ -66,6 +66,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Shared unit, extension, channel, and gateway runs all stay on Vitest `forks`.
   - The wrapper keeps measured fork-isolated exceptions and heavy singleton lanes explicit in `test/fixtures/test-parallel.behavior.json`.
   - The wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
+  - CLI startup benchmarking now has distinct saved outputs: `pnpm test:startup:bench:smoke` writes the targeted smoke artifact at `.artifacts/cli-startup-bench-smoke.json`, `pnpm test:startup:bench:save` writes the full-suite artifact at `.artifacts/cli-startup-bench-all.json` with `runs=5` and `warmup=1`, and `pnpm test:startup:bench:update` refreshes the checked-in fixture at `test/fixtures/cli-startup-bench.json` with `runs=5` and `warmup=1`.
   - For surface-only local runs, unit, extension, and channel shared lanes can overlap their isolated hotspots instead of waiting behind one serial prefix.
   - For multi-surface local runs, the wrapper keeps the shared surface phases ordered, but batches inside the same shared phase now fan out together, deferred isolated work can overlap the next shared phase, and spare `unit-fast` headroom now starts that deferred work earlier instead of leaving those slots idle.
   - Refresh the timing snapshots with `pnpm test:perf:update-timings` and `pnpm test:perf:update-timings:extensions` after major suite shape changes.
@@ -205,7 +206,7 @@ Live tests are split into two layers so we can isolate failures:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - Set `OPENCLAW_LIVE_MODELS=modern` (or `all`, alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
 - How to select models:
-  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
+  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
   - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-6,..."` (comma allowlist)
 - How to select providers:
@@ -236,7 +237,7 @@ Live tests are split into two layers so we can isolate failures:
 - How to enable:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - How to select models:
-  - Default: modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
+  - Default: modern allowlist (Opus/Sonnet 4.6+, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
   - `OPENCLAW_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
   - Or set `OPENCLAW_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
 - How to select providers (avoid “OpenRouter everything”):
@@ -497,7 +498,15 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 
 These Docker runners split into two buckets:
 
-- Live-model runners: `test:docker:live-models` and `test:docker:live-gateway` run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted).
+- Live-model runners: `test:docker:live-models` and `test:docker:live-gateway` run only their matching profile-key live file inside the repo Docker image (`src/agents/models.profiles.live.test.ts` and `src/gateway/gateway-models.profiles.live.test.ts`), mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). The matching local entrypoints are `test:live:models-profiles` and `test:live:gateway-profiles`.
+- Docker live runners default to a smaller smoke cap so a full Docker sweep stays practical:
+  `test:docker:live-models` defaults to `OPENCLAW_LIVE_MAX_MODELS=12`, and
+  `test:docker:live-gateway` defaults to `OPENCLAW_LIVE_GATEWAY_SMOKE=1`,
+  `OPENCLAW_LIVE_GATEWAY_MAX_MODELS=8`,
+  `OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=45000`, and
+  `OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=90000`. Override those env vars when you
+  explicitly want the larger exhaustive scan.
+- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, then reuses it for the two live Docker lanes.
 - Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:gateway-network`, `test:docker:mcp-channels`, and `test:docker:plugins` boot one or more real containers and verify higher-level integration paths.
 
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:

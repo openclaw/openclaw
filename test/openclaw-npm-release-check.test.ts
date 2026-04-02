@@ -7,8 +7,10 @@ import {
   parseNpmPackJsonOutput,
   parseReleaseTagVersion,
   parseReleaseVersion,
+  resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   resolveNpmCommandInvocation,
+  shouldSkipPackedTarballValidation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
 
@@ -100,7 +102,7 @@ describe("resolveNpmPublishPlan", () => {
   });
 
   it("does not mirror beta when beta already points at a newer prerelease", () => {
-    expect(resolveNpmPublishPlan("2026.3.29", "2026.3.30-beta.1")).toEqual({
+    expect(resolveNpmPublishPlan("2026.3.29", "2026.4.1-beta.1")).toEqual({
       channel: "stable",
       publishTag: "latest",
       mirrorDistTags: [],
@@ -116,13 +118,73 @@ describe("resolveNpmPublishPlan", () => {
   });
 });
 
+describe("resolveNpmDistTagMirrorAuth", () => {
+  it("prefers NODE_AUTH_TOKEN when both auth env vars exist", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "node-token",
+        npmToken: "npm-token",
+      }),
+    ).toEqual({
+      hasAuth: true,
+      source: "node-auth-token",
+    });
+  });
+
+  it("falls back to NPM_TOKEN when NODE_AUTH_TOKEN is missing", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "  ",
+        npmToken: "npm-token",
+      }),
+    ).toEqual({
+      hasAuth: true,
+      source: "npm-token",
+    });
+  });
+
+  it("reports missing auth when neither token exists", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "",
+        npmToken: undefined,
+      }),
+    ).toEqual({
+      hasAuth: false,
+      source: "none",
+    });
+  });
+});
+
+describe("shouldSkipPackedTarballValidation", () => {
+  it("defaults to full pack validation", () => {
+    expect(shouldSkipPackedTarballValidation({})).toBe(false);
+  });
+
+  it("accepts truthy values for metadata-only validation", () => {
+    expect(
+      shouldSkipPackedTarballValidation({
+        OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1",
+      }),
+    ).toBe(true);
+  });
+
+  it("treats false-like values as disabled", () => {
+    expect(
+      shouldSkipPackedTarballValidation({
+        OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "false",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("compareReleaseVersions", () => {
   it("treats stable as newer than same-day beta", () => {
     expect(compareReleaseVersions("2026.3.29", "2026.3.29-beta.2")).toBe(1);
   });
 
   it("treats a newer beta day as newer than an older stable day", () => {
-    expect(compareReleaseVersions("2026.3.30-beta.1", "2026.3.29")).toBe(1);
+    expect(compareReleaseVersions("2026.4.1-beta.1", "2026.3.29")).toBe(1);
   });
 
   it("orders stable correction releases after the base stable release", () => {

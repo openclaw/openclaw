@@ -3,7 +3,10 @@ import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const hoisted = vi.hoisted(() => {
@@ -113,6 +116,7 @@ const { __testing: acpManagerTesting } = await import("../../acp/control-plane/m
 const { __testing: acpResetTargetTesting } = await import("./acp-reset-target.js");
 const { createTaskRecord, resetTaskRegistryForTests } =
   await import("../../tasks/task-registry.js");
+const { failTaskRunByRunId } = await import("../../tasks/task-executor.js");
 
 function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
   const trimmed = raw?.trim().replace(/^telegram:/i, "");
@@ -123,7 +127,9 @@ function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
   return (topicMatch?.[1] ?? trimmed).trim() || undefined;
 }
 
-function parseDiscordConversationIdForTest(targets: Array<string | undefined | null>): string | undefined {
+function parseDiscordConversationIdForTest(
+  targets: Array<string | undefined | null>,
+): string | undefined {
   for (const rawTarget of targets) {
     const target = rawTarget?.trim();
     if (!target) {
@@ -1459,7 +1465,8 @@ describe("/acp command", () => {
     });
     createTaskRecord({
       runtime: "acp",
-      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
       childSessionKey: defaultAcpSessionKey,
       runId: "acp-run-1",
       task: "Inspect ACP backlog",
@@ -1476,6 +1483,92 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("taskProgress: Fetching the latest runtime state");
     expect(result?.reply?.text).toContain("capabilities:");
     expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sanitizes leaked task and runtime details in ACP status output", async () => {
+    mockBoundThreadSession({
+      identity: {
+        state: "resolved",
+        source: "status",
+        acpxSessionId: "acpx-sid-1",
+        agentSessionId: "codex-sid-1",
+        lastUpdatedAt: Date.now(),
+      },
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      ...createAcpSessionEntry({
+        identity: {
+          state: "resolved",
+          source: "status",
+          acpxSessionId: "acpx-sid-1",
+          agentSessionId: "codex-sid-1",
+          lastUpdatedAt: Date.now(),
+        },
+      }),
+      acp: {
+        ...createAcpSessionEntry().acp,
+        identity: {
+          state: "resolved",
+          source: "status",
+          acpxSessionId: "acpx-sid-1",
+          agentSessionId: "codex-sid-1",
+          lastUpdatedAt: Date.now(),
+        },
+        lastError: [
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "[Internal task completion event]",
+          "source: subagent",
+        ].join("\n"),
+      },
+    });
+    hoisted.getStatusMock.mockResolvedValue({
+      summary: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+      details: {
+        payload: [
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "[Internal task completion event]",
+          "source: subagent",
+        ].join("\n"),
+      },
+    });
+    createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: defaultAcpSessionKey,
+      runId: "acp-run-1",
+      task: "Inspect ACP backlog",
+      status: "running",
+    });
+    failTaskRunByRunId({
+      runId: "acp-run-1",
+      endedAt: Date.now(),
+      error: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+      terminalSummary: "Needs approval to continue.",
+    });
+
+    const result = await runThreadAcpCommand("/acp status", baseCfg);
+
+    expect(result?.reply?.text).toContain("ACP status:");
+    expect(result?.reply?.text).toContain("taskSummary: Needs approval to continue.");
+    expect(result?.reply?.text).not.toContain("OpenClaw runtime context (internal):");
+    expect(result?.reply?.text).not.toContain("Internal task completion event");
   });
 
   it("updates ACP runtime mode via /acp set-mode", async () => {

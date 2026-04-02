@@ -77,6 +77,245 @@ describe("legacy migrate mention routing", () => {
     expect(res.changes).toEqual([]);
     expect(res.config).toBeNull();
   });
+
+  it("moves channels.telegram.groupMentionsOnly into groups.*.requireMention", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
+    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(true);
+    expect(
+      (res.config?.channels?.telegram as { groupMentionsOnly?: unknown } | undefined)
+        ?.groupMentionsOnly,
+    ).toBeUndefined();
+  });
+
+  it('keeps explicit channels.telegram.groups."*".requireMention when migrating groupMentionsOnly', () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: {
+            "*": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*" already set).',
+    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
+    expect(
+      (res.config?.channels?.telegram as { groupMentionsOnly?: unknown } | undefined)
+        ?.groupMentionsOnly,
+    ).toBeUndefined();
+  });
+
+  it("does not overwrite invalid channels.telegram.groups when migrating groupMentionsOnly", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: [],
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
+    );
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
+
+  it('does not overwrite invalid channels.telegram.groups."*" when migrating groupMentionsOnly', () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: {
+            "*": false,
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
+    );
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
+});
+
+describe("legacy migrate tts provider shape", () => {
+  it("moves messages.tts.<provider> keys into messages.tts.providers", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          elevenlabs: {
+            apiKey: "test-key",
+            voiceId: "voice-1",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved messages.tts.elevenlabs → messages.tts.providers.elevenlabs.",
+    );
+    expect(res.config?.messages?.tts).toEqual({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          apiKey: "test-key",
+          voiceId: "voice-1",
+        },
+      },
+    });
+  });
+
+  it("moves channels.discord.accounts.<id>.voice.tts.edge into providers.microsoft", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          accounts: {
+            main: {
+              voice: {
+                tts: {
+                  edge: {
+                    voice: "en-US-JennyNeural",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.main.voice.tts.edge → channels.discord.accounts.main.voice.tts.providers.microsoft.",
+    );
+    const mainTts = (
+      res.config?.channels?.discord?.accounts as
+        | Record<string, { voice?: { tts?: Record<string, unknown> } }>
+        | undefined
+    )?.main?.voice?.tts;
+    expect(mainTts?.providers).toEqual({
+      microsoft: {
+        voice: "en-US-JennyNeural",
+      },
+    });
+    expect(mainTts?.edge).toBeUndefined();
+  });
+
+  it("moves plugins.entries.voice-call.config.tts.<provider> keys into providers", () => {
+    const res = migrateLegacyConfig({
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              tts: {
+                provider: "openai",
+                openai: {
+                  model: "gpt-4o-mini-tts",
+                  voice: "alloy",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved plugins.entries.voice-call.config.tts.openai → plugins.entries.voice-call.config.tts.providers.openai.",
+    );
+    const voiceCallTts = (
+      res.config?.plugins?.entries as
+        | Record<string, { config?: { tts?: Record<string, unknown> } }>
+        | undefined
+    )?.["voice-call"]?.config?.tts;
+    expect(voiceCallTts).toEqual({
+      provider: "openai",
+      providers: {
+        openai: {
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+        },
+      },
+    });
+  });
+
+  it("does not migrate legacy tts provider keys for unknown plugin ids", () => {
+    const res = migrateLegacyConfig({
+      plugins: {
+        entries: {
+          "third-party-plugin": {
+            config: {
+              tts: {
+                provider: "openai",
+                openai: {
+                  model: "custom-tts",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
+  });
+});
+
+describe("legacy migrate x_search auth", () => {
+  it("moves only legacy x_search auth into plugin-owned xai config", () => {
+    const res = migrateLegacyConfig({
+      tools: {
+        web: {
+          x_search: {
+            apiKey: "xai-legacy-key",
+            enabled: true,
+            model: "grok-4-1-fast",
+          },
+        },
+      },
+    });
+
+    expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(res.config?.plugins?.entries?.xai).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "xai-legacy-key",
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
+    ]);
+  });
 });
 
 describe("legacy migrate heartbeat config", () => {

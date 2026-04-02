@@ -98,72 +98,8 @@ openclaw channels login
 ```
 
 On macOS, Podman machine may make the browser appear non-local to the gateway.
-If the Control UI reports device-auth errors after launch, prefer the SSH
-tunnel flow in [macOS Podman SSH tunnel](#macos-podman-ssh-tunnel). For
-remote HTTPS access, use the Tailscale guidance in
+If the Control UI reports device-auth errors after launch, use the Tailscale guidance in
 [Podman + Tailscale](#podman--tailscale).
-
-## macOS Podman SSH tunnel
-
-On macOS, Podman machine can make the browser appear non-local to the gateway even when the published port is only on `127.0.0.1`.
-
-For local browser access, use an SSH tunnel into the Podman VM and open the tunneled localhost port instead.
-
-Recommended local tunnel port:
-
-- `28889` on the Mac host
-- forwarded to `127.0.0.1:18789` inside the Podman VM
-
-Start the tunnel in a separate terminal:
-
-```bash
-ssh -N \
-  -i ~/.local/share/containers/podman/machine/machine \
-  -p <podman-vm-ssh-port> \
-  -L 28889:127.0.0.1:18789 \
-  core@127.0.0.1
-```
-
-In that command, `<podman-vm-ssh-port>` is the Podman VM's SSH port on the Mac host. Check your current value with:
-
-```bash
-podman system connection list
-```
-
-Allow the tunneled browser origin once. This is required the first time you use the tunnel because the launcher can auto-seed the Podman-published port, but it cannot infer your chosen browser tunnel port:
-
-```bash
-OPENCLAW_CONTAINER=openclaw openclaw config set gateway.controlUi.allowedOrigins \
-  '["http://127.0.0.1:18789","http://localhost:18789","http://127.0.0.1:28889","http://localhost:28889"]' \
-  --strict-json
-podman restart openclaw
-```
-
-That is a one-time step for the default `28889` tunnel.
-
-Then open:
-
-```text
-http://127.0.0.1:28889/
-```
-
-Notes:
-
-- `18789` is usually already occupied on the Mac host by the Podman-published gateway port, so the tunnel uses `28889` as the local browser port.
-- If the UI asks for pairing approval, prefer explicit container-targeted or explicit-URL commands so the host CLI does not fall back to local pairing files:
-
-```bash
-openclaw --container openclaw devices list
-openclaw --container openclaw devices approve --latest
-```
-
-- Equivalent explicit-URL form:
-
-```bash
-openclaw devices list \
-  --url ws://127.0.0.1:28889 \
-  --token "$(sed -n 's/^OPENCLAW_GATEWAY_TOKEN=//p' ~/.openclaw/.env | head -n1)"
-```
 
 <a id="podman--tailscale"></a>
 
@@ -175,7 +111,7 @@ Podman-specific note:
 
 - Keep the Podman publish host at `127.0.0.1`.
 - Prefer host-managed `tailscale serve` over `openclaw gateway --tailscale serve`.
-- For local macOS browser access without HTTPS, prefer the SSH tunnel section above.
+- On macOS, if local browser device-auth context is unreliable, use Tailscale access instead of ad hoc local tunnel workarounds.
 
 See:
 

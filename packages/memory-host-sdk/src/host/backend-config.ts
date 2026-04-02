@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js";
 import { parseDurationMs } from "../../../../src/cli/parse-duration.js";
@@ -113,6 +114,33 @@ function sanitizeName(input: string): string {
 
 function scopeCollectionBase(base: string, agentId: string): string {
   return `${base}-${sanitizeName(agentId)}`;
+}
+
+function canonicalizePathForContainment(rawPath: string): string {
+  const resolved = path.resolve(rawPath);
+  let current = resolved;
+  const suffix: string[] = [];
+  while (true) {
+    try {
+      const canonical = path.normalize(fs.realpathSync.native(current));
+      return path.normalize(path.join(canonical, ...suffix));
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return path.normalize(resolved);
+      }
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function isPathInsideRoot(candidatePath: string, rootPath: string): boolean {
+  const relative = path.relative(
+    canonicalizePathForContainment(rootPath),
+    canonicalizePathForContainment(candidatePath),
+  );
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function ensureUniqueName(base: string, existing: Set<string>): string {
@@ -252,7 +280,11 @@ function resolveCustomPaths(
       return;
     }
     seenRoots.add(dedupeKey);
-    const baseName = scopeCollectionBase(entry.name?.trim() || `custom-${index + 1}`, agentId);
+    const explicitName = entry.name?.trim();
+    const baseName =
+      explicitName && !isPathInsideRoot(resolved, workspaceDir)
+        ? explicitName
+        : scopeCollectionBase(explicitName || `custom-${index + 1}`, agentId);
     const name = ensureUniqueName(baseName, existing);
     collections.push({
       name,
@@ -336,9 +368,19 @@ export function resolveMemoryBackendConfig(params: {
   const searchExtraPaths = dedupedExtraPaths.map(
     (pathValue): { path: string; pattern?: string; name?: string } => ({ path: pathValue }),
   );
+  const mergedExtraCollections = [
+    ...(params.cfg.agents?.defaults?.memorySearch?.qmd?.extraCollections ?? []),
+    ...(agentEntry?.memorySearch?.qmd?.extraCollections ?? []),
+  ].filter((value): value is MemoryQmdIndexPath =>
+    Boolean(value && typeof value === "object" && typeof value.path === "string"),
+  );
 
-  // Combine QMD-specific paths with memorySearch extraPaths
-  const allQmdPaths: MemoryQmdIndexPath[] = [...(qmdCfg?.paths ?? []), ...searchExtraPaths];
+  // Combine QMD-specific paths with extraPaths and per-agent cross-agent collections.
+  const allQmdPaths: MemoryQmdIndexPath[] = [
+    ...(qmdCfg?.paths ?? []),
+    ...searchExtraPaths,
+    ...mergedExtraCollections,
+  ];
 
   const collections = [
     ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, normalizedAgentId),
