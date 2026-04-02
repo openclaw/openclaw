@@ -337,6 +337,7 @@ export async function resolveSlackAttachmentContent(params: {
 export type SlackThreadStarter = {
   text: string;
   userId?: string;
+  botId?: string;
   ts?: string;
   files?: SlackFile[];
 };
@@ -391,7 +392,15 @@ export async function resolveSlackThreadStarter(params: {
       ts: params.threadTs,
       limit: 1,
       inclusive: true,
-    })) as { messages?: Array<{ text?: string; user?: string; ts?: string; files?: SlackFile[] }> };
+    })) as {
+      messages?: Array<{
+        text?: string;
+        user?: string;
+        bot_id?: string;
+        ts?: string;
+        files?: SlackFile[];
+      }>;
+    };
     const message = response?.messages?.[0];
     const text = (message?.text ?? "").trim();
     if (!message || !text) {
@@ -400,6 +409,7 @@ export async function resolveSlackThreadStarter(params: {
     const starter: SlackThreadStarter = {
       text,
       userId: message.user,
+      botId: message.bot_id,
       ts: message.ts,
       files: message.files,
     };
