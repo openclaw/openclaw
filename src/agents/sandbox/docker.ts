@@ -171,7 +171,10 @@ import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
-import { validateSandboxSecurity } from "./validate-sandbox-security.js";
+import {
+  getReservedContainerTargetReason,
+  validateSandboxSecurity,
+} from "./validate-sandbox-security.js";
 import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 const log = createSubsystemLogger("docker");
@@ -383,7 +386,7 @@ function volumeSettingToBindSpec(volume: SandboxDockerVolumeSetting): string | n
   return `${source}:${target}:${volume.readOnly ? "ro" : "rw"}`;
 }
 
-function appendVolumeMounts(args: string[], cfg: SandboxDockerConfig): void {
+export function appendVolumeMounts(args: string[], cfg: SandboxDockerConfig): void {
   for (const volume of cfg.volumes ?? []) {
     const target = volume.target.trim();
     if (!target) {
@@ -415,6 +418,30 @@ function appendVolumeMounts(args: string[], cfg: SandboxDockerConfig): void {
   }
 }
 
+function validateReservedVolumeTargets(params: {
+  volumes?: SandboxDockerVolumeSetting[];
+  allowReservedContainerTargets: boolean;
+}): void {
+  if (params.allowReservedContainerTargets || !params.volumes?.length) {
+    return;
+  }
+  for (const volume of params.volumes) {
+    const target = volume.target?.trim();
+    if (!target) {
+      continue;
+    }
+    const reason = getReservedContainerTargetReason(target);
+    if (!reason || reason.kind !== "reserved_target") {
+      continue;
+    }
+    throw new Error(
+      `Sandbox security: volume target "${target}" for strategy "${volume.strategy}" hits reserved container path "${reason.reservedPath}" ` +
+        `(resolved target: "${reason.targetPath}"). This can shadow OpenClaw sandbox mounts. ` +
+        "Use a dangerous override only when you fully trust this runtime.",
+    );
+  }
+}
+
 export function buildSandboxCreateArgs(params: {
   name: string;
   cfg: SandboxDockerConfig;
@@ -429,6 +456,15 @@ export function buildSandboxCreateArgs(params: {
   allowContainerNamespaceJoin?: boolean;
   envSanitizationOptions?: EnvSanitizationOptions;
 }) {
+  const allowReservedContainerTargets =
+    params.allowReservedContainerTargets ??
+    params.cfg.dangerouslyAllowReservedContainerTargets === true;
+
+  validateReservedVolumeTargets({
+    volumes: params.cfg.volumes,
+    allowReservedContainerTargets,
+  });
+
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
   const bindSpecsFromVolumes = (params.cfg.volumes ?? [])
     .map((entry) => volumeSettingToBindSpec(entry))
@@ -441,9 +477,7 @@ export function buildSandboxCreateArgs(params: {
     allowSourcesOutsideAllowedRoots:
       params.allowSourcesOutsideAllowedRoots ??
       params.cfg.dangerouslyAllowExternalBindSources === true,
-    allowReservedContainerTargets:
-      params.allowReservedContainerTargets ??
-      params.cfg.dangerouslyAllowReservedContainerTargets === true,
+    allowReservedContainerTargets,
     dangerouslyAllowContainerNamespaceJoin:
       params.allowContainerNamespaceJoin ??
       params.cfg.dangerouslyAllowContainerNamespaceJoin === true,

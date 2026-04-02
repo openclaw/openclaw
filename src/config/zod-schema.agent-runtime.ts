@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
+import { getReservedContainerTargetReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -193,6 +194,18 @@ const SandboxDockerSchema = z
             path: ["volumes", i, "target"],
             message: "Sandbox security: volume target must be an absolute POSIX path.",
           });
+        } else {
+          const reservedTargetReason = getReservedContainerTargetReason(target);
+          if (reservedTargetReason && data.dangerouslyAllowReservedContainerTargets !== true) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["volumes", i, "target"],
+              message:
+                `Sandbox security: volume target "${target}" hits reserved container path ` +
+                `"${reservedTargetReason.reservedPath}". ` +
+                "Use dangerouslyAllowReservedContainerTargets=true only when you fully trust this runtime.",
+            });
+          }
         }
         const source = vol?.source?.trim();
         if (vol.strategy === "bind") {

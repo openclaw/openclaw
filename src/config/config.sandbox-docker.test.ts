@@ -264,6 +264,37 @@ describe("sandbox docker config", () => {
     });
     expect(res.ok).toBe(false);
   });
+
+  it("rejects reserved volume targets by default", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              volumes: [{ strategy: "named", source: "openclaw-cache", target: "/workspace" }],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("allows reserved volume targets with explicit dangerous override", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              dangerouslyAllowReservedContainerTargets: true,
+              volumes: [{ strategy: "named", source: "openclaw-cache", target: "/workspace" }],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("sandbox browser binds config", () => {

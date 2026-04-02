@@ -48,7 +48,10 @@ const BLOCKED_HOME_SUBPATHS = [
 
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
-const RESERVED_CONTAINER_TARGET_PATHS = ["/workspace", SANDBOX_AGENT_WORKSPACE_MOUNT];
+export const RESERVED_CONTAINER_TARGET_PATHS = [
+  "/workspace",
+  SANDBOX_AGENT_WORKSPACE_MOUNT,
+] as const;
 let blockedHostPathsCache:
   | {
       key: string;
@@ -232,8 +235,7 @@ function getOutsideAllowedRootsReason(
   };
 }
 
-function getReservedTargetReason(bind: string): BlockedBindReason | null {
-  const targetRaw = parseBindTargetPath(bind);
+export function getReservedContainerTargetReason(targetRaw: string): BlockedBindReason | null {
   if (!targetRaw || !targetRaw.startsWith("/")) {
     return null;
   }
@@ -248,6 +250,10 @@ function getReservedTargetReason(bind: string): BlockedBindReason | null {
     }
   }
   return null;
+}
+
+function getReservedTargetReason(bind: string): BlockedBindReason | null {
+  return getReservedContainerTargetReason(parseBindTargetPath(bind));
 }
 
 function enforceSourcePathPolicy(params: {
