@@ -19,12 +19,22 @@ export function replaceSensitiveValuesInRaw(params: {
 }
 
 /**
- * Strip keys with `undefined` values so that objects materialized with
- * `void 0` assignments compare cleanly against JSON-parsed objects
+ * Recursively strip keys with `undefined` values so that objects materialized
+ * with `void 0` assignments compare cleanly against JSON-parsed objects
  * (which can never contain `undefined`).
  */
 function stripUndefinedKeys(value: unknown): unknown {
-  return JSON.parse(JSON.stringify(value));
+  if (Array.isArray(value)) {
+    return value.map(stripUndefinedKeys);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, stripUndefinedKeys(v)]),
+    );
+  }
+  return value;
 }
 
 export function shouldFallbackToStructuredRawRedaction(params: {
