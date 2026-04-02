@@ -6,8 +6,6 @@ import {
   probeDiscord as probeDiscordImpl,
   resolveDiscordChannelAllowlist as resolveDiscordChannelAllowlistImpl,
   resolveDiscordUserAllowlist as resolveDiscordUserAllowlistImpl,
-} from "../../plugin-sdk/discord.js";
-import {
   createThreadDiscord as createThreadDiscordImpl,
   deleteMessageDiscord as deleteMessageDiscordImpl,
   editChannelDiscord as editChannelDiscordImpl,
@@ -18,7 +16,7 @@ import {
   sendPollDiscord as sendPollDiscordImpl,
   sendTypingDiscord as sendTypingDiscordImpl,
   unpinMessageDiscord as unpinMessageDiscordImpl,
-} from "../../plugin-sdk/discord.js";
+} from "../../plugin-sdk/discord-runtime-surface.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 type RuntimeDiscordOps = Pick<

@@ -1,8 +1,9 @@
-import { inspectDiscordAccount as inspectDiscordAccountImpl } from "../plugin-sdk/discord.js";
+import { inspectDiscordAccount as inspectDiscordAccountImpl } from "../plugin-sdk/discord-surface.js";
 
-export type { InspectedDiscordAccount } from "../plugin-sdk/discord.js";
+export type { InspectedDiscordAccount } from "../plugin-sdk/discord-surface.js";
 
-type InspectDiscordAccount = typeof import("../plugin-sdk/discord.js").inspectDiscordAccount;
+type InspectDiscordAccount =
+  typeof import("../plugin-sdk/discord-surface.js").inspectDiscordAccount;
 
 export function inspectDiscordAccount(
   ...args: Parameters<InspectDiscordAccount>
