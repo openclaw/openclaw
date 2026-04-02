@@ -409,7 +409,7 @@ export class AcpGatewayAgent implements Agent {
   private sessionStore: AcpSessionStore;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
-  private disconnectDeadlineSessionIds = new Set<string>();
+  private disconnectDeadlineRunIds = new Map<string, string>();
   private disconnectTimer: NodeJS.Timeout | null = null;
   private disconnectGeneration = 0;
 
@@ -458,7 +458,12 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     this.disconnectGeneration += 1;
-    this.disconnectDeadlineSessionIds = new Set(this.pendingPrompts.keys());
+    this.disconnectDeadlineRunIds = new Map(
+      [...this.pendingPrompts.entries()].map(([sessionId, pending]) => [
+        sessionId,
+        pending.idempotencyKey,
+      ]),
+    );
     this.clearDisconnectTimer();
     this.disconnectTimer = setTimeout(() => {
       this.disconnectTimer = null;
@@ -741,7 +746,7 @@ export class AcpGatewayAgent implements Agent {
           return;
         }
         this.pendingPrompts.delete(params.sessionId);
-        this.disconnectDeadlineSessionIds.delete(params.sessionId);
+        this.disconnectDeadlineRunIds.delete(params.sessionId);
         this.sessionStore.clearActiveRun(params.sessionId);
         if (this.pendingPrompts.size === 0) {
           this.clearDisconnectTimer();
@@ -1004,7 +1009,7 @@ export class AcpGatewayAgent implements Agent {
     stopReason: StopReason,
   ): Promise<void> {
     this.pendingPrompts.delete(sessionId);
-    this.disconnectDeadlineSessionIds.delete(sessionId);
+    this.disconnectDeadlineRunIds.delete(sessionId);
     this.sessionStore.clearActiveRun(sessionId);
     if (this.pendingPrompts.size === 0) {
       this.clearDisconnectTimer();
@@ -1041,29 +1046,32 @@ export class AcpGatewayAgent implements Agent {
     this.disconnectTimer = null;
   }
 
-  private rejectPendingPrompts(error: Error, sessionIds: Iterable<string>): void {
-    for (const sessionId of sessionIds) {
-      const pending = this.pendingPrompts.get(sessionId);
+  private rejectPendingPrompts(
+    error: Error,
+    promptRuns: Iterable<readonly [string, string]>,
+  ): void {
+    for (const [sessionId, runId] of promptRuns) {
+      const pending = this.getPendingPrompt(sessionId, runId);
       if (!pending) {
         continue;
       }
       pending.reject(error);
       this.sessionStore.clearActiveRun(pending.sessionId);
       this.pendingPrompts.delete(sessionId);
-      this.disconnectDeadlineSessionIds.delete(sessionId);
+      this.disconnectDeadlineRunIds.delete(sessionId);
     }
   }
 
   private async expireDisconnectDeadline(error: Error): Promise<void> {
-    const deadlineSessionIds = [...this.disconnectDeadlineSessionIds];
-    for (const sessionId of deadlineSessionIds) {
-      const pending = this.pendingPrompts.get(sessionId);
+    const deadlinePromptRuns = [...this.disconnectDeadlineRunIds.entries()];
+    for (const [sessionId, runId] of deadlinePromptRuns) {
+      const pending = this.getPendingPrompt(sessionId, runId);
       if (!pending) {
-        this.disconnectDeadlineSessionIds.delete(sessionId);
+        this.disconnectDeadlineRunIds.delete(sessionId);
         continue;
       }
       if (!pending.sendAccepted) {
-        this.rejectPendingPrompts(error, [sessionId]);
+        this.rejectPendingPrompts(error, [[sessionId, runId]]);
         continue;
       }
 
@@ -1072,17 +1080,17 @@ export class AcpGatewayAgent implements Agent {
         result = await this.gateway.request<AgentWaitResult>(
           "agent.wait",
           {
-            runId: pending.idempotencyKey,
+            runId,
             timeoutMs: 0,
           },
           { timeoutMs: null },
         );
       } catch {
-        this.rejectPendingPrompts(error, [sessionId]);
+        this.rejectPendingPrompts(error, [[sessionId, runId]]);
         continue;
       }
 
-      const currentPending = this.getPendingPrompt(sessionId, pending.idempotencyKey);
+      const currentPending = this.getPendingPrompt(sessionId, runId);
       if (!currentPending) {
         continue;
       }
@@ -1094,7 +1102,7 @@ export class AcpGatewayAgent implements Agent {
         void this.finishPrompt(sessionId, currentPending, "end_turn");
         continue;
       }
-      this.rejectPendingPrompts(error, [sessionId]);
+      this.rejectPendingPrompts(error, [[sessionId, runId]]);
     }
   }
 
@@ -1110,7 +1118,7 @@ export class AcpGatewayAgent implements Agent {
 
     const pendingEntries = [...this.pendingPrompts.entries()];
     let keepDisconnectTimer = false;
-    const nextDisconnectDeadlineSessionIds = new Set<string>();
+    const nextDisconnectDeadlineRunIds = new Map<string, string>();
     for (const [sessionId, pending] of pendingEntries) {
       if (this.pendingPrompts.get(sessionId) !== pending) {
         continue;
@@ -1128,7 +1136,7 @@ export class AcpGatewayAgent implements Agent {
       } catch (err) {
         this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
         keepDisconnectTimer = true;
-        nextDisconnectDeadlineSessionIds.add(sessionId);
+        nextDisconnectDeadlineRunIds.set(sessionId, pending.idempotencyKey);
         continue;
       }
 
@@ -1145,13 +1153,13 @@ export class AcpGatewayAgent implements Agent {
       }
       if (result?.status === "timeout") {
         keepDisconnectTimer = true;
-        nextDisconnectDeadlineSessionIds.add(sessionId);
+        nextDisconnectDeadlineRunIds.set(sessionId, pending.idempotencyKey);
         continue;
       }
     }
 
     if (this.disconnectGeneration === observedDisconnectGeneration) {
-      this.disconnectDeadlineSessionIds = nextDisconnectDeadlineSessionIds;
+      this.disconnectDeadlineRunIds = nextDisconnectDeadlineRunIds;
     }
     if (!keepDisconnectTimer && this.disconnectGeneration === observedDisconnectGeneration) {
       this.clearDisconnectTimer();
