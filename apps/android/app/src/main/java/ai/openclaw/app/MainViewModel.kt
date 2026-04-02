@@ -259,6 +259,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       _chatDraft.value = null
       return
     }
+    _pendingAssistantAutoSend.value = null
     _chatDraft.value = request.prompt
   }
 
