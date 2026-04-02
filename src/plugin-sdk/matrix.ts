@@ -11,7 +11,7 @@ export {
   readStringArrayParam,
   readStringParam,
 } from "../agents/tools/common.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { BlockReplyContext, ReplyPayload } from "../auto-reply/types.js";
 export { resolveAckReaction } from "../agents/identity.js";
 export {
   compileAllowlist,

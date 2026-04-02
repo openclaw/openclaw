@@ -170,8 +170,15 @@ export function listEffectivePairedDeviceRoles(
   device: Pick<PairedDevice, "role" | "roles" | "tokens">,
 ): string[] {
   const activeTokenRoles = listActiveTokenRoles(device.tokens);
-  if (device.tokens) {
-    return activeTokenRoles ?? [];
+  if (activeTokenRoles && activeTokenRoles.length > 0) {
+    return activeTokenRoles;
+  }
+  // Only fall back to legacy role fields when the tokens map is absent
+  // or has no entries at all (empty object from a fresh pairing record).
+  // When token entries exist but are all revoked, the revocation is
+  // authoritative — do not re-grant roles from sticky historical fields.
+  if (device.tokens && Object.keys(device.tokens).length > 0) {
+    return [];
   }
   return mergeRoles(device.roles, device.role) ?? [];
 }

@@ -1,61 +1,18 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   resolveConfiguredMatrixAccountIds,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../account-selection.js";
+import { resolveMatrixAccountStringValues } from "../auth-precedence.js";
+import { getMatrixScopedEnvVarNames } from "../env-vars.js";
 import type { CoreConfig, MatrixConfig } from "../types.js";
-import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
-import { resolveMatrixConfigForAccount } from "./client.js";
+import {
+  findMatrixAccountConfig,
+  resolveMatrixAccountConfig,
+  resolveMatrixBaseConfig,
+} from "./account-config.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials-read.js";
-
-type MatrixRoomEntries = Record<string, NonNullable<MatrixConfig["groups"]>[string]>;
-
-function selectInheritedMatrixRoomEntries(params: {
-  entries: MatrixRoomEntries | undefined;
-  accountId: string;
-}): MatrixRoomEntries | undefined {
-  const entries = params.entries;
-  if (!entries) {
-    return undefined;
-  }
-  const selected = Object.fromEntries(
-    Object.entries(entries).filter(([, value]) => {
-      const scopedAccount =
-        typeof value?.account === "string" ? normalizeAccountId(value.account) : undefined;
-      return scopedAccount === undefined || scopedAccount === params.accountId;
-    }),
-  ) as MatrixRoomEntries;
-  return Object.keys(selected).length > 0 ? selected : undefined;
-}
-
-function mergeMatrixRoomEntries(
-  inherited: MatrixRoomEntries | undefined,
-  accountEntries: MatrixRoomEntries | undefined,
-  hasAccountOverride: boolean,
-): MatrixRoomEntries | undefined {
-  if (!inherited && !accountEntries) {
-    return undefined;
-  }
-  if (hasAccountOverride && Object.keys(accountEntries ?? {}).length === 0) {
-    return undefined;
-  }
-  const merged: MatrixRoomEntries = {
-    ...(inherited ?? {}),
-  };
-  for (const [key, value] of Object.entries(accountEntries ?? {})) {
-    const inheritedValue = merged[key];
-    merged[key] =
-      inheritedValue && value
-        ? {
-            ...inheritedValue,
-            ...value,
-          }
-        : (value ?? inheritedValue);
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
 
 export type ResolvedMatrixAccount = {
   accountId: string;
@@ -67,14 +24,96 @@ export type ResolvedMatrixAccount = {
   config: MatrixConfig;
 };
 
+type MatrixEnvConfig = {
+  homeserver: string;
+  userId: string;
+  accessToken?: string;
+  password?: string;
+  deviceId?: string;
+  deviceName?: string;
+};
+
+function clean(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function resolveGlobalMatrixEnvConfig(env: NodeJS.ProcessEnv): MatrixEnvConfig {
+  return {
+    homeserver: clean(env.MATRIX_HOMESERVER),
+    userId: clean(env.MATRIX_USER_ID),
+    accessToken: clean(env.MATRIX_ACCESS_TOKEN) || undefined,
+    password: clean(env.MATRIX_PASSWORD) || undefined,
+    deviceId: clean(env.MATRIX_DEVICE_ID) || undefined,
+    deviceName: clean(env.MATRIX_DEVICE_NAME) || undefined,
+  };
+}
+
+function resolveScopedMatrixEnvConfig(accountId: string, env: NodeJS.ProcessEnv): MatrixEnvConfig {
+  const keys = getMatrixScopedEnvVarNames(accountId);
+  return {
+    homeserver: clean(env[keys.homeserver]),
+    userId: clean(env[keys.userId]),
+    accessToken: clean(env[keys.accessToken]) || undefined,
+    password: clean(env[keys.password]) || undefined,
+    deviceId: clean(env[keys.deviceId]) || undefined,
+    deviceName: clean(env[keys.deviceName]) || undefined,
+  };
+}
+
+function resolveMatrixAccountAuthView(params: {
+  cfg: CoreConfig;
+  accountId: string;
+  env: NodeJS.ProcessEnv;
+}): {
+  homeserver: string;
+  userId: string;
+  accessToken?: string;
+  password?: string;
+} {
+  const normalizedAccountId = normalizeAccountId(params.accountId);
+  const matrix = resolveMatrixBaseConfig(params.cfg);
+  const account = findMatrixAccountConfig(params.cfg, normalizedAccountId) ?? {};
+  const resolvedStrings = resolveMatrixAccountStringValues({
+    accountId: normalizedAccountId,
+    account: {
+      homeserver: clean(account.homeserver),
+      userId: clean(account.userId),
+      accessToken: typeof account.accessToken === "string" ? clean(account.accessToken) : "",
+      password: typeof account.password === "string" ? clean(account.password) : "",
+      deviceId: clean(account.deviceId),
+      deviceName: clean(account.deviceName),
+    },
+    scopedEnv: resolveScopedMatrixEnvConfig(normalizedAccountId, params.env),
+    channel: {
+      homeserver: clean(matrix.homeserver),
+      userId: clean(matrix.userId),
+      accessToken: typeof matrix.accessToken === "string" ? clean(matrix.accessToken) : "",
+      password: typeof matrix.password === "string" ? clean(matrix.password) : "",
+      deviceId: clean(matrix.deviceId),
+      deviceName: clean(matrix.deviceName),
+    },
+    globalEnv: resolveGlobalMatrixEnvConfig(params.env),
+  });
+  return {
+    homeserver: resolvedStrings.homeserver,
+    userId: resolvedStrings.userId,
+    accessToken: resolvedStrings.accessToken || undefined,
+    password: resolvedStrings.password || undefined,
+  };
+}
+
 function resolveMatrixAccountUserId(params: {
   cfg: CoreConfig;
   accountId: string;
   env?: NodeJS.ProcessEnv;
 }): string | null {
   const env = params.env ?? process.env;
-  const resolved = resolveMatrixConfigForAccount(params.cfg, params.accountId, env);
-  const configuredUserId = resolved.userId.trim();
+  const authView = resolveMatrixAccountAuthView({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    env,
+  });
+  const configuredUserId = authView.userId.trim();
   if (configuredUserId) {
     return configuredUserId;
   }
@@ -83,10 +122,10 @@ function resolveMatrixAccountUserId(params: {
   if (!stored) {
     return null;
   }
-  if (resolved.homeserver && stored.homeserver !== resolved.homeserver) {
+  if (authView.homeserver && stored.homeserver !== authView.homeserver) {
     return null;
   }
-  if (resolved.accessToken && stored.accessToken !== resolved.accessToken) {
+  if (authView.accessToken && stored.accessToken !== authView.accessToken) {
     return null;
   }
   return stored.userId.trim() || null;
@@ -149,20 +188,24 @@ export function resolveMatrixAccount(params: {
       : (findMatrixAccountConfig(params.cfg, accountId) ?? {});
   const enabled = base.enabled !== false && matrixBase.enabled !== false;
 
-  const resolved = resolveMatrixConfigForAccount(params.cfg, accountId, env);
-  const hasHomeserver = Boolean(resolved.homeserver);
-  const hasUserId = Boolean(resolved.userId);
+  const authView = resolveMatrixAccountAuthView({
+    cfg: params.cfg,
+    accountId,
+    env,
+  });
+  const hasHomeserver = Boolean(authView.homeserver);
+  const hasUserId = Boolean(authView.userId);
   const hasAccessToken =
-    Boolean(resolved.accessToken) || hasConfiguredSecretInput(explicitAuthConfig.accessToken);
-  const hasPassword = Boolean(resolved.password);
+    Boolean(authView.accessToken) || hasConfiguredSecretInput(explicitAuthConfig.accessToken);
+  const hasPassword = Boolean(authView.password);
   const hasPasswordAuth =
     hasUserId && (hasPassword || hasConfiguredSecretInput(explicitAuthConfig.password));
   const stored = loadMatrixCredentials(env, accountId);
   const hasStored =
-    stored && resolved.homeserver
+    stored && authView.homeserver
       ? credentialsMatchConfig(stored, {
-          homeserver: resolved.homeserver,
-          userId: resolved.userId || "",
+          homeserver: authView.homeserver,
+          userId: authView.userId || "",
         })
       : false;
   const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || Boolean(hasStored));
@@ -171,51 +214,10 @@ export function resolveMatrixAccount(params: {
     enabled,
     name: base.name?.trim() || undefined,
     configured,
-    homeserver: resolved.homeserver || undefined,
-    userId: resolved.userId || undefined,
+    homeserver: authView.homeserver || undefined,
+    userId: authView.userId || undefined,
     config: base,
   };
 }
 
-export function resolveMatrixAccountConfig(params: {
-  cfg: CoreConfig;
-  accountId?: string | null;
-  env?: NodeJS.ProcessEnv;
-}): MatrixConfig {
-  const env = params.env ?? process.env;
-  const accountId = normalizeAccountId(params.accountId);
-  const base = resolveMatrixBaseConfig(params.cfg);
-  const merged = resolveMergedAccountConfig<MatrixConfig>({
-    channelConfig: base,
-    accounts: params.cfg.channels?.matrix?.accounts as
-      | Record<string, Partial<MatrixConfig>>
-      | undefined,
-    accountId,
-    normalizeAccountId,
-    nestedObjectKeys: ["dm", "actions"],
-  });
-  const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
-  const groups = mergeMatrixRoomEntries(
-    selectInheritedMatrixRoomEntries({
-      entries: base.groups,
-      accountId,
-    }),
-    accountConfig?.groups,
-    Boolean(accountConfig && Object.hasOwn(accountConfig, "groups")),
-  );
-  const rooms = mergeMatrixRoomEntries(
-    selectInheritedMatrixRoomEntries({
-      entries: base.rooms,
-      accountId,
-    }),
-    accountConfig?.rooms,
-    Boolean(accountConfig && Object.hasOwn(accountConfig, "rooms")),
-  );
-  // Room maps need custom scoping, so keep the generic merge for all other fields.
-  const { groups: _ignoredGroups, rooms: _ignoredRooms, ...rest } = merged;
-  return {
-    ...rest,
-    ...(groups ? { groups } : {}),
-    ...(rooms ? { rooms } : {}),
-  };
-}
+export { resolveMatrixAccountConfig } from "./account-config.js";
