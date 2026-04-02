@@ -143,6 +143,7 @@ function createTestFetchProvider(params: {
       const webFetch = (config.webFetch ??= {}) as { apiKey?: unknown };
       webFetch.apiKey = value;
     },
+    createTool: () => null,
   };
 }
 
