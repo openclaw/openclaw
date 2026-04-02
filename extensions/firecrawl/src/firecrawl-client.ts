@@ -7,6 +7,7 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   truncateText,
+  withStrictWebToolsEndpoint,
   withTrustedWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
@@ -93,7 +94,10 @@ async function postFirecrawlJson<T>(
   },
   parse: (response: Response) => Promise<T>,
 ): Promise<T> {
-  return await withTrustedWebToolsEndpoint(
+  // Strict SSRF guard for the default public endpoint; trusted mode for self-hosted
+  const isDefault = new URL(params.url).hostname === "api.firecrawl.dev";
+  const withEndpoint = isDefault ? withStrictWebToolsEndpoint : withTrustedWebToolsEndpoint;
+  return await withEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
