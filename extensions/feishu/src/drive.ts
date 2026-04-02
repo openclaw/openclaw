@@ -272,6 +272,23 @@ function applyAmbientCommentDefaults<
   };
 }
 
+function applyAddCommentAmbientDefaults<
+  T extends {
+    file_token?: string;
+    file_type?: "doc" | "docx";
+  },
+>(params: T, context: FeishuDriveToolContext | undefined): T {
+  const ambient = resolveAmbientCommentTarget(context);
+  if (!ambient || (ambient.fileType !== "doc" && ambient.fileType !== "docx")) {
+    return params;
+  }
+  return {
+    ...params,
+    file_token: params.file_token?.trim() || ambient.fileToken,
+    file_type: params.file_type ?? ambient.fileType,
+  };
+}
+
 function applyAddCommentDefaults<
   T extends {
     file_token?: string;
@@ -849,7 +866,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                 return jsonToolResult(await listCommentReplies(client, resolved));
               }
               case "add_comment": {
-                const resolved = applyAddCommentDefaults(applyAmbientCommentDefaults(p, ctx));
+                const resolved = applyAddCommentDefaults(applyAddCommentAmbientDefaults(p, ctx));
                 return jsonToolResult(await addComment(client, resolved));
               }
               case "reply_comment": {

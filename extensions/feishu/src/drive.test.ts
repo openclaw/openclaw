@@ -565,6 +565,63 @@ describe("registerFeishuDriveTools", () => {
     );
   });
 
+  it("does not inherit non-doc ambient file types for add_comment", async () => {
+    const registerTool = vi.fn();
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({
+      agentAccountId: undefined,
+      deliveryContext: {
+        channel: "feishu",
+        to: "comment:sheet:sheet_1:c1",
+      },
+    });
+
+    requestMock.mockResolvedValueOnce({
+      code: 0,
+      data: { comment_id: "c-add-docx" },
+    });
+
+    const result = await tool.execute("call-add-ignore-sheet-ambient", {
+      action: "add_comment",
+      file_token: "doc_1",
+      content: "default add comment",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/new_comments",
+        data: {
+          file_type: "docx",
+          reply_elements: [{ type: "text", text: "default add comment" }],
+        },
+      }),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining("add_comment missing file_type; defaulting to docx"),
+    );
+    expect(result.details).toEqual(
+      expect.objectContaining({ success: true, comment_id: "c-add-docx" }),
+    );
+  });
+
   it("defaults reply_comment file_type to docx when omitted", async () => {
     const registerTool = vi.fn();
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
