@@ -120,7 +120,7 @@ export function buildMemorySearchUnavailableResult(error: string | undefined) {
     ? "Top up or switch embedding provider, then retry memory_search."
     : isSqliteMissing
       ? "node:sqlite requires Node.js 22.5+ compiled with SQLite support. " +
-        "Check your Node.js build or run: openclaw doctor --memory to see remediation options."
+        "Check your Node.js build (node:sqlite requires Node.js v22.5+) or run \`openclaw doctor\` to diagnose."
       : "Check embedding provider configuration and retry memory_search.";
   return {
     results: [],
