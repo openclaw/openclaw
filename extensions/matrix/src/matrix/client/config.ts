@@ -1,24 +1,12 @@
-import {
-  coerceSecretRef,
-  resolveConfiguredSecretInputString,
-} from "openclaw/plugin-sdk/config-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../../account-selection.js";
 import { resolveMatrixAccountStringValues } from "../../auth-precedence.js";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  assertHttpUrlTargetsPrivateNetwork,
-  isPrivateOrLoopbackHost,
-  type LookupFn,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-  normalizeResolvedSecretInputString,
-  ssrfPolicyFromAllowPrivateNetwork,
-} from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import {
@@ -26,7 +14,16 @@ import {
   resolveMatrixBaseConfig,
   listNormalizedMatrixAccountIds,
 } from "../account-config.js";
-import { resolveMatrixConfigFieldPath } from "../config-update.js";
+import { resolveMatrixConfigFieldPath } from "../config-paths.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  assertHttpUrlTargetsPrivateNetwork,
+  isPrivateOrLoopbackHost,
+  type LookupFn,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+  ssrfPolicyFromAllowPrivateNetwork,
+} from "./config-runtime-api.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
 type MatrixAuthClientDeps = {
@@ -39,15 +36,22 @@ type MatrixCredentialsReadDeps = {
   credentialsMatchConfig: typeof import("../credentials-read.js").credentialsMatchConfig;
 };
 
+type MatrixSecretInputDeps = {
+  resolveConfiguredSecretInputString: typeof import("./config-secret-input.runtime.js").resolveConfiguredSecretInputString;
+};
+
 let matrixAuthClientDepsPromise: Promise<MatrixAuthClientDeps> | undefined;
 let matrixCredentialsReadDepsPromise: Promise<MatrixCredentialsReadDeps> | undefined;
+let matrixSecretInputDepsPromise: Promise<MatrixSecretInputDeps> | undefined;
 let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
 
 export function setMatrixAuthClientDepsForTest(
-  deps?: {
-    MatrixClient: typeof import("../sdk.js").MatrixClient;
-    ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
-  } | undefined,
+  deps?:
+    | {
+        MatrixClient: typeof import("../sdk.js").MatrixClient;
+        ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+      }
+    | undefined,
 ): void {
   matrixAuthClientDepsForTest = deps;
 }
@@ -73,6 +77,13 @@ async function loadMatrixCredentialsReadDeps(): Promise<MatrixCredentialsReadDep
     }),
   );
   return await matrixCredentialsReadDepsPromise;
+}
+
+async function loadMatrixSecretInputDeps(): Promise<MatrixSecretInputDeps> {
+  matrixSecretInputDepsPromise ??= import("./config-secret-input.runtime.js").then((runtime) => ({
+    resolveConfiguredSecretInputString: runtime.resolveConfiguredSecretInputString,
+  }));
+  return await matrixSecretInputDepsPromise;
 }
 
 function readEnvSecretRefFallback(params: {
@@ -271,6 +282,7 @@ async function resolveConfiguredMatrixAuthSecretInput(params: {
     return undefined;
   }
 
+  const { resolveConfiguredSecretInputString } = await loadMatrixSecretInputDeps();
   const resolved = await resolveConfiguredSecretInputString({
     config: params.cfg,
     env: params.env,
