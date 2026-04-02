@@ -1184,13 +1184,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const messageGeneration = context?.assistantMessageIndex ?? currentDraftMessageGeneration;
         const lastQueuedDraftBoundaryOffset =
           latestQueuedDraftBoundaryOffsets.get(messageGeneration) ?? 0;
-        const nextDraftBoundaryOffset =
-          messageGeneration === currentDraftMessageGeneration
-            ? Math.max(
-                latestDraftFullText.length,
-                lastQueuedDraftBoundaryOffset + payloadTextLength,
-              )
-            : lastQueuedDraftBoundaryOffset + payloadTextLength;
+        // Logical block boundaries must follow emitted block text, not whichever
+        // later partial preview has already arrived by the time the async
+        // boundary callback drains.
+        const nextDraftBoundaryOffset = lastQueuedDraftBoundaryOffset + payloadTextLength;
         latestQueuedDraftBoundaryOffsets.set(messageGeneration, nextDraftBoundaryOffset);
         pendingDraftBoundaries.push({
           messageGeneration,
