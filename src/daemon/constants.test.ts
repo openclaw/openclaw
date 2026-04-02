@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 import {
   formatGatewayServiceDescription,
   GATEWAY_LAUNCH_AGENT_LABEL,
@@ -30,6 +34,7 @@ describe("normalizeGatewayProfile", () => {
 
 describe("resolveGatewayLaunchAgentLabel", () => {
   it("returns default label when no profile is set", () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "");
     const result = resolveGatewayLaunchAgentLabel();
     expect(result).toBe(GATEWAY_LAUNCH_AGENT_LABEL);
     expect(result).toBe("ai.openclaw.gateway");
@@ -43,6 +48,7 @@ describe("resolveGatewayLaunchAgentLabel", () => {
 
 describe("resolveGatewaySystemdServiceName", () => {
   it("returns default service name when no profile is set", () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "");
     const result = resolveGatewaySystemdServiceName();
     expect(result).toBe(GATEWAY_SYSTEMD_SERVICE_NAME);
     expect(result).toBe("openclaw-gateway");
@@ -56,6 +62,7 @@ describe("resolveGatewaySystemdServiceName", () => {
 
 describe("resolveGatewayWindowsTaskName", () => {
   it("returns default task name when no profile is set", () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "");
     const result = resolveGatewayWindowsTaskName();
     expect(result).toBe(GATEWAY_WINDOWS_TASK_NAME);
     expect(result).toBe("OpenClaw Gateway");
@@ -69,6 +76,7 @@ describe("resolveGatewayWindowsTaskName", () => {
 
 describe("resolveGatewayProfileSuffix", () => {
   it("returns empty string when no profile is set", () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "");
     expect(resolveGatewayProfileSuffix()).toBe("");
   });
 

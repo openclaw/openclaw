@@ -23,7 +23,7 @@ export function normalizeGatewayProfile(profile?: string): string | null {
 }
 
 export function resolveGatewayProfileSuffix(profile?: string): string {
-  const normalized = normalizeGatewayProfile(profile);
+  const normalized = normalizeGatewayProfile(profile ?? process.env.OPENCLAW_PROFILE);
   return normalized ? `-${normalized}` : "";
 }
 
