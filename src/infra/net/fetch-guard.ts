@@ -93,6 +93,29 @@ function assertExplicitProxySupportsPinnedDns(
   }
 }
 
+async function assertExplicitProxyAllowed(
+  dispatcherPolicy: PinnedDispatcherPolicy | undefined,
+  lookupFn: LookupFn | undefined,
+  policy: SsrFPolicy | undefined,
+): Promise<void> {
+  if (!dispatcherPolicy || dispatcherPolicy.mode !== "explicit-proxy") {
+    return;
+  }
+  let parsedProxyUrl: URL;
+  try {
+    parsedProxyUrl = new URL(dispatcherPolicy.proxyUrl);
+  } catch {
+    throw new Error("Invalid explicit proxy URL");
+  }
+  if (!["http:", "https:"].includes(parsedProxyUrl.protocol)) {
+    throw new Error("Explicit proxy URL must use http or https");
+  }
+  await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
+    lookupFn,
+    policy,
+  });
+}
+
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
@@ -158,6 +181,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     let dispatcher: Dispatcher | null = null;
     try {
       assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
+      await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
       const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
         lookupFn: params.lookupFn,
         policy: params.policy,

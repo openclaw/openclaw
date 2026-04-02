@@ -3,13 +3,15 @@ import type {
   ProviderRequestTransport,
 } from "../agents/provider-attribution.js";
 import {
+  buildProviderRequestDispatcherPolicy,
   normalizeBaseUrl,
   resolveProviderRequestPolicyConfig,
+  type ProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
+import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 
@@ -21,6 +23,7 @@ export function resolveProviderHttpRequestConfig(params: {
   allowPrivateNetwork?: boolean;
   headers?: HeadersInit;
   defaultHeaders?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
   provider?: string;
   api?: string;
   capability?: ProviderRequestCapability;
@@ -29,6 +32,7 @@ export function resolveProviderHttpRequestConfig(params: {
   baseUrl: string;
   allowPrivateNetwork: boolean;
   headers: Headers;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   requestConfig: ResolvedProviderRequestConfig;
 } {
   const requestConfig = resolveProviderRequestPolicyConfig({
@@ -44,6 +48,7 @@ export function resolveProviderHttpRequestConfig(params: {
     precedence: "caller-wins",
     allowPrivateNetwork: params.allowPrivateNetwork,
     api: params.api,
+    request: params.request,
   });
   const headers = new Headers(requestConfig.headers);
   if (!requestConfig.baseUrl) {
@@ -54,6 +59,7 @@ export function resolveProviderHttpRequestConfig(params: {
     baseUrl: requestConfig.baseUrl,
     allowPrivateNetwork: requestConfig.allowPrivateNetwork,
     headers,
+    dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
     requestConfig,
   };
 }
@@ -67,6 +73,7 @@ export async function fetchWithTimeoutGuarded(
     ssrfPolicy?: SsrFPolicy;
     lookupFn?: LookupFn;
     pinDns?: boolean;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
   },
 ): Promise<GuardedFetchResult> {
   return await fetchWithSsrFGuard({
@@ -77,6 +84,7 @@ export async function fetchWithTimeoutGuarded(
     policy: options?.ssrfPolicy,
     lookupFn: options?.lookupFn,
     pinDns: options?.pinDns,
+    dispatcherPolicy: options?.dispatcherPolicy,
   });
 }
 
@@ -87,6 +95,7 @@ export async function postTranscriptionRequest(params: {
   timeoutMs: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -97,7 +106,12 @@ export async function postTranscriptionRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+    params.allowPrivateNetwork || params.dispatcherPolicy
+      ? {
+          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+        }
+      : undefined,
   );
 }
 
@@ -108,6 +122,7 @@ export async function postJsonRequest(params: {
   timeoutMs: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -118,7 +133,12 @@ export async function postJsonRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+    params.allowPrivateNetwork || params.dispatcherPolicy
+      ? {
+          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+        }
+      : undefined,
   );
 }
 
