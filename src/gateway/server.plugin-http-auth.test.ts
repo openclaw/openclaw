@@ -320,6 +320,64 @@ describe("gateway plugin HTTP auth boundary", () => {
     expect(writeAllowedResults).toEqual([false]);
   });
 
+  test("keeps write runtime scopes for shared-secret bearer gateway-auth plugin routes", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const writeAllowedResults: boolean[] = [];
+    const handlePluginRequest = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          {
+            pluginId: "runtime-scope-bearer",
+            source: "runtime-scope-bearer",
+            path: "/secure-hook",
+            auth: "gateway",
+            match: "exact",
+            handler: async (_req: IncomingMessage, res: ServerResponse) => {
+              const runtimeScopes =
+                getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
+              observedRuntimeScopes.push(runtimeScopes);
+              const writeAuth = authorizeOperatorScopesForMethod("node.invoke", runtimeScopes);
+              writeAllowedResults.push(writeAuth.allowed);
+              res.statusCode = 200;
+              res.end("ok");
+              return true;
+            },
+          },
+        ],
+      }),
+      log: { warn: vi.fn() } as Parameters<typeof createGatewayPluginRequestHandler>[0]["log"],
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-runtime-scope-bearer-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/secure-hook",
+      },
+      run: async (server) => {
+        const response = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/secure-hook",
+            authorization: "Bearer test-token",
+            headers: {
+              "x-openclaw-scopes": "operator.read",
+            },
+          }),
+          response.res,
+        );
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe("ok");
+      },
+    });
+
+    expect(observedRuntimeScopes).toEqual([["operator.write"]]);
+    expect(writeAllowedResults).toEqual([true]);
+  });
+
   test("allows unauthenticated Mattermost slash callback routes while keeping other channel routes protected", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
