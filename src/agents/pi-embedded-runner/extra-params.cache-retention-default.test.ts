@@ -172,8 +172,20 @@ describe("cacheRetention default behavior", () => {
     });
   });
 
+  it("passes cacheRetention 'long' through for custom anthropic-messages provider", () => {
+    expect(resolveCacheRetention({ cacheRetention: "long" }, "litellm", "anthropic-messages")).toBe(
+      "long",
+    );
+  });
+
   it("does not default to caching for custom provider without explicit config", () => {
     expect(resolveCacheRetention(undefined, "litellm", "anthropic-messages")).toBeUndefined();
+  });
+
+  it("passes cacheRetention 'none' through for custom anthropic-messages provider", () => {
+    expect(resolveCacheRetention({ cacheRetention: "none" }, "litellm", "anthropic-messages")).toBe(
+      "none",
+    );
   });
 
   it("respects cacheRetention 'short' for custom anthropic-messages provider", () => {
@@ -195,5 +207,11 @@ describe("cacheRetention default behavior", () => {
       model: { api: "anthropic-messages" } as Parameters<typeof applyExtraParamsToAgent>[8],
       provider: "litellm",
     });
+  });
+
+  it("passes cacheRetention 'short' through for custom anthropic-messages provider", () => {
+    expect(
+      resolveCacheRetention({ cacheRetention: "short" }, "litellm", "anthropic-messages"),
+    ).toBe("short");
   });
 });
