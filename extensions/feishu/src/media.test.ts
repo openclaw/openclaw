@@ -608,4 +608,78 @@ describe("downloadMessageResourceFeishu", () => {
       fileName: "clip.mp4",
     });
   });
+
+  it("preserves ASCII filename= metadata unchanged", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-doc-data"),
+      headers: {
+        "content-disposition": `attachment; filename="report-2026.pdf"`,
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_doc_msg",
+      fileKey: "file_key_doc",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe("report-2026.pdf");
+  });
+
+  it("decodes RFC5987 filename*=UTF-8 metadata", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-doc-data"),
+      headers: {
+        "content-disposition":
+          "attachment; filename*=UTF-8''%E5%85%AD%E5%A4%A7%E7%BB%84%E4%BB%B6%E5%85%A8%E8%A7%A3%E6%9E%90.md",
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_utf8_msg",
+      fileKey: "file_key_utf8",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe("六大组件全解析.md");
+  });
+
+  it("recovers mojibake filename= metadata back to UTF-8", async () => {
+    const mojibake = Buffer.from("六大组件全解析.md", "utf8").toString("latin1");
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-doc-data"),
+      headers: {
+        "content-disposition": `attachment; filename="${mojibake}"`,
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_mojibake_msg",
+      fileKey: "file_key_mojibake",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe("六大组件全解析.md");
+  });
+
+  it("does not corrupt already-correct Unicode filename= metadata", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-doc-data"),
+      headers: {
+        "content-disposition": `attachment; filename="六大组件全解析.md"`,
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_unicode_msg",
+      fileKey: "file_key_unicode",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe("六大组件全解析.md");
+  });
 });

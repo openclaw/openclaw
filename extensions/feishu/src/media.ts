@@ -124,17 +124,35 @@ function readHeaderValue(
 }
 
 function decodeDispositionFileName(value: string): string | undefined {
+  const normalizeDecodedFileName = (fileName: string): string => {
+    const trimmed = fileName.trim().replace(/^"(.*)"$/, "$1");
+    if (!trimmed) {
+      return trimmed;
+    }
+    // Some Feishu responses put UTF-8 bytes into `filename=` and clients decode
+    // them as Latin-1, producing mojibake like `å­å¤§...`. Recover only when the
+    // input is entirely within Latin-1 and round-trips to valid UTF-8.
+    if (/[^\u0000-\u00FF]/.test(trimmed)) {
+      return trimmed;
+    }
+    const decoded = Buffer.from(trimmed, "latin1").toString("utf8");
+    if (!decoded || decoded === trimmed || decoded.includes("\uFFFD")) {
+      return trimmed;
+    }
+    return /[^\x00-\x7F]/.test(decoded) ? decoded : trimmed;
+  };
+
   const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
   if (utf8Match?.[1]) {
     try {
-      return decodeURIComponent(utf8Match[1].trim().replace(/^"(.*)"$/, "$1"));
+      return normalizeDecodedFileName(decodeURIComponent(utf8Match[1].trim()));
     } catch {
-      return utf8Match[1].trim().replace(/^"(.*)"$/, "$1");
+      return normalizeDecodedFileName(utf8Match[1]);
     }
   }
 
   const plainMatch = value.match(/filename="?([^";]+)"?/i);
-  return plainMatch?.[1]?.trim();
+  return plainMatch?.[1] ? normalizeDecodedFileName(plainMatch[1]) : undefined;
 }
 
 function extractFeishuDownloadMetadata(response: FeishuDownloadResponse): {
