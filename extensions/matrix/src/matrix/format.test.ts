@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { markdownToMatrixHtml, renderMarkdownToMatrixHtmlWithMentions } from "./format.js";
 
-function createMentionClient(joinedMembers: string[] = [], selfUserId = "@bot:example.org") {
+function createMentionClient(selfUserId = "@bot:example.org") {
   return {
-    getJoinedRoomMembers: async () => joinedMembers,
     getUserId: async () => selfUserId,
   } as unknown as import("./sdk.js").MatrixClient;
 }
@@ -64,27 +63,48 @@ describe("markdownToMatrixHtml", () => {
     });
   });
 
-  it("resolves unique bare localpart mentions from joined room members", async () => {
+  it("leaves bare localpart text unmentioned", async () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "hello @alice",
-      client: createMentionClient(["@alice:example.org", "@bob:example.org"]),
+      client: createMentionClient(),
       roomId: "!room:example.org",
     });
 
-    expect(result.html).toContain('href="https://matrix.to/#/@alice:example.org"');
-    expect(result.mentions).toEqual({
-      user_ids: ["@alice:example.org"],
-    });
+    expect(result.html).not.toContain("matrix.to");
+    expect(result.mentions).toEqual({});
   });
 
-  it("leaves ambiguous bare localpart mentions as plain text", async () => {
+  it("does not convert escaped qualified mentions", async () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
-      markdown: "hello @alice",
-      client: createMentionClient(["@alice:example.org", "@alice:elsewhere.org"]),
+      markdown: "\\@alice:example.org",
+      client: createMentionClient(),
       roomId: "!room:example.org",
     });
 
-    expect(result.html).not.toContain('href="https://matrix.to/#/@alice:example.org"');
+    expect(result.html).toContain("@alice:example.org");
+    expect(result.html).not.toContain("matrix.to");
+    expect(result.mentions).toEqual({});
+  });
+
+  it("does not convert escaped room mentions", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "\\@room",
+      client: createMentionClient(),
+      roomId: "!room:example.org",
+    });
+
+    expect(result.html).toContain("@room");
+    expect(result.mentions).toEqual({});
+  });
+
+  it("keeps backslashes inside code spans", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "`\\@alice:example.org`",
+      client: createMentionClient(),
+      roomId: "!room:example.org",
+    });
+
+    expect(result.html).toContain("<code>\\@alice:example.org</code>");
     expect(result.mentions).toEqual({});
   });
 

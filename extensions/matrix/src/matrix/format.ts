@@ -27,10 +27,10 @@ type MatrixMentionCandidate = {
   end: number;
   kind: "room" | "user";
   userId?: string;
-  localpart?: string;
 };
 
-const MENTION_PATTERN = /@room\b|@[A-Za-z0-9._=+\-/]+(?::[A-Za-z0-9.-]+(?::\d+)?)?/g;
+const ESCAPED_MENTION_SENTINEL = "\uE000";
+const MENTION_PATTERN = /@room\b|@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?::\d+)?/g;
 const TRIMMABLE_MENTION_SUFFIX = /[),.!?:;\]]/;
 
 function shouldSuppressAutoLink(
@@ -60,16 +60,40 @@ md.renderer.rules.link_close = (tokens, idx, _options, _env, self) => {
   return self.renderToken(tokens, idx, _options);
 };
 
-function resolveMatrixUserLocalpart(userId: string): string | null {
-  const trimmed = userId.trim();
-  if (!trimmed.startsWith("@")) {
-    return null;
+function maskEscapedMentions(markdown: string): string {
+  let masked = "";
+  let idx = 0;
+  let codeFenceLength = 0;
+
+  while (idx < markdown.length) {
+    if (markdown[idx] === "`") {
+      let runLength = 1;
+      while (markdown[idx + runLength] === "`") {
+        runLength += 1;
+      }
+      if (codeFenceLength === 0) {
+        codeFenceLength = runLength;
+      } else if (runLength === codeFenceLength) {
+        codeFenceLength = 0;
+      }
+      masked += markdown.slice(idx, idx + runLength);
+      idx += runLength;
+      continue;
+    }
+    if (codeFenceLength === 0 && markdown[idx] === "\\" && markdown[idx + 1] === "@") {
+      masked += ESCAPED_MENTION_SENTINEL;
+      idx += 2;
+      continue;
+    }
+    masked += markdown[idx] ?? "";
+    idx += 1;
   }
-  const colonIndex = trimmed.indexOf(":");
-  if (colonIndex <= 1) {
-    return null;
-  }
-  return trimmed.slice(1, colonIndex).trim() || null;
+
+  return masked;
+}
+
+function restoreEscapedMentions(text: string): string {
+  return text.replaceAll(ESCAPED_MENTION_SENTINEL, "@");
 }
 
 function isMentionStartBoundary(charBefore: string | undefined): boolean {
@@ -99,9 +123,10 @@ function buildMentionCandidate(raw: string, start: number): MatrixMentionCandida
   if (isRoomMention) {
     return trimMentionSuffix(base);
   }
-  const userCandidate = isMatrixQualifiedUserId(raw)
-    ? { ...base, userId: raw }
-    : { ...base, localpart: raw.slice(1) };
+  const userCandidate = isMatrixQualifiedUserId(raw) ? { ...base, userId: raw } : null;
+  if (!userCandidate) {
+    return null;
+  }
   return trimMentionSuffix(userCandidate);
 }
 
@@ -157,56 +182,15 @@ function createMentionLinkTokens(params: {
   return [open, text, close];
 }
 
-function buildResolvedLocalpartMap(joinedMembers: string[]): Map<string, string | null> {
-  const byLocalpart = new Map<string, string | null>();
-  for (const userId of joinedMembers) {
-    const localpart = resolveMatrixUserLocalpart(userId);
-    if (!localpart) {
-      continue;
-    }
-    const existing = byLocalpart.get(localpart);
-    if (existing === undefined) {
-      byLocalpart.set(localpart, userId);
-      continue;
-    }
-    if (existing !== userId) {
-      byLocalpart.set(localpart, null);
-    }
-  }
-  return byLocalpart;
-}
-
-function resolveMentionUserId(
-  match: MatrixMentionCandidate,
-  resolvedLocalparts: Map<string, string | null>,
-): string | null {
+function resolveMentionUserId(match: MatrixMentionCandidate): string | null {
   if (match.kind !== "user") {
     return null;
   }
-  if (match.userId) {
-    return match.userId;
-  }
-  if (!match.localpart) {
-    return null;
-  }
-  return resolvedLocalparts.get(match.localpart) ?? null;
-}
-
-function containsBareLocalpartMentions(tokens: MarkdownToken[]): boolean {
-  return tokens.some((token) =>
-    token.children?.some(
-      (child) =>
-        child.type === "text" &&
-        collectMentionCandidates(child.content).some(
-          (match) => match.kind === "user" && !match.userId && match.localpart,
-        ),
-    ),
-  );
+  return match.userId ?? null;
 }
 
 function mutateInlineTokensWithMentions(params: {
   children: MarkdownInlineToken[];
-  resolvedLocalparts: Map<string, string | null>;
   userIds: string[];
   seenUserIds: Set<string>;
   selfUserId: string | null;
@@ -230,16 +214,19 @@ function mutateInlineTokensWithMentions(params: {
       continue;
     }
 
+    const visibleContent = restoreEscapedMentions(child.content);
     const matches = collectMentionCandidates(child.content);
     if (matches.length === 0) {
-      nextChildren.push(child);
+      nextChildren.push(createTextToken(child, visibleContent));
       continue;
     }
 
     let cursor = 0;
     for (const match of matches) {
       if (match.start > cursor) {
-        nextChildren.push(createTextToken(child, child.content.slice(cursor, match.start)));
+        nextChildren.push(
+          createTextToken(child, restoreEscapedMentions(child.content.slice(cursor, match.start))),
+        );
       }
       cursor = match.end;
       if (match.kind === "room") {
@@ -248,7 +235,7 @@ function mutateInlineTokensWithMentions(params: {
         continue;
       }
 
-      const resolvedUserId = resolveMentionUserId(match, params.resolvedLocalparts);
+      const resolvedUserId = resolveMentionUserId(match);
       if (!resolvedUserId || resolvedUserId === params.selfUserId) {
         nextChildren.push(createTextToken(child, match.raw));
         continue;
@@ -266,7 +253,9 @@ function mutateInlineTokensWithMentions(params: {
       );
     }
     if (cursor < child.content.length) {
-      nextChildren.push(createTextToken(child, child.content.slice(cursor)));
+      nextChildren.push(
+        createTextToken(child, restoreEscapedMentions(child.content.slice(cursor))),
+      );
     }
   }
   return { children: nextChildren, roomMentioned };
@@ -282,12 +271,8 @@ async function resolveMarkdownMentionState(params: {
   client: MatrixClient;
   roomId: string;
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
-  const markdown = params.markdown ?? "";
+  const markdown = maskEscapedMentions(params.markdown ?? "");
   const tokens = md.parse(markdown, {});
-  const needsBareLocalpartResolution = containsBareLocalpartMentions(tokens);
-  const resolvedLocalparts = needsBareLocalpartResolution
-    ? buildResolvedLocalpartMap(await params.client.getJoinedRoomMembers(params.roomId))
-    : new Map<string, string | null>();
   const selfUserId = await params.client.getUserId().catch(() => null);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();
@@ -299,7 +284,6 @@ async function resolveMarkdownMentionState(params: {
     }
     const mutated = mutateInlineTokensWithMentions({
       children: token.children,
-      resolvedLocalparts,
       userIds,
       seenUserIds,
       selfUserId,

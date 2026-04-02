@@ -427,25 +427,8 @@ describe("sendMessageMatrix mentions", () => {
     ).toContain('href="https://matrix.to/#/@alice:example.org"');
   });
 
-  it("resolves unique bare localpart mentions against joined room members", async () => {
-    const { client, sendMessage, getJoinedRoomMembers } = makeClient();
-    getJoinedRoomMembers.mockResolvedValue(["@alice:example.org", "@bob:example.org"]);
-
-    await sendMessageMatrix("room:!room:example", "hello @alice", {
-      client,
-    });
-
-    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
-      "m.mentions": { user_ids: ["@alice:example.org"] },
-    });
-    expect(
-      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
-    ).toContain('href="https://matrix.to/#/@alice:example.org"');
-  });
-
-  it("keeps ambiguous bare localpart mentions as plain text", async () => {
-    const { client, sendMessage, getJoinedRoomMembers } = makeClient();
-    getJoinedRoomMembers.mockResolvedValue(["@alice:example.org", "@alice:elsewhere.org"]);
+  it("keeps bare localpart text as plain text", async () => {
+    const { client, sendMessage } = makeClient();
 
     await sendMessageMatrix("room:!room:example", "hello @alice", {
       client,
@@ -457,6 +440,33 @@ describe("sendMessageMatrix mentions", () => {
     expect(
       (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
     ).not.toContain("matrix.to/#/@alice:example.org");
+  });
+
+  it("does not emit mentions for escaped qualified users", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "\\@alice:example.org", {
+      client,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": {},
+    });
+    expect(
+      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+    ).not.toContain("matrix.to/#/@alice:example.org");
+  });
+
+  it("does not emit mentions for escaped room mentions", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "\\@room please review", {
+      client,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.mentions": {},
+    });
   });
 
   it("marks room mentions via m.mentions.room", async () => {
