@@ -25,7 +25,7 @@ IRC ships as an extension plugin, but it is configured in the main config under 
       enabled: true,
       host: "localhost",
       port: 6667,
-      tls: false
+      tls: false,
       nick: "openclaw-bot",
       channels: ["#openclaw"],
     },
