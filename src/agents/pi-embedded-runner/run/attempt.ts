@@ -125,7 +125,11 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import { dropThinkingBlocks } from "../thinking.js";
+import {
+  dropThinkingBlocks,
+  sanitizeThinkingForRecovery,
+  wrapAnthropicStreamWithRecovery,
+} from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
@@ -1091,6 +1095,16 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      if (
+        params.model.api === "anthropic-messages" ||
+        params.model.api === "bedrock-converse-stream"
+      ) {
+        activeSession.agent.streamFn = wrapAnthropicStreamWithRecovery(
+          activeSession.agent.streamFn,
+          { id: activeSession.sessionId },
+        );
+      }
+
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
@@ -1116,6 +1130,31 @@ export async function runEmbeddedAttempt(
       }
 
       try {
+        if (
+          params.model.api === "anthropic-messages" ||
+          params.model.api === "bedrock-converse-stream"
+        ) {
+          const originalMessageCount = activeSession.messages.length;
+          const { messages, prefill } = sanitizeThinkingForRecovery(activeSession.messages);
+          if (messages !== activeSession.messages) {
+            activeSession.agent.replaceMessages(messages);
+          }
+          if (messages.length !== originalMessageCount) {
+            log.warn(
+              `[session-recovery] dropped latest assistant message with incomplete thinking: sessionId=${params.sessionId}`,
+            );
+          }
+          if (prefill) {
+            // Keeping the signed-thinking turn intact is a forward-compatibility
+            // signal for future prefill-style recovery; the current fallback
+            // still comes from the one-shot stream wrapper if Anthropic rejects
+            // the replayed payload.
+            log.warn(
+              `[session-recovery] keeping latest assistant message with signed thinking and incomplete text: sessionId=${params.sessionId}`,
+            );
+          }
+        }
+
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
           modelApi: params.model.api,
