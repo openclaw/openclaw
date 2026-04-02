@@ -440,6 +440,47 @@ describe("plugin status reports", () => {
     });
   });
 
+  it("preserves raw config activation context for compatibility-derived reports", () => {
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
+      {
+        demo: { enabled: true },
+      },
+      { channels: { demo: { enabled: true } } },
+    );
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
+    });
+    setSinglePluginLoadResult(
+      createPluginRecord({
+        id: "demo",
+        name: "Demo",
+        description: "Auto-enabled plugin",
+        origin: "bundled",
+        hookCount: 1,
+      }),
+      {
+        typedHooks: [createTypedHook({ pluginId: "demo", hookName: "before_agent_start" })],
+      },
+    );
+
+    expect(buildPluginCompatibilityNotices({ config: rawConfig })).toEqual([
+      createCompatibilityNotice({ pluginId: "demo", code: "legacy-before-agent-start" }),
+      createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
+    ]);
+
+    expectAutoEnabledStatusLoad({
+      rawConfig,
+      autoEnabledConfig,
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
+    });
+  });
+
   it("normalizes bundled plugin versions to the core base release", () => {
     setSinglePluginLoadResult(
       createPluginRecord({
