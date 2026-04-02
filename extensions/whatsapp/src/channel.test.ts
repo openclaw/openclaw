@@ -185,6 +185,23 @@ describe("whatsappPlugin outbound sendMedia", () => {
   });
 });
 
+describe("whatsappPlugin outbound resolveTarget", () => {
+  it("delegates direct target normalization to the outbound resolver", () => {
+    const outbound = whatsappPlugin.outbound;
+    if (!outbound?.resolveTarget) {
+      throw new Error("whatsapp outbound resolveTarget is unavailable");
+    }
+
+    expect(
+      outbound.resolveTarget({
+        to: "whatsapp:+15551234567",
+        allowFrom: [],
+        mode: "explicit",
+      }),
+    ).toEqual({ ok: true, to: "+15551234567" });
+  });
+});
+
 describe("whatsappPlugin outbound sendPoll", () => {
   beforeEach(async () => {
     vi.resetModules();
