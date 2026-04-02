@@ -3665,6 +3665,19 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           default: true,
           type: "boolean",
         },
+        xActionsAllowFrom: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
         groupSessionScope: {
           type: "string",
           enum: ["group", "group_sender", "group_topic", "group_topic_sender"],
@@ -14705,6 +14718,110 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "WhatsApp Config Writes",
         help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
       },
+    },
+  },
+  {
+    pluginId: "x",
+    channelId: "x",
+    label: "X (Twitter)",
+    description: "Monitor mentions, reply to tweets, and run x-actions via the X API.",
+    schema: {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+        },
+        enabled: {
+          type: "boolean",
+        },
+        consumerKey: {
+          type: "string",
+        },
+        consumerSecret: {
+          type: "string",
+        },
+        accessToken: {
+          type: "string",
+        },
+        accessTokenSecret: {
+          type: "string",
+        },
+        pollIntervalSeconds: {
+          type: "number",
+          minimum: 15,
+        },
+        allowFrom: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        actionsAllowFrom: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        proxy: {
+          type: "string",
+        },
+        accounts: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              consumerKey: {
+                type: "string",
+                minLength: 1,
+              },
+              consumerSecret: {
+                type: "string",
+                minLength: 1,
+              },
+              accessToken: {
+                type: "string",
+                minLength: 1,
+              },
+              accessTokenSecret: {
+                type: "string",
+                minLength: 1,
+              },
+              enabled: {
+                type: "boolean",
+              },
+              pollIntervalSeconds: {
+                type: "number",
+                minimum: 15,
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              actionsAllowFrom: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              name: {
+                type: "string",
+              },
+              proxy: {
+                type: "string",
+              },
+            },
+            required: ["consumerKey", "consumerSecret", "accessToken", "accessTokenSecret"],
+            additionalProperties: false,
+          },
+        },
+      },
+      additionalProperties: false,
     },
   },
   {

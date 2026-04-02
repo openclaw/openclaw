@@ -324,6 +324,16 @@
       "hasChildren": true
     },
     {
+      "path": "agents.defaults.additionalSystemPrompt",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.blockStreamingBreak",
       "kind": "core",
       "type": "string",
@@ -1689,7 +1699,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, x, zalo, zalouser.",
       "hasChildren": false
     },
     {
@@ -4483,7 +4493,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, x, zalo, zalouser.",
       "hasChildren": false
     },
     {
@@ -16991,6 +17001,29 @@
       "path": "channels.feishu.webhookPort",
       "kind": "channel",
       "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.xActionsAllowFrom",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.feishu.xActionsAllowFrom.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -38613,6 +38646,315 @@
       "hasChildren": false
     },
     {
+      "path": "channels.x",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "X (Twitter)",
+      "help": "Monitor mentions, reply to tweets, and run x-actions via the X API.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.x.accessToken",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.accessTokenSecret",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.accounts",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.x.accounts.*",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.x.accounts.*.accessToken",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.accounts.*.accessTokenSecret",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "access",
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.accounts.*.actionsAllowFrom",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.x.accounts.*.actionsAllowFrom.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.accounts.*.allowFrom",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.x.accounts.*.allowFrom.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.accounts.*.consumerKey",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.accounts.*.consumerSecret",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.accounts.*.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.accounts.*.name",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.accounts.*.pollIntervalSeconds",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.accounts.*.proxy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.actionsAllowFrom",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.x.actionsAllowFrom.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.allowFrom",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.x.allowFrom.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.consumerKey",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.consumerSecret",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "channels",
+        "network",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.name",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.pollIntervalSeconds",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.x.proxy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.zalo",
       "kind": "channel",
       "type": "object",
@@ -46551,6 +46893,16 @@
       "path": "models.providers.*.models.*.reasoning",
       "kind": "core",
       "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.proxy",
+      "kind": "core",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -55778,6 +56130,139 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.entries.qveris.config.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qveris.config.autoMaterializeFullContent",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qveris.config.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qveris.config.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qveris.config.executeTimeoutSeconds",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qveris.config.fullContentMaxBytes",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qveris.config.fullContentTimeoutSeconds",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qveris.config.maxResponseSize",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qveris.config.region",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "global",
+        "cn"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qveris.config.searchLimit",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qveris.config.searchTimeoutSeconds",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qveris.config.timeoutSeconds",
+      "kind": "plugin",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.qveris.config.webSearch",
       "kind": "plugin",
       "type": "object",
@@ -61067,6 +61552,16 @@
       "hasChildren": false
     },
     {
+      "path": "proxy",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "secrets",
       "kind": "core",
       "type": "object",
@@ -61654,6 +62149,16 @@
       "hasChildren": false
     },
     {
+      "path": "session.maxRecentTurns",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "session.parentForkMaxTokens",
       "kind": "core",
       "type": "integer",
@@ -62222,6 +62727,16 @@
       ],
       "label": "Thread Binding Max Age (hours)",
       "help": "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
+      "hasChildren": false
+    },
+    {
+      "path": "session.transcriptRetentionDays",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -66409,6 +66924,143 @@
       "hasChildren": false
     },
     {
+      "path": "tools.qveris",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.qveris.apiKey",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.qveris.autoMaterializeFullContent",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.qveris.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.qveris.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.qveris.executeTimeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.qveris.fullContentMaxBytes",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.qveris.fullContentTimeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.qveris.maxResponseSize",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.qveris.region",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "global",
+        "cn"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.qveris.searchLimit",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.qveris.searchTimeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.qveris.timeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.sandbox",
       "kind": "core",
       "type": "object",
@@ -67065,6 +67717,336 @@
       "hasChildren": false
     },
     {
+      "path": "tools.web.search.firecrawl",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.gemini",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.gemini.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.gemini.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.gemini.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.gemini.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.gemini.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.gemini.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.grok.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.grok.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok.inlineCitations",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.grok.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.kimi",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.kimi.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.kimi.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.kimi.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.kimi.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.kimi.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.kimi.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.web.search.maxResults",
       "kind": "core",
       "type": "integer",
@@ -67155,6 +68137,86 @@
       "hasChildren": false
     },
     {
+      "path": "tools.web.search.perplexity",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.perplexity.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.perplexity.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.perplexity.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.perplexity.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.perplexity.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.perplexity.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.web.search.provider",
       "kind": "core",
       "type": "string",
@@ -67166,6 +68228,86 @@
       ],
       "label": "Web Search Provider",
       "help": "Search provider id. Auto-detected from available API keys if omitted.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.qveris",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.qveris.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.qveris.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.qveris.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.qveris.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.qveris.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools",
+        "url-secret"
+      ],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.qveris.toolId",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
