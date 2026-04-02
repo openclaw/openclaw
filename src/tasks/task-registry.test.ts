@@ -19,6 +19,7 @@ import {
   findTaskByRunId,
   getTaskById,
   getTaskRegistrySummary,
+  isParentFlowLinkError,
   listTasksForOwnerKey,
   listTaskRecords,
   linkTaskToFlowById,
@@ -376,6 +377,65 @@ describe("task-registry", () => {
         taskId: task.taskId,
         parentFlowId: undefined,
       });
+    });
+  });
+
+  it("rejects parent flow links once cancellation has been requested", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetFlowRegistryForTests();
+
+      const flow = createManagedFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-registry",
+        goal: "Cancelling flow",
+        cancelRequestedAt: 42,
+      });
+
+      try {
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          parentFlowId: flow.flowId,
+          runId: "cancel-requested-link",
+          task: "Should be denied",
+        });
+        throw new Error("Expected createTaskRecord to throw.");
+      } catch (error) {
+        expect(isParentFlowLinkError(error)).toBe(true);
+        expect(error).toMatchObject({
+          code: "cancel_requested",
+          message: "Parent flow cancellation has already been requested.",
+        });
+      }
+    });
+  });
+
+  it("rejects parent flow links for terminal flows", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetFlowRegistryForTests();
+
+      const flow = createManagedFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-registry",
+        goal: "Completed flow",
+        status: "cancelled",
+      });
+
+      expect(() =>
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          parentFlowId: flow.flowId,
+          runId: "terminal-flow-link",
+          task: "Should be denied",
+        }),
+      ).toThrow("Parent flow is already cancelled.");
     });
   });
 
