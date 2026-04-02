@@ -402,7 +402,7 @@ describe("acp translator stop reason mapping", () => {
     }
   });
 
-  it("keeps pre-ack prompts pending after reconnect timeout", async () => {
+  it("rejects pre-ack prompts when reconnect timeout still finds no run", async () => {
     vi.useFakeTimers();
     try {
       const sessionId = "session-1";
@@ -442,9 +442,7 @@ describe("acp translator stop reason mapping", () => {
       );
 
       await vi.advanceTimersByTimeAsync(5_000);
-      await expect(Promise.race([promptPromise, Promise.resolve("pending")])).resolves.toBe(
-        "pending",
-      );
+      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
     } finally {
       vi.useRealTimers();
     }
@@ -491,7 +489,7 @@ describe("acp translator stop reason mapping", () => {
     await expect(Promise.race([secondPrompt, Promise.resolve("pending")])).resolves.toBe("pending");
   });
 
-  it("keeps disconnect deadline when a superseded send resolves late", async () => {
+  it("rejects stale pre-ack prompts when a superseded send resolves late", async () => {
     vi.useFakeTimers();
     try {
       const sessionId = "session-1";
@@ -548,15 +546,13 @@ describe("acp translator stop reason mapping", () => {
       agent.handleGatewayReconnect();
       await vi.advanceTimersByTimeAsync(5_000);
 
-      await expect(Promise.race([secondPrompt, Promise.resolve("pending")])).resolves.toBe(
-        "pending",
-      );
+      await expect(secondPrompt).rejects.toThrow("Gateway disconnected: 1006: connection lost");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("finishes terminal prompts without rejecting other reconnecting prompts", async () => {
+  it("finishes terminal prompts while rejecting stale pre-ack prompts", async () => {
     vi.useFakeTimers();
     try {
       let acceptedRunId: string | undefined;
@@ -621,9 +617,7 @@ describe("acp translator stop reason mapping", () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(acceptedPrompt).resolves.toEqual({ stopReason: "end_turn" });
-      await expect(Promise.race([preAckPrompt, Promise.resolve("pending")])).resolves.toBe(
-        "pending",
-      );
+      await expect(preAckPrompt).rejects.toThrow("Gateway disconnected: 1006: connection lost");
     } finally {
       vi.useRealTimers();
     }
