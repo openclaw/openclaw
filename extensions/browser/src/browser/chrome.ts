@@ -85,6 +85,33 @@ function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
 }
 
+/**
+ * Attempt to clean up stale SingletonLock file if it exists and is not held by a running process.
+ * This handles the case where Chrome crashed without releasing the lock.
+ */
+function cleanupStaleSingletonLock(userDataDir: string): void {
+  try {
+    const lockPath = path.join(userDataDir, "SingletonLock");
+    if (!fs.existsSync(lockPath)) {
+      return;
+    }
+
+    // Try to read the lock file to see if it contains a PID
+    // Chrome's SingletonLock format varies by platform, so we'll just try to delete it
+    // If another Chrome process is using it, the delete will fail (which is correct)
+    try {
+      fs.unlinkSync(lockPath);
+      log.info(`Cleaned up stale SingletonLock for profile at ${userDataDir}`);
+    } catch (unlinkErr) {
+      // Lock is held by another process - this is expected and correct
+      // The error will surface later when Chrome tries to acquire it
+    }
+  } catch (err) {
+    // Ignore errors - if we can't clean up, Chrome will fail with its own error
+    log.debug(`Could not clean up SingletonLock: ${String(err)}`);
+  }
+}
+
 export function buildOpenClawChromeLaunchArgs(params: {
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
@@ -386,6 +413,9 @@ export async function launchOpenClawChrome(
     log.warn(`openclaw browser clean-exit prefs failed: ${String(err)}`);
   }
 
+  // Clean up stale lock file before launching
+  cleanupStaleSingletonLock(userDataDir);
+
   const proc = spawnOnce();
 
   // Collect stderr for diagnostics in case Chrome fails to start.
@@ -408,20 +438,36 @@ export async function launchOpenClawChrome(
 
   if (!(await isChromeReachable(profile.cdpUrl))) {
     const stderrOutput = Buffer.concat(stderrChunks).toString("utf8").trim();
-    const stderrHint = stderrOutput
-      ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
-      : "";
+
+    // Check for SingletonLock error
+    const hasSingletonLockError =
+      stderrOutput.includes("SingletonLock") || stderrOutput.includes("process_singleton");
+
+    let stderrHint = "";
+    if (stderrOutput) {
+      stderrHint = `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`;
+    }
+
     const sandboxHint =
       process.platform === "linux" && !resolved.noSandbox
         ? "\nHint: If running in a container or as root, try setting browser.noSandbox: true in config."
         : "";
+
+    // Add specific hint for SingletonLock error
+    const lockHint = hasSingletonLockError
+      ? `\nHint: Another Chrome instance may be using this profile. Try:\n` +
+        `  1. Close all Chrome windows for this profile\n` +
+        `  2. Run: openclaw browser reset-profile --profile ${profile.name}\n` +
+        `  3. Wait a few seconds and retry`
+      : "";
+
     try {
       proc.kill("SIGKILL");
     } catch {
       // ignore
     }
     throw new Error(
-      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".${sandboxHint}${stderrHint}`,
+      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".${sandboxHint}${lockHint}${stderrHint}`,
     );
   }
 

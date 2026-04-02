@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   CHROME_MCP_ATTACH_READY_POLL_MS,
   CHROME_MCP_ATTACH_READY_WINDOW_MS,
@@ -31,6 +32,11 @@ import type {
   ContextOptions,
   ProfileRuntimeState,
 } from "./server-context.types.js";
+
+const CDP_LAUNCH_MAX_RETRIES = 3;
+const CDP_LAUNCH_RETRY_DELAY_MS = 1000;
+
+const log = createSubsystemLogger("browser").child("availability");
 
 type AvailabilityDeps = {
   opts: ContextOptions;
@@ -215,16 +221,46 @@ export function createProfileAvailability({
             : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
       }
-      const launched = await launchOpenClawChrome(current.resolved, profile);
-      attachRunning(launched);
-      try {
-        await waitForCdpReadyAfterLaunch();
-      } catch (err) {
-        await stopOpenClawChrome(launched).catch(() => {});
-        setProfileRunning(null);
-        throw err;
+
+      // Retry logic for transient failures
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= CDP_LAUNCH_MAX_RETRIES; attempt++) {
+        try {
+          const launched = await launchOpenClawChrome(current.resolved, profile);
+          attachRunning(launched);
+          try {
+            await waitForCdpReadyAfterLaunch();
+            return; // Success!
+          } catch (err) {
+            await stopOpenClawChrome(launched).catch(() => {});
+            setProfileRunning(null);
+            throw err;
+          }
+        } catch (err) {
+          lastError = err;
+          const errMsg = err instanceof Error ? err.message : String(err);
+
+          // Check if this is a transient error worth retrying
+          const isTransient =
+            errMsg.includes("SingletonLock") ||
+            errMsg.includes("EADDRINUSE") ||
+            errMsg.includes("not reachable after start");
+
+          if (!isTransient || attempt === CDP_LAUNCH_MAX_RETRIES) {
+            // Not transient or out of retries - give up
+            throw err;
+          }
+
+          // Transient error - wait and retry
+          log.warn(
+            `Browser launch attempt ${attempt}/${CDP_LAUNCH_MAX_RETRIES} failed for profile "${profile.name}": ${errMsg}. Retrying...`,
+          );
+          await new Promise((r) => setTimeout(r, CDP_LAUNCH_RETRY_DELAY_MS * attempt));
+        }
       }
-      return;
+
+      // Should never reach here, but just in case
+      throw lastError;
     }
 
     // Port is reachable - check if we own it.
@@ -256,15 +292,36 @@ export function createProfileAvailability({
       );
     }
 
-    await stopOpenClawChrome(profileState.running);
-    setProfileRunning(null);
+    // Save reference to old process before clearing state
+    const oldRunning = profileState.running;
 
-    const relaunched = await launchOpenClawChrome(current.resolved, profile);
-    attachRunning(relaunched);
+    try {
+      // Stop old process but don't clear state yet
+      await stopOpenClawChrome(oldRunning);
 
-    if (!(await isReachable(PROFILE_POST_RESTART_WS_TIMEOUT_MS))) {
-      throw new Error(
-        `Chrome CDP websocket for profile "${profile.name}" is not reachable after restart.`,
+      // Attempt relaunch
+      const relaunched = await launchOpenClawChrome(current.resolved, profile);
+
+      // Only clear old state and set new state after successful launch
+      setProfileRunning(null);
+      attachRunning(relaunched);
+
+      // Verify reachability
+      if (!(await isReachable(PROFILE_POST_RESTART_WS_TIMEOUT_MS))) {
+        // Reachability failed - clean up new process
+        await stopOpenClawChrome(relaunched).catch(() => {});
+        setProfileRunning(null);
+        throw new Error(
+          `Chrome CDP websocket for profile "${profile.name}" is not reachable after restart.`,
+        );
+      }
+    } catch (err) {
+      // Launch or reachability failed
+      setProfileRunning(null);
+      throw new BrowserProfileUnavailableError(
+        `Failed to restart browser for profile "${profile.name}": ${err instanceof Error ? err.message : String(err)}. ` +
+          `Try action=reset-profile profile=${profile.name} to force cleanup.`,
+        { cause: err },
       );
     }
   };
