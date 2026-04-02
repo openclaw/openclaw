@@ -125,6 +125,42 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
+  it("migrates legacy x_search config into xai plugin-owned config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          x_search: {
+            apiKey: "xai-legacy-key",
+            enabled: true,
+            model: "grok-4-1-fast",
+          },
+        } as Record<string, unknown>,
+      },
+    });
+
+    expect(
+      (res.config.tools?.web as Record<string, unknown> | undefined)?.x_search,
+    ).toBeUndefined();
+    expect(res.config.plugins?.entries?.xai).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "xai-legacy-key",
+        },
+        xSearch: {
+          enabled: true,
+          model: "grok-4-1-fast",
+        },
+      },
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
+        "Moved tools.web.x_search → plugins.entries.xai.config.xSearch.",
+      ]),
+    );
+  });
+
   it("migrates Discord account dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {

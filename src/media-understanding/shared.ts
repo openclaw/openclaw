@@ -2,57 +2,20 @@ import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
 } from "../agents/provider-attribution.js";
-import { resolveProviderRequestAttributionHeaders } from "../agents/provider-attribution.js";
 import {
-  resolveProviderRequestConfig,
+  buildProviderRequestDispatcherPolicy,
+  normalizeBaseUrl,
+  resolveProviderRequestPolicyConfig,
+  type ProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
+import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
-
-export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string {
-  const raw = baseUrl?.trim() || fallback;
-  return raw.replace(/\/+$/, "");
-}
-
-export function applyProviderRequestHeaders(params: {
-  headers?: HeadersInit;
-  defaultHeaders?: Record<string, string>;
-  provider?: string;
-  api?: string;
-  baseUrl?: string;
-  capability?: ProviderRequestCapability;
-  transport?: ProviderRequestTransport;
-}): Headers {
-  const headers = new Headers(params.headers);
-  if (params.defaultHeaders) {
-    for (const [key, value] of Object.entries(params.defaultHeaders)) {
-      if (!headers.has(key)) {
-        headers.set(key, value);
-      }
-    }
-  }
-  const attributionHeaders = resolveProviderRequestAttributionHeaders({
-    provider: params.provider,
-    api: params.api,
-    baseUrl: params.baseUrl,
-    capability: params.capability ?? "other",
-    transport: params.transport ?? "http",
-  });
-  if (!attributionHeaders) {
-    return headers;
-  }
-  for (const [key, value] of Object.entries(attributionHeaders)) {
-    if (!headers.has(key)) {
-      headers.set(key, value);
-    }
-  }
-  return headers;
-}
 
 export function resolveProviderHttpRequestConfig(params: {
   baseUrl?: string;
@@ -60,6 +23,7 @@ export function resolveProviderHttpRequestConfig(params: {
   allowPrivateNetwork?: boolean;
   headers?: HeadersInit;
   defaultHeaders?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
   provider?: string;
   api?: string;
   capability?: ProviderRequestCapability;
@@ -68,35 +32,34 @@ export function resolveProviderHttpRequestConfig(params: {
   baseUrl: string;
   allowPrivateNetwork: boolean;
   headers: Headers;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   requestConfig: ResolvedProviderRequestConfig;
 } {
-  const baseUrl = normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl);
-  const requestConfigParams: Parameters<typeof resolveProviderRequestConfig>[0] = {
+  const requestConfig = resolveProviderRequestPolicyConfig({
     provider: params.provider ?? "",
-    baseUrl,
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: params.defaultBaseUrl,
     capability: params.capability ?? "other",
     transport: params.transport ?? "http",
-  };
-  if (params.api !== undefined) {
-    requestConfigParams.api = params.api;
+    callerHeaders: params.headers
+      ? Object.fromEntries(new Headers(params.headers).entries())
+      : undefined,
+    providerHeaders: params.defaultHeaders,
+    precedence: "caller-wins",
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    api: params.api,
+    request: params.request,
+  });
+  const headers = new Headers(requestConfig.headers);
+  if (!requestConfig.baseUrl) {
+    throw new Error("Missing baseUrl: provide baseUrl or defaultBaseUrl");
   }
-  if (params.defaultHeaders !== undefined) {
-    requestConfigParams.providerHeaders = params.defaultHeaders;
-  }
-  const requestConfig = resolveProviderRequestConfig(requestConfigParams);
 
   return {
-    baseUrl,
-    allowPrivateNetwork: params.allowPrivateNetwork ?? Boolean(params.baseUrl?.trim()),
-    headers: applyProviderRequestHeaders({
-      headers: params.headers,
-      defaultHeaders: requestConfig.headers,
-      provider: params.provider,
-      api: params.api,
-      baseUrl,
-      capability: params.capability,
-      transport: params.transport,
-    }),
+    baseUrl: requestConfig.baseUrl,
+    allowPrivateNetwork: requestConfig.allowPrivateNetwork,
+    headers,
+    dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
     requestConfig,
   };
 }
@@ -110,6 +73,7 @@ export async function fetchWithTimeoutGuarded(
     ssrfPolicy?: SsrFPolicy;
     lookupFn?: LookupFn;
     pinDns?: boolean;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
   },
 ): Promise<GuardedFetchResult> {
   return await fetchWithSsrFGuard({
@@ -120,6 +84,7 @@ export async function fetchWithTimeoutGuarded(
     policy: options?.ssrfPolicy,
     lookupFn: options?.lookupFn,
     pinDns: options?.pinDns,
+    dispatcherPolicy: options?.dispatcherPolicy,
   });
 }
 
@@ -130,6 +95,7 @@ export async function postTranscriptionRequest(params: {
   timeoutMs: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -140,7 +106,12 @@ export async function postTranscriptionRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+    params.allowPrivateNetwork || params.dispatcherPolicy
+      ? {
+          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+        }
+      : undefined,
   );
 }
 
@@ -151,6 +122,7 @@ export async function postJsonRequest(params: {
   timeoutMs: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -161,7 +133,12 @@ export async function postJsonRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+    params.allowPrivateNetwork || params.dispatcherPolicy
+      ? {
+          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+        }
+      : undefined,
   );
 }
 

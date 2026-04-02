@@ -187,7 +187,7 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
-  it("deduplicates webhook replay by event_name + message_id", async () => {
+  it("deduplicates webhook replay for the same event origin", async () => {
     const sink = vi.fn();
     const unregister = registerTarget({ path: "/hook-replay", statusSink: sink });
     const payload = createTextUpdate({
@@ -215,7 +215,6 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
   });
-
   it("keeps replay dedupe isolated per authenticated target", async () => {
     const sinkA = vi.fn();
     const sinkB = vi.fn();
@@ -269,6 +268,132 @@ describe("handleZaloWebhookRequest", () => {
     } finally {
       unregisterA();
       unregisterB();
+    }
+  });
+
+  it("does not collide replay dedupe across different chats", async () => {
+    const sink = vi.fn();
+    const unregister = registerTarget({ path: "/hook-replay-chat-scope", statusSink: sink });
+    const firstPayload = createTextUpdate({
+      messageId: "msg-replay-chat-1",
+      userId: "123",
+      userName: "",
+      chatId: "chat-a",
+      text: "hello from a",
+    });
+    const secondPayload = createTextUpdate({
+      messageId: "msg-replay-chat-1",
+      userId: "123",
+      userName: "",
+      chatId: "chat-b",
+      text: "hello from b",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const first = await fetch(`${baseUrl}/hook-replay-chat-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(firstPayload),
+        });
+        const second = await fetch(`${baseUrl}/hook-replay-chat-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(secondPayload),
+        });
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+      });
+
+      expect(sink).toHaveBeenCalledTimes(2);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not collide replay dedupe across different senders in the same chat", async () => {
+    const sink = vi.fn();
+    const unregister = registerTarget({ path: "/hook-replay-sender-scope", statusSink: sink });
+    const firstPayload = createTextUpdate({
+      messageId: "msg-replay-sender-1",
+      userId: "user-a",
+      userName: "",
+      chatId: "chat-shared",
+      text: "hello from user a",
+    });
+    const secondPayload = createTextUpdate({
+      messageId: "msg-replay-sender-1",
+      userId: "user-b",
+      userName: "",
+      chatId: "chat-shared",
+      text: "hello from user b",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const first = await fetch(`${baseUrl}/hook-replay-sender-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(firstPayload),
+        });
+        const second = await fetch(`${baseUrl}/hook-replay-sender-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(secondPayload),
+        });
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+      });
+
+      expect(sink).toHaveBeenCalledTimes(2);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not throw when replay metadata is partially missing", async () => {
+    const sink = vi.fn();
+    const unregister = registerTarget({ path: "/hook-replay-partial", statusSink: sink });
+    const payload = {
+      event_name: "message.text.received",
+      message: {
+        message_id: "msg-replay-partial-1",
+        date: Math.floor(Date.now() / 1000),
+        text: "hello",
+      },
+    };
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/hook-replay-partial`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(200);
+      });
+
+      expect(sink).toHaveBeenCalledTimes(1);
+    } finally {
+      unregister();
     }
   });
 
