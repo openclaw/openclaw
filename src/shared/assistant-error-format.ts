@@ -175,6 +175,58 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   };
 }
 
+/** True for failures that often clear with a short backoff + retry (OpenAI/Codex streams, HTTP blips). */
+export function isTransientAssistantApiFailure(raw?: string): boolean {
+  if (!raw?.trim()) {
+    return false;
+  }
+  const trimmed = raw.trim();
+  const info = parseApiErrorInfo(trimmed);
+  if (info) {
+    const ty = (info.type ?? "").toLowerCase();
+    if (ty === "server_error" || ty === "rate_limit_error") {
+      return true;
+    }
+    if (info.httpCode === "503" || info.httpCode === "529" || info.httpCode === "429") {
+      return true;
+    }
+    const msg = (info.message ?? "").toLowerCase();
+    if (
+      msg.includes("an error occurred while processing your request") ||
+      msg.includes("please try again") ||
+      msg.includes("overloaded") ||
+      msg.includes("rate limit")
+    ) {
+      return true;
+    }
+  }
+  if (trimmed.includes('"type":"server_error"') || trimmed.includes('"code":"server_error"')) {
+    return true;
+  }
+  if (/An error occurred while processing your request/i.test(trimmed)) {
+    return true;
+  }
+  if (/\b503\b/.test(trimmed) && /unavailable|server error/i.test(trimmed)) {
+    return true;
+  }
+  if (/\b529\b/.test(trimmed)) {
+    return true;
+  }
+  if (/\b429\b/.test(trimmed) || /too many requests/i.test(trimmed)) {
+    return true;
+  }
+  if (/rate[\s_-]*limit/i.test(trimmed)) {
+    return true;
+  }
+  if (/connection (closed|reset)|ECONNRESET|ETIMEDOUT|ECONNREFUSED/i.test(trimmed)) {
+    return true;
+  }
+  if (/websocket.*(closed|failed)|failed to connect to websocket/i.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
 export function formatRawAssistantErrorForUi(raw?: string): string {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) {
