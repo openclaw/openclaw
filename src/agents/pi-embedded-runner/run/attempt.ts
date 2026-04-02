@@ -9,6 +9,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../../infra/diagnostic-events.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -28,6 +29,7 @@ import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
@@ -72,10 +74,6 @@ import {
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
-import {
-  emitDiagnosticEvent,
-  isDiagnosticsEnabled,
-} from "../../../infra/diagnostic-events.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
@@ -183,7 +181,6 @@ import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
 
 export {
   appendAttemptCacheTtlIfNeeded,
@@ -1283,6 +1280,8 @@ export async function runEmbeddedAttempt(
                       status: "ok" | "error";
                       errorMessage?: string;
                       costUsd?: number;
+                      requestText?: string;
+                      replyText?: string;
                     }) => {
                       const costConfig = resolveModelCostConfig({
                         provider: params.provider,
@@ -1304,6 +1303,8 @@ export async function runEmbeddedAttempt(
                         status: evt.status,
                         ...(evt.errorMessage ? { errorMessage: evt.errorMessage } : {}),
                         ...(costUsd != null ? { costUsd } : {}),
+                        ...(evt.requestText ? { requestText: evt.requestText } : {}),
+                        ...(evt.replyText ? { replyText: evt.replyText } : {}),
                       });
                     }
                   : undefined,

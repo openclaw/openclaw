@@ -44,11 +44,21 @@ export type SubscribeEmbeddedPiSessionParams = {
   onLlmCallComplete?: (event: {
     callIndex: number;
     durationMs: number;
-    usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      total?: number;
+    };
     status: "ok" | "error";
     errorMessage?: string;
     /** Estimated cost in USD for this single LLM call. */
     costUsd?: number;
+    /** The last user message text (max 240 chars, newlines compressed). */
+    requestText?: string;
+    /** The assistant reply text (max 240 chars, newlines compressed). */
+    replyText?: string;
   }) => void;
   /**
    * Called after every internal tool execution completes (tool.call trace).
