@@ -218,8 +218,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 7. Create and push the git tag.
 8. Create or refresh the matching GitHub release.
 9. Start `.github/workflows/openclaw-npm-release.yml` with `preflight_only=true`
-   and wait for it to pass. Save that run id because the real publish requires
-   it to reuse the prepared npm tarball.
+   and choose the intended `npm_dist_tag` (`beta` default; `latest` only for
+   an intentional direct stable publish). Wait for it to pass. Save that run id
+   because the real publish requires it to reuse the prepared npm tarball.
 10. Start `.github/workflows/macos-release.yml` in `openclaw/openclaw` and wait
     for the public validation-only run to pass.
 11. Start
@@ -235,8 +236,8 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     Never reuse old preflight results after the commit changes.
 14. Start `.github/workflows/openclaw-npm-release.yml` with the same tag for
     the real publish, choose `npm_dist_tag` (`beta` default, `latest` only when
-    you intentionally want direct stable publish), and pass the successful npm
-    `preflight_run_id`.
+    you intentionally want direct stable publish), keep it the same as the
+    preflight run, and pass the successful npm `preflight_run_id`.
 15. Wait for `npm-release` approval from `@openclaw/openclaw-release-managers`.
 16. If the stable release was published to `beta`, start
     `.github/workflows/openclaw-npm-promote-beta.yml` with the exact stable

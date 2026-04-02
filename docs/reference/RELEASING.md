@@ -75,6 +75,42 @@ OpenClaw has three public release lanes:
     URL, and a `CFBundleVersion` at or above the canonical Sparkle build floor
     for that release version
 
+## NPM workflow inputs
+
+`OpenClaw NPM Release` accepts these operator-controlled inputs:
+
+- `tag`: required release tag such as `v2026.4.2`, `v2026.4.2-1`, or
+  `v2026.4.2-beta.1`
+- `preflight_only`: `true` for validation/build/package only, `false` for the
+  real publish path
+- `preflight_run_id`: required on the real publish path so the workflow reuses
+  the prepared tarball from the successful preflight run
+- `npm_dist_tag`: npm target tag for the publish path; defaults to `beta`
+
+Rules:
+
+- Stable and correction tags may publish to either `beta` or `latest`
+- Beta prerelease tags may publish only to `beta`
+- The real publish path must use the same `npm_dist_tag` used during preflight;
+  the workflow verifies that metadata before publish continues
+
+## Stable npm release sequence
+
+When cutting a stable npm release:
+
+1. Run `OpenClaw NPM Release` with `preflight_only=true`
+2. Choose `npm_dist_tag=beta` for the normal beta-first flow, or `latest` only
+   when you intentionally want a direct stable publish
+3. Save the successful `preflight_run_id`
+4. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
+   `tag`, the same `npm_dist_tag`, and the saved `preflight_run_id`
+5. If the release landed on `beta`, run `OpenClaw NPM Promote Beta` later with
+   the exact stable version when you want to move that published build to
+   `latest`
+
+That keeps the direct publish path and the beta-first promotion path both
+documented and operator-visible.
+
 ## Public references
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
