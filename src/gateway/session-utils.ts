@@ -260,9 +260,43 @@ function resolveEstimatedSessionCostUsd(params: {
   return resolveNonNegativeNumber(estimated);
 }
 
+/**
+ * Build a reverse index mapping controller session keys to their child session
+ * keys.  Building this once per `listSessionsFromStore` call turns the previous
+ * O(N²) nested scan (each row iterated the entire store) into O(N).
+ */
+function buildChildSessionIndex(store: Record<string, SessionEntry>): Map<string, Set<string>> {
+  const index = new Map<string, Set<string>>();
+
+  const addChild = (parentKey: string, childKey: string): void => {
+    let children = index.get(parentKey);
+    if (!children) {
+      children = new Set<string>();
+      index.set(parentKey, children);
+    }
+    children.add(childKey);
+  };
+
+  for (const [key, entry] of Object.entries(store)) {
+    if (!entry) {
+      continue;
+    }
+    const spawnedBy = entry.spawnedBy?.trim();
+    const parentSessionKey = entry.parentSessionKey?.trim();
+    if (spawnedBy) {
+      addChild(spawnedBy, key);
+    }
+    if (parentSessionKey && parentSessionKey !== spawnedBy) {
+      addChild(parentSessionKey, key);
+    }
+  }
+
+  return index;
+}
+
 function resolveChildSessionKeys(
   controllerSessionKey: string,
-  store: Record<string, SessionEntry>,
+  childIndex: Map<string, Set<string>>,
 ): string[] | undefined {
   const childSessionKeys = new Set<string>();
   for (const entry of listSubagentRunsForController(controllerSessionKey)) {
@@ -278,24 +312,19 @@ function resolveChildSessionKeys(
     }
     childSessionKeys.add(childSessionKey);
   }
-  for (const [key, entry] of Object.entries(store)) {
-    if (!entry || key === controllerSessionKey) {
-      continue;
-    }
-    const spawnedBy = entry.spawnedBy?.trim();
-    const parentSessionKey = entry.parentSessionKey?.trim();
-    if (spawnedBy !== controllerSessionKey && parentSessionKey !== controllerSessionKey) {
-      continue;
-    }
-    const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
-    if (latest) {
-      const latestControllerSessionKey =
-        latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
-      if (latestControllerSessionKey !== controllerSessionKey) {
-        continue;
+  const candidates = childIndex.get(controllerSessionKey);
+  if (candidates) {
+    for (const key of candidates) {
+      const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
+      if (latest) {
+        const latestControllerSessionKey =
+          latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
+        if (latestControllerSessionKey !== controllerSessionKey) {
+          continue;
+        }
       }
+      childSessionKeys.add(key);
     }
-    childSessionKeys.add(key);
   }
   const childSessions = Array.from(childSessionKeys);
   return childSessions.length > 0 ? childSessions : undefined;
@@ -1154,6 +1183,7 @@ export function buildGatewaySessionRow(params: {
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  childIndex?: Map<string, Set<string>>;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const now = params.now ?? Date.now();
@@ -1243,7 +1273,10 @@ export function buildGatewaySessionRow(params: {
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
       ? true
       : transcriptUsage?.totalTokensFresh === true;
-  const childSessions = resolveChildSessionKeys(key, store);
+  const childSessions = resolveChildSessionKeys(
+    key,
+    params.childIndex ?? buildChildSessionIndex(store),
+  );
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
       cfg,
@@ -1375,7 +1408,9 @@ export function listSessionsFromStore(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
 
-  let sessions = Object.entries(store)
+  // --- Phase 1: lightweight filtering on store entries (no disk I/O) ---
+
+  let filtered = Object.entries(store)
     .filter(([key]) => {
       if (isCronRunSessionKey(key)) {
         return false;
@@ -1418,21 +1453,51 @@ export function listSessionsFromStore(params: {
         return true;
       }
       return entry?.label === label;
-    })
-    .map(([key, entry]) =>
-      buildGatewaySessionRow({
-        cfg,
-        storePath,
-        store,
-        key,
-        entry,
-        now,
-        includeDerivedTitles,
-        includeLastMessage,
-      }),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    });
 
+  // --- Phase 2: pre-sort by entry.updatedAt and apply early limit ---
+  // Sort using the store entry's updatedAt (available without building the
+  // full row) so we can apply the limit *before* the expensive
+  // buildGatewaySessionRow() calls.
+
+  filtered.sort(([, a], [, b]) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0));
+
+  if (activeMinutes !== undefined) {
+    const cutoff = now - activeMinutes * 60_000;
+    filtered = filtered.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
+  }
+
+  // When there is no text search we can apply the limit before building rows,
+  // avoiding expensive per-row disk I/O for sessions that will be discarded.
+  const limit =
+    typeof opts.limit === "number" && Number.isFinite(opts.limit)
+      ? Math.max(1, Math.floor(opts.limit))
+      : undefined;
+
+  if (limit !== undefined && !search) {
+    filtered = filtered.slice(0, limit);
+  }
+
+  // --- Phase 3: build full rows (disk I/O happens here) ---
+
+  const childIndex = buildChildSessionIndex(store);
+
+  let sessions = filtered.map(([key, entry]) =>
+    buildGatewaySessionRow({
+      cfg,
+      storePath,
+      store,
+      key,
+      entry,
+      now,
+      includeDerivedTitles,
+      includeLastMessage,
+      childIndex,
+    }),
+  );
+
+  // When search is active we could not apply the limit early, so filter and
+  // limit now.
   if (search) {
     sessions = sessions.filter((s) => {
       const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
@@ -1440,13 +1505,7 @@ export function listSessionsFromStore(params: {
     });
   }
 
-  if (activeMinutes !== undefined) {
-    const cutoff = now - activeMinutes * 60_000;
-    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
-  }
-
-  if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
-    const limit = Math.max(1, Math.floor(opts.limit));
+  if (limit !== undefined && search) {
     sessions = sessions.slice(0, limit);
   }
 
