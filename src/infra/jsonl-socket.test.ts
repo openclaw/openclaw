@@ -57,13 +57,14 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
   it("half-closes the write side after sending the request line", async () => {
     await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
       const socketPath = path.join(dir, "socket.sock");
+      let receivedBuffer: string | null = null;
       const server = net.createServer((socket) => {
         let buffer = "";
         socket.on("data", (chunk) => {
           buffer += chunk.toString("utf8");
         });
         socket.on("end", () => {
-          expect(buffer).toBe('{"hello":"world"}\n');
+          receivedBuffer = buffer;
           socket.end('{"type":"done","value":7}\n');
         });
       });
@@ -84,6 +85,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
             },
           }),
         ).resolves.toBe(7);
+        expect(receivedBuffer).toBe('{"hello":"world"}\n');
       } finally {
         server.close();
       }
