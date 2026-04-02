@@ -61,11 +61,11 @@ describe("parseAt — time-only strings (HH:MM / HH:MM:SS)", () => {
     expect(parseAt("09:00", "Asia/Shanghaix")).toBeNull();
   });
 
-  it("result date is today\'s wall-clock date in the given timezone", () => {
+  it("result date is today's wall-clock date in the given timezone", () => {
     const result = parseAt("09:00", "Asia/Shanghai");
     expect(result).not.toBeNull();
     const d = new Date(result!);
-    // Get today\'s date string in Shanghai (YYYY-MM-DD)
+    // Get today's date string in Shanghai (YYYY-MM-DD)
     const todayInSH = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Asia/Shanghai",
       year: "numeric",
