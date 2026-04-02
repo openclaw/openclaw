@@ -292,4 +292,27 @@ describe("windows command wrapper behavior", () => {
       platformSpy.mockRestore();
     }
   });
+
+  it("sets windowsHide on direct runCommandWithTimeout invocations too", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["node", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      if (!captured) {
+        throw new Error("expected direct spawn invocation");
+      }
+      expect(captured[0]).toBe("node");
+      expect(captured[1]).toEqual(["--version"]);
+      expect(captured[2].windowsHide).toBe(true);
+      expect(captured[2].windowsVerbatimArguments).toBeUndefined();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
 });
