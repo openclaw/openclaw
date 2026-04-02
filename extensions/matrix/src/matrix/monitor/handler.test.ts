@@ -1773,7 +1773,7 @@ describe("matrix monitor handler draft streaming", () => {
     }
   });
 
-  it("resets materializedTextLength on assistant message start", async () => {
+  it("resets draft block offsets on assistant message start", async () => {
     const { dispatch } = createStreamingHarness();
     const { deliver, opts, finish } = await dispatch();
 
@@ -1802,6 +1802,55 @@ describe("matrix monitor handler draft streaming", () => {
     // The draft stream should have received "Block two", not empty string.
     const sentBody = sendSingleTextMessageMatrixMock.mock.calls[0]?.[1];
     expect(sentBody).toBeTruthy();
+    await finish();
+  });
+
+  it("keeps queued block boundaries ordered while Matrix deliveries drain", async () => {
+    const { dispatch } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Alpha" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("Alpha");
+
+    await opts.onBlockReplyQueued?.({ text: "Alpha" });
+    opts.onPartialReply?.({ text: "AlphaBeta" });
+    await opts.onBlockReplyQueued?.({ text: "Beta" });
+    opts.onPartialReply?.({ text: "AlphaBetaGamma" });
+
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+
+    sendSingleTextMessageMatrixMock.mockClear();
+    editMessageMatrixMock.mockClear();
+    sendSingleTextMessageMatrixMock.mockResolvedValueOnce({
+      messageId: "$draft2",
+      roomId: "!room",
+    });
+    await deliver({ text: "Alpha" }, { kind: "block" });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("Beta");
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+
+    sendSingleTextMessageMatrixMock.mockClear();
+    editMessageMatrixMock.mockClear();
+    sendSingleTextMessageMatrixMock.mockResolvedValueOnce({
+      messageId: "$draft3",
+      roomId: "!room",
+    });
+    await deliver({ text: "Beta" }, { kind: "block" });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("Gamma");
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+
     await finish();
   });
 

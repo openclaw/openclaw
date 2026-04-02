@@ -1145,44 +1145,56 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           })
         : undefined;
       draftStreamRef = draftStream;
-      // Track the start offset of the current draft block within the model's
-      // cumulative partial text so each block preview only streams its own
-      // portion, even if later block delivery drains asynchronously.
+      // Track the current draft block start plus any queued block-end offsets
+      // inside the model's cumulative partial text so multiple block
+      // boundaries can drain in order even when Matrix delivery lags behind.
       let currentDraftBlockOffset = 0;
-      let lastPartialFullTextLength = 0;
-      let draftBlockBoundaryPending = false;
-      let bufferedPartialFullText: string | undefined;
+      let latestDraftFullText = "";
+      const pendingDraftBoundaryOffsets: number[] = [];
       // Set after the first final payload consumes the draft event so
       // subsequent finals go through normal delivery.
       let draftConsumed = false;
 
-      const updateDraftFromFullText = (fullText: string) => {
-        lastPartialFullTextLength = fullText.length;
-        const blockText = fullText.slice(currentDraftBlockOffset);
+      const getDisplayableDraftText = () => {
+        const nextDraftBoundaryOffset = pendingDraftBoundaryOffsets[0];
+        if (nextDraftBoundaryOffset === undefined) {
+          return latestDraftFullText.slice(currentDraftBlockOffset);
+        }
+        return latestDraftFullText.slice(currentDraftBlockOffset, nextDraftBoundaryOffset);
+      };
+
+      const updateDraftFromLatestFullText = () => {
+        const blockText = getDisplayableDraftText();
         if (blockText) {
           draftStream?.update(blockText);
         }
       };
 
-      const flushBufferedDraftPartial = () => {
-        if (!draftStream || bufferedPartialFullText === undefined) {
-          return;
-        }
-        const fullText = bufferedPartialFullText;
-        bufferedPartialFullText = undefined;
-        updateDraftFromFullText(fullText);
+      const queueDraftBlockBoundary = (payload: ReplyPayload) => {
+        const payloadTextLength = payload.text?.length ?? 0;
+        const lastQueuedBoundaryOffset =
+          pendingDraftBoundaryOffsets[pendingDraftBoundaryOffsets.length - 1] ??
+          currentDraftBlockOffset;
+        pendingDraftBoundaryOffsets.push(
+          Math.max(latestDraftFullText.length, lastQueuedBoundaryOffset + payloadTextLength),
+        );
       };
 
-      const markDraftBlockBoundaryQueued = () => {
-        draftBlockBoundaryPending = true;
-        currentDraftBlockOffset = lastPartialFullTextLength;
-        bufferedPartialFullText = undefined;
+      const advanceDraftBlockBoundary = (options?: { fallbackToLatestEnd?: boolean }) => {
+        const completedBoundaryOffset = pendingDraftBoundaryOffsets.shift();
+        if (completedBoundaryOffset !== undefined) {
+          currentDraftBlockOffset = completedBoundaryOffset;
+          return;
+        }
+        if (options?.fallbackToLatestEnd) {
+          currentDraftBlockOffset = latestDraftFullText.length;
+        }
       };
 
       const resetDraftBlockOffsets = () => {
         currentDraftBlockOffset = 0;
-        lastPartialFullTextLength = 0;
-        bufferedPartialFullText = undefined;
+        latestDraftFullText = "";
+        pendingDraftBoundaryOffsets.length = 0;
       };
 
       const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
@@ -1334,10 +1346,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               // create ghost messages.
               if (info.kind === "block") {
                 draftConsumed = false;
+                advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
                 draftStream.reset();
                 currentDraftReplyToId = replyToMode === "all" ? draftReplyToId : undefined;
-                draftBlockBoundaryPending = false;
-                flushBufferedDraftPartial();
+                updateDraftFromLatestFullText();
 
                 // Re-assert typing so the user still sees the indicator while
                 // the next block generates.
@@ -1366,8 +1378,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               nonFinalReplyDeliveryFailed = true;
             }
             if (info.kind === "block") {
-              draftBlockBoundaryPending = false;
-              flushBufferedDraftPartial();
+              advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
             }
             runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
           },
@@ -1396,13 +1407,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 disableBlockStreaming: !blockStreamingEnabled,
                 onPartialReply: draftStream
                   ? (payload) => {
-                      const fullText = payload.text ?? "";
-                      if (draftBlockBoundaryPending) {
-                        bufferedPartialFullText = fullText;
-                        lastPartialFullTextLength = fullText.length;
-                        return;
-                      }
-                      updateDraftFromFullText(fullText);
+                      latestDraftFullText = payload.text ?? "";
+                      updateDraftFromLatestFullText();
                     }
                   : undefined,
                 onBlockReplyQueued: draftStream
@@ -1410,12 +1416,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                       if (payload.isCompactionNotice === true) {
                         return;
                       }
-                      markDraftBlockBoundaryQueued();
+                      queueDraftBlockBoundary(payload);
                     }
                   : undefined,
-                // Reset text offset on assistant message boundaries so
-                // post-tool blocks stream correctly (payload.text resets
-                // per assistant message upstream).
+                // Reset draft boundary bookkeeping on assistant message
+                // boundaries so post-tool blocks stream from a fresh
+                // cumulative payload (payload.text resets upstream).
                 onAssistantMessageStart: draftStream
                   ? () => {
                       resetDraftBlockOffsets();
