@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
@@ -235,5 +236,64 @@ describe("ensureSandboxBrowser create args", () => {
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
     const labels = collectDockerFlagValues(createArgs ?? [], "--label");
     expect(labels).toContain(`openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`);
+  });
+
+  it("recreates a cached bridge when ssrfPolicy changes", async () => {
+    const cfg = buildConfig(false);
+    const existingBridge = {
+      server: {} as never,
+      port: 19000,
+      baseUrl: "http://127.0.0.1:19000",
+      state: {
+        server: null,
+        port: 19000,
+        resolved: {
+          cdpProtocol: "http",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          defaultProfile: "openclaw",
+          profiles: {
+            openclaw: {
+              cdpPort: 49100,
+              color: "#4F46E5",
+            },
+          },
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } satisfies SsrFPolicy,
+        },
+        profiles: new Map(),
+      },
+    };
+    BROWSER_BRIDGES.set("session:test", {
+      bridge: existingBridge,
+      containerName: "openclaw-sbx-browser-session-test-0661d10a",
+      authToken: undefined,
+      authPassword: undefined,
+    });
+    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+    dockerMocks.readDockerContainerLabel.mockResolvedValue("matching-hash");
+    registryMocks.readBrowserRegistry.mockResolvedValue({
+      entries: [
+        {
+          containerName: "openclaw-sbx-browser-session-test-0661d10a",
+          configHash: "matching-hash",
+          lastUsedAtMs: Date.now(),
+        },
+      ],
+    });
+
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+      ssrfPolicy: { allowedHostnames: ["example.com"] },
+    });
+
+    expect(BROWSER_BRIDGES.get("session:test")).toMatchObject({
+      containerName: "openclaw-sbx-browser-session-test-0661d10a",
+    });
+    expect((BROWSER_BRIDGES.get("session:test") as { bridge: unknown }).bridge).not.toBe(
+      existingBridge,
+    );
   });
 });

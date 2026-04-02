@@ -1,12 +1,12 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
-import type { BrowserConfig, BrowserProfileConfig } from "../config/types.browser.js";
 import {
   DEFAULT_BROWSER_CONTROL_PORT,
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
+import type { BrowserConfig, BrowserProfileConfig } from "../config/types.browser.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -133,7 +133,7 @@ function normalizeStringList(raw: string[] | undefined): string[] | undefined {
   return values.length > 0 ? values : undefined;
 }
 
-function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
+export function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const allowPrivateNetwork = cfg?.ssrfPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = cfg?.ssrfPolicy?.dangerouslyAllowPrivateNetwork;
   const allowedHostnames = normalizeStringList(cfg?.ssrfPolicy?.allowedHostnames);

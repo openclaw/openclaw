@@ -11,6 +11,7 @@ export {
   redactCdpUrl,
   resolveBrowserConfig,
   resolveBrowserControlAuth,
+  resolveBrowserSsrFPolicy,
   resolveProfile,
 } from "./browser-config.js";
 import {
