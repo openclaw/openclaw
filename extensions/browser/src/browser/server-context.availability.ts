@@ -234,6 +234,7 @@ export function createProfileAvailability({
           } catch (err) {
             await stopOpenClawChrome(launched).catch(() => {});
             setProfileRunning(null);
+            // Readiness check failed - this is NOT a transient error, don't retry
             throw err;
           }
         } catch (err) {
@@ -241,10 +242,12 @@ export function createProfileAvailability({
           const errMsg = err instanceof Error ? err.message : String(err);
 
           // Check if this is a transient error worth retrying
+          // Only retry errors that occur during launch (SingletonLock, port conflicts)
+          // Do NOT retry readiness timeout errors - those mean Chrome launched but never became ready
           const isTransient =
             errMsg.includes("SingletonLock") ||
             errMsg.includes("EADDRINUSE") ||
-            errMsg.includes("not reachable after start");
+            errMsg.includes("Failed to start Chrome CDP");
 
           if (!isTransient || attempt === CDP_LAUNCH_MAX_RETRIES) {
             // Not transient or out of retries - give up
