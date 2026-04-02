@@ -375,11 +375,13 @@ function analyzeInterpreterHeuristicsFromUnquoted(raw: string): {
   hasScriptHint: boolean;
 } {
   const hasPython =
-    /(?:^|[|&;()\n\r])\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*python(?:3(?:\.\d+)?)?(?=$|[\s|&;()<>\n\r`$])/i.test(
+    /(?:^|\s|(?<!\\)[|&;()])(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*python(?:3(?:\.\d+)?)?(?=$|[\s|&;()<>\n\r`$])/i.test(
       raw,
     );
   const hasNode =
-    /(?:^|[|&;()\n\r])\s*(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*node(?=$|[\s|&;()<>\n\r`$])/i.test(raw);
+    /(?:^|\s|(?<!\\)[|&;()])(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*node(?=$|[\s|&;()<>\n\r`$])/i.test(
+      raw,
+    );
   const hasProcessSubstitution = /(?<!\\)<\(|(?<!\\)>\(/u.test(raw);
   const hasComplexSyntax =
     /(?<!\\)\|/u.test(raw) ||
@@ -425,6 +427,12 @@ function extractShellWrappedCommandPayload(
       continue;
     }
     if (/^--[A-Za-z0-9][A-Za-z0-9-]*(?:=.*)?$/u.test(arg)) {
+      if (!arg.includes("=")) {
+        const next = args[i + 1];
+        if (next && next !== "--" && !next.startsWith("-")) {
+          i += 1;
+        }
+      }
       continue;
     }
     return null;

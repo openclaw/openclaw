@@ -214,6 +214,22 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("fails closed for shell-wrapped interpreter invocations inside control-flow payloads", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      await expect(
+        tool.execute("call-shell-wrap-control-flow", {
+          command: 'bash -c "if true; then python bad.py; fi"',
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
+    });
+  });
+
   it("fails closed for env-prefixed shell-wrapped interpreter invocations", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");
@@ -240,6 +256,23 @@ describeNonWin("exec script preflight", () => {
       await expect(
         tool.execute("call-shell-wrap-abs-path", {
           command: '/bin/bash -c "python bad.py"',
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
+    });
+  });
+
+  it("fails closed for shell-wrapped interpreter invocations when long options take separate values", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+      await fs.writeFile(path.join(tmp, "shell.rc"), "# rc", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      await expect(
+        tool.execute("call-shell-wrap-long-option-value", {
+          command: 'bash --rcfile shell.rc -c "python bad.py"',
           workdir: tmp,
         }),
       ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
