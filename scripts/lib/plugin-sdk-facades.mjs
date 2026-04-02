@@ -877,6 +877,36 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     ],
   },
   {
+    subpath: "whatsapp-targets",
+    source: pluginSource("whatsapp", "targets.js"),
+    exports: ["isWhatsAppGroupJid", "isWhatsAppUserTarget", "normalizeWhatsAppTarget"],
+  },
+  {
+    subpath: "whatsapp-surface",
+    source: pluginSource("whatsapp", "api.js"),
+    exportSources: {
+      DEFAULT_WEB_MEDIA_BYTES: pluginSource("whatsapp", "constants.js"),
+    },
+    exports: [
+      "DEFAULT_WEB_MEDIA_BYTES",
+      "hasAnyWhatsAppAuth",
+      "listEnabledWhatsAppAccounts",
+      "listWhatsAppDirectoryGroupsFromConfig",
+      "listWhatsAppDirectoryPeersFromConfig",
+      "resolveWhatsAppAccount",
+      "resolveWhatsAppGroupRequireMention",
+      "resolveWhatsAppGroupToolPolicy",
+      "resolveWhatsAppOutboundTarget",
+      "whatsappAccessControlTesting",
+    ],
+    typeExports: [
+      "WebChannelStatus",
+      "WebInboundMessage",
+      "WebListenerCloseReason",
+      "WebMonitorTuning",
+    ],
+  },
+  {
     subpath: "zalo-setup",
     source: pluginSource("zalo", "api.js"),
     exports: [
