@@ -12,6 +12,21 @@ import {
   startGatewayConfigReloader,
 } from "./config-reload.js";
 
+// Mock $include scanning so tests can control which paths are returned.
+const collectIncludePathsRecursiveMock = vi.fn(
+  async (_params: { configPath: string; parsed: unknown }) => [] as string[],
+);
+vi.mock("../config/includes-scan.js", () => ({
+  collectIncludePathsRecursive: (params: { configPath: string; parsed: unknown }) =>
+    collectIncludePathsRecursiveMock(params),
+}));
+
+// Mock fs.readFile used for initial $include sync.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, readFile: vi.fn(async () => "{}") };
+});
+
 describe("diffConfigPaths", () => {
   it("captures nested config changes", () => {
     const prev = { hooks: { gmail: { account: "a" } } };
@@ -300,6 +315,8 @@ function createWatcherMock() {
       }
     },
     close: vi.fn(async () => {}),
+    add: vi.fn(),
+    unwatch: vi.fn(),
   };
 }
 
@@ -368,6 +385,8 @@ function createReloaderHarness(
 describe("startGatewayConfigReloader", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    collectIncludePathsRecursiveMock.mockReset();
+    collectIncludePathsRecursiveMock.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -574,5 +593,105 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
 
     await harness.reloader.stop();
+  });
+
+  it("watches $include paths after successful snapshot reload", async () => {
+    collectIncludePathsRecursiveMock.mockResolvedValue([
+      "/etc/openclaw/base.json",
+      "/etc/openclaw/channels.json",
+    ]);
+
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        path: "/tmp/openclaw.json",
+        parsed: { $include: ["./base.json", "./channels.json"] },
+        config: {
+          gateway: { reload: { debounceMs: 0 } },
+          hooks: { enabled: true },
+        },
+        hash: "include-1",
+      }),
+    );
+    const { watcher, log, reloader } = createReloaderHarness(readSnapshot);
+
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(collectIncludePathsRecursiveMock).toHaveBeenCalledWith({
+      configPath: "/tmp/openclaw.json",
+      parsed: { $include: ["./base.json", "./channels.json"] },
+    });
+    expect(watcher.add).toHaveBeenCalledWith("/etc/openclaw/base.json");
+    expect(watcher.add).toHaveBeenCalledWith("/etc/openclaw/channels.json");
+    expect(log.info).toHaveBeenCalledWith("$include watch updated: 2 file(s) watched (+2 -0)");
+
+    await reloader.stop();
+  });
+
+  it("unwatches removed $include paths on subsequent reloads", async () => {
+    collectIncludePathsRecursiveMock
+      .mockResolvedValueOnce(["/etc/openclaw/base.json", "/etc/openclaw/old.json"])
+      .mockResolvedValueOnce(["/etc/openclaw/base.json", "/etc/openclaw/new.json"]);
+
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          parsed: { $include: ["./base.json", "./old.json"] },
+          config: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: true },
+          },
+          hash: "include-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          parsed: { $include: ["./base.json", "./new.json"] },
+          config: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: true, gmail: { account: "x" } },
+          },
+          hash: "include-2",
+        }),
+      );
+    const { watcher, reloader } = createReloaderHarness(readSnapshot);
+
+    // First reload: watch base.json + old.json
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(watcher.add).toHaveBeenCalledWith("/etc/openclaw/old.json");
+
+    // Second reload: old.json removed, new.json added
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(watcher.unwatch).toHaveBeenCalledWith("/etc/openclaw/old.json");
+    expect(watcher.add).toHaveBeenCalledWith("/etc/openclaw/new.json");
+
+    await reloader.stop();
+  });
+
+  it("does not break reload when $include scanning fails", async () => {
+    collectIncludePathsRecursiveMock.mockRejectedValueOnce(new Error("scan failed"));
+
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: {
+          gateway: { reload: { debounceMs: 0 } },
+          hooks: { enabled: true },
+        },
+        hash: "scan-fail-1",
+      }),
+    );
+    const { watcher, onHotReload, log, reloader } = createReloaderHarness(readSnapshot);
+
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    // Reload should still succeed even though include scanning failed.
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(log.error).not.toHaveBeenCalled();
+
+    await reloader.stop();
   });
 });

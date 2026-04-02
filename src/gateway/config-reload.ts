@@ -1,11 +1,14 @@
+import * as fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
+import JSON5 from "json5";
 import type {
   OpenClawConfig,
   ConfigFileSnapshot,
   ConfigWriteNotification,
   GatewayReloadMode,
 } from "../config/config.js";
+import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { isPlainObject } from "../utils.js";
 import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
@@ -99,6 +102,9 @@ export function startGatewayConfigReloader(opts: {
   let pendingInProcessConfig: OpenClawConfig | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
 
+  /** Currently watched $include file paths (excludes the main watchPath). */
+  let watchedIncludePaths = new Set<string>();
+
   const scheduleAfter = (wait: number) => {
     if (stopped) {
       return;
@@ -154,6 +160,48 @@ export function startGatewayConfigReloader(opts: {
     const issues = formatConfigIssueLines(snapshot.issues, "").join(", ");
     opts.log.warn(`config reload skipped (invalid config): ${issues}`);
     return true;
+  };
+
+  /**
+   * Synchronize the set of watched $include file paths with the current config.
+   * Adds newly referenced files and unwatches removed ones.
+   * Best-effort: failures are logged but do not disrupt the reload cycle.
+   */
+  const syncIncludeWatchPaths = async (configPath: string, parsed: unknown) => {
+    if (stopped || watcherClosed) {
+      return;
+    }
+    try {
+      const includePaths = await collectIncludePathsRecursive({ configPath, parsed });
+      const nextSet = new Set(includePaths);
+
+      // Determine what changed.
+      let added = 0;
+      let removed = 0;
+
+      for (const p of nextSet) {
+        if (!watchedIncludePaths.has(p)) {
+          watcher.add(p);
+          added++;
+        }
+      }
+      for (const p of watchedIncludePaths) {
+        if (!nextSet.has(p)) {
+          watcher.unwatch(p);
+          removed++;
+        }
+      }
+
+      watchedIncludePaths = nextSet;
+
+      if (added > 0 || removed > 0) {
+        opts.log.info(
+          `$include watch updated: ${nextSet.size} file(s) watched (+${added} -${removed})`,
+        );
+      }
+    } catch {
+      // Include scanning is best-effort; don't disrupt the reload cycle.
+    }
   };
 
   const applySnapshot = async (nextConfig: OpenClawConfig) => {
@@ -225,6 +273,10 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       await applySnapshot(snapshot.config);
+
+      // After a successful snapshot apply, sync $include watch paths so that
+      // edits to included files also trigger reloads.
+      await syncIncludeWatchPaths(snapshot.path, snapshot.parsed);
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
     } finally {
@@ -269,6 +321,18 @@ export function startGatewayConfigReloader(opts: {
     void watcher.close().catch(() => {});
   });
 
+  // Perform an initial $include path sync so that edits to included files
+  // trigger reloads immediately, even before the main config file changes.
+  void (async () => {
+    try {
+      const raw = await fs.readFile(opts.watchPath, "utf-8");
+      const parsed = JSON5.parse(raw);
+      await syncIncludeWatchPaths(opts.watchPath, parsed);
+    } catch {
+      // Best-effort: include files will be picked up on first main config change.
+    }
+  })();
+
   return {
     stop: async () => {
       stopped = true;
@@ -277,6 +341,7 @@ export function startGatewayConfigReloader(opts: {
       }
       debounceTimer = null;
       watcherClosed = true;
+      watchedIncludePaths = new Set();
       unsubscribeFromWrites();
       await watcher.close().catch(() => {});
     },
