@@ -14,6 +14,7 @@ import {
   resolveAllowAlwaysPatterns,
   resolveSafeBins,
 } from "./exec-approvals.js";
+import { matchAllowlist } from "./exec-command-resolution.js";
 
 describe("resolveAllowAlwaysPatterns", () => {
   function makeExecutable(dir: string, name: string): string {
@@ -250,6 +251,51 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(second.allowlistSatisfied).toBe(true);
   });
 
+  it("keeps Windows strict inline-eval interpreter approvals argv-bound", () => {
+    const awk = "C:\\temp\\awk.exe";
+    const resolution = makeMockCommandResolution({
+      execution: makeMockExecutableResolution({
+        rawExecutable: awk,
+        resolvedPath: awk,
+        executableName: "awk",
+      }),
+    });
+    const entries = resolveAllowAlwaysPatternEntries({
+      segments: [
+        {
+          raw: `${awk} -F , -f script.awk data.csv`,
+          argv: [awk, "-F", ",", "-f", "script.awk", "data.csv"],
+          resolution,
+        },
+      ],
+      platform: "win32",
+      strictInlineEval: true,
+    });
+
+    expect(entries).toEqual([
+      expect.objectContaining({
+        pattern: awk,
+        argPattern: expect.any(String),
+      }),
+    ]);
+    expect(
+      matchAllowlist(
+        entries,
+        resolution.execution ?? null,
+        [awk, "-F", ",", "-f", "script.awk", "data.csv"],
+        "win32",
+      ),
+    ).toEqual(expect.objectContaining({ pattern: awk, argPattern: expect.any(String) }));
+    expect(
+      matchAllowlist(
+        entries,
+        resolution.execution ?? null,
+        [awk, "-f", "other.awk", "secrets.csv"],
+        "win32",
+      ),
+    ).toBeNull();
+  });
+
   it("keeps inline awk programs out of allow-always persistence in strict inline-eval mode", () => {
     if (process.platform === "win32") {
       return;
@@ -267,29 +313,6 @@ describe("resolveAllowAlwaysPatterns", () => {
       strictInlineEval: true,
     });
     expect(persisted).toEqual([]);
-  });
-
-  it("persists benign awk interpreters without argv binding in strict inline-eval mode on Windows", () => {
-    const awk = "C:\\temp\\awk.exe";
-    const entries = resolveAllowAlwaysPatternEntries({
-      segments: [
-        {
-          raw: `${awk} -F , -f script.awk data.csv`,
-          argv: [awk, "-F", ",", "-f", "script.awk", "data.csv"],
-          resolution: makeMockCommandResolution({
-            execution: makeMockExecutableResolution({
-              rawExecutable: awk,
-              resolvedPath: awk,
-              executableName: "awk",
-            }),
-          }),
-        },
-      ],
-      platform: "win32",
-      strictInlineEval: true,
-    });
-
-    expect(entries).toEqual([{ pattern: awk }]);
   });
 
   it("unwraps shell wrappers and persists the inner executable instead", () => {
