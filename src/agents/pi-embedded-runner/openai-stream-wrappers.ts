@@ -6,10 +6,8 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../codex-native-web-search.js";
-import {
-  resolveProviderRequestAttributionHeaders,
-  resolveProviderRequestPolicy,
-} from "../provider-attribution.js";
+import { resolveProviderRequestPolicy } from "../provider-attribution.js";
+import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
@@ -540,16 +538,15 @@ export function createOpenAIAttributionHeadersWrapper(
     }
     return underlying(model, context, {
       ...options,
-      headers: {
-        ...options?.headers,
-        ...resolveProviderRequestAttributionHeaders({
-          provider: attributionProvider,
-          api: typeof model.api === "string" ? model.api : undefined,
-          baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-          capability: "llm",
-          transport: "stream",
-        }),
-      },
+      headers: resolveProviderRequestHeaders({
+        provider: attributionProvider,
+        api: typeof model.api === "string" ? model.api : undefined,
+        baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+        capability: "llm",
+        transport: "stream",
+        callerHeaders: options?.headers,
+        precedence: "defaults-win",
+      }),
     });
   };
 }
