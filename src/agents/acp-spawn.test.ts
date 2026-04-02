@@ -249,6 +249,22 @@ function enableLineCurrentConversationBindings(): void {
   });
 }
 
+function enableSlackAcpThreadBindings(): void {
+  registerSessionBindingAdapter({
+    channel: "slack",
+    accountId: "default",
+    capabilities: {
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"] satisfies SessionBindingPlacement[],
+    },
+    bind: async (input) => await hoisted.sessionBindingBindMock(input),
+    listBySession: (targetSessionKey) => hoisted.sessionBindingListBySessionMock(targetSessionKey),
+    resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
+    unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
+  });
+}
+
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
     replaceSpawnConfig(createDefaultSpawnConfig());
@@ -435,7 +451,6 @@ describe("spawnAcpDirect", () => {
         agentChannel: "discord",
         agentAccountId: "default",
         agentTo: "channel:parent-channel",
-        agentThreadId: "requester-thread",
       },
     );
 
@@ -942,6 +957,178 @@ describe("spawnAcpDirect", () => {
     expect(firstHandle.dispose).toHaveBeenCalledTimes(1);
     expect(firstHandle.notifyStarted).not.toHaveBeenCalled();
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects streamTo="thread" when thread binding is not requested', async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "run",
+        streamTo: "thread",
+      } as SpawnRequest,
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain('streamTo="thread"');
+    expect(result.error).toContain("thread=true");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
+  it('derives discord relay delivery target from the bound thread when streamTo="thread"', async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+        streamTo: "thread",
+      } as SpawnRequest,
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.streamLogPath).toBe("/tmp/sess-main.acp-stream.jsonl");
+    const relayCalls = hoisted.startAcpSpawnParentStreamRelayMock.mock.calls.map(
+      (call: unknown[]) =>
+        call[0] as {
+          deliveryTarget?: { channel?: string; to?: string; accountId?: string; threadId?: string };
+        },
+    );
+    expect(relayCalls.length).toBeGreaterThan(0);
+    expect(
+      relayCalls.every(
+        (call) =>
+          call.deliveryTarget?.channel === "discord" &&
+          call.deliveryTarget?.accountId === "default" &&
+          call.deliveryTarget?.to === "channel:child-thread" &&
+          call.deliveryTarget?.threadId === undefined,
+      ),
+    ).toBe(true);
+    expectAgentGatewayCall({
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      threadId: undefined,
+    });
+  });
+
+  it('derives slack relay delivery target using parent channel + thread id when streamTo="thread"', async () => {
+    enableSlackAcpThreadBindings();
+    hoisted.sessionBindingBindMock.mockImplementationOnce(
+      async (input: {
+        targetSessionKey: string;
+        conversation: { accountId: string };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "slack",
+            accountId: input.conversation.accountId,
+            conversationId: "1743525000.123456",
+            parentConversationId: "C-parent-1",
+          },
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+            agentId: "codex",
+          },
+        }),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+        streamTo: "thread",
+      } as SpawnRequest,
+      {
+        agentSessionKey: "agent:main:slack:channel:C-parent-1",
+        agentChannel: "slack",
+        agentAccountId: "default",
+        agentTo: "channel:C-parent-1",
+        agentThreadId: "1743525000.123456",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.streamLogPath).toBe("/tmp/sess-main.acp-stream.jsonl");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "slack",
+          accountId: "default",
+          conversationId: "1743525000.123456",
+        }),
+      }),
+    );
+    const relayCalls = hoisted.startAcpSpawnParentStreamRelayMock.mock.calls.map(
+      (call: unknown[]) =>
+        call[0] as {
+          deliveryTarget?: { channel?: string; to?: string; accountId?: string; threadId?: string };
+        },
+    );
+    expect(relayCalls.length).toBeGreaterThan(0);
+    expect(
+      relayCalls.every(
+        (call) =>
+          call.deliveryTarget?.channel === "slack" &&
+          call.deliveryTarget?.accountId === "default" &&
+          call.deliveryTarget?.to === "channel:C-parent-1" &&
+          call.deliveryTarget?.threadId === "1743525000.123456",
+      ),
+    ).toBe(true);
+    expectAgentGatewayCall({
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      threadId: undefined,
+    });
+  });
+
+  it('starts thread relay without requester session context when streamTo="thread"', async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+        streamTo: "thread",
+      } as SpawnRequest,
+      {
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(
+      hoisted.startAcpSpawnParentStreamRelayMock.mock.calls.some((call: unknown[]) => {
+        const params = call[0] as {
+          parentSessionKey?: string;
+          deliveryTarget?: { channel?: string; to?: string };
+        };
+        return (
+          !params.parentSessionKey &&
+          params.deliveryTarget?.channel === "discord" &&
+          params.deliveryTarget?.to === "channel:child-thread"
+        );
+      }),
+    ).toBe(true);
   });
 
   it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {

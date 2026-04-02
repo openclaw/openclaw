@@ -18,7 +18,7 @@ import {
 import {
   formatThreadBindingDisabledError,
   formatThreadBindingSpawnDisabledError,
-  requiresNativeThreadContextForThreadHere,
+  resolveThreadBindingPlacementForCurrentContext,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
@@ -53,6 +53,7 @@ import {
 } from "../utils/delivery-context.js";
 import {
   type AcpSpawnParentRelayHandle,
+  type AcpSpawnRelayDeliveryTarget,
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
@@ -66,7 +67,7 @@ export const ACP_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
 export const ACP_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnAcpSandboxMode = (typeof ACP_SPAWN_SANDBOX_MODES)[number];
-export const ACP_SPAWN_STREAM_TARGETS = ["parent"] as const;
+export const ACP_SPAWN_STREAM_TARGETS = ["parent", "thread"] as const;
 export type SpawnAcpStreamTarget = (typeof ACP_SPAWN_STREAM_TARGETS)[number];
 
 export type SpawnAcpParams = {
@@ -161,6 +162,8 @@ type AcpSpawnRequesterState = {
 type AcpSpawnStreamPlan = {
   implicitStreamToParent: boolean;
   effectiveStreamToParent: boolean;
+  effectiveStreamToThread: boolean;
+  effectiveStreamRelay: boolean;
 };
 
 type AcpSpawnBootstrapDeliveryPlan = {
@@ -476,7 +479,10 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  const placement = requiresNativeThreadContextForThreadHere(policy.channel) ? "child" : "current";
+  const placement = resolveThreadBindingPlacementForCurrentContext({
+    channel: policy.channel,
+    threadId: params.threadId != null ? String(params.threadId) : undefined,
+  });
   if (!capabilities.bindSupported || !capabilities.placements.includes(placement)) {
     return {
       ok: false,
@@ -558,6 +564,7 @@ function resolveAcpSpawnStreamPlan(params: {
   spawnMode: SpawnAcpMode;
   requestThreadBinding: boolean;
   streamToParentRequested: boolean;
+  streamToThreadRequested: boolean;
   requester: AcpSpawnRequesterState;
 }): AcpSpawnStreamPlan {
   // For mode=run without thread binding, implicitly route output to parent
@@ -577,9 +584,71 @@ function resolveAcpSpawnStreamPlan(params: {
     params.requester.heartbeatEnabled &&
     params.requester.heartbeatRelayRouteUsable;
 
+  const effectiveStreamToParent = params.streamToParentRequested || implicitStreamToParent;
+  const effectiveStreamToThread = params.streamToThreadRequested;
   return {
     implicitStreamToParent,
-    effectiveStreamToParent: params.streamToParentRequested || implicitStreamToParent,
+    effectiveStreamToParent,
+    effectiveStreamToThread,
+    effectiveStreamRelay: effectiveStreamToParent || effectiveStreamToThread,
+  };
+}
+
+function resolveAcpSpawnRelayDeliveryTarget(params: {
+  binding: SessionBindingRecord;
+  targetAgentId: string;
+}): AcpSpawnRelayDeliveryTarget | undefined {
+  const channel = params.binding.conversation.channel.trim().toLowerCase();
+  const accountId = params.binding.conversation.accountId.trim() || "default";
+  const conversationId = params.binding.conversation.conversationId.trim();
+  const parentConversationId =
+    params.binding.conversation.parentConversationId?.trim() || undefined;
+  if (!channel || !conversationId) {
+    return undefined;
+  }
+
+  if (
+    (channel === "slack" || channel === "mattermost") &&
+    parentConversationId &&
+    parentConversationId !== conversationId
+  ) {
+    const parentTarget = formatConversationTarget({
+      channel,
+      conversationId: parentConversationId,
+    });
+    if (!parentTarget) {
+      return undefined;
+    }
+    return {
+      channel,
+      accountId,
+      to: parentTarget,
+      threadId: conversationId,
+      agentId: params.targetAgentId,
+    };
+  }
+
+  const deliveryTarget = resolveConversationDeliveryTarget({
+    channel,
+    conversationId,
+    parentConversationId,
+  });
+  const to =
+    deliveryTarget.to ??
+    formatConversationTarget({
+      channel,
+      conversationId,
+      parentConversationId,
+    });
+  if (!to) {
+    return undefined;
+  }
+  return {
+    channel,
+    accountId,
+    to,
+    ...(deliveryTarget.threadId ? { threadId: deliveryTarget.threadId } : {}),
+    agentId: params.targetAgentId,
   };
 }
 
@@ -710,7 +779,7 @@ async function bindPreparedAcpThread(params: {
 function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   spawnMode: SpawnAcpMode;
   requestThreadBinding: boolean;
-  effectiveStreamToParent: boolean;
+  effectiveStreamRelay: boolean;
   requester: AcpSpawnRequesterState;
   binding: SessionBindingRecord | null;
 }): AcpSpawnBootstrapDeliveryPlan {
@@ -757,7 +826,7 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   // the parent task lifecycle notifier instead of letting the child ACP
   // session write raw output directly into the originating channel.
   const useInlineDelivery =
-    hasDeliveryTarget && !params.effectiveStreamToParent && params.spawnMode === "session";
+    hasDeliveryTarget && !params.effectiveStreamRelay && params.spawnMode === "session";
 
   return {
     useInlineDelivery,
@@ -784,6 +853,7 @@ export async function spawnAcpDirect(
     };
   }
   const streamToParentRequested = params.streamTo === "parent";
+  const streamToThreadRequested = params.streamTo === "thread";
   const parentSessionKey = ctx.agentSessionKey?.trim();
   if (streamToParentRequested && !parentSessionKey) {
     return {
@@ -793,6 +863,13 @@ export async function spawnAcpDirect(
   }
 
   let requestThreadBinding = params.thread === true;
+  if (streamToThreadRequested && !requestThreadBinding) {
+    return {
+      status: "error",
+      error:
+        'sessions_spawn streamTo="thread" requires thread=true so updates can relay to the bound thread.',
+    };
+  }
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -822,10 +899,11 @@ export async function spawnAcpDirect(
     parentSessionKey,
     ctx,
   });
-  const { effectiveStreamToParent } = resolveAcpSpawnStreamPlan({
+  const { effectiveStreamRelay, effectiveStreamToThread } = resolveAcpSpawnStreamPlan({
     spawnMode,
     requestThreadBinding,
     streamToParentRequested,
+    streamToThreadRequested,
     requester: requesterState,
   });
 
@@ -918,31 +996,53 @@ export async function spawnAcpDirect(
     };
   }
 
+  const relayDeliveryTarget =
+    effectiveStreamToThread && binding
+      ? resolveAcpSpawnRelayDeliveryTarget({
+          binding,
+          targetAgentId,
+        })
+      : undefined;
+  if (effectiveStreamToThread && !relayDeliveryTarget) {
+    await cleanupFailedAcpSpawn({
+      cfg,
+      sessionKey,
+      shouldDeleteSession: true,
+      deleteTranscript: true,
+      runtimeCloseHandle: initializedRuntime,
+    });
+    return {
+      status: "error",
+      error: 'Failed to resolve streamTo="thread" relay target from the bound conversation.',
+      childSessionKey: sessionKey,
+    };
+  }
+
   const deliveryPlan = resolveAcpSpawnBootstrapDeliveryPlan({
     spawnMode,
     requestThreadBinding,
-    effectiveStreamToParent,
+    effectiveStreamRelay,
     requester: requesterState,
     binding,
   });
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
-  const streamLogPath =
-    effectiveStreamToParent && parentSessionKey
-      ? resolveAcpSpawnStreamLogPath({
-          childSessionKey: sessionKey,
-        })
-      : undefined;
+  const streamLogPath = effectiveStreamRelay
+    ? resolveAcpSpawnStreamLogPath({
+        childSessionKey: sessionKey,
+      })
+    : undefined;
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
-  if (effectiveStreamToParent && parentSessionKey) {
+  if (effectiveStreamRelay && (parentSessionKey || relayDeliveryTarget)) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
     parentRelay = startAcpSpawnParentStreamRelay({
       runId: childIdem,
-      parentSessionKey,
+      parentSessionKey: parentSessionKey ?? "",
       childSessionKey: sessionKey,
       agentId: targetAgentId,
       logPath: streamLogPath,
       emitStartNotice: false,
+      ...(relayDeliveryTarget ? { deliveryTarget: relayDeliveryTarget } : {}),
     });
   }
   try {
@@ -979,17 +1079,18 @@ export async function spawnAcpDirect(
     };
   }
 
-  if (effectiveStreamToParent && parentSessionKey) {
+  if (effectiveStreamRelay && parentRelay) {
     if (parentRelay && childRunId !== childIdem) {
       parentRelay.dispose();
       // Defensive fallback if gateway returns a runId that differs from idempotency key.
       parentRelay = startAcpSpawnParentStreamRelay({
         runId: childRunId,
-        parentSessionKey,
+        parentSessionKey: parentSessionKey ?? "",
         childSessionKey: sessionKey,
         agentId: targetAgentId,
         logPath: streamLogPath,
         emitStartNotice: false,
+        ...(relayDeliveryTarget ? { deliveryTarget: relayDeliveryTarget } : {}),
       });
     }
     parentRelay?.notifyStarted();

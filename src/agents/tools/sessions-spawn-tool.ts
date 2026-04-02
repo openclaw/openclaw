@@ -19,7 +19,7 @@ import {
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 // Keep the schema local to avoid a circular import through acp-spawn/openclaw-tools.
-const SESSIONS_SPAWN_ACP_STREAM_TARGETS = ["parent"] as const;
+const SESSIONS_SPAWN_ACP_STREAM_TARGETS = ["parent", "thread"] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "target",
   "transport",
@@ -156,7 +156,8 @@ export function createSessionsSpawnTool(
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
-      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const streamTo =
+        params.streamTo === "parent" || params.streamTo === "thread" ? params.streamTo : undefined;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"

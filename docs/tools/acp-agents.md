@@ -304,7 +304,10 @@ Interface details:
 - `cwd` (optional): requested runtime working directory (validated by backend/runtime policy).
 - `label` (optional): operator-facing label used in session/banner text.
 - `resumeSessionId` (optional): resume an existing ACP session instead of creating a new one. The agent replays its conversation history via `session/load`. Requires `runtime: "acp"`.
-- `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session as system events.
+- `streamTo` (optional): controls where initial ACP run progress summaries are streamed.
+  - `"parent"` streams progress summaries back to the requester session as system events.
+  - `"thread"` streams progress summaries to the thread-bound ACP session target.
+    - This requires a thread-bound ACP session where OpenClaw can resolve a concrete thread delivery target from the active binding context.
   - When available, accepted responses include `streamLogPath` pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
 
 ### Resume an existing session
