@@ -97,19 +97,17 @@ function resolveFalNetworkPolicy(params: {
   }
 
   const hostSuffix = parsedBaseUrl.hostname.trim().toLowerCase();
-  if (!hostSuffix) {
+  if (!hostSuffix || !params.allowPrivateNetwork) {
     return {};
   }
 
   const hostPolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostSuffix]);
-  const privateNetworkPolicy = params.allowPrivateNetwork
-    ? ssrfPolicyFromAllowPrivateNetwork(true)
-    : undefined;
+  const privateNetworkPolicy = ssrfPolicyFromAllowPrivateNetwork(true);
   const trustedHostPolicy = mergeSsrFPolicies(hostPolicy, privateNetworkPolicy);
   return {
     apiPolicy: trustedHostPolicy,
-    trustedDownloadHostSuffix: params.allowPrivateNetwork ? hostSuffix : undefined,
-    trustedDownloadPolicy: params.allowPrivateNetwork ? trustedHostPolicy : undefined,
+    trustedDownloadHostSuffix: hostSuffix,
+    trustedDownloadPolicy: trustedHostPolicy,
   };
 }
 
@@ -344,7 +342,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         resolveProviderHttpRequestConfig({
           baseUrl: explicitBaseUrl,
           defaultBaseUrl: DEFAULT_FAL_BASE_URL,
-          allowPrivateNetwork: Boolean(explicitBaseUrl),
+          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Key ${auth.apiKey}`,
             "Content-Type": "application/json",

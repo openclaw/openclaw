@@ -66,7 +66,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         resolveProviderHttpRequestConfig({
           baseUrl: resolveOpenAIBaseUrl(req.cfg),
           defaultBaseUrl: DEFAULT_OPENAI_IMAGE_BASE_URL,
-          allowPrivateNetwork: Boolean(req.cfg?.models?.providers?.openai?.baseUrl?.trim()),
+          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",

@@ -352,17 +352,13 @@ describe("fal image-generation provider", () => {
     );
   });
 
-  it("allows trusted private relay hosts derived from configured baseUrl", async () => {
+  it("does not auto-whitelist trusted private relay hosts from a configured baseUrl", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
       source: "env",
       mode: "api-key",
     });
     _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
-    const relayPolicy = {
-      allowPrivateNetwork: true,
-      hostnameAllowlist: ["relay.internal", "*.relay.internal"],
-    };
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -406,7 +402,7 @@ describe("fal image-generation provider", () => {
       expect.objectContaining({
         url: "http://relay.internal:8080/fal-ai/flux/dev",
         auditContext: "fal-image-generate",
-        policy: relayPolicy,
+        policy: undefined,
       }),
     );
     expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
@@ -414,7 +410,7 @@ describe("fal image-generation provider", () => {
       expect.objectContaining({
         url: "http://media.relay.internal/files/generated.png",
         auditContext: "fal-image-download",
-        policy: relayPolicy,
+        policy: undefined,
       }),
     );
   });

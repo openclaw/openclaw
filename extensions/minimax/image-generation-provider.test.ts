@@ -113,4 +113,35 @@ describe("minimax image-generation provider", () => {
       expect.any(Object),
     );
   });
+
+  it("does not allow private-network routing just because a custom base URL is configured", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "minimax-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildMinimaxImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "minimax",
+        model: "image-01",
+        prompt: "draw a cat",
+        cfg: {
+          models: {
+            providers: {
+              minimax: {
+                baseUrl: "http://127.0.0.1:8080/anthropic",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("Blocked hostname or private/internal/special-use IP address");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

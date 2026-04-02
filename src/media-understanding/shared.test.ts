@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveProviderHttpRequestConfig } from "./shared.js";
+import { readErrorResponse, resolveProviderHttpRequestConfig } from "./shared.js";
 
 describe("resolveProviderHttpRequestConfig", () => {
   it("preserves explicit caller headers but protects attribution headers", () => {
@@ -106,5 +106,31 @@ describe("resolveProviderHttpRequestConfig", () => {
         defaultBaseUrl: "   ",
       }),
     ).toThrow("Missing baseUrl");
+  });
+});
+
+describe("readErrorResponse", () => {
+  it("caps streamed error bodies instead of buffering the whole response", async () => {
+    const encoder = new TextEncoder();
+    let reads = 0;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          reads += 1;
+          controller.enqueue(encoder.encode("a".repeat(2048)));
+          if (reads >= 10) {
+            controller.close();
+          }
+        },
+      }),
+      {
+        status: 500,
+      },
+    );
+
+    const detail = await readErrorResponse(response);
+
+    expect(detail).toBe(`${"a".repeat(300)}…`);
+    expect(reads).toBe(2);
   });
 });
