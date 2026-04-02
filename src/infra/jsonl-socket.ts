@@ -30,7 +30,8 @@ export async function requestJsonlSocket<T>(params: {
 
     client.on("error", () => finish(null));
     client.connect(socketPath, () => {
-      client.write(`${payload}\n`);
+      // The macOS exec host can wait for EOF before responding, so finish writing.
+      client.end(`${payload}\n`);
     });
     client.on("data", (data) => {
       buffer += data.toString("utf8");
