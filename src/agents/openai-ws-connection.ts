@@ -15,7 +15,7 @@
 
 import { EventEmitter } from "node:events";
 import WebSocket, { type ClientOptions } from "ws";
-import { resolveProviderRequestAttributionHeaders } from "./provider-attribution.js";
+import { resolveProviderRequestHeaders } from "./provider-request-config.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WebSocket Event Types (Server → Client)
@@ -403,17 +403,18 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
       }
 
       const socket = this.socketFactory(this.wsUrl, {
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "OpenAI-Beta": "responses-websocket=v1",
-          ...resolveProviderRequestAttributionHeaders({
-            provider: "openai",
-            api: "openai-responses",
-            baseUrl: this.wsUrl,
-            capability: "llm",
-            transport: "websocket",
-          }),
-        },
+        headers: resolveProviderRequestHeaders({
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: this.wsUrl,
+          capability: "llm",
+          transport: "websocket",
+          defaultHeaders: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "OpenAI-Beta": "responses-websocket=v1",
+          },
+          precedence: "defaults-win",
+        }),
       });
 
       this.ws = socket;

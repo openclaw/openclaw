@@ -32,6 +32,8 @@ export type ResolvedProviderRequestConfig = {
   policy: ProviderRequestPolicyResolution;
 };
 
+export type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
+
 export function mergeProviderRequestHeaders(
   ...headerSets: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {
@@ -85,4 +87,33 @@ export function resolveProviderRequestConfig(params: {
     tls: { configured: false },
     policy,
   };
+}
+
+export function resolveProviderRequestHeaders(params: {
+  provider: string;
+  api?: RequestApi;
+  baseUrl?: string;
+  capability?: ProviderRequestCapability;
+  transport?: ProviderRequestTransport;
+  callerHeaders?: Record<string, string>;
+  defaultHeaders?: Record<string, string>;
+  precedence?: ProviderRequestHeaderPrecedence;
+}): Record<string, string> | undefined {
+  const requestConfig = resolveProviderRequestConfig({
+    provider: params.provider,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    capability: params.capability,
+    transport: params.transport,
+    providerHeaders: params.defaultHeaders,
+  });
+  const mergedDefaults = mergeProviderRequestHeaders(
+    requestConfig.headers,
+    requestConfig.policy.attributionHeaders,
+  );
+  // When precedence is omitted, defaults-win is the conservative choice:
+  // attribution/default headers cannot be silently overridden by callers.
+  return params.precedence === "caller-wins"
+    ? mergeProviderRequestHeaders(mergedDefaults, params.callerHeaders)
+    : mergeProviderRequestHeaders(params.callerHeaders, mergedDefaults);
 }
