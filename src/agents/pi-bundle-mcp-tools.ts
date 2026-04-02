@@ -206,7 +206,7 @@ async function createPersistentConfiguredMcpProjection(params: {
 
     for (const tool of listedTools) {
       const normalizedName = tool.name.trim().toLowerCase();
-      if (!normalizedName) continue;
+      if (!normalizedName) { continue; }
       if (reservedNames.has(normalizedName)) {
         logWarn(
           `persistent-mcp: skipped tool "${tool.name}" from server "${serverName}" because the name already exists.`,
@@ -318,7 +318,7 @@ async function createTransientBundleMcpToolRuntime(params: {
         sessions.push(session);
         for (const tool of listedTools) {
           const normalizedName = tool.name.trim().toLowerCase();
-          if (!normalizedName) continue;
+          if (!normalizedName) { continue; }
           if (reservedNames.has(normalizedName)) {
             logWarn(
               `bundle-mcp: skipped tool "${tool.name}" from server "${serverName}" because the name already exists.`,

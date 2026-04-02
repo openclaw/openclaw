@@ -508,6 +508,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.allowFrom": "Command Elevated Access Rules",
   mcp: "MCP",
   "mcp.servers": "MCP Servers",
+  "mcp.servers.*.persistent": "Keep Alive",
   ui: "UI",
   "ui.seamColor": "Accent Color",
   "ui.assistant": "Assistant Appearance",

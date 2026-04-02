@@ -269,7 +269,6 @@ describe("createEmbeddedBundleMcpRuntime", () => {
     expect(client).not.toBeNull();
     vi.spyOn(client!, "listTools").mockRejectedValue(new Error("simulated listTools failure"));
 
-    const transientSpawnedServers: string[] = [];
     const runtime = await createEmbeddedBundleMcpRuntime({
       workspaceDir,
       cfg: {
