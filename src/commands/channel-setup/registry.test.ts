@@ -41,7 +41,7 @@ describe("resolveChannelSetupWizardAdapterForPlugin", () => {
     expect(resolveChannelSetupWizardAdapterForPlugin(plugin)).toBe(adapter);
   });
 
-  it("passes through adapter-shaped setupWizard surfaces", async () => {
+  it("passes through adapter-shaped setupWizard surfaces", () => {
     const setupWizard = {
       channel: "demo",
       getStatus: async () => ({

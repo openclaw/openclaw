@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { matrixSetupAdapter, matrixSetupWizard } from "../../test/helpers/plugins/matrix-setup.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -113,7 +114,6 @@ function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
 }
 
 async function setMatrixOnboardingRegistryForTests(): Promise<void> {
-  const { matrixSetupAdapter, matrixSetupWizard } = await import("../../extensions/matrix/api.ts");
   setActivePluginRegistry(
     createTestRegistry([
       {
