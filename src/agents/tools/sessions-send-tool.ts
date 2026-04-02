@@ -125,6 +125,7 @@ export function createSessionsSendTool(opts?: {
       }
 
       let sessionKey = sessionKeyParam;
+      let isCrossAgent = false;
       if (!sessionKey && labelParam) {
         const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
         const requestedAgentId = labelAgentIdParam
@@ -139,7 +140,11 @@ export function createSessionsSendTool(opts?: {
           });
         }
 
-        if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
+        isCrossAgent = Boolean(
+          requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId,
+        );
+
+        if (isCrossAgent && requesterAgentId && requestedAgentId) {
           if (!a2aPolicy.enabled) {
             return jsonResult({
               runId: crypto.randomUUID(),
@@ -227,7 +232,7 @@ export function createSessionsSendTool(opts?: {
       const visibleSession = await resolveVisibleSessionReference({
         resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
-        restrictToSpawned,
+        restrictToSpawned: restrictToSpawned && !isCrossAgent,
         visibilitySessionKey: sessionKey,
       });
       if (!visibleSession.ok) {
