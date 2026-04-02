@@ -67,13 +67,14 @@ export function resolveProviderHttpRequestConfig(params: {
 export async function fetchWithTimeoutGuarded(
   url: string,
   init: RequestInit,
-  timeoutMs: number,
+  timeoutMs: number | undefined,
   fetchFn: typeof fetch,
   options?: {
     ssrfPolicy?: SsrFPolicy;
     lookupFn?: LookupFn;
     pinDns?: boolean;
     dispatcherPolicy?: PinnedDispatcherPolicy;
+    auditContext?: string;
   },
 ): Promise<GuardedFetchResult> {
   return await fetchWithSsrFGuard({
@@ -85,6 +86,7 @@ export async function fetchWithTimeoutGuarded(
     lookupFn: options?.lookupFn,
     pinDns: options?.pinDns,
     dispatcherPolicy: options?.dispatcherPolicy,
+    auditContext: options?.auditContext,
   });
 }
 
@@ -92,10 +94,11 @@ export async function postTranscriptionRequest(params: {
   url: string;
   headers: Headers;
   body: BodyInit;
-  timeoutMs: number;
+  timeoutMs?: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -110,6 +113,7 @@ export async function postTranscriptionRequest(params: {
       ? {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
           ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+          ...(params.auditContext ? { auditContext: params.auditContext } : {}),
         }
       : undefined,
   );
@@ -119,10 +123,11 @@ export async function postJsonRequest(params: {
   url: string;
   headers: Headers;
   body: unknown;
-  timeoutMs: number;
+  timeoutMs?: number;
   fetchFn: typeof fetch;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
 }) {
   return fetchWithTimeoutGuarded(
     params.url,
@@ -137,6 +142,7 @@ export async function postJsonRequest(params: {
       ? {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
           ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+          ...(params.auditContext ? { auditContext: params.auditContext } : {}),
         }
       : undefined,
   );

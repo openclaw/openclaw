@@ -11,23 +11,14 @@ import {
 } from "./image-generation-provider.js";
 
 function expectFalJsonPost(params: { call: number; url: string; body: Record<string, unknown> }) {
-  expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-    params.call,
-    expect.objectContaining({
-      url: params.url,
-      init: expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Key fal-test-key",
-          "Content-Type": "application/json",
-        }),
-      }),
-      auditContext: "fal-image-generate",
-    }),
-  );
-
   const request = fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0];
   expect(request).toBeTruthy();
+  expect(request?.url).toBe(params.url);
+  expect(request?.auditContext).toBe("fal-image-generate");
+  expect(request?.init?.method).toBe("POST");
+  const headers = new Headers(request?.init?.headers);
+  expect(headers.get("authorization")).toBe("Key fal-test-key");
+  expect(headers.get("content-type")).toBe("application/json");
   expect(JSON.parse(String(request?.init?.body))).toEqual(params.body);
 }
 
