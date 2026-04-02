@@ -2,36 +2,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createFlowRecord,
-  createFlowForTask,
-  createManagedFlow,
-  deleteFlowRecordById,
+  createTaskFlowForTask,
+  createManagedTaskFlow,
+  deleteTaskFlowRecordById,
   failFlow,
-  getFlowById,
-  listFlowRecords,
+  getTaskFlowById,
+  listTaskFlowRecords,
   requestFlowCancel,
-  resetFlowRegistryForTests,
+  resetTaskFlowRegistryForTests,
   resumeFlow,
   setFlowWaiting,
   syncFlowFromTask,
   updateFlowRecordByIdExpectedRevision,
-} from "./flow-registry.js";
-import { configureFlowRegistryRuntime } from "./flow-registry.store.js";
+} from "./task-flow-registry.js";
+import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Promise<T> {
-  return await withTempDir({ prefix: "openclaw-flow-registry-" }, async (root) => {
+  return await withTempDir({ prefix: "openclaw-task-flow-registry-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
-    resetFlowRegistryForTests();
+    resetTaskFlowRegistryForTests();
     try {
       return await run(root);
     } finally {
-      resetFlowRegistryForTests();
+      resetTaskFlowRegistryForTests();
     }
   });
 }
 
-describe("flow-registry", () => {
+describe("task-flow-registry", () => {
   beforeEach(() => {
     vi.useRealTimers();
   });
@@ -43,15 +43,15 @@ describe("flow-registry", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
-    resetFlowRegistryForTests();
+    resetTaskFlowRegistryForTests();
   });
 
   it("creates managed flows and updates them through revision-checked helpers", async () => {
     await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetFlowRegistryForTests();
+      resetTaskFlowRegistryForTests();
 
-      const created = createManagedFlow({
+      const created = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-controller",
         goal: "Investigate flaky test",
@@ -151,7 +151,7 @@ describe("flow-registry", () => {
         }),
       });
 
-      expect(listFlowRecords()).toEqual([
+      expect(listTaskFlowRecords()).toEqual([
         expect.objectContaining({
           flowId: created.flowId,
           revision: 4,
@@ -159,15 +159,15 @@ describe("flow-registry", () => {
         }),
       ]);
 
-      expect(deleteFlowRecordById(created.flowId)).toBe(true);
-      expect(getFlowById(created.flowId)).toBeUndefined();
+      expect(deleteTaskFlowRecordById(created.flowId)).toBe(true);
+      expect(getTaskFlowById(created.flowId)).toBeUndefined();
     });
   });
 
   it("requires a controller for managed flows and rejects clearing it later", async () => {
     await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetFlowRegistryForTests();
+      resetTaskFlowRegistryForTests();
 
       expect(() =>
         createFlowRecord({
@@ -176,7 +176,7 @@ describe("flow-registry", () => {
         }),
       ).toThrow("Managed flow controllerId is required.");
 
-      const created = createManagedFlow({
+      const created = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-controller",
         goal: "Protected controller",
@@ -196,7 +196,7 @@ describe("flow-registry", () => {
 
   it("emits restored, upserted, and deleted flow hook events", () => {
     const onEvent = vi.fn();
-    configureFlowRegistryRuntime({
+    configureTaskFlowRegistryRuntime({
       store: {
         loadSnapshot: () => ({
           flows: new Map(),
@@ -208,13 +208,13 @@ describe("flow-registry", () => {
       },
     });
 
-    const created = createManagedFlow({
+    const created = createManagedTaskFlow({
       ownerKey: "agent:main:main",
       controllerId: "tests/hooks",
       goal: "Observe hooks",
     });
 
-    deleteFlowRecordById(created.flowId);
+    deleteTaskFlowRecordById(created.flowId);
 
     expect(onEvent).toHaveBeenCalledWith({
       kind: "restored",
@@ -237,7 +237,7 @@ describe("flow-registry", () => {
   });
 
   it("normalizes restored managed flows without a controller id", () => {
-    configureFlowRegistryRuntime({
+    configureTaskFlowRegistryRuntime({
       store: {
         loadSnapshot: () => ({
           flows: new Map([
@@ -261,7 +261,7 @@ describe("flow-registry", () => {
       },
     });
 
-    expect(getFlowById("legacy-managed")).toMatchObject({
+    expect(getTaskFlowById("legacy-managed")).toMatchObject({
       flowId: "legacy-managed",
       syncMode: "managed",
       controllerId: "core/legacy-restored",
@@ -271,9 +271,9 @@ describe("flow-registry", () => {
   it("mirrors one-task flow state from tasks and leaves managed flows alone", async () => {
     await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetFlowRegistryForTests();
+      resetTaskFlowRegistryForTests();
 
-      const mirrored = createFlowForTask({
+      const mirrored = createTaskFlowForTask({
         task: {
           ownerKey: "agent:main:main",
           taskId: "task-running",
@@ -306,7 +306,7 @@ describe("flow-registry", () => {
         blockedSummary: "Writable session required.",
       });
 
-      const managed = createManagedFlow({
+      const managed = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/managed",
         goal: "Cluster PRs",
@@ -337,9 +337,9 @@ describe("flow-registry", () => {
   it("preserves explicit json null in state and wait payloads", async () => {
     await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
-      resetFlowRegistryForTests();
+      resetTaskFlowRegistryForTests();
 
-      const created = createManagedFlow({
+      const created = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/null-state",
         goal: "Null payloads",
