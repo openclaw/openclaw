@@ -14,6 +14,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "../../infra/net/undici-global-dispatcher.js";
 import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -822,6 +823,10 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
 export async function runMessageAction(
   input: RunMessageActionParams,
 ): Promise<MessageActionRunResult> {
+  // Proxy bootstrap: mirror attempt.ts pattern so outbound channel fetches
+  // (e.g. Discord REST API) respect HTTP_PROXY/HTTPS_PROXY env vars (as well as
+  // lowercase http_proxy/https_proxy and NO_PROXY, if set).
+  ensureGlobalUndiciEnvProxyDispatcher();
   const cfg = input.cfg;
   let params = { ...input.params };
   const resolvedAgentId =
