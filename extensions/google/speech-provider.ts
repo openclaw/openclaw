@@ -52,6 +52,7 @@ function normalizeGeminiProviderConfig(
     }),
     baseUrl: baseUrl?.replace(/\/+$/, "") || DEFAULT_GEMINI_BASE_URL,
     modelId: trimToUndefined(raw?.modelId) ?? DEFAULT_GEMINI_TTS_MODEL,
+    voiceId: trimToUndefined(raw?.voiceId),
     timeoutMs: asNumber(raw?.timeoutMs),
   };
 }
