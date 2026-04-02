@@ -306,9 +306,9 @@ describe("resolvePluginWebSearchProviders", () => {
     applyPluginAutoEnableSpy = vi
       .spyOn(pluginAutoEnableModule, "applyPluginAutoEnable")
       .mockImplementation(
-        (params: { config: unknown }) =>
+        (params) =>
           ({
-            config: params.config,
+            config: params.config ?? {},
             changes: [],
             autoEnabledReasons: {},
           }) as ReturnType<PluginAutoEnableModule["applyPluginAutoEnable"]>,
