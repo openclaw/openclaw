@@ -71,6 +71,12 @@ function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
   return changed;
 }
 
+function pruneStateIfEmpty(nodeId: string, state: NodePendingWorkState) {
+  if (state.itemsById.size === 0) {
+    stateByNodeId.delete(nodeId);
+  }
+}
+
 function sortedItems(state: NodePendingWorkState): NodePendingWorkItem[] {
   return [...state.itemsById.values()].toSorted((a, b) => {
     const priorityDelta = PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority];
@@ -138,6 +144,7 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   const revision = state?.revision ?? 0;
   if (state) {
     pruneExpired(state, nowMs);
+    pruneStateIfEmpty(normalizedNodeId, state);
   }
   const maxItems = Math.min(MAX_ITEMS, Math.max(1, Math.trunc(opts.maxItems ?? DEFAULT_MAX_ITEMS)));
   const explicitItems = state ? sortedItems(state) : [];
@@ -181,6 +188,7 @@ export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: st
   if (removedItemIds.length > 0) {
     state.revision += 1;
   }
+  pruneStateIfEmpty(nodeId, state);
   return { revision: state.revision, removedItemIds };
 }
 
