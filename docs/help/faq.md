@@ -1016,7 +1016,7 @@ for usage/billing and raise limits as needed.
     openclaw cron runs --id <jobId> --limit 50
     ```
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat).
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation).
 
   </Accordion>
 
@@ -1041,7 +1041,7 @@ for usage/billing and raise limits as needed.
     - **Heartbeat** for "main session" periodic checks.
     - **Isolated jobs** for autonomous agents that post summaries or deliver to chats.
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat),
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation),
     [Heartbeat](/gateway/heartbeat).
 
   </Accordion>

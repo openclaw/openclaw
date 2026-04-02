@@ -343,6 +343,6 @@ One public example: a “second brain” CLI + Lobster pipelines that manage thr
 
 ## Related
 
-- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — scheduling Lobster workflows
+- [Automation & Tasks](/automation) — scheduling Lobster workflows
 - [Automation Overview](/automation) — all automation mechanisms
 - [Tools Overview](/tools) — all available agent tools
