@@ -1,5 +1,5 @@
+import { discordMessageActions } from "../../plugin-sdk/discord-runtime-surface.js";
 import {
-  discordMessageActions,
   getThreadBindingManager,
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingInactivityExpiresAt,
@@ -8,7 +8,7 @@ import {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
   unbindThreadBindingsBySessionKey,
-} from "../../plugin-sdk/discord.js";
+} from "../../plugin-sdk/discord-thread-bindings.js";
 import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeSurface,

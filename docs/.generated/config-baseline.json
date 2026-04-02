@@ -1087,6 +1087,20 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.compaction.notifyUser",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Compaction Notify User",
+      "help": "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.compaction.postCompactionSections",
       "kind": "core",
       "type": "array",
@@ -2194,16 +2208,6 @@
       "path": "agents.defaults.memorySearch.multimodal.modalities.*",
       "kind": "core",
       "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "agents.defaults.memorySearch.notifyUser",
-      "kind": "core",
-      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -49608,6 +49612,20 @@
       ],
       "label": "Allow Remote Viewer",
       "help": "Allow non-loopback access to diff viewer URLs when the token path is known.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.diffs.config.viewerBaseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Viewer Base URL",
+      "help": "Persistent gateway base URL used for returned viewer links when a tool call does not pass baseUrl.",
       "hasChildren": false
     },
     {
