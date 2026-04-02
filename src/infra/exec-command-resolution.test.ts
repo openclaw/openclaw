@@ -445,5 +445,14 @@ describe("exec-command-resolution", () => {
         String.raw`C:\Users\demo\AI\system\openclaw`,
       ),
     ).toBeUndefined();
+    expect(
+      resolveAllowlistCandidatePath(
+        {
+          rawExecutable: String.raw`:/Users/demo/AI/system/openclaw`,
+          executableName: "openclaw",
+        },
+        String.raw`C:\Users\demo\AI\system\openclaw`,
+      ),
+    ).toBeUndefined();
   });
 });
