@@ -9,7 +9,7 @@ title: "Background Tasks"
 
 # Background Tasks
 
-> **Cron vs Heartbeat vs Tasks?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for choosing the right scheduling mechanism. This page covers **tracking** background work, not scheduling it.
+> **Looking for scheduling?** See [Automation & Tasks](/automation) for choosing the right mechanism. This page covers **tracking** background work, not scheduling it.
 
 Background tasks track work that runs **outside your main conversation session**:
 ACP runs, subagent spawns, isolated cron job executions, and CLI-initiated operations.
@@ -252,10 +252,8 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 
 ## Related
 
-- [Automation Overview](/automation) — all automation mechanisms at a glance
+- [Automation & Tasks](/automation) — all automation mechanisms at a glance
 - [TaskFlow](/automation/taskflow) — flow orchestration above tasks
-- [Cron Jobs](/automation/cron-jobs) — scheduling background work
-- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism
+- [Scheduled Tasks](/automation/cron-jobs) — scheduling background work
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
-- [CLI: tasks](/cli/index#tasks) — CLI reference for `openclaw tasks flow`
 - [CLI: Tasks](/cli/index#tasks) — CLI command reference

@@ -566,7 +566,7 @@ Subcommands:
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
+Gmail Pub/Sub hook setup + runner. See [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration).
 
 Subcommands:
 
