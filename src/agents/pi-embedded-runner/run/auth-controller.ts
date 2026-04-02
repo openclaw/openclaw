@@ -14,7 +14,10 @@ import {
   isFailoverErrorMessage,
   type FailoverReason,
 } from "../../pi-embedded-helpers.js";
-import { resolveProviderRequestConfig } from "../../provider-request-config.js";
+import {
+  resolveProviderRequestConfig,
+  sanitizeRuntimeProviderRequestOverrides,
+} from "../../provider-request-config.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import { describeUnknownError } from "../utils.js";
 import {
@@ -87,7 +90,7 @@ export function createEmbeddedRunAuthController(params: {
         typeof paramsForApply.runtimeModel.headers === "object"
           ? paramsForApply.runtimeModel.headers
           : undefined,
-      request: paramsForApply.preparedAuth.request,
+      request: sanitizeRuntimeProviderRequestOverrides(paramsForApply.preparedAuth.request),
       capability: "llm",
       transport: "stream",
     });

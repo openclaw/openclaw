@@ -141,4 +141,68 @@ describe("createEmbeddedRunAuthController", () => {
       profileId: "default",
     });
   });
+
+  it("rejects privileged runtime transport overrides on the first auth exchange", async () => {
+    let runtimeModel = createTestModel();
+
+    mocks.getApiKeyForModel.mockResolvedValue({
+      apiKey: "source-api-key",
+      mode: "api-key",
+      profileId: "default",
+      source: "env",
+    });
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue({
+      apiKey: "runtime-api-key",
+      request: {
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+        },
+      },
+    });
+
+    const controller = createEmbeddedRunAuthController({
+      config: undefined,
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      authStore: {
+        version: 1,
+        profiles: {},
+      } as AuthProfileStore,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      profileCandidates: ["default"],
+      initialThinkLevel: "medium",
+      attemptedThinking: new Set(),
+      fallbackConfigured: false,
+      allowTransientCooldownProbe: false,
+      getProvider: () => "custom-openai",
+      getModelId: () => "test-model",
+      getRuntimeModel: () => runtimeModel,
+      setRuntimeModel: (next) => {
+        runtimeModel = next;
+      },
+      getEffectiveModel: () => runtimeModel,
+      setEffectiveModel: () => undefined,
+      getApiKeyInfo: () => null as never,
+      setApiKeyInfo: () => undefined,
+      getLastProfileId: () => undefined,
+      setLastProfileId: () => undefined,
+      getRuntimeAuthState: () => null,
+      setRuntimeAuthState: () => undefined,
+      getRuntimeAuthRefreshCancelled: () => false,
+      setRuntimeAuthRefreshCancelled: () => undefined,
+      getProfileIndex: () => 0,
+      setProfileIndex: () => undefined,
+      setThinkLevel: () => undefined,
+      log: {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+      },
+    });
+
+    await expect(controller.initializeAuthProfile()).rejects.toThrow(
+      /runtime auth request overrides do not allow proxy or tls/i,
+    );
+  });
 });

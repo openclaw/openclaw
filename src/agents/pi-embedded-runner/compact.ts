@@ -61,7 +61,10 @@ import {
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
-import { resolveProviderRequestConfig } from "../provider-request-config.js";
+import {
+  resolveProviderRequestConfig,
+  sanitizeRuntimeProviderRequestOverrides,
+} from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
@@ -370,7 +373,7 @@ export async function compactEmbeddedPiSessionDirect(
             runtimeModel.headers && typeof runtimeModel.headers === "object"
               ? runtimeModel.headers
               : undefined,
-          request: preparedAuth?.request,
+          request: sanitizeRuntimeProviderRequestOverrides(preparedAuth?.request),
           capability: "llm",
           transport: "stream",
         });

@@ -132,6 +132,10 @@ export type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig 
 };
 
 const FORBIDDEN_HEADER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const FORBIDDEN_INSECURE_TLS_MESSAGE =
+  "Provider transport overrides do not allow insecureSkipVerify";
+const FORBIDDEN_RUNTIME_TRANSPORT_OVERRIDE_MESSAGE =
+  "Runtime auth request overrides do not allow proxy or TLS transport settings";
 
 type ResolveProviderRequestPolicyConfigParams = {
   provider?: string;
@@ -204,13 +208,15 @@ function resolveTlsOverride(
   if (!tls) {
     return { configured: false };
   }
+  if (tls.insecureSkipVerify === true) {
+    throw new Error(FORBIDDEN_INSECURE_TLS_MESSAGE);
+  }
   const ca = tls.ca?.trim();
   const cert = tls.cert?.trim();
   const key = tls.key?.trim();
   const passphrase = tls.passphrase?.trim();
   const serverName = tls.serverName?.trim();
-  const rejectUnauthorized =
-    tls.insecureSkipVerify === true ? false : tls.insecureSkipVerify === false ? true : undefined;
+  const rejectUnauthorized = tls.insecureSkipVerify === false ? true : undefined;
   if (!ca && !cert && !key && !passphrase && !serverName && rejectUnauthorized === undefined) {
     return { configured: false };
   }
@@ -261,6 +267,26 @@ function resolveAuthOverride(params: {
     configured: false,
     mode: params.authHeader ? "authorization-bearer" : "provider-default",
     injectAuthorizationHeader: params.authHeader === true,
+  };
+}
+
+export function sanitizeRuntimeProviderRequestOverrides(
+  request: ProviderRequestTransportOverrides | undefined,
+): ProviderRequestTransportOverrides | undefined {
+  if (!request) {
+    return undefined;
+  }
+  if (request.proxy || request.tls) {
+    throw new Error(FORBIDDEN_RUNTIME_TRANSPORT_OVERRIDE_MESSAGE);
+  }
+  const headers = request.headers;
+  const auth = request.auth;
+  if (!headers && !auth) {
+    return undefined;
+  }
+  return {
+    ...(headers ? { headers } : {}),
+    ...(auth ? { auth } : {}),
   };
 }
 

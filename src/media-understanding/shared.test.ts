@@ -83,7 +83,6 @@ describe("resolveProviderHttpRequestConfig", () => {
         tls: {
           cert: "client-cert",
           key: "client-key",
-          insecureSkipVerify: true,
         },
       },
       provider: "deepgram",

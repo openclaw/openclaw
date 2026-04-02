@@ -4,6 +4,7 @@ import {
   resolveProviderRequestPolicyConfig,
   resolveProviderRequestConfig,
   resolveProviderRequestHeaders,
+  sanitizeRuntimeProviderRequestOverrides,
 } from "./provider-request-config.js";
 
 describe("provider request config", () => {
@@ -97,7 +98,6 @@ describe("provider request config", () => {
         tls: {
           cert: "client-cert",
           key: "client-key",
-          insecureSkipVerify: true,
           serverName: "gateway.internal",
         },
       },
@@ -132,7 +132,6 @@ describe("provider request config", () => {
       configured: true,
       cert: "client-cert",
       key: "client-key",
-      rejectUnauthorized: false,
       serverName: "gateway.internal",
     });
   });
@@ -189,6 +188,34 @@ describe("provider request config", () => {
         ca: "proxy-ca",
       },
     });
+  });
+
+  it("rejects insecure TLS transport overrides", () => {
+    expect(() =>
+      resolveProviderRequestConfig({
+        provider: "custom-openai",
+        baseUrl: "https://proxy.example.com/v1",
+        request: {
+          tls: {
+            insecureSkipVerify: true,
+          },
+        },
+      }),
+    ).toThrow(/insecureskipverify/i);
+  });
+
+  it("rejects proxy and tls runtime auth overrides", () => {
+    expect(() =>
+      sanitizeRuntimeProviderRequestOverrides({
+        headers: {
+          "X-Tenant": "acme",
+        },
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+        },
+      }),
+    ).toThrow(/runtime auth request overrides do not allow proxy or tls/i);
   });
 
   it("lets defaults override caller headers when requested", () => {
