@@ -26,6 +26,11 @@ function createSlackThreadingPlugin(): ChannelPlugin {
         currentChannelId: context.To?.replace(/^channel:/, ""),
         currentThreadTs:
           context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+        currentMessageTs:
+          typeof context.CurrentMessageId === "string" &&
+          /^\d+\.\d+$/.test(context.CurrentMessageId)
+            ? context.CurrentMessageId
+            : undefined,
         replyToMode: "all",
       }),
     },
