@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
 import {
   AUTH_NONE,
@@ -9,7 +11,10 @@ import {
   CANONICAL_UNAUTH_VARIANTS,
   createCanonicalizedChannelPluginHandler,
   createHooksHandler,
+  createRequest,
+  createResponse,
   createTestGatewayServer,
+  dispatchRequest,
   expectAuthorizedVariants,
   expectUnauthorizedResponse,
   expectUnauthorizedVariants,
@@ -17,6 +22,8 @@ import {
   withGatewayServer,
   withGatewayTempConfig,
 } from "./server-http.test-harness.js";
+import { createTestRegistry } from "./server/__tests__/test-utils.js";
+import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 type PluginRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -238,6 +245,79 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(handlePluginRequest).toHaveBeenCalledTimes(1);
       },
     });
+  });
+
+  test("preserves trusted-proxy read scopes for gateway-auth plugin runtime routes", async () => {
+    const observedRuntimeScopes: string[][] = [];
+    const writeAllowedResults: boolean[] = [];
+    const handlePluginRequest = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          {
+            pluginId: "runtime-scope",
+            source: "runtime-scope",
+            path: "/secure-hook",
+            auth: "gateway",
+            match: "exact",
+            handler: async (_req: IncomingMessage, res: ServerResponse) => {
+              const runtimeScopes =
+                getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
+              observedRuntimeScopes.push(runtimeScopes);
+              const writeAuth = authorizeOperatorScopesForMethod("node.invoke", runtimeScopes);
+              writeAllowedResults.push(writeAuth.allowed);
+              res.statusCode = 200;
+              res.end("ok");
+              return true;
+            },
+          },
+        ],
+      }),
+      log: { warn: vi.fn() } as Parameters<typeof createGatewayPluginRequestHandler>[0]["log"],
+    });
+
+    await withTempConfig({
+      cfg: {
+        gateway: {
+          trustedProxies: ["203.0.113.10"],
+        },
+      },
+      prefix: "openclaw-plugin-http-runtime-scope-trusted-proxy-test-",
+      run: async () => {
+        const server = createTestGatewayServer({
+          resolvedAuth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+          overrides: {
+            handlePluginRequest,
+            shouldEnforcePluginGatewayAuth: (pathContext) =>
+              pathContext.pathname === "/secure-hook",
+          },
+        });
+
+        const response = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/secure-hook",
+            remoteAddress: "203.0.113.10",
+            headers: {
+              "x-forwarded-user": "operator",
+              "x-forwarded-for": "198.51.100.20",
+              "x-openclaw-scopes": "operator.read",
+            },
+          }),
+          response.res,
+        );
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe("ok");
+      },
+    });
+
+    expect(observedRuntimeScopes).toEqual([["operator.read"]]);
+    expect(writeAllowedResults).toEqual([false]);
   });
 
   test("allows unauthenticated Mattermost slash callback routes while keeping other channel routes protected", async () => {
