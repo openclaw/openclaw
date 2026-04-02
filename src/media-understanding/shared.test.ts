@@ -44,4 +44,23 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.allowPrivateNetwork).toBe(false);
     expect(resolved.headers.get("authorization")).toBe("Token test-key");
   });
+
+  it("allows callers to preserve custom-base detection before URL normalization", () => {
+    const resolved = resolveProviderHttpRequestConfig({
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      allowPrivateNetwork: false,
+      defaultHeaders: {
+        "x-goog-api-key": "test-key",
+      },
+      provider: "google",
+      api: "google-generative-ai",
+      capability: "image",
+      transport: "http",
+    });
+
+    expect(resolved.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.headers.get("x-goog-api-key")).toBe("test-key");
+  });
 });

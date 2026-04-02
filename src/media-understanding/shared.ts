@@ -57,6 +57,7 @@ export function applyProviderRequestHeaders(params: {
 export function resolveProviderHttpRequestConfig(params: {
   baseUrl?: string;
   defaultBaseUrl: string;
+  allowPrivateNetwork?: boolean;
   headers?: HeadersInit;
   defaultHeaders?: Record<string, string>;
   provider?: string;
@@ -86,7 +87,7 @@ export function resolveProviderHttpRequestConfig(params: {
 
   return {
     baseUrl,
-    allowPrivateNetwork: Boolean(params.baseUrl?.trim()),
+    allowPrivateNetwork: params.allowPrivateNetwork ?? Boolean(params.baseUrl?.trim()),
     headers: applyProviderRequestHeaders({
       headers: params.headers,
       defaultHeaders: requestConfig.headers,

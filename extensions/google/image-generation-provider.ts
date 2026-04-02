@@ -137,6 +137,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       const { baseUrl, allowPrivateNetwork, headers } = resolveProviderHttpRequestConfig({
         baseUrl: resolveGoogleBaseUrl(req.cfg),
         defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
+        allowPrivateNetwork: Boolean(req.cfg?.models?.providers?.google?.baseUrl?.trim()),
         defaultHeaders: parseGeminiAuth(auth.apiKey).headers,
         provider: "google",
         api: "google-generative-ai",

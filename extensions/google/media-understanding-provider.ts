@@ -54,6 +54,7 @@ async function generateGeminiInlineDataText(params: {
   const { baseUrl, allowPrivateNetwork, headers } = resolveProviderHttpRequestConfig({
     baseUrl: normalizeGoogleApiBaseUrl(params.baseUrl ?? params.defaultBaseUrl),
     defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
+    allowPrivateNetwork: Boolean(params.baseUrl?.trim()),
     headers: params.headers,
     defaultHeaders: parseGeminiAuth(params.apiKey).headers,
     provider: "google",
