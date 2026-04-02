@@ -32,6 +32,7 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   triggerSenderName?: string;
   thinkLevel?: string;
   status?: string;
+  triggerText?: string;
 };
 
 export type DiagnosticModelCallEvent = DiagnosticBaseEvent & {
