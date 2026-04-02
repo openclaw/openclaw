@@ -4,6 +4,8 @@ export {
   createManagedFlow,
   deleteFlowRecordById,
   findLatestFlowForOwnerKey,
+  failFlow,
+  finishFlow,
   getFlowById,
   listFlowRecords,
   listFlowsForOwnerKey,
@@ -15,3 +17,5 @@ export {
   syncFlowFromTask,
   updateFlowRecordByIdExpectedRevision,
 } from "./flow-registry.js";
+
+export type { FlowUpdateResult } from "./flow-registry.js";
