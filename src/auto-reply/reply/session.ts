@@ -63,14 +63,7 @@ function loadSessionArchiveRuntime() {
 function resolveExplicitSessionEndReason(
   matchedResetTriggerLower?: string,
 ): PluginHookSessionEndReason {
-  switch (matchedResetTriggerLower) {
-    case "/new":
-      return "new";
-    case "/reset":
-      return "reset";
-    default:
-      return "unknown";
-  }
+  return matchedResetTriggerLower === "/reset" ? "reset" : "new";
 }
 
 function resolveStaleSessionEndReason(params: {
@@ -85,10 +78,13 @@ function resolveStaleSessionEndReason(params: {
     params.freshness.dailyResetAt != null && params.entry.updatedAt < params.freshness.dailyResetAt;
   const staleIdle =
     params.freshness.idleExpiresAt != null && params.now > params.freshness.idleExpiresAt;
-  if (staleDaily === staleIdle) {
-    return staleDaily ? "unknown" : undefined;
+  if (staleIdle) {
+    return "idle";
   }
-  return staleDaily ? "daily" : "idle";
+  if (staleDaily) {
+    return "daily";
+  }
+  return undefined;
 }
 
 export type SessionInitResult = {

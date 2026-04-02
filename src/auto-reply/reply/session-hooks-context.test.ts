@@ -150,6 +150,34 @@ describe("session hook context wiring", () => {
     expect(event).toMatchObject({ reason: "reset" });
   });
 
+  it("maps custom reset trigger aliases to the new-session reason", async () => {
+    const sessionKey = "agent:main:telegram:direct:alias";
+    const storePath = await createStorePath("openclaw-session-hook-reset-alias");
+    const transcriptPath = await writeTranscript(storePath, "alias-session", "alias me");
+    await writeStore(storePath, {
+      [sessionKey]: {
+        sessionId: "alias-session",
+        sessionFile: transcriptPath,
+        updatedAt: Date.now(),
+      },
+    });
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/fresh"],
+      },
+    } as OpenClawConfig;
+
+    await initSessionState({
+      ctx: { Body: "/fresh", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+    expect(event).toMatchObject({ reason: "new" });
+  });
+
   it("marks daily stale rollovers and exposes the archived transcript path", async () => {
     vi.useFakeTimers();
     try {
@@ -204,6 +232,44 @@ describe("session hook context wiring", () => {
           store: storePath,
           reset: {
             mode: "idle",
+            idleMinutes: 30,
+          },
+        },
+      } as OpenClawConfig;
+
+      await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+      expect(event).toMatchObject({ reason: "idle" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prefers idle over daily when both rollover conditions are true", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+      const sessionKey = "agent:main:telegram:direct:overlap";
+      const storePath = await createStorePath("openclaw-session-hook-overlap");
+      const transcriptPath = await writeTranscript(storePath, "overlap-session", "overlap");
+      await writeStore(storePath, {
+        [sessionKey]: {
+          sessionId: "overlap-session",
+          sessionFile: transcriptPath,
+          updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+        },
+      });
+      const cfg = {
+        session: {
+          store: storePath,
+          reset: {
+            mode: "daily",
+            atHour: 4,
             idleMinutes: 30,
           },
         },
