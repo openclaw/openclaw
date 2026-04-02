@@ -587,8 +587,7 @@ export async function runHeartbeatOnce(opts: {
   let runSessionKey = sessionKey;
   let runStorePath = storePath;
   if (useIsolatedSession) {
-    const baseKey = sessionKey.endsWith(":heartbeat") ? sessionKey : `${sessionKey}:heartbeat`;
-    const isolatedKey = baseKey;
+    const isolatedKey = sessionKey.endsWith(":heartbeat") ? sessionKey : `${sessionKey}:heartbeat`;
     const cronSession = resolveCronSession({
       cfg,
       sessionKey: isolatedKey,
