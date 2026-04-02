@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.TalkPromptDisplay
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.mobileAccent
@@ -115,7 +116,13 @@ private fun ChatMessageBody(role: String, content: List<ChatMessageContent>, tex
     for (part in content) {
       when (part.type) {
         "text" -> {
-          val text = part.text ?: continue
+          val raw = part.text ?: continue
+          val text =
+            if (role == "user") {
+              TalkPromptDisplay.displayTextFromPrompt(raw)
+            } else {
+              raw
+            }
           ChatMarkdown(text = text, textColor = textColor)
         }
         else -> {
