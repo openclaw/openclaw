@@ -229,6 +229,9 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
         normalized[key] = first[key];
       }
     }
+    // Re-run alias normalization so hoisted alias keys (e.g. old_string
+    // from edits[0]) are converted to canonical keys (oldText/newText).
+    normalizeClaudeParamAliases(normalized);
   }
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.
