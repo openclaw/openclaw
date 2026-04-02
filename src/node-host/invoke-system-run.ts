@@ -4,11 +4,10 @@ import { loadConfig } from "../config/config.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
   addDurableCommandApproval,
-  addAllowlistEntry,
   hasDurableExecApproval,
-  recordAllowlistUse,
+  persistAllowAlwaysPatterns,
+  recordAllowlistMatchesUse,
   resolveApprovalAuditCandidatePath,
-  resolveAllowAlwaysPatterns,
   resolveExecApprovals,
   type ExecAllowlistEntry,
   type ExecAsk,
@@ -564,41 +563,30 @@ async function executeSystemRunPhase(
   }
 
   if (phase.policy.approvalDecision === "allow-always" && phase.inlineEvalHit === null) {
-    const patterns = resolveAllowAlwaysPatterns({
-      segments: phase.segments,
-      cwd: phase.cwd,
-      env: phase.env,
-      platform: process.platform,
-      strictInlineEval: phase.strictInlineEval,
-    });
-    for (const pattern of patterns) {
-      if (pattern) {
-        addAllowlistEntry(phase.approvals.file, phase.agentId, pattern, {
-          source: "allow-always",
-        });
-      }
-    }
+    const patterns =
+      phase.policy.analysisOk
+        ? persistAllowAlwaysPatterns({
+            approvals: phase.approvals.file,
+            agentId: phase.agentId,
+            segments: phase.segments,
+            cwd: phase.cwd,
+            env: phase.env,
+            platform: process.platform,
+            strictInlineEval: phase.strictInlineEval,
+          })
+        : [];
     if (patterns.length === 0) {
       addDurableCommandApproval(phase.approvals.file, phase.agentId, phase.commandText);
     }
   }
 
-  if (phase.allowlistMatches.length > 0) {
-    const seen = new Set<string>();
-    for (const match of phase.allowlistMatches) {
-      if (!match?.pattern || seen.has(match.pattern)) {
-        continue;
-      }
-      seen.add(match.pattern);
-      recordAllowlistUse(
-        phase.approvals.file,
-        phase.agentId,
-        match,
-        phase.commandText,
-        resolveApprovalAuditCandidatePath(phase.segments[0]?.resolution ?? null, phase.cwd),
-      );
-    }
-  }
+  recordAllowlistMatchesUse({
+    approvals: phase.approvals.file,
+    agentId: phase.agentId,
+    matches: phase.allowlistMatches,
+    command: phase.commandText,
+    resolvedPath: resolveApprovalAuditCandidatePath(phase.segments[0]?.resolution ?? null, phase.cwd),
+  });
 
   if (phase.needsScreenRecording) {
     await sendSystemRunDenied(opts, phase.execution, {
