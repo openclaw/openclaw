@@ -1,0 +1,37 @@
+{
+  "nav": {
+    "chat": "Chat",
+    "overview": "Overview",
+    "channels": "Channels",
+    "instances": "Instances",
+    "sessions": "Sessions",
+    "usage": "Usage",
+    "cron": "Cron",
+    "agents": "Agents",
+    "skills": "Skills",
+    "nodes": "Nodes",
+    "config": "Config",
+    "communications": "Communications",
+    "appearance": "Appearance",
+    "automation": "Automation",
+    "infrastructure": "Infrastructure",
+    "aiAgents": "AI Agents",
+    "debug": "Debug",
+    "logs": "Logs"
+  },
+  "status": {
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "connecting": "Connecting...",
+    "error": "Error"
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "loading": "Loading...",
+    "noData": "No data"
+  }
+}
