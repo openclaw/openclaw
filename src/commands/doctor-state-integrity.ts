@@ -378,11 +378,11 @@ export type LinuxVolatileStateDir = {
 };
 
 /** Filesystem types that do not survive a reboot. */
-const VOLATILE_FS_TYPES = new Set(["tmpfs", "ramfs", "overlay"]);
+const VOLATILE_FS_TYPES = new Set(["tmpfs", "ramfs"]);
 
 /**
  * Detect whether the state directory resides on a volatile (non-persistent)
- * filesystem such as tmpfs, ramfs, or an overlay root.  These filesystems
+ * filesystem such as tmpfs or ramfs.  These filesystems
  * lose all data on reboot, which means sessions, credentials, and config
  * are silently destroyed.
  *
