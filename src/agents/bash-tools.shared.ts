@@ -2,11 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import {
-  analyzeShellCommand,
-  buildEnforcedShellCommand,
-  isCanonicalEnforcedShellCommand,
-} from "../infra/exec-approvals-analysis.js";
+import { buildSafeShellCommand } from "../infra/exec-approvals-analysis.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxBackendExecSpec } from "./sandbox/backend.js";
@@ -73,8 +69,6 @@ export function buildDockerExecArgs(params: {
 }) {
   const plannedCommand = buildDockerShellCommand({
     command: params.command,
-    workdir: params.workdir,
-    env: params.env,
   });
 
   const args = ["exec", "-i"];
@@ -120,38 +114,20 @@ export function buildDockerExecArgs(params: {
   return args;
 }
 
-function buildDockerShellCommand(params: {
-  command: string;
-  workdir?: string;
-  env: Record<string, string>;
-}): string {
-  const analysis = analyzeShellCommand({
+function buildDockerShellCommand(params: { command: string }): string {
+  // Keep argv[0] as written by the caller: Docker commands run inside the container
+  // and must not be rewritten to host-resolved executable paths.
+  const planned = buildSafeShellCommand({
     command: params.command,
-    cwd: params.workdir,
-    env: params.env,
     // Docker runtime command execution uses `/bin/sh` inside Linux containers.
     platform: "linux",
   });
-  if (!analysis.ok) {
+  if (!planned.ok || !planned.command) {
     throw new Error(
-      `Security Violation: unsupported sandbox shell syntax (${analysis.reason ?? "unable to parse command"}).`,
+      `Security Violation: unsupported sandbox shell syntax (${planned.reason ?? "unable to parse command"}).`,
     );
   }
-  if (isCanonicalEnforcedShellCommand(analysis.segments)) {
-    return params.command;
-  }
-
-  const enforced = buildEnforcedShellCommand({
-    command: params.command,
-    segments: analysis.segments,
-    platform: "linux",
-  });
-  if (!enforced.ok || !enforced.command) {
-    throw new Error(
-      `Security Violation: sandbox command execution plan unavailable (${enforced.reason ?? "unknown reason"}).`,
-    );
-  }
-  return enforced.command;
+  return planned.command;
 }
 
 export async function resolveSandboxWorkdir(params: {

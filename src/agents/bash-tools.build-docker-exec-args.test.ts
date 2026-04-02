@@ -18,8 +18,7 @@ describe("buildDockerExecArgs", () => {
     expect(args).toContain("OPENCLAW_PREPEND_PATH=/custom/bin:/usr/local/bin:/usr/bin");
     expect(bootstrapArg).toContain('export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"');
     expect(bootstrapArg).toContain('exec /bin/sh -c "$1"');
-    expect(commandArg).toMatch(/'[^']*echo'/);
-    expect(commandArg).toContain("'hello'");
+    expect(commandArg).toBe("'echo' 'hello'");
   });
 
   it("does not interpolate PATH into the shell bootstrap script", () => {
@@ -53,8 +52,7 @@ describe("buildDockerExecArgs", () => {
     const bootstrapArg = args[args.length - 3];
     const commandArg = args[args.length - 1];
     expect(bootstrapArg).toBe('exec /bin/sh -c "$1"');
-    expect(commandArg).toMatch(/'[^']*echo'/);
-    expect(commandArg).toContain("'hello'");
+    expect(commandArg).toBe("'echo' 'hello'");
     expect(bootstrapArg).not.toContain("export PATH");
   });
 
@@ -120,6 +118,19 @@ describe("buildDockerExecArgs", () => {
     expect(commandArg).toContain("FOO='bar'");
     expect(commandArg).toMatch(/'[^']*echo'/);
     expect(commandArg).toContain("'hi'");
+  });
+
+  it("does not rewrite executable names to host-resolved absolute paths", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo host-portable",
+      env: { HOME: "/home/user" },
+      tty: false,
+    });
+
+    const commandArg = args[args.length - 1];
+    expect(commandArg).toBe("'echo' 'host-portable'");
+    expect(commandArg).not.toContain("/echo");
   });
 
   it("keeps already-enforced canonical commands unchanged", () => {

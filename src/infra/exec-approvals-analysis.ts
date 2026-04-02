@@ -637,7 +637,8 @@ export function buildSafeShellCommand(params: { command: string; platform?: stri
       if (!argv || argv.length === 0) {
         return { ok: false, reason: "unable to parse shell segment" };
       }
-      return { ok: true, rendered: argv.map((token) => shellEscapeSingleArg(token)).join(" ") };
+      const rendered = renderCanonicalSegmentFromArgvTokens(argv);
+      return rendered.ok ? rendered : { ok: false, reason: "unable to parse shell segment" };
     },
   });
   return finalizeRebuiltShellCommand(rebuilt);

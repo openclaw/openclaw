@@ -6,6 +6,7 @@ import {
   analyzeArgvCommand,
   analyzeShellCommand,
   buildEnforcedShellCommand,
+  buildSafeShellCommand,
   buildSafeBinsShellCommand,
   resolvePlannedSegmentArgv,
 } from "./exec-approvals-analysis.js";
@@ -82,6 +83,18 @@ describe("exec approvals shell analysis", () => {
       expect(res.command).toContain("FOO='bar'");
       expect(res.command).toMatch(/'[^']*echo'/);
       expect(res.command).toContain("'hi'");
+    });
+
+    it("preserves leading inline env assignments in safe shell command mode", () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const res = buildSafeShellCommand({
+        command: "FOO=bar echo hi",
+        platform: process.platform,
+      });
+      expect(res.ok).toBe(true);
+      expect(res.command).toBe("FOO='bar' 'echo' 'hi'");
     });
 
     it("keeps shell multiplexer rebuilds as coherent execution argv", () => {
