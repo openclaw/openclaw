@@ -277,6 +277,22 @@ describe("loadGatewayPlugins", () => {
     );
   });
 
+  test("treats an empty startup scope as no plugin load instead of an unscoped load", async () => {
+    resolveGatewayStartupPluginIds.mockReturnValue([]);
+
+    const result = serverPluginsModule.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: createTestLog(),
+      coreGatewayHandlers: {},
+      baseMethods: ["sessions.get"],
+    });
+
+    expect(loadOpenClawPlugins).not.toHaveBeenCalled();
+    expect(result.pluginRegistry.plugins).toEqual([]);
+    expect(result.gatewayMethods).toEqual(["sessions.get"]);
+  });
+
   test("loads gateway plugins from the auto-enabled config snapshot", async () => {
     const autoEnabledConfig = { channels: { slack: { enabled: true } }, autoEnabled: true };
     applyPluginAutoEnable.mockReturnValue({
