@@ -440,6 +440,7 @@ export async function runAgentTurnWithFallback(params: {
                 })(),
                 suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
+                workingMemoryPath: params.opts?.workingMemoryPath,
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                 images: params.opts?.images,
                 imageOrder: params.opts?.imageOrder,

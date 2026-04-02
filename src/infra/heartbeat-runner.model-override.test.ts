@@ -77,6 +77,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     model?: string;
     suppressToolErrorWarnings?: boolean;
     lightContext?: boolean;
+    workingMemoryPath?: string;
     isolatedSession?: boolean;
   }) {
     return withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
@@ -90,6 +91,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               model: params.model,
               suppressToolErrorWarnings: params.suppressToolErrorWarnings,
               lightContext: params.lightContext,
+              workingMemoryPath: params.workingMemoryPath,
               isolatedSession: params.isolatedSession,
             },
           },
@@ -136,6 +138,52 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         bootstrapContextMode: "lightweight",
       }),
     );
+  });
+
+  it("passes workingMemoryPath when configured", async () => {
+    const replyOpts = await runDefaultsHeartbeat({
+      workingMemoryPath: ".openclaw/working-memory/heartbeat/private.md",
+    });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        workingMemoryPath: ".openclaw/working-memory/heartbeat/private.md",
+      }),
+    );
+  });
+
+  it("rejects invalid workingMemoryPath when configured", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+              workingMemoryPath: "../outside.md",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+
+      await expect(
+        runHeartbeatOnce({
+          cfg,
+          deps: {
+            getQueueSize: () => 0,
+            nowMs: () => 0,
+          },
+        }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        reason: "workingMemoryPath must stay inside the workspace",
+      });
+    });
   });
 
   it("uses isolated session key when isolatedSession is enabled", async () => {

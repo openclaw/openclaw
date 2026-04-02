@@ -78,3 +78,31 @@ openclaw cron add \
 ```
 
 `--light-context` applies to isolated agent-turn jobs only. For cron runs, lightweight mode keeps bootstrap context empty instead of injecting the full workspace bootstrap set.
+
+If you want a lightweight isolated cron job to keep its own scoped notes without
+loading broader durable memory, give it a scoped working-memory file:
+
+```bash
+openclaw cron add \
+  --name "Nightly improvement loop" \
+  --cron "0 2 * * *" \
+  --session isolated \
+  --message "Complete exactly one high-leverage task." \
+  --light-context \
+  --working-memory ".openclaw/working-memory/cron/nightly-improvements.md" \
+  --announce --channel telegram --to "-1001234567890"
+```
+
+`--working-memory` should point to a workspace-relative markdown file under
+`.openclaw/working-memory/`. In this mode, `/context` will show the file as
+**working memory**, distinct from startup memory (`MEMORY.md`), searchable
+memory (`memory/`), and conversation recall/history.
+
+This isolates what gets preloaded and what memory tools can surface by default;
+it does **not** by itself remove general workspace tools like `read`, `write`,
+or `exec` unless the run's tool policy also filters them.
+
+If you omit `--working-memory`, lightweight isolated cron jobs keep lightweight
+bootstrap behavior but do **not** implicitly enable scoped working memory.
+That memory lane is explicit opt-in so existing jobs do not silently change
+their tool exposure or recall behavior.

@@ -93,10 +93,41 @@ A good rule of thumb:
 - put **deep reference material** in topic notes
 - use **conversation recall** for historical reconstruction
 
+### 5) Scoped working memory -- `.openclaw/working-memory/*.md`
+
+For isolated or durable-memory-sensitive automation runs, OpenClaw can also inject a
+**scoped working-memory file** that is separate from both startup memory and
+searchable durable notes.
+
+Typical examples:
+
+- `.openclaw/working-memory/cron/nightly.md`
+- `.openclaw/working-memory/cron/research-watch.md`
+- `.openclaw/working-memory/heartbeat/private.md`
+
+Use this lane for:
+
+- run-local scratch state
+- scoped continuity for isolated cron/heartbeat flows
+- notes that should **not** become part of general searchable memory by default
+
+Unlike `MEMORY.md` or `memory/**/*.md`, these files are meant to be loaded only
+when a run explicitly opts into them.
+
 <Tip>
 A strong pattern is to keep `MEMORY.md` short enough to skim quickly, then move
 project detail into searchable topic files under `memory/`.
 </Tip>
+
+<Tip>
+When you need continuity for an isolated automation loop but do **not** want to
+load or search the agent's broader durable memory, prefer a scoped file under
+`.openclaw/working-memory/`.
+</Tip>
+
+Scoped working memory is a **context-loading boundary**, not a full filesystem or
+tool isolation boundary by itself. A run can still have general workspace tools
+such as `read`, `write`, or `exec` unless those are separately filtered.
 
 ## Memory tools
 

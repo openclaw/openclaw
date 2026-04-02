@@ -234,6 +234,8 @@ export function createOpenClawCodingTools(options?: {
   trigger?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
   memoryFlushWritePath?: string;
+  /** Relative workspace path for scoped working memory in isolated/lightweight runs. */
+  workingMemoryPath?: string;
   agentDir?: string;
   workspaceDir?: string;
   /**
@@ -305,6 +307,7 @@ export function createOpenClawCodingTools(options?: {
     throw new Error("memoryFlushWritePath required for memory-triggered tool runs");
   }
   const memoryFlushWritePath = isMemoryFlushRun ? options.memoryFlushWritePath : undefined;
+  const scopedWorkingMemoryEnabled = Boolean(options?.workingMemoryPath);
   const {
     agentId,
     globalPolicy,
@@ -594,8 +597,14 @@ export function createOpenClawCodingTools(options?: {
           return [tool];
         })
       : tools;
+  const toolsForScopedWorkingMemory = scopedWorkingMemoryEnabled
+    ? toolsForMemoryFlush.filter(
+        (tool) =>
+          tool.name !== "memory_search" && tool.name !== "memory_get" && !/^lcm_/i.test(tool.name),
+      )
+    : toolsForMemoryFlush;
   const toolsForMessageProvider = applyMessageProviderToolPolicy(
-    toolsForMemoryFlush,
+    toolsForScopedWorkingMemory,
     options?.messageProvider,
   );
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {

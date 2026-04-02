@@ -193,4 +193,42 @@ describe("buildSystemPromptReport", () => {
       },
     ]);
   });
+
+  it("reports scoped working memory separately from startup/searchable memory", () => {
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [],
+      injectedFiles: [
+        {
+          path: ".openclaw/working-memory/cron/nightly.md",
+          content: "current focus\n- tighten cron privacy",
+        },
+      ],
+      workingMemoryFiles: [
+        {
+          path: ".openclaw/working-memory/cron/nightly.md",
+          status: "loaded",
+          rawChars: 36,
+          injectedChars: 36,
+        },
+      ],
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.memory?.working).toEqual({
+      enabled: true,
+      files: [
+        {
+          path: ".openclaw/working-memory/cron/nightly.md",
+          status: "loaded",
+          rawChars: 36,
+          injectedChars: 36,
+        },
+      ],
+    });
+  });
 });

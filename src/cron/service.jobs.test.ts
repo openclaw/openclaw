@@ -191,6 +191,73 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("persists agentTurn payload.workingMemoryPath updates when editing existing jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-working-memory", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      workingMemoryPath: ".openclaw/working-memory/cron/nightly.md",
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        workingMemoryPath: " .openclaw/working-memory/cron/privacy.md ",
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.workingMemoryPath).toBe(".openclaw/working-memory/cron/privacy.md");
+    }
+  });
+
+  it("clears agentTurn payload.workingMemoryPath when an empty patch value is supplied", () => {
+    const job = createIsolatedAgentTurnJob("job-working-memory-clear", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      workingMemoryPath: ".openclaw/working-memory/cron/nightly.md",
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        workingMemoryPath: "",
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.workingMemoryPath).toBeUndefined();
+    }
+  });
+
+  it("rejects invalid agentTurn payload.workingMemoryPath updates", () => {
+    const job = createIsolatedAgentTurnJob("job-working-memory-invalid", {
+      mode: "announce",
+      channel: "telegram",
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        payload: {
+          kind: "agentTurn",
+          message: "do it",
+          workingMemoryPath: "../outside.md",
+        },
+      }),
+    ).toThrow("workingMemoryPath must stay inside the workspace");
+  });
+
   it.each([
     { name: "no delivery update", patch: { enabled: true } satisfies CronJobPatch },
     {

@@ -60,6 +60,7 @@ type CronUpdatePatch = {
       model?: string;
       thinking?: string;
       lightContext?: boolean;
+      workingMemoryPath?: string;
     };
     delivery?: {
       mode?: string;
@@ -73,7 +74,12 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
-  payload?: { model?: string; thinking?: string; lightContext?: boolean };
+  payload?: {
+    model?: string;
+    thinking?: string;
+    lightContext?: boolean;
+    workingMemoryPath?: string;
+  };
   delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
   agentId?: string;
@@ -417,6 +423,40 @@ describe("cron cli", () => {
     expect(params?.payload?.lightContext).toBe(true);
   });
 
+  it("sets workingMemoryPath on cron add when --working-memory is passed", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Scoped memory",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--working-memory",
+      " .openclaw/working-memory/cron/nightly.md ",
+    ]);
+
+    expect(params?.payload?.workingMemoryPath).toBe(".openclaw/working-memory/cron/nightly.md");
+  });
+
+  it("rejects invalid workingMemoryPath on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "Scoped memory",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--working-memory",
+      "../outside.md",
+    ]);
+  });
+
   it.each([
     {
       label: "omits empty model and thinking",
@@ -465,6 +505,37 @@ describe("cron cli", () => {
 
     const clearPatch = await runCronEditAndGetPatch(["--no-light-context", "--message", "hello"]);
     expect(clearPatch?.patch?.payload?.lightContext).toBe(false);
+  });
+
+  it("sets and clears workingMemoryPath on cron edit", async () => {
+    const setPatch = await runCronEditAndGetPatch([
+      "--working-memory",
+      " .openclaw/working-memory/cron/privacy.md ",
+      "--message",
+      "hello",
+    ]);
+    expect(setPatch?.patch?.payload?.workingMemoryPath).toBe(
+      ".openclaw/working-memory/cron/privacy.md",
+    );
+
+    const clearPatch = await runCronEditAndGetPatch([
+      "--clear-working-memory",
+      "--message",
+      "hello",
+    ]);
+    expect(clearPatch?.patch?.payload?.workingMemoryPath).toBe("");
+  });
+
+  it("rejects invalid workingMemoryPath on cron edit", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "edit",
+      "job-1",
+      "--working-memory",
+      "../outside.md",
+      "--message",
+      "hello",
+    ]);
   });
 
   it("updates delivery settings without requiring --message", async () => {

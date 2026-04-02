@@ -69,6 +69,12 @@ function makeParams(
           projectContextChars: 500,
           nonProjectContextChars: 500,
         },
+        memory: {
+          startup: { files: [] },
+          working: { enabled: false, files: [] },
+          searchable: { available: false, toolNames: [], noteRoots: ["memory/"] },
+          recall: { available: false, toolNames: [] },
+        },
         injectedWorkspaceFiles,
         skills: {
           promptChars: 10,
@@ -93,13 +99,13 @@ describe("buildContextReply", () => {
   it("shows bootstrap truncation warning in list output when context exceeds configured limits", async () => {
     const result = await buildContextReply(makeParams("/context list", true));
     expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
-    expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
+    expect(result.text).toContain("⚠ Injected startup/working context is over configured limits");
     expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
   });
 
   it("does not show bootstrap truncation warning when there is no truncation", async () => {
     const result = await buildContextReply(makeParams("/context list", false));
-    expect(result.text).not.toContain("Bootstrap context is over configured limits");
+    expect(result.text).not.toContain("Injected startup/working context is over configured limits");
   });
 
   it("falls back to config defaults when legacy reports are missing bootstrap limits", async () => {
@@ -114,12 +120,13 @@ describe("buildContextReply", () => {
   });
 
   it("synthesizes memory-layer output for legacy cached reports", async () => {
-    const result = await buildContextReply(
-      makeParams("/context list", false, {
-        includeLegacyMemoryFile: true,
-        includeMemoryTools: true,
-      }),
-    );
+    const params = makeParams("/context list", false, {
+      includeLegacyMemoryFile: true,
+      includeMemoryTools: true,
+    });
+    delete params.sessionEntry!.systemPromptReport!.memory;
+
+    const result = await buildContextReply(params);
     expect(result.text).toContain("Startup memory: MEMORY.md (present, not startup-injected)");
     expect(result.text).toContain(
       "Searchable memory: on-demand via memory_search, memory_get (note roots: memory/)",
@@ -127,5 +134,97 @@ describe("buildContextReply", () => {
     expect(result.text).toContain(
       "Conversation recall: separate from durable memory via lcm_expand_query",
     );
+  });
+
+  it("shows scoped working-memory files when present", async () => {
+    const params = makeParams("/context list", false);
+    params.sessionEntry!.systemPromptReport!.memory = {
+      startup: { files: [] },
+      working: {
+        enabled: true,
+        files: [
+          {
+            path: ".openclaw/working-memory/cron/nightly.md",
+            status: "loaded",
+            rawChars: 42,
+            injectedChars: 42,
+          },
+        ],
+      },
+      searchable: { available: false, toolNames: [], noteRoots: ["memory/"] },
+      recall: { available: false, toolNames: [] },
+    };
+
+    const result = await buildContextReply(params);
+    expect(result.text).toContain(
+      "Working memory: .openclaw/working-memory/cron/nightly.md (loaded; raw 42 chars (~11 tok) | injected 42 chars (~11 tok))",
+    );
+  });
+
+  it("deep-backfills partially migrated cached memory reports", async () => {
+    const params = makeParams("/context list", false);
+    params.sessionEntry!.systemPromptReport!.memory = {
+      startup: {
+        files: [
+          {
+            name: "MEMORY.md",
+            path: "/tmp/workspace/MEMORY.md",
+            status: "present-not-injected",
+            rawChars: 500,
+            injectedChars: 0,
+          },
+        ],
+      },
+      searchable: {
+        available: true,
+        toolNames: ["memory_search", "memory_get"],
+        noteRoots: ["memory/", "notes/"],
+      },
+      recall: {
+        available: true,
+        toolNames: ["lcm_expand_query"],
+      },
+    } as NonNullable<
+      NonNullable<HandleCommandsParams["sessionEntry"]>["systemPromptReport"]
+    >["memory"];
+    delete (params.sessionEntry!.systemPromptReport!.memory as { working?: unknown }).working;
+
+    const result = await buildContextReply(params);
+    expect(result.text).toContain("Startup memory: MEMORY.md (present, not startup-injected)");
+    expect(result.text).toContain("Working memory: none configured for this run");
+    expect(result.text).toContain(
+      "Searchable memory: on-demand via memory_search, memory_get (note roots: memory/, notes/)",
+    );
+    expect(result.text).toContain(
+      "Conversation recall: separate from durable memory via lcm_expand_query",
+    );
+  });
+
+  it("counts scoped working memory in truncation warnings", async () => {
+    const params = makeParams("/context list", false);
+    params.sessionEntry!.systemPromptReport!.memory = {
+      startup: { files: [] },
+      working: {
+        enabled: true,
+        files: [
+          {
+            path: ".openclaw/working-memory/cron/nightly.md",
+            status: "loaded",
+            rawChars: 200_000,
+            injectedChars: 10_000,
+          },
+        ],
+      },
+      searchable: { available: false, toolNames: [], noteRoots: ["memory/"] },
+      recall: { available: false, toolNames: [] },
+    };
+
+    const result = await buildContextReply(params);
+    expect(result.text).toContain("⚠ Injected startup/working context is over configured limits");
+    expect(result.text).toContain("nightly.md");
+    expect(result.text).toContain(
+      "Scoped working memory note: this lane has its own max/file cap of 10,000 chars",
+    );
+    expect(result.text).toContain("Raising bootstrap limits alone will not remove that truncation");
   });
 });

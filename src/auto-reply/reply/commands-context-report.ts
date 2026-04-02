@@ -3,6 +3,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/pi-embedded-helpers.js";
+import { DEFAULT_SCOPED_WORKING_MEMORY_MAX_CHARS } from "../../agents/scoped-working-memory.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
@@ -15,6 +16,8 @@ const SEARCHABLE_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 type SessionSystemPromptReportWithMemory = SessionSystemPromptReport & {
   memory: NonNullable<SessionSystemPromptReport["memory"]>;
 };
+
+type SessionMemoryReport = NonNullable<SessionSystemPromptReport["memory"]>;
 
 function isConversationRecallTool(name: string): boolean {
   return /^lcm_/i.test(name);
@@ -39,6 +42,30 @@ function formatStatusLabel(status: "loaded" | "present-not-injected" | "missing"
   }
 }
 
+function formatWorkingMemoryStatusLabel(
+  file: SessionSystemPromptReportWithMemory["memory"]["working"]["files"][number],
+): string {
+  const base = (() => {
+    switch (file.status) {
+      case "loaded":
+        return file.injectedChars < file.rawChars ? "loaded, truncated" : "loaded";
+      case "present-not-injected":
+        return "present, not injected";
+      case "missing":
+        return "missing";
+      case "rejected":
+        return file.reason ? `rejected (${file.reason})` : "rejected";
+    }
+  })();
+  if (file.status === "loaded") {
+    return `${base}; raw ${formatCharsAndTokens(file.rawChars)} | injected ${formatCharsAndTokens(file.injectedChars)}`;
+  }
+  if (file.rawChars > 0 || file.injectedChars > 0) {
+    return `${base}; raw ${formatCharsAndTokens(file.rawChars)} | injected ${formatCharsAndTokens(file.injectedChars)}`;
+  }
+  return base;
+}
+
 function formatMemoryBoundaryLines(report: SessionSystemPromptReportWithMemory): string[] {
   const startupFiles = report.memory.startup.files;
   const startupLine = startupFiles.length
@@ -46,6 +73,12 @@ function formatMemoryBoundaryLines(report: SessionSystemPromptReportWithMemory):
         .map((file) => `${file.name} (${formatStatusLabel(file.status)})`)
         .join(", ")}`
     : "Startup memory: none detected";
+
+  const workingLine = report.memory.working.enabled
+    ? `Working memory: ${report.memory.working.files
+        .map((file) => `${file.path} (${formatWorkingMemoryStatusLabel(file)})`)
+        .join(", ")}`
+    : "Working memory: none configured for this run";
 
   const searchableLine = report.memory.searchable.available
     ? `Searchable memory: on-demand via ${report.memory.searchable.toolNames.join(", ")} (note roots: ${report.memory.searchable.noteRoots.join(", ")})`
@@ -58,10 +91,46 @@ function formatMemoryBoundaryLines(report: SessionSystemPromptReportWithMemory):
   return [
     "Memory layers:",
     startupLine,
+    workingLine,
     searchableLine,
     recallLine,
     "Rule of thumb: startup memory is preloaded, searchable memory is pulled on demand, and recall/history stays separate.",
   ];
+}
+
+function buildScopedWorkingMemoryWarningLines(
+  report: SessionSystemPromptReportWithMemory,
+): string[] {
+  const truncatedWorkingMemoryFiles = report.memory.working.files.filter(
+    (file) => file.status === "loaded" && file.injectedChars < file.rawChars,
+  );
+  if (truncatedWorkingMemoryFiles.length === 0) {
+    return [];
+  }
+
+  const cappedFiles = truncatedWorkingMemoryFiles.filter(
+    (file) => file.rawChars > DEFAULT_SCOPED_WORKING_MEMORY_MAX_CHARS,
+  );
+  const lines = [
+    `Scoped working memory note: this lane has its own max/file cap of ${formatInt(DEFAULT_SCOPED_WORKING_MEMORY_MAX_CHARS)} chars and also shares the remaining bootstrap total budget.`,
+  ];
+  if (cappedFiles.length > 0) {
+    lines.push(
+      `${cappedFiles.length} scoped working-memory file(s) exceeded that dedicated ${formatInt(DEFAULT_SCOPED_WORKING_MEMORY_MAX_CHARS)}-char cap. Raising bootstrap limits alone will not remove that truncation.`,
+    );
+  }
+  if (
+    truncatedWorkingMemoryFiles.some(
+      (file) =>
+        file.injectedChars < file.rawChars &&
+        file.injectedChars < DEFAULT_SCOPED_WORKING_MEMORY_MAX_CHARS,
+    )
+  ) {
+    lines.push(
+      "Some scoped working-memory truncation may also come from the shared bootstrap total budget, so check both limits before increasing anything.",
+    );
+  }
+  return lines;
 }
 
 function parseContextArgs(commandBodyNormalized: string): string {
@@ -88,10 +157,6 @@ function formatListTop(
 function ensureMemoryReport(
   report: SessionSystemPromptReport,
 ): SessionSystemPromptReportWithMemory {
-  if (report.memory) {
-    return report as SessionSystemPromptReportWithMemory;
-  }
-
   const startupFiles = report.injectedWorkspaceFiles
     .filter((file) => STARTUP_MEMORY_FILE_NAMES.has(file.name))
     .map((file) => ({
@@ -106,21 +171,46 @@ function ensureMemoryReport(
       injectedChars: file.injectedChars,
     }));
   const toolNames = report.tools.entries.map((tool) => tool.name);
+  const existingMemory = (report.memory ?? {}) as Partial<SessionMemoryReport>;
+  const workingFiles = Array.isArray(existingMemory.working?.files)
+    ? existingMemory.working.files
+    : [];
 
   return {
     ...report,
     memory: {
       startup: {
-        files: startupFiles,
+        files: Array.isArray(existingMemory.startup?.files)
+          ? existingMemory.startup.files
+          : startupFiles,
+      },
+      working: {
+        enabled:
+          typeof existingMemory.working?.enabled === "boolean"
+            ? existingMemory.working.enabled
+            : workingFiles.length > 0,
+        files: workingFiles,
       },
       searchable: {
-        available: toolNames.some((name) => SEARCHABLE_MEMORY_TOOL_NAMES.has(name)),
-        toolNames: toolNames.filter((name) => SEARCHABLE_MEMORY_TOOL_NAMES.has(name)),
-        noteRoots: ["memory/"],
+        available:
+          typeof existingMemory.searchable?.available === "boolean"
+            ? existingMemory.searchable.available
+            : toolNames.some((name) => SEARCHABLE_MEMORY_TOOL_NAMES.has(name)),
+        toolNames: Array.isArray(existingMemory.searchable?.toolNames)
+          ? existingMemory.searchable.toolNames
+          : toolNames.filter((name) => SEARCHABLE_MEMORY_TOOL_NAMES.has(name)),
+        noteRoots: Array.isArray(existingMemory.searchable?.noteRoots)
+          ? existingMemory.searchable.noteRoots
+          : ["memory/"],
       },
       recall: {
-        available: toolNames.some(isConversationRecallTool),
-        toolNames: toolNames.filter(isConversationRecallTool),
+        available:
+          typeof existingMemory.recall?.available === "boolean"
+            ? existingMemory.recall.available
+            : toolNames.some(isConversationRecallTool),
+        toolNames: Array.isArray(existingMemory.recall?.toolNames)
+          ? existingMemory.recall.toolNames
+          : toolNames.filter(isConversationRecallTool),
       },
     },
   };
@@ -242,7 +332,20 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({
-    files: report.injectedWorkspaceFiles,
+    files: [
+      ...report.injectedWorkspaceFiles,
+      ...report.memory.working.files.map((file) => ({
+        name: file.path.split("/").pop() || file.path,
+        path: file.path,
+        missing: file.status === "missing",
+        rawChars: file.rawChars,
+        injectedChars: file.injectedChars,
+        truncated:
+          file.status !== "missing" &&
+          file.status !== "rejected" &&
+          file.injectedChars < file.rawChars,
+      })),
+    ],
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
   });
@@ -269,11 +372,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const bootstrapWarningLines =
     truncatedBootstrapFiles.length > 0
       ? [
-          `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(bootstrapAnalysis.totals.rawChars)} raw chars -> ${formatInt(bootstrapAnalysis.totals.injectedChars)} injected chars).`,
+          `⚠ Injected startup/working context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(bootstrapAnalysis.totals.rawChars)} raw chars -> ${formatInt(bootstrapAnalysis.totals.injectedChars)} injected chars).`,
           ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
           "Tip: increase `agents.defaults.bootstrapMaxChars` and/or `agents.defaults.bootstrapTotalMaxChars` if this truncation is not intentional.",
         ]
       : [];
+  const scopedWorkingMemoryWarningLines = buildScopedWorkingMemoryWarningLines(report);
 
   const totalsLine =
     session.totalTokens != null
@@ -286,6 +390,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     sandboxLine,
     systemPromptLine,
     ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
+    ...(scopedWorkingMemoryWarningLines.length ? ["", ...scopedWorkingMemoryWarningLines] : []),
     "",
     "Injected workspace files:",
     ...fileLines,

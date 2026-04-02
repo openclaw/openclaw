@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { normalizeScopedWorkingMemoryPath } from "../../agents/scoped-working-memory.js";
 import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
@@ -55,6 +56,8 @@ export function registerCronEditCommand(cron: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
+      .option("--working-memory <path>", "Workspace-relative scoped working-memory markdown file")
+      .option("--clear-working-memory", "Clear scoped working-memory path", false)
       .option("--tools <csv>", "Comma-separated tool allow-list (e.g. exec,read,write)")
       .option("--clear-tools", "Remove tool allow-list (use all tools)", false)
       .option("--announce", "Announce summary to a chat (subagent-style)")
@@ -189,6 +192,8 @@ export function registerCronEditCommand(cron: Command) {
             Boolean(thinking) ||
             hasTimeoutSeconds ||
             typeof opts.lightContext === "boolean" ||
+            typeof opts.workingMemory === "string" ||
+            opts.clearWorkingMemory ||
             typeof opts.tools === "string" ||
             opts.clearTools ||
             hasDeliveryModeFlag ||
@@ -215,6 +220,11 @@ export function registerCronEditCommand(cron: Command) {
               opts.lightContext,
               typeof opts.lightContext === "boolean",
             );
+            if (opts.clearWorkingMemory) {
+              payload.workingMemoryPath = "";
+            } else if (typeof opts.workingMemory === "string") {
+              payload.workingMemoryPath = normalizeScopedWorkingMemoryPath(opts.workingMemory);
+            }
             if (opts.clearTools) {
               payload.toolsAllow = null;
             } else if (typeof opts.tools === "string" && opts.tools.trim()) {

@@ -12,6 +12,7 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       lightContext: Type.Optional(Type.Boolean()),
+      workingMemoryPath: Type.Optional(Type.String()),
     },
     { additionalProperties: false },
   );

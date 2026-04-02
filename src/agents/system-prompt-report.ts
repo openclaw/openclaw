@@ -2,6 +2,7 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { ScopedWorkingMemoryFile } from "./scoped-working-memory.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 const STARTUP_MEMORY_FILE_NAMES = new Set(["MEMORY.md", "memory.md"]);
@@ -99,6 +100,7 @@ export function buildSystemPromptReport(params: {
   systemPrompt: string;
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
+  workingMemoryFiles?: ScopedWorkingMemoryFile[];
   skillsPrompt: string;
   tools: AgentTool[];
 }): SessionSystemPromptReport {
@@ -156,6 +158,10 @@ export function buildSystemPromptReport(params: {
     memory: {
       startup: {
         files: startupMemoryFiles,
+      },
+      working: {
+        enabled: (params.workingMemoryFiles?.length ?? 0) > 0,
+        files: params.workingMemoryFiles ?? [],
       },
       searchable: {
         available: searchableMemoryTools.length > 0,

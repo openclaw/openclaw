@@ -79,6 +79,12 @@ import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../..
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
+import {
+  buildScopedWorkingMemoryInjectionStats,
+  DEFAULT_SCOPED_WORKING_MEMORY_MAX_CHARS,
+  fitScopedWorkingMemoryContextFileToBudget,
+  loadScopedWorkingMemoryContextFile,
+} from "../../scoped-working-memory.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
@@ -362,7 +368,7 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles: bootstrapContextFiles } =
       await resolveBootstrapContextForRun({
         workspaceDir: effectiveWorkspace,
         config: params.config,
@@ -374,11 +380,40 @@ export async function runEmbeddedAttempt(
       });
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
+    const bootstrapInjectedChars = bootstrapContextFiles.reduce(
+      (sum, file) => sum + file.content.length,
+      0,
+    );
+    const scopedWorkingMemory = params.workingMemoryPath
+      ? await loadScopedWorkingMemoryContextFile({
+          workspaceDir: effectiveWorkspace,
+          relativePath: params.workingMemoryPath,
+        })
+      : null;
+    const budgetedScopedWorkingMemory = scopedWorkingMemory
+      ? fitScopedWorkingMemoryContextFileToBudget({
+          loaded: scopedWorkingMemory,
+          maxChars: DEFAULT_SCOPED_WORKING_MEMORY_MAX_CHARS,
+          totalMaxChars: Math.max(0, bootstrapTotalMaxChars - bootstrapInjectedChars),
+          warn: (message) => log.warn(message),
+        })
+      : null;
+    const contextFiles = [
+      ...bootstrapContextFiles,
+      ...(budgetedScopedWorkingMemory?.contextFile
+        ? [budgetedScopedWorkingMemory.contextFile]
+        : []),
+    ];
     const bootstrapAnalysis = analyzeBootstrapBudget({
-      files: buildBootstrapInjectionStats({
-        bootstrapFiles: hookAdjustedBootstrapFiles,
-        injectedFiles: contextFiles,
-      }),
+      files: [
+        ...buildBootstrapInjectionStats({
+          bootstrapFiles: hookAdjustedBootstrapFiles,
+          injectedFiles: contextFiles,
+        }),
+        ...buildScopedWorkingMemoryInjectionStats(
+          budgetedScopedWorkingMemory ? [budgetedScopedWorkingMemory.file] : [],
+        ),
+      ],
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
     });
@@ -393,7 +428,15 @@ export async function runEmbeddedAttempt(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )
       ? ["Reminder: commit your changes in this workspace after edits."]
-      : undefined;
+      : [];
+    if (
+      budgetedScopedWorkingMemory?.contextFile &&
+      budgetedScopedWorkingMemory.file.status === "loaded"
+    ) {
+      workspaceNotes.push(
+        `Scoped working memory for this run: ${budgetedScopedWorkingMemory.file.path} (separate from MEMORY.md and searchable durable notes).`,
+      );
+    }
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
@@ -419,64 +462,65 @@ export async function runEmbeddedAttempt(
       ? []
       : (() => {
           const allTools = createOpenClawCodingTools({
-          agentId: sessionAgentId,
-          trigger: params.trigger,
-          memoryFlushWritePath: params.memoryFlushWritePath,
-          exec: {
-            ...params.execOverrides,
-            elevated: params.bashElevated,
-          },
-          sandbox,
-          messageProvider: params.messageChannel ?? params.messageProvider,
-          agentAccountId: params.agentAccountId,
-          messageTo: params.messageTo,
-          messageThreadId: params.messageThreadId,
-          groupId: params.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          spawnedBy: params.spawnedBy,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
-          senderIsOwner: params.senderIsOwner,
-          allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-          sessionKey: sandboxSessionKey,
-          sessionId: params.sessionId,
-          runId: params.runId,
-          agentDir,
-          workspaceDir: effectiveWorkspace,
-          // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
-          // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
-          spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+            agentId: sessionAgentId,
+            trigger: params.trigger,
+            memoryFlushWritePath: params.memoryFlushWritePath,
+            workingMemoryPath: params.workingMemoryPath,
+            exec: {
+              ...params.execOverrides,
+              elevated: params.bashElevated,
+            },
             sandbox,
-            resolvedWorkspace,
-          }),
-          config: params.config,
-          abortSignal: runAbortController.signal,
-          modelProvider: params.model.provider,
-          modelId: params.modelId,
-          modelCompat: params.model.compat,
-          modelApi: params.model.api,
-          modelContextWindowTokens: params.model.contextWindow,
-          modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
-          currentChannelId: params.currentChannelId,
-          currentThreadTs: params.currentThreadTs,
-          currentMessageId: params.currentMessageId,
-          replyToMode: params.replyToMode,
-          hasRepliedRef: params.hasRepliedRef,
-          modelHasVision,
-          requireExplicitMessageTarget:
-            params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
-          disableMessageTool: params.disableMessageTool,
-          onYield: (message) => {
-            yieldDetected = true;
-            yieldMessage = message;
-            queueYieldInterruptForSession?.();
-            runAbortController.abort("sessions_yield");
-            abortSessionForYield?.();
-          },
-        });
+            messageProvider: params.messageChannel ?? params.messageProvider,
+            agentAccountId: params.agentAccountId,
+            messageTo: params.messageTo,
+            messageThreadId: params.messageThreadId,
+            groupId: params.groupId,
+            groupChannel: params.groupChannel,
+            groupSpace: params.groupSpace,
+            spawnedBy: params.spawnedBy,
+            senderId: params.senderId,
+            senderName: params.senderName,
+            senderUsername: params.senderUsername,
+            senderE164: params.senderE164,
+            senderIsOwner: params.senderIsOwner,
+            allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+            sessionKey: sandboxSessionKey,
+            sessionId: params.sessionId,
+            runId: params.runId,
+            agentDir,
+            workspaceDir: effectiveWorkspace,
+            // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
+            // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
+            spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+              sandbox,
+              resolvedWorkspace,
+            }),
+            config: params.config,
+            abortSignal: runAbortController.signal,
+            modelProvider: params.model.provider,
+            modelId: params.modelId,
+            modelCompat: params.model.compat,
+            modelApi: params.model.api,
+            modelContextWindowTokens: params.model.contextWindow,
+            modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+            currentChannelId: params.currentChannelId,
+            currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
+            replyToMode: params.replyToMode,
+            hasRepliedRef: params.hasRepliedRef,
+            modelHasVision,
+            requireExplicitMessageTarget:
+              params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+            disableMessageTool: params.disableMessageTool,
+            onYield: (message) => {
+              yieldDetected = true;
+              yieldMessage = message;
+              queueYieldInterruptForSession?.();
+              runAbortController.abort("sessions_yield");
+              abortSessionForYield?.();
+            },
+          });
           if (params.toolsAllow && params.toolsAllow.length > 0) {
             const allowSet = new Set(params.toolsAllow);
             return allTools.filter((tool) => allowSet.has(tool.name));
@@ -621,7 +665,7 @@ export async function runEmbeddedAttempt(
     const promptMode = resolvePromptModeForSession(params.sessionKey);
 
     // When toolsAllow is set, use minimal prompt and strip skills catalog
-    const effectivePromptMode = params.toolsAllow?.length ? "minimal" as const : promptMode;
+    const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
     const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
@@ -691,6 +735,9 @@ export async function runEmbeddedAttempt(
       systemPrompt: appendPrompt,
       bootstrapFiles: hookAdjustedBootstrapFiles,
       injectedFiles: contextFiles,
+      workingMemoryFiles: budgetedScopedWorkingMemory
+        ? [budgetedScopedWorkingMemory.file]
+        : undefined,
       skillsPrompt,
       tools: effectiveTools,
     });

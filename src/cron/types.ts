@@ -98,6 +98,8 @@ type CronAgentTurnPayloadFields = {
   externalContentSource?: HookExternalContentSource;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
+  /** Optional scoped working-memory file for isolated/lightweight runs. */
+  workingMemoryPath?: string;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
 };

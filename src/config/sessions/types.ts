@@ -383,6 +383,16 @@ export type SessionSystemPromptReport = {
         injectedChars: number;
       }>;
     };
+    working: {
+      enabled: boolean;
+      files: Array<{
+        path: string;
+        status: "loaded" | "missing" | "present-not-injected" | "rejected";
+        rawChars: number;
+        injectedChars: number;
+        reason?: "path" | "validation" | "io" | "budget";
+      }>;
+    };
     searchable: {
       available: boolean;
       toolNames: string[];

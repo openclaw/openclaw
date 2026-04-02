@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { normalizeScopedWorkingMemoryPath } from "../../agents/scoped-working-memory.js";
 import type { CronJob } from "../../cron/types.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -89,6 +90,10 @@ export function registerCronAddCommand(cron: Command) {
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
+      .option(
+        "--working-memory <path>",
+        "Workspace-relative scoped working-memory markdown file (e.g. .openclaw/working-memory/cron/nightly.md)",
+      )
       .option("--tools <csv>", "Comma-separated tool allow-list (e.g. exec,read,write)")
       .option("--announce", "Announce summary to a chat (subagent-style)", false)
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
@@ -153,6 +158,10 @@ export function registerCronAddCommand(cron: Command) {
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
               lightContext: opts.lightContext === true ? true : undefined,
+              workingMemoryPath:
+                typeof opts.workingMemory === "string" && opts.workingMemory.trim()
+                  ? normalizeScopedWorkingMemoryPath(opts.workingMemory)
+                  : undefined,
               toolsAllow:
                 typeof opts.tools === "string" && opts.tools.trim()
                   ? opts.tools

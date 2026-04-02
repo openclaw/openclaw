@@ -11,6 +11,7 @@ import {
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { normalizeScopedWorkingMemoryPath } from "../agents/scoped-working-memory.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -722,14 +723,19 @@ export async function runHeartbeatOnce(opts: {
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    const workingMemoryPath =
+      typeof heartbeat?.workingMemoryPath === "string" && heartbeat.workingMemoryPath.trim()
+        ? normalizeScopedWorkingMemoryPath(heartbeat.workingMemoryPath)
+        : undefined;
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
           heartbeatModelOverride,
           suppressToolErrorWarnings,
           bootstrapContextMode,
+          workingMemoryPath,
         }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode, workingMemoryPath };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;

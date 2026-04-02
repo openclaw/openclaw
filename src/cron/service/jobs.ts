@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeScopedWorkingMemoryPath } from "../../agents/scoped-working-memory.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
@@ -696,6 +697,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.lightContext === "boolean") {
     next.lightContext = patch.lightContext;
   }
+  if (typeof patch.workingMemoryPath === "string") {
+    next.workingMemoryPath = normalizeOptionalWorkingMemoryPath(patch.workingMemoryPath);
+  }
   if (typeof patch.allowUnsafeExternalContent === "boolean") {
     next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
   }
@@ -721,8 +725,14 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
+    workingMemoryPath: normalizeOptionalWorkingMemoryPath(patch.workingMemoryPath),
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
   };
+}
+
+function normalizeOptionalWorkingMemoryPath(value: unknown): string | undefined {
+  const trimmed = normalizeOptionalTrimmedString(value);
+  return trimmed ? normalizeScopedWorkingMemoryPath(trimmed) : undefined;
 }
 
 function normalizeOptionalTrimmedString(value: unknown): string | undefined {

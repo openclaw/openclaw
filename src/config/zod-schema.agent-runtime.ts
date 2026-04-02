@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
+import { normalizeScopedWorkingMemoryPath } from "../agents/scoped-working-memory.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import {
@@ -34,6 +35,7 @@ export const HeartbeatSchema = z
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
     lightContext: z.boolean().optional(),
+    workingMemoryPath: z.string().optional(),
     isolatedSession: z.boolean().optional(),
   })
   .strict()
@@ -90,6 +92,18 @@ export const HeartbeatSchema = z
 
     validateTime(active.start, { allow24: false }, "start");
     validateTime(active.end, { allow24: true }, "end");
+
+    if (typeof val.workingMemoryPath === "string" && val.workingMemoryPath.trim()) {
+      try {
+        normalizeScopedWorkingMemoryPath(val.workingMemoryPath);
+      } catch (error) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["workingMemoryPath"],
+          message: error instanceof Error ? error.message : "invalid workingMemoryPath",
+        });
+      }
+    }
   })
   .optional();
 
