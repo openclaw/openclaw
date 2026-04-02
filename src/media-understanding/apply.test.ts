@@ -30,6 +30,7 @@ const runExecMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
+let sanitizeMimeType: typeof import("./apply.js").sanitizeMimeType;
 const mockedResolveApiKey = resolveApiKeyForProviderMock;
 const mockedFetchRemoteMedia = fetchRemoteMediaMock;
 const mockedRunFfmpeg = runFfmpegMock;
@@ -298,6 +299,7 @@ describe("applyMediaUnderstanding", () => {
     const baseDir = resolvePreferredOpenClawTmpDir();
     await fs.mkdir(baseDir, { recursive: true });
     suiteTempMediaRootDir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));
+    ({ applyMediaUnderstanding, sanitizeMimeType } = await import("./apply.js"));
   });
 
   beforeEach(() => {
@@ -327,6 +329,14 @@ describe("applyMediaUnderstanding", () => {
     suiteTempMediaRootDir = "";
     sharedTempMediaCacheDir = "";
     tempMediaFileCache.clear();
+  });
+
+  it("accepts case-insensitive MIME types with parameters", () => {
+    expect(sanitizeMimeType(" Text/Plain; Charset=UTF-8 ")).toBe("text/plain");
+  });
+
+  it("rejects trailing MIME junk outside parameters", () => {
+    expect(sanitizeMimeType("text/plain<script")).toBeUndefined();
   });
 
   it("sets Transcript and replaces Body when audio transcription succeeds", async () => {
