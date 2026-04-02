@@ -2080,14 +2080,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
   ): Promise<{ persistedHash: string }> {
-    if (options.preserveRuntimeSnapshot === true) {
-      // Wrapper-managed writes keep runtime snapshots until refresh succeeds.
-      clearConfigCacheEntry();
-    } else {
-      // Direct io.writeConfigFile callers should keep legacy behavior and force
-      // a fresh runtime reload on next loadConfig().
+    const preserveRuntimeSnapshot = options.preserveRuntimeSnapshot === true;
+    // Always clear parse-cache entries first so this write computes from a fresh
+    // on-disk snapshot and does not reuse stale cache state.
+    clearConfigCacheEntry();
+    const finalizeRuntimeInvalidation = () => {
+      if (preserveRuntimeSnapshot) {
+        return;
+      }
+      // Direct io.writeConfigFile() callers still force a runtime reload, but
+      // only after persistence succeeds. This avoids clearing the active
+      // runtime snapshot during the write window.
       clearConfigCache();
-    }
+    };
     let persistCandidate: unknown = cfg;
     const { snapshot } = await readConfigFileSnapshotInternal();
     let envRefMap: Map<string, string> | null = null;
@@ -2353,6 +2358,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             undefined,
             await deps.fs.promises.stat(configPath).catch(() => null),
           );
+          finalizeRuntimeInvalidation();
           return { persistedHash: nextHash };
         }
         await deps.fs.promises.unlink(tmp).catch(() => {
@@ -2367,6 +2373,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );
+      finalizeRuntimeInvalidation();
       return { persistedHash: nextHash };
     } catch (err) {
       await appendWriteAudit("failed", err);
@@ -2731,6 +2738,13 @@ export function loadConfig(): OpenClawConfig {
   const io = createConfigIO();
   const configPath = io.configPath;
   const now = Date.now();
+  // Prefer the in-memory runtime snapshot before the parse cache so concurrent readers
+  // still see last-known-good resolved config during `writeConfigFile(...,
+  // preserveRuntimeSnapshot: true)` (and after `clearConfigCacheEntry()` clears the TTL
+  // cache) instead of falling back to a fresh disk read with unresolved SecretRefs.
+  if (runtimeConfigSnapshot) {
+    return runtimeConfigSnapshot;
+  }
   if (shouldUseConfigCache(process.env)) {
     const cached = configCache;
     if (cached && cached.configPath === configPath && cached.expiresAt > now) {
@@ -2744,9 +2758,6 @@ export function loadConfig(): OpenClawConfig {
       config,
     };
     return config;
-  }
-  if (runtimeConfigSnapshot) {
-    return runtimeConfigSnapshot;
   }
   const config = io.loadConfig();
   configStatFingerprintAtLastLoad = collectResolvedConfigSourceStatFingerprintSync();
