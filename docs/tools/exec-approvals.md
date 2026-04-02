@@ -426,7 +426,7 @@ resolved approver list for authorization even when native approval delivery is d
 Discord, Slack, and Telegram can also act as native approval-delivery adapters with channel-specific config.
 
 - Discord: `channels.discord.execApprovals.*`
-- Slack: uses shared `approvals.exec.targets` with `channel: "slack"` and renders Block Kit approval buttons when interactivity is enabled
+- Slack: `channels.slack.execApprovals.*` plus shared `approvals.exec` routing; Slack renders Block Kit approval buttons when interactivity is enabled
 - Telegram: `channels.telegram.execApprovals.*`
 
 These native delivery adapters are opt-in. They add DM routing and channel fanout on top of the
@@ -436,6 +436,9 @@ Shared behavior:
 
 - Slack, Matrix, Microsoft Teams, and similar deliverable chats use the normal channel auth model
   for same-chat `/approve`
+- Slack native delivery stays disabled until `channels.slack.execApprovals.enabled: true`
+- Slack approvers resolve from `channels.slack.execApprovals.approvers`, then fall back to `commands.ownerAllowFrom`
+- `channels.slack.allowFrom` is not used to infer Slack exec approvers
 - for Discord and Telegram, only resolved approvers can approve or deny
 - Discord and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
 - the requester does not need to be an approver

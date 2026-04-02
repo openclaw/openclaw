@@ -487,7 +487,7 @@ Exec approval prompts can route natively through Slack using interactive buttons
 
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
 
-Configuration uses the shared `approvals.exec` config with Slack targets:
+Slack-native exec approvals require both shared exec approval routing and a Slack account `execApprovals` block. If `channels.slack.execApprovals.enabled` is unset or false, Slack messages and buttons cannot approve exec requests even when `approvals.exec` is configured.
 
 ```json5
 {
@@ -497,8 +497,22 @@ Configuration uses the shared `approvals.exec` config with Slack targets:
       targets: [{ channel: "slack", to: "U12345678" }],
     },
   },
+  channels: {
+    slack: {
+      execApprovals: {
+        enabled: true,
+        approvers: ["U12345678"],
+      },
+    },
+  },
 }
 ```
+
+Approver resolution order:
+
+- `channels.slack.execApprovals.approvers`
+- fallback: `commands.ownerAllowFrom`
+- `channels.slack.allowFrom` is not used for Slack exec approvers
 
 Same-chat `/approve` also works in Slack channels and DMs that already support commands. See [Exec approvals](/tools/exec-approvals) for the full approval forwarding model.
 
