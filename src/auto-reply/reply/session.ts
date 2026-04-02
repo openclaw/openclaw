@@ -452,26 +452,38 @@ export async function initSessionState(params: {
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
-  // Track the originating channel/to for announce routing (subagent announce-back).
+  // System events (heartbeat/cron/exec) run inside an existing session but are
+  // not real user turns. They may carry internal sender placeholders like
+  // "heartbeat", and letting them rewrite lastChannel/lastTo pollutes the
+  // session's reply route for future target=last deliveries.
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
-  const lastChannelRaw = resolveLastChannelRaw({
-    originatingChannelRaw,
-    persistedLastChannel: baseEntry?.lastChannel,
-    sessionKey,
-  });
-  const lastToRaw = resolveLastToRaw({
-    originatingChannelRaw,
-    originatingToRaw: ctx.OriginatingTo,
-    toRaw: ctx.To,
-    persistedLastTo: baseEntry?.lastTo,
-    persistedLastChannel: baseEntry?.lastChannel,
-    sessionKey,
-  });
-  const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
-  // Only fall back to persisted threadId for thread sessions.  Non-thread
+  const lastChannelRaw = isSystemEvent
+    ? baseEntry?.lastChannel
+    : resolveLastChannelRaw({
+        originatingChannelRaw,
+        persistedLastChannel: baseEntry?.lastChannel,
+        sessionKey,
+      });
+  const lastToRaw = isSystemEvent
+    ? baseEntry?.lastTo
+    : resolveLastToRaw({
+        originatingChannelRaw,
+        originatingToRaw: ctx.OriginatingTo,
+        toRaw: ctx.To,
+        persistedLastTo: baseEntry?.lastTo,
+        persistedLastChannel: baseEntry?.lastChannel,
+        sessionKey,
+      });
+  const lastAccountIdRaw = isSystemEvent
+    ? baseEntry?.lastAccountId
+    : ctx.AccountId || baseEntry?.lastAccountId;
+  // Only fall back to persisted threadId for thread sessions. Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
-  // previous interaction that happened inside a topic/thread.
-  const lastThreadIdRaw = ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
+  // previous interaction that happened inside a topic/thread. System events
+  // never own session routing, so preserve the persisted thread metadata too.
+  const lastThreadIdRaw = isSystemEvent
+    ? baseEntry?.lastThreadId
+    : ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,

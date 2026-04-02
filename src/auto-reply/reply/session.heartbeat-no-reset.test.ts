@@ -96,6 +96,66 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     expect(result.sessionEntry.sessionId).toBe("original-session-id-12345");
   });
 
+  it("preserves the existing external route during heartbeat turns", async () => {
+    const initialStore: Record<string, SessionEntry> = {
+      "main:user123": {
+        sessionId: "original-session-id-12345",
+        updatedAt: Date.now(),
+        systemSent: true,
+        lastChannel: "telegram",
+        lastTo: "451740013",
+        lastAccountId: "default",
+        deliveryContext: {
+          channel: "telegram",
+          to: "451740013",
+          accountId: "default",
+        },
+      },
+    };
+    await saveSessionStore(storePath, initialStore);
+
+    const cfg = createBaseConfig();
+    const ctx = createBaseCtx({
+      Provider: "heartbeat",
+      To: "heartbeat",
+      OriginatingChannel: "telegram",
+    });
+
+    const result = await initSessionState({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("telegram");
+    expect(result.sessionEntry.lastTo).toBe("451740013");
+    expect(result.sessionEntry.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "451740013",
+      accountId: "default",
+    });
+  });
+
+  it("does not seed a new session route from the internal heartbeat target", async () => {
+    const cfg = createBaseConfig();
+    const ctx = createBaseCtx({
+      Provider: "heartbeat",
+      To: "heartbeat",
+      OriginatingChannel: "telegram",
+      OriginatingTo: undefined,
+    });
+
+    const result = await initSessionState({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBeUndefined();
+    expect(result.sessionEntry.lastTo).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext).toBeUndefined();
+  });
+
   it("should reset session when Provider is NOT 'heartbeat' and session is stale", async () => {
     // Setup: Create a session entry that is "stale" (older than idle timeout)
     const now = Date.now();
