@@ -80,7 +80,18 @@ function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: num
   if (!messageId) {
     return false;
   }
-  const key = `${target.path}:${target.account.accountId}:${update.event_name}:${messageId}`;
+  const chatId = update.message?.chat?.id ?? "";
+  const senderId = update.message?.from?.id ?? "";
+  // Scope replay dedupe to the authenticated target and the message origin so
+  // reused message ids in other chats or from other senders do not collide.
+  const key = [
+    target.path,
+    target.account.accountId,
+    update.event_name,
+    chatId,
+    senderId,
+    messageId,
+  ].join(":");
   return recentWebhookEvents.check(key, nowMs);
 }
 
