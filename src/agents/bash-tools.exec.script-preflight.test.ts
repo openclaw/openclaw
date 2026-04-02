@@ -339,6 +339,38 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("fails closed for shell-wrapped interpreter invocations when -O consumes a separate value", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      await expect(
+        tool.execute("call-shell-wrap-short-option-O-value", {
+          command: 'bash -O extglob -c "python bad.py"',
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
+    });
+  });
+
+  it("fails closed for shell-wrapped interpreter invocations when -o consumes a separate value", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "bad.py");
+      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      await expect(
+        tool.execute("call-shell-wrap-short-option-o-value", {
+          command: 'bash -o errexit -c "python bad.py"',
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: complex interpreter invocation detected/);
+    });
+  });
+
   it("fails closed for shell-wrapped interpreter invocations when -c is not the trailing short flag", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");

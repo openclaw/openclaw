@@ -426,6 +426,7 @@ function extractShellWrappedCommandPayload(
   if (!/^(?:bash|dash|fish|ksh|sh|zsh)$/i.test(normalizedExecutable)) {
     return null;
   }
+  const shortOptionsWithSeparateValue = new Set(["-O", "-o"]);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--") {
@@ -437,6 +438,9 @@ function extractShellWrappedCommandPayload(
     if (/^-[A-Za-z]+$/u.test(arg)) {
       if (arg.includes("c")) {
         return args[i + 1] ?? null;
+      }
+      if (shortOptionsWithSeparateValue.has(arg)) {
+        i += 1;
       }
       continue;
     }
