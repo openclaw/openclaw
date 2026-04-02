@@ -47,9 +47,9 @@ const GEMINI_25_PRO_COST = {
   cacheWrite: 0,
 };
 
-const ZERO_COST = {
-  input: 0,
-  output: 0,
+const O4_MINI_COST = {
+  input: 1.1,
+  output: 4.4,
   cacheRead: 0,
   cacheWrite: 0,
 };
@@ -100,7 +100,7 @@ export const CHUIZI_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text", "image"],
     contextWindow: 200000,
     maxTokens: 100000,
-    cost: ZERO_COST,
+    cost: O4_MINI_COST,
   },
   // Google
   {
@@ -121,6 +121,7 @@ export const CHUIZI_MODEL_CATALOG: ModelDefinitionConfig[] = [
     contextWindow: 131072,
     maxTokens: 8192,
     cost: DEEPSEEK_V3_COST,
+    compat: { supportsUsageInStreaming: true },
   },
   {
     id: "deepseek/deepseek-r1",
@@ -130,6 +131,7 @@ export const CHUIZI_MODEL_CATALOG: ModelDefinitionConfig[] = [
     contextWindow: 131072,
     maxTokens: 65536,
     cost: DEEPSEEK_V3_COST,
+    compat: { supportsUsageInStreaming: true },
   },
 ];
 
