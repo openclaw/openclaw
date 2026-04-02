@@ -308,15 +308,15 @@ describe("exec-command-resolution", () => {
   });
 
   it("resolves allowlist candidate paths from unresolved raw executables", () => {
-    expect(
-      resolveExecutionTargetCandidatePath(
-        {
-          rawExecutable: "~/bin/tool",
-          executableName: "tool",
-        },
-        "/tmp",
-      ),
-    ).toContain("/bin/tool");
+    const homeCandidatePath = resolveExecutionTargetCandidatePath(
+      {
+        rawExecutable: "~/bin/tool",
+        executableName: "tool",
+      },
+      "/tmp",
+    );
+    expect(homeCandidatePath).toBeDefined();
+    expect(homeCandidatePath?.replaceAll("\\", "/")).toContain("/bin/tool");
 
     expect(
       resolveExecutionTargetCandidatePath(
