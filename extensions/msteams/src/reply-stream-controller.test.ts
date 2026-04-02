@@ -5,6 +5,8 @@ const streamInstances = vi.hoisted(
     [] as Array<{
       hasContent: boolean;
       isFinalized: boolean;
+      isFailed: boolean;
+      streamedLength: number;
       sendInformativeUpdate: ReturnType<typeof vi.fn>;
       update: ReturnType<typeof vi.fn>;
       finalize: ReturnType<typeof vi.fn>;
@@ -15,9 +17,15 @@ vi.mock("./streaming-message.js", () => ({
   TeamsHttpStream: class {
     hasContent = false;
     isFinalized = false;
+    isFailed = false;
+    streamedLength = 0;
     sendInformativeUpdate = vi.fn(async () => {});
-    update = vi.fn(function (this: { hasContent: boolean }) {
+    update = vi.fn(function (
+      this: { hasContent: boolean; streamedLength: number },
+      payloadText?: string,
+    ) {
       this.hasContent = true;
+      this.streamedLength = payloadText?.length ?? 0;
     });
     finalize = vi.fn(async function (this: { isFinalized: boolean }) {
       this.isFinalized = true;
@@ -48,6 +56,34 @@ describe("createTeamsReplyStreamController", () => {
 
     const result = ctrl.preparePayload({ text: "Hello world" });
     expect(result).toBeUndefined();
+  });
+
+  it("when stream fails after partial delivery, fallback sends only remaining text", () => {
+    const ctrl = createController();
+    const fullText = "a".repeat(4000) + "b".repeat(200);
+
+    ctrl.onPartialReply({ text: fullText });
+    streamInstances[0]!.hasContent = false;
+    streamInstances[0]!.isFailed = true;
+    streamInstances[0]!.isFinalized = true;
+    streamInstances[0]!.streamedLength = 4000;
+
+    const result = ctrl.preparePayload({ text: fullText });
+    expect(result).toEqual({ text: "b".repeat(200) });
+  });
+
+  it("when stream fails before sending content, fallback sends full text", () => {
+    const ctrl = createController();
+    const fullText = "Failure at first chunk";
+
+    ctrl.onPartialReply({ text: fullText });
+    streamInstances[0]!.hasContent = false;
+    streamInstances[0]!.isFailed = true;
+    streamInstances[0]!.isFinalized = true;
+    streamInstances[0]!.streamedLength = 0;
+
+    const result = ctrl.preparePayload({ text: fullText });
+    expect(result).toEqual({ text: fullText });
   });
 
   it("allows fallback delivery for second text segment after tool calls", () => {
