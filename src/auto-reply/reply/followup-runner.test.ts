@@ -305,8 +305,10 @@ afterEach(async () => {
   debugFollowupTest(`active requests: ${JSON.stringify(requests ?? [])}`);
 });
 
-const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
-  createMockFollowupRun({ run: { messageProvider } });
+const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun => {
+  const baseRun = createMockFollowupRun();
+  return createMockFollowupRun({ run: { ...baseRun.run, messageProvider } });
+};
 
 function createQueuedRun(
   overrides: Partial<FollowupRun> & { run?: Partial<FollowupRun["run"]> } = {},
