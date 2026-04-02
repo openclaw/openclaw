@@ -68,17 +68,24 @@ export function pushSnapshot(history: ContextHistory, totalChars: number): void 
 }
 
 export function getCategoryBreakdown(report: SessionSystemPromptReport): CategoryBreakdown[] {
-  const systemPromptChars = report.systemPrompt.chars;
+  // systemPrompt.chars already includes injected workspace files, skills, and tool-list text.
+  // Only tool schemas (JSON) are additive. Break out the embedded portions so categories
+  // are disjoint and sum to the real total without double-counting.
   const workspaceChars = report.injectedWorkspaceFiles.reduce((s, f) => s + f.injectedChars, 0);
   const skillsChars = report.skills.promptChars;
-  const toolsChars = report.tools.listChars + report.tools.schemaChars;
+  const toolListChars = report.tools.listChars;
+  const toolSchemaChars = report.tools.schemaChars;
+  const coreSystemPromptChars = Math.max(
+    0,
+    report.systemPrompt.chars - workspaceChars - skillsChars - toolListChars,
+  );
 
   return [
     {
       category: "system-prompt",
       label: "System Prompt",
-      chars: systemPromptChars,
-      tokens: estimateTokensFromChars(systemPromptChars),
+      chars: coreSystemPromptChars,
+      tokens: estimateTokensFromChars(coreSystemPromptChars),
       itemCount: 1,
     },
     {
@@ -98,8 +105,8 @@ export function getCategoryBreakdown(report: SessionSystemPromptReport): Categor
     {
       category: "tools",
       label: "Tools",
-      chars: toolsChars,
-      tokens: estimateTokensFromChars(toolsChars),
+      chars: toolListChars + toolSchemaChars,
+      tokens: estimateTokensFromChars(toolListChars + toolSchemaChars),
       itemCount: report.tools.entries.length,
     },
   ];
@@ -151,6 +158,7 @@ export function getCategoryDetail(
 }
 
 export function getTotalChars(report: SessionSystemPromptReport): number {
-  const breakdown = getCategoryBreakdown(report);
-  return breakdown.reduce((s, c) => s + c.chars, 0);
+  // systemPrompt.chars includes workspace files, skills, and tool-list text.
+  // Only tool schemas are additive (not embedded in the system prompt text).
+  return report.systemPrompt.chars + report.tools.schemaChars;
 }
