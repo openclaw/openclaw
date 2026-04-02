@@ -19,6 +19,7 @@ import {
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
+import { createCodexProxyTransportWrapper } from "./codex-proxy-transport.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxFastModeWrapper } from "./minimax-stream-wrappers.js";
@@ -301,6 +302,8 @@ export function applyExtraParamsToAgent(
   workspaceDir?: string,
   model?: ProviderRuntimeModel,
 ): { effectiveExtraParams: Record<string, unknown> } {
+  agent.streamFn = createCodexProxyTransportWrapper(agent.streamFn);
+
   const resolvedExtraParams = resolveExtraParams({
     cfg,
     provider,

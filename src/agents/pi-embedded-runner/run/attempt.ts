@@ -843,6 +843,14 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
       });
+      activeSession.agent.getApiKey = async (provider) => {
+        const resolvedProvider = provider || params.provider;
+        const key = await params.modelRegistry.getApiKeyForProvider(resolvedProvider);
+        if (!key) {
+          throw new Error(`No API key found for "${resolvedProvider}".`);
+        }
+        return key;
+      };
 
       const providerStreamFn = registerProviderStreamForModel({
         model: params.model,
