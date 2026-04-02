@@ -178,6 +178,42 @@ describe("generateThreadTitle", () => {
     );
   });
 
+  it("omits temperature for openai-codex responses models", async () => {
+    prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
+      selection: {
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        agentDir: "/tmp/openclaw-agent",
+      },
+      model: {
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        id: "gpt-5.4",
+      },
+      auth: {
+        apiKey: "sk-test",
+        source: "env:TEST_API_KEY",
+        mode: "api-key",
+      },
+    } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
+
+    await generateThreadTitle({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      messageText: "Summarize deployment blockers and owner follow-ups.",
+    });
+
+    expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
+    expect(completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options).toEqual(
+      expect.objectContaining({
+        maxTokens: 24,
+      }),
+    );
+    expect(completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options).not.toHaveProperty(
+      "temperature",
+    );
+  });
+
   it("returns null when completion throws", async () => {
     completeWithPreparedSimpleCompletionModelMock.mockRejectedValueOnce(
       new Error("network timeout"),
