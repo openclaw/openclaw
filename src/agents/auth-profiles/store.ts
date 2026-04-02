@@ -48,6 +48,12 @@ function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
   return structuredClone(store);
 }
 
+function invalidateRuntimeAuthProfileStoreSnapshot(agentDir?: string): void {
+  const key = resolveRuntimeStoreKey(agentDir);
+  runtimeAuthStoreSnapshots.delete(key);
+  runtimeSnapshotMtimes.delete(key);
+}
+
 function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | null {
   if (runtimeAuthStoreSnapshots.size === 0) {
     return null;
@@ -67,8 +73,7 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
   if (mainLoadedMtime !== undefined) {
     const mainMtime = readAuthStoreMtimeMs(mainAuthPath);
     if (mainMtime !== null && mainMtime > mainLoadedMtime) {
-      runtimeAuthStoreSnapshots.clear();
-      runtimeSnapshotMtimes.clear();
+      invalidateRuntimeAuthProfileStoreSnapshot();
       return null;
     }
   }
@@ -79,8 +84,7 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
     if (requestedLoadedMtime !== undefined) {
       const requestedMtime = readAuthStoreMtimeMs(requestedAuthPath);
       if (requestedMtime !== null && requestedMtime > requestedLoadedMtime) {
-        runtimeAuthStoreSnapshots.clear();
-        runtimeSnapshotMtimes.clear();
+        invalidateRuntimeAuthProfileStoreSnapshot(agentDir);
         return null;
       }
     }

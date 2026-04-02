@@ -148,6 +148,65 @@ describe("runtime snapshot staleness detection", () => {
     });
   });
 
+  it("preserves unrelated runtime snapshots when a different agent snapshot becomes stale", async () => {
+    await withTempHome("runtime-snapshot-single-agent-invalidate-", async (home) => {
+      const mainAgentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+      const opsAgentDir = path.join(home, ".openclaw", "agents", "ops", "agent");
+      await fs.mkdir(mainAgentDir, { recursive: true });
+      await fs.mkdir(opsAgentDir, { recursive: true });
+
+      const mainAuthPath = path.join(mainAgentDir, "auth-profiles.json");
+      const opsAuthPath = path.join(opsAgentDir, "auth-profiles.json");
+
+      const mainDiskStore = createAuthStore({
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-main-disk",
+        },
+      });
+      const mainRuntimeStore = createAuthStore({
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-main-runtime",
+        },
+      });
+      const opsStore = createAuthStore({
+        "anthropic:ops": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-ops",
+        },
+      });
+
+      await fs.writeFile(mainAuthPath, JSON.stringify(mainDiskStore, null, 2), "utf8");
+      await fs.writeFile(opsAuthPath, JSON.stringify(opsStore, null, 2), "utf8");
+      await fs.utimes(mainAuthPath, new Date(1000), new Date(1000));
+      await fs.utimes(opsAuthPath, new Date(1000), new Date(1000));
+
+      replaceRuntimeAuthProfileStoreSnapshots([
+        { agentDir: undefined, store: mainRuntimeStore },
+        { agentDir: opsAgentDir, store: opsStore },
+      ]);
+
+      const updatedOpsStore = createAuthStore({
+        "anthropic:ops": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-ops-updated",
+        },
+      });
+      await fs.writeFile(opsAuthPath, JSON.stringify(updatedOpsStore, null, 2), "utf8");
+      await fs.utimes(opsAuthPath, new Date(2000), new Date(2000));
+
+      expect(getApiKey(ensureAuthProfileStore(), "openai:default")).toBe("sk-main-runtime");
+      expect(getApiKey(ensureAuthProfileStore(opsAgentDir), "anthropic:ops")).toBe(
+        "sk-ops-updated",
+      );
+    });
+  });
+
   it("clears stale mtime keys when agent is removed from runtime snapshots", async () => {
     await withTempHome("runtime-snapshot-clear-stale-", async (home) => {
       const mainAgentDir = path.join(home, ".openclaw", "agents", "main", "agent");

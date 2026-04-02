@@ -50,7 +50,7 @@ function expectCooldownInRange(remainingMs: number, minMs: number, maxMs: number
 }
 
 describe("markAuthProfileFailure", () => {
-  it("does not overwrite fresher on-disk credentials with a stale runtime snapshot", async () => {
+  it("reloads fresher on-disk credentials when the runtime snapshot becomes stale", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
     try {
       const authPath = path.join(agentDir, "auth-profiles.json");
@@ -89,15 +89,17 @@ describe("markAuthProfileFailure", () => {
         }),
       );
 
-      const staleRuntimeStore = ensureAuthProfileStore(agentDir);
-      const staleCredential = staleRuntimeStore.profiles["openai:default"];
-      expect(staleCredential?.type).toBe("api_key");
-      expect(staleCredential && "key" in staleCredential ? staleCredential.key : undefined).toBe(
-        "sk-expired-old",
+      const refreshedRuntimeStore = ensureAuthProfileStore(agentDir);
+      const refreshedCredential = refreshedRuntimeStore.profiles["openai:default"];
+      expect(refreshedCredential?.type).toBe("api_key");
+      expect(
+        refreshedCredential && "key" in refreshedCredential ? refreshedCredential.key : undefined,
+      ).toBe(
+        "sk-fresh-new",
       );
 
       await markAuthProfileFailure({
-        store: staleRuntimeStore,
+        store: refreshedRuntimeStore,
         profileId: "openai:default",
         reason: "rate_limit",
         agentDir,

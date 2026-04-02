@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -512,6 +513,48 @@ describe("secrets runtime snapshot integration", () => {
         key: "sk-ops-runtime",
         keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
       });
+    });
+  });
+
+  it("captures auth store mtime before loading each auth store", async () => {
+    await withTempHome("openclaw-secrets-runtime-auth-mtime-", async (home) => {
+      const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      await fs.mkdir(agentDir, { recursive: true });
+
+      const oldStore = loadAuthStoreWithProfiles({
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-old",
+        },
+      });
+      const newStore = loadAuthStoreWithProfiles({
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-new",
+        },
+      });
+
+      await fs.writeFile(authPath, `${JSON.stringify(oldStore, null, 2)}\n`, "utf8");
+      await fs.utimes(authPath, new Date(1000), new Date(1000));
+
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({}),
+        agentDirs: [agentDir],
+        loadAuthStore: () => {
+          syncFs.writeFileSync(authPath, `${JSON.stringify(newStore, null, 2)}\n`, "utf8");
+          syncFs.utimesSync(authPath, new Date(2000), new Date(2000));
+          return oldStore;
+        },
+      });
+
+      expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        key: "sk-old",
+      });
+      expect(snapshot.authStoreMtimes?.[agentDir]).toBe(1000);
     });
   });
 });

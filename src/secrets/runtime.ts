@@ -199,13 +199,13 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
   if (includeAuthStoreRefs) {
     for (const agentDir of candidateDirs) {
-      const store = structuredClone(loadAuthStore(agentDir));
       const authPath = resolveAuthStorePath(agentDir);
       try {
         authStoreMtimes[agentDir] = fs.statSync(authPath).mtimeMs;
       } catch {
         authStoreMtimes[agentDir] = Date.now();
       }
+      const store = structuredClone(loadAuthStore(agentDir));
       collectAuthStoreAssignments({
         store,
         context,
