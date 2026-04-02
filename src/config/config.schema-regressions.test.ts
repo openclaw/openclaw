@@ -1,0 +1,283 @@
+import { describe, expect, it } from "vitest";
+import { validateConfigObject } from "./config.js";
+
+describe("config schema regressions", () => {
+  it("accepts nested telegram groupPolicy overrides", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": {
+              groupPolicy: "open",
+              topics: {
+                "42": {
+                  groupPolicy: "disabled",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts memorySearch fallback "voyage"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            fallback: "voyage",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts memorySearch provider "mistral"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "mistral",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts memorySearch.qmd.extraCollections", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            qmd: {
+              extraCollections: [
+                { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts agents.list[].memorySearch.qmd.extraCollections", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            memorySearch: {
+              qmd: {
+                extraCollections: [
+                  { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts safe iMessage remoteHost", () => {
+    const res = validateConfigObject({
+      channels: {
+        imessage: {
+          remoteHost: "bot@gateway-host",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts channels.whatsapp.enabled", () => {
+    const res = validateConfigObject({
+      channels: {
+        whatsapp: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts BlueBubbles enrichGroupParticipantsFromContacts at channel and account scope", () => {
+    const res = validateConfigObject({
+      channels: {
+        bluebubbles: {
+          enrichGroupParticipantsFromContacts: true,
+          accounts: {
+            work: {
+              enrichGroupParticipantsFromContacts: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unsafe iMessage remoteHost", () => {
+    const res = validateConfigObject({
+      channels: {
+        imessage: {
+          remoteHost: "bot@gateway-host -oProxyCommand=whoami",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("channels.imessage.remoteHost");
+    }
+  });
+
+  it("accepts iMessage attachment root patterns", () => {
+    const res = validateConfigObject({
+      channels: {
+        imessage: {
+          attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+          remoteAttachmentRoots: ["/Volumes/relay/attachments"],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts string values for agents defaults model inputs", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-6",
+          imageModel: "openai/gpt-4.1-mini",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts pdf default model and limits", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          pdfModel: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-5-mini"],
+          },
+          pdfMaxBytesMb: 12,
+          pdfMaxPages: 25,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects non-positive pdf limits", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          pdfModel: { primary: "openai/gpt-5-mini" },
+          pdfMaxBytesMb: 0,
+          pdfMaxPages: 0,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
+    }
+  });
+
+  it("rejects relative iMessage attachment roots", () => {
+    const res = validateConfigObject({
+      channels: {
+        imessage: {
+          attachmentRoots: ["./attachments"],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("channels.imessage.attachmentRoots.0");
+    }
+  });
+
+  it("accepts browser.extraArgs for proxy and custom flags", () => {
+    const res = validateConfigObject({
+      browser: {
+        extraArgs: ["--proxy-server=http://127.0.0.1:7890"],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects browser.extraArgs with non-array value", () => {
+    const res = validateConfigObject({
+      browser: {
+        extraArgs: "--proxy-server=http://127.0.0.1:7890" as unknown,
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts signal accountUuid for loop protection", () => {
+    const res = validateConfigObject({
+      channels: {
+        signal: {
+          accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts telegram actions editMessage and createForumTopic", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          actions: {
+            editMessage: true,
+            createForumTopic: false,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
+    const res = validateConfigObject({
+      discovery: {
+        wideArea: {
+          enabled: true,
+          domain: "openclaw.internal",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+});
