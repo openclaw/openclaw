@@ -31,7 +31,10 @@ export const closeTrackedBrowserTabsForSessions: BrowserRuntimeModule["closeTrac
 export const movePathToTrash: BrowserRuntimeModule["movePathToTrash"] = (async (...args) => {
   const [targetPath] = args;
   try {
-    await runCommandWithTimeout(["trash", targetPath], { timeoutMs: 10_000 });
+    const result = await runCommandWithTimeout(["trash", targetPath], { timeoutMs: 10_000 });
+    if (result.code !== 0) {
+      throw new Error(`trash exited with code ${result.code ?? "unknown"}`);
+    }
     return targetPath;
   } catch {
     const trashDir = path.join(os.homedir(), ".Trash");
