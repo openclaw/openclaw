@@ -6,8 +6,8 @@ import {
   normalizeCommandBody,
 } from "./commands-registry.js";
 import { isAbortTrigger } from "./reply/abort-primitives.js";
-import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
+import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 import { normalizeThinkLevel } from "./thinking.js";
 
 const THINK_COMMAND_ALIASES = new Set(["think", "thinking", "t"]);
@@ -107,7 +107,8 @@ function parseOneShotThinkMessage(
   }
   // Keep slash-command and directive-only tails on the control-command path so invalid
   // inputs like `/think high /status` or `/think high /new` do not persist `/think high`.
-  if (isControlCommandMessage(trimmedBody, cfg, options) || isDirectiveOnlyTail(trimmedBody, cfg)) {
+  // Plain abort text such as `stop` is still valid message content here.
+  if (hasControlCommand(trimmedBody, cfg, options) || isDirectiveOnlyTail(trimmedBody, cfg)) {
     return { kind: "invalid-tail" };
   }
   return { kind: "one-shot", level: rawLevel, body };

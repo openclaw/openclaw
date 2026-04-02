@@ -80,6 +80,11 @@ describe("isOneShotThinkMessage", () => {
     expect(isOneShotThinkMessage("/think high /stop")).toBe(false);
   });
 
+  it("accepts abort-like plain text tails as one-shot body text", () => {
+    expect(isOneShotThinkMessage("/think high stop")).toBe(true);
+    expect(isOneShotThinkMessage("/think high please stop")).toBe(true);
+  });
+
   it("rejects non-think commands", () => {
     expect(isOneShotThinkMessage("/status")).toBe(false);
     expect(isOneShotThinkMessage("/help")).toBe(false);
