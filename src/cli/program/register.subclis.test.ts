@@ -134,7 +134,7 @@ describe("registerSubCliCommands", () => {
     await program
       .parseAsync(["node", "openclaw", "nodes", "list", "--help"])
       .catch((err: Error & { code?: string }) => {
-        if (err.code !== "commander.helpDisplayed") throw err;
+        if (err.code !== "commander.helpDisplayed") { throw err; }
       });
 
     // Should show help for `nodes list` subcommand, not the `nodes` parent.
