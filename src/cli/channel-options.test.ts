@@ -16,7 +16,7 @@ vi.mock("node:fs", async () => {
   };
 });
 
-vi.mock("../channels/registry.js", () => ({
+vi.mock("../channels/ids.js", () => ({
   CHAT_CHANNEL_ORDER: ["telegram", "discord"],
 }));
 
