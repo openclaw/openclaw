@@ -77,6 +77,9 @@ export async function startGatewaySidecars(params: {
     error: (msg: string) => void;
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
+  /** When provided, channel startup is skipped if the signal fires before
+   *  `startChannels` begins or while the model pre-warm is still running. */
+  signal?: AbortSignal;
 }) {
   try {
     const stateDir = resolveStateDir(process.env);
@@ -161,12 +164,21 @@ export async function startGatewaySidecars(params: {
     // background.
     void (async () => {
       try {
+        if (params.signal?.aborted) {
+          return;
+        }
         await prewarmConfiguredPrimaryModel({
           cfg: params.cfg,
           log: params.log,
         });
+        if (params.signal?.aborted) {
+          return;
+        }
         await params.startChannels();
       } catch (err) {
+        if (params.signal?.aborted) {
+          return;
+        }
         params.logChannels.error(`channel startup failed: ${String(err)}`);
       }
     })();
