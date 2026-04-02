@@ -415,9 +415,10 @@ resolved approver list for authorization even when native approval delivery is d
 
 ### Native approval delivery
 
-Discord and Telegram can also act as native approval-delivery adapters with channel-specific config.
+Discord, Slack, and Telegram can also act as native approval-delivery adapters with channel-specific config.
 
 - Discord: `channels.discord.execApprovals.*`
+- Slack: `channels.slack.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
 
 These native delivery adapters are opt-in. They add DM routing and channel fanout on top of the
@@ -427,8 +428,9 @@ Shared behavior:
 
 - Slack, Matrix, Microsoft Teams, and similar deliverable chats use the normal channel auth model
   for same-chat `/approve`
-- for Discord and Telegram, only resolved approvers can approve or deny
-- Discord and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
+- for Discord, Slack, and Telegram, only resolved approvers can approve or deny
+- Discord, Slack, and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
+  - **Note for Slack:** `channels.slack.allowFrom` is NOT used for exec approval approvers. The system checks `channels.slack.execApprovals.approvers` and falls back to `commands.ownerAllowFrom`. Existing `allowFrom` users won't automatically be approvers unless they are added to `execApprovals.approvers` or `commands.ownerAllowFrom`.
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
 - when channel delivery is enabled, approval prompts include the command text

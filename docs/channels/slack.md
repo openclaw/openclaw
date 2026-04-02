@@ -388,6 +388,30 @@ Notes:
 - Slack expects shortcodes (for example `"hourglass_flowing_sand"`).
 - The reaction is best-effort and cleanup is attempted automatically after the reply or failure path completes.
 
+## Exec approvals
+
+The Slack plugin supports native exec approvals delivery. This feature requires per-channel configuration under `channels.slack.execApprovals`:
+
+```json5
+{
+  channels: {
+    slack: {
+      execApprovals: {
+        enabled: true,
+        approvers: ["U12345678"]
+      }
+    }
+  }
+}
+```
+
+**Important:** `channels.slack.allowFrom` is NOT used for exec approval approvers. The fallback hierarchy for Slack approvers is:
+
+1. `channels.slack.execApprovals.approvers`
+2. `commands.ownerAllowFrom`
+
+Without this configuration, exec prompts will report that chat exec approvals are not enabled on Slack, even if the top-level `approvals.exec` is configured.
+
 ## Manifest and scope checklist
 
 <AccordionGroup>
