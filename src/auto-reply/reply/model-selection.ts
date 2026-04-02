@@ -25,6 +25,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
+import { defaultRuntime } from "../../runtime.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import type { ThinkLevel } from "./directives.js";
 
@@ -540,7 +541,7 @@ export async function createModelSelectionState(params: {
       return;
     }
     const suffix = extra ? ` ${extra}` : "";
-    console.log(
+    defaultRuntime.log?.(
       `[model-selection] session=${params.sessionKey ?? "(no-session)"} stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`,
     );
   };
@@ -714,7 +715,7 @@ export async function createModelSelectionState(params: {
       usingStoredOverride = true;
       // Log when stored override is kept instead of imageModel override
       if (params.hasAppliedImageModelOverride) {
-        console.log(
+        defaultRuntime.log?.(
           `[image-model-switch] Kept user's vision-capable stored model ${key} instead of imageModel override`,
         );
       }
