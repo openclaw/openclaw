@@ -18,6 +18,7 @@ type CreateCommandBotResult = {
   bot: RegisterTelegramNativeCommandsParams["bot"];
   commandHandlers: Map<string, (ctx: unknown) => Promise<void>>;
   sendMessage: ReturnType<typeof vi.fn>;
+  deleteMessage: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
 };
 
@@ -73,17 +74,19 @@ export function resetNativeCommandMenuMocks() {
 export function createCommandBot(): CreateCommandBotResult {
   const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
   const sendMessage = vi.fn().mockResolvedValue({ message_id: 999 });
+  const deleteMessage = vi.fn().mockResolvedValue(true);
   const setMyCommands = vi.fn().mockResolvedValue(undefined);
   const bot = {
     api: {
       setMyCommands,
       sendMessage,
+      deleteMessage,
     },
     command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
       commandHandlers.set(name, cb);
     }),
   } as unknown as RegisterTelegramNativeCommandsParams["bot"];
-  return { bot, commandHandlers, sendMessage, setMyCommands };
+  return { bot, commandHandlers, sendMessage, deleteMessage, setMyCommands };
 }
 
 export function createNativeCommandTestParams(
