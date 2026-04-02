@@ -153,6 +153,19 @@ export async function resolveTelegramInboundBody(params: {
   }
 
   let bodyText = rawBody;
+  if (allMedia.length === 0 && placeholder && rawBody !== placeholder) {
+    const mediaFileRef =
+      msg.video ??
+      msg.video_note ??
+      msg.document ??
+      msg.audio ??
+      msg.voice ??
+      (msg.photo ? msg.photo[msg.photo.length - 1] : undefined);
+    const mediaTag = mediaFileRef?.file_id
+      ? `${placeholder} [file_id:${mediaFileRef.file_id}]`
+      : placeholder;
+    bodyText = `${mediaTag}\n${bodyText}`.trim();
+  }
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
