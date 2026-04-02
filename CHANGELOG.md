@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - Agents/tools: include value-shape hints in missing-parameter tool errors so dropped, empty-string, and wrong-type write payloads are easier to diagnose from logs. (#55317) Thanks @priyansh19.
 - Plugins/browser: block SSRF redirect bypass by installing a real-time Playwright route handler before `page.goto()` so navigation to private/internal IPs is intercepted and aborted mid-redirect instead of checked post-hoc. (#58771) Thanks @pgondhi987.
 - Android/assistant: keep queued App Actions prompts pending when auto-send enqueue is rejected, so transient chat-health drops do not silently lose the assistant request. Thanks @obviyus.
+- Zalo/webhook: scope replay-dedupe cache key to path and account using `JSON.stringify` so multi-account deployments do not silently drop events due to cross-account cache poisoning. (#59387) Thanks @pgondhi987.
 
 ## 2026.4.2-beta.1
 
