@@ -103,6 +103,10 @@ function installBrowserMocks() {
     getBrowserDisconnectedHandler,
     getRouteHandler: () => routeHandler,
     mainFrame,
+    pushOpenPage: () => {
+      openPages.push(page);
+      return page;
+    },
   };
 }
 
@@ -656,6 +660,62 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     await expect(
       getPageForTargetId({
         cdpUrl: "http://127.0.0.1:18792",
+      }),
+    ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
+  });
+
+  it("falls back to caller targetId quarantine when target lookup fails", async () => {
+    const first = installBrowserMocks();
+    first.pageClose.mockRejectedValueOnce(new Error("close failed"));
+
+    await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "about:blank",
+    });
+    const page = await getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "TARGET_1",
+    });
+
+    first.pageGoto.mockImplementationOnce(async () => {
+      const handler = first.getRouteHandler();
+      if (!handler) {
+        throw new Error("missing route handler");
+      }
+      await handler(
+        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
+        {
+          isNavigationRequest: () => true,
+          frame: () => first.mainFrame,
+          url: () => "http://127.0.0.1:18080/internal-hop",
+        },
+      );
+      throw new Error("Navigation aborted");
+    });
+
+    first.sessionSend.mockRejectedValueOnce(new Error("Target lookup failed"));
+    await expect(
+      gotoPageWithNavigationGuard({
+        cdpUrl: "http://127.0.0.1:18792",
+        page,
+        url: "https://93.184.216.34/start",
+        timeoutMs: 1000,
+        targetId: "TARGET_1",
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    await forceDisconnectPlaywrightForTarget({
+      cdpUrl: "http://127.0.0.1:18792",
+      reason: "test reconnect after blocked navigation",
+    });
+
+    const second = installBrowserMocks();
+    second.pushOpenPage();
+
+    await expect(
+      getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "TARGET_1",
       }),
     ).rejects.toBeInstanceOf(BlockedBrowserTargetError);
   });

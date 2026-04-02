@@ -679,12 +679,18 @@ function isPolicyDenyNavigationError(err: unknown): boolean {
   return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
 }
 
-async function closeBlockedNavigationTarget(opts: { cdpUrl: string; page: Page }): Promise<void> {
-  // Quarantine the concrete page first; caller-provided target ids can be stale.
+async function closeBlockedNavigationTarget(opts: {
+  cdpUrl: string;
+  page: Page;
+  targetId?: string;
+}): Promise<void> {
+  // Quarantine the concrete page first; then persist by target id when available.
   markPageRefBlocked(opts.cdpUrl, opts.page);
   const resolvedTargetId = await pageTargetId(opts.page).catch(() => null);
-  if (resolvedTargetId) {
-    markTargetBlocked(opts.cdpUrl, resolvedTargetId);
+  const fallbackTargetId = opts.targetId?.trim() || "";
+  const targetIdToBlock = resolvedTargetId || fallbackTargetId;
+  if (targetIdToBlock) {
+    markTargetBlocked(opts.cdpUrl, targetIdToBlock);
   }
   await opts.page.close().catch(() => {});
 }
@@ -711,6 +717,7 @@ export async function assertPageNavigationCompletedSafely(opts: {
       await closeBlockedNavigationTarget({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
+        targetId: opts.targetId,
       });
     }
     throw err;
@@ -771,6 +778,7 @@ export async function gotoPageWithNavigationGuard(opts: {
       await closeBlockedNavigationTarget({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
+        targetId: opts.targetId,
       });
     }
   }
