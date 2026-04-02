@@ -3,6 +3,7 @@ import { createInterface, type Interface } from "node:readline";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type IMessageRpcError = {
   code?: number;
@@ -103,7 +104,7 @@ export class IMessageRpcClient {
     });
 
     child.on("error", (err) => {
-      this.failAll(err instanceof Error ? err : new Error(String(err)));
+      this.failAll(err instanceof Error ? err : new Error(formatErrorMessage(err)));
       this.closedResolve?.();
     });
 
@@ -188,7 +189,7 @@ export class IMessageRpcClient {
     try {
       parsed = JSON.parse(line) as IMessageRpcResponse<unknown>;
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = err instanceof Error ? err.message : formatErrorMessage(err);
       this.runtime?.error?.(`imsg rpc: failed to parse ${line}: ${detail}`);
       return;
     }

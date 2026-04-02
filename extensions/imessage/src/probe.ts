@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { detectBinary } from "openclaw/plugin-sdk/setup";
 import { createIMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 // Re-export for backwards compatibility
 export { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
@@ -55,7 +56,7 @@ async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcS
       error: combined || `imsg rpc --help failed (code ${String(result.code ?? "unknown")})`,
     };
   } catch (err) {
-    return { supported: false, error: String(err) };
+    return { supported: false, error: formatErrorMessage(err) };
   }
 }
 
@@ -98,7 +99,7 @@ export async function probeIMessage(
     await client.request("chats.list", { limit: 1 }, { timeoutMs: effectiveTimeout });
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, error: formatErrorMessage(err) };
   } finally {
     await client.stop();
   }

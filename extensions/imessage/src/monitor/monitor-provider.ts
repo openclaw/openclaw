@@ -55,6 +55,7 @@ import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 /**
  * Try to detect remote host from an SSH wrapper script like:
@@ -200,7 +201,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       await handleMessageNow(syntheticMessage);
     },
     onError: (err) => {
-      runtime.error?.(`imessage debounce flush failed: ${String(err)}`);
+      runtime.error?.(`imessage debounce flush failed: ${formatErrorMessage(err)}`);
     },
   });
 
@@ -320,7 +321,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           });
         },
         onReplyError: (err) => {
-          logVerbose(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
+          logVerbose(`imessage pairing reply failed for ${decision.senderId}: ${formatErrorMessage(err)}`);
         },
       });
       return;
@@ -381,7 +382,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             }
           : undefined,
       onRecordError: (err) => {
-        logVerbose(`imessage: failed updating session meta: ${String(err)}`);
+        logVerbose(`imessage: failed updating session meta: ${formatErrorMessage(err)}`);
       },
     });
 
@@ -422,7 +423,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         });
       },
       onError: (err, info) => {
-        runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
+        runtime.error?.(danger(`imessage ${info.kind} reply failed: ${formatErrorMessage(err)}`));
       },
     });
 
@@ -498,7 +499,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     onNotification: (msg) => {
       if (msg.method === "message") {
         void handleMessage(msg.params).catch((err) => {
-          runtime.error?.(`imessage: handler failed: ${String(err)}`);
+          runtime.error?.(`imessage: handler failed: ${formatErrorMessage(err)}`);
         });
       } else if (msg.method === "error") {
         runtime.error?.(`imessage: watch error ${JSON.stringify(msg.params)}`);
@@ -524,7 +525,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     if (abort?.aborted) {
       return;
     }
-    runtime.error?.(danger(`imessage: monitor failed: ${String(err)}`));
+    runtime.error?.(danger(`imessage: monitor failed: ${formatErrorMessage(err)}`));
     throw err;
   } finally {
     detachAbortHandler();
