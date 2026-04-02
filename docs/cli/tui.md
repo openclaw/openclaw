@@ -25,6 +25,8 @@ Notes:
 openclaw tui
 openclaw tui --url ws://127.0.0.1:18789 --token <token>
 openclaw tui --session main --deliver
+# preserve intermediate stream output as separate entries instead of replacing the current line
+openclaw tui --preserve-intermediate
 # when run inside an agent workspace, infers that agent automatically
 openclaw tui --session bugfix
 ```

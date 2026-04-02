@@ -59,6 +59,11 @@ describe("cli program (smoke)", () => {
     expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: undefined }));
   });
 
+  it("runs tui with preserve-intermediate enabled", async () => {
+    await runProgram(["tui", "--preserve-intermediate"]);
+    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ preserveIntermediate: true }));
+  });
+
   it("runs setup wizard when wizard flags are present", async () => {
     await runProgram(["setup", "--remote-url", "ws://example"]);
 

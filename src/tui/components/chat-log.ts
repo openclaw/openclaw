@@ -6,16 +6,22 @@ import { BtwInlineMessage } from "./btw-inline-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
+type ChatLogOptions = {
+  preserveIntermediate?: boolean;
+};
+
 export class ChatLog extends Container {
   private readonly maxComponents: number;
+  private readonly preserveIntermediate: boolean;
   private toolById = new Map<string, ToolExecutionComponent>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private btwMessage: BtwInlineMessage | null = null;
   private toolsExpanded = false;
 
-  constructor(maxComponents = 180) {
+  constructor(maxComponents = 180, opts: ChatLogOptions = {}) {
     super();
     this.maxComponents = Math.max(20, Math.floor(maxComponents));
+    this.preserveIntermediate = Boolean(opts.preserveIntermediate);
   }
 
   private dropComponentReferences(component: Component) {
@@ -78,6 +84,13 @@ export class ChatLog extends Container {
 
   startAssistant(text: string, runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
+    if (this.preserveIntermediate) {
+      const component = new AssistantMessageComponent(text);
+      this.streamingRuns.set(effectiveRunId, component);
+      this.append(component);
+      return component;
+    }
+
     const existing = this.streamingRuns.get(effectiveRunId);
     if (existing) {
       existing.setText(text);
@@ -90,6 +103,11 @@ export class ChatLog extends Container {
   }
 
   updateAssistant(text: string, runId?: string) {
+    if (this.preserveIntermediate) {
+      this.startAssistant(text, runId);
+      return;
+    }
+
     const effectiveRunId = this.resolveRunId(runId);
     const existing = this.streamingRuns.get(effectiveRunId);
     if (!existing) {
@@ -100,6 +118,13 @@ export class ChatLog extends Container {
   }
 
   finalizeAssistant(text: string, runId?: string) {
+    if (this.preserveIntermediate) {
+      this.startAssistant(text, runId);
+      const effectiveRunId = this.resolveRunId(runId);
+      this.streamingRuns.delete(effectiveRunId);
+      return;
+    }
+
     const effectiveRunId = this.resolveRunId(runId);
     const existing = this.streamingRuns.get(effectiveRunId);
     if (existing) {
@@ -118,6 +143,10 @@ export class ChatLog extends Container {
     }
     this.removeChild(existing);
     this.streamingRuns.delete(effectiveRunId);
+
+    // For preserveIntermediate, keep earlier intermediate fragments in history.
+    // dropAssistant only removes the latest in-progress component so that it
+    // does not remain in the active streaming slot; we retain the preserved history.
   }
 
   showBtw(params: { question: string; text: string; isError?: boolean }) {

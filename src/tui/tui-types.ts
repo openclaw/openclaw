@@ -7,6 +7,7 @@ export type TuiOptions = {
   thinking?: string;
   timeoutMs?: number;
   historyLimit?: number;
+  preserveIntermediate?: boolean;
   message?: string;
 };
 

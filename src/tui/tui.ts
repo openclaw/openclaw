@@ -413,7 +413,9 @@ export async function runTui(opts: TuiOptions) {
   const header = new Text("", 1, 0);
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
-  const chatLog = new ChatLog();
+  const chatLog = new ChatLog(180, {
+    preserveIntermediate: Boolean(opts.preserveIntermediate),
+  });
   const editor = new CustomEditor(tui, editorTheme);
   const root = new Container();
   root.addChild(header);
