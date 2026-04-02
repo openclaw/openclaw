@@ -11,6 +11,7 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  stopLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -20,6 +21,8 @@ const state = vi.hoisted(() => ({
   bootstrapError: "",
   kickstartError: "",
   kickstartFailuresRemaining: 0,
+  stopError: "",
+  stopFailuresRemaining: 0,
   dirs: new Set<string>(),
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
@@ -80,6 +83,10 @@ vi.mock("./exec-file.js", () => ({
     if (call[0] === "kickstart" && state.kickstartError && state.kickstartFailuresRemaining > 0) {
       state.kickstartFailuresRemaining -= 1;
       return { stdout: "", stderr: state.kickstartError, code: 1 };
+    }
+    if (call[0] === "stop" && state.stopError && state.stopFailuresRemaining > 0) {
+      state.stopFailuresRemaining -= 1;
+      return { stdout: "", stderr: state.stopError, code: 1 };
     }
     return { stdout: "", stderr: "", code: 0 };
   }),
@@ -154,6 +161,8 @@ beforeEach(() => {
   state.bootstrapError = "";
   state.kickstartError = "";
   state.kickstartFailuresRemaining = 0;
+  state.stopError = "";
+  state.stopFailuresRemaining = 0;
   state.dirs.clear();
   state.dirModes.clear();
   state.files.clear();
@@ -334,6 +343,61 @@ describe("launchd install", () => {
     expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
     expect(state.fileModes.get(plistPath)).toBe(0o644);
+  });
+
+  it("stops LaunchAgent with stop and no bootout", async () => {
+    const env = createDefaultLaunchdEnv();
+
+    await stopLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    const serviceId = `${domain}/${label}`;
+    expect(state.launchctlCalls).toContainEqual(["stop", serviceId]);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
+  });
+
+  it("tolerates stop when LaunchAgent is not loaded", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.stopError = "Could not find service";
+    state.stopFailuresRemaining = 1;
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+
+    await expect(
+      stopLaunchAgent({
+        env,
+        stdout,
+      }),
+    ).resolves.toBeUndefined();
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    const serviceId = `${domain}/${label}`;
+    expect(state.launchctlCalls).toContainEqual(["stop", serviceId]);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
+    expect(output).toContain("Stopped LaunchAgent");
+  });
+
+  it("surfaces real stop failures", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.stopError = "Operation not permitted";
+    state.stopFailuresRemaining = 1;
+
+    await expect(
+      stopLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+      }),
+    ).rejects.toThrow("launchctl stop failed: Operation not permitted");
+
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
   });
 
   it("restarts LaunchAgent with kickstart and no bootout", async () => {
