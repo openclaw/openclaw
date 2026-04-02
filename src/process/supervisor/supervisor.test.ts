@@ -45,7 +45,7 @@ describe("process supervisor", () => {
       sessionId: "s1",
       argv: createSilentIdleArgv(),
       timeoutMs: 300,
-      noOutputTimeoutMs: 5,
+      noOutputTimeoutMs: 50,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
@@ -85,7 +85,7 @@ describe("process supervisor", () => {
     const run = await spawnChild(supervisor, {
       sessionId: "s-timeout",
       argv: createSilentIdleArgv(),
-      timeoutMs: 1,
+      timeoutMs: 10,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
