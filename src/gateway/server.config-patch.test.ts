@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
+import { __testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -14,6 +15,10 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+
+beforeEach(() => {
+  controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
+});
 
 let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
 let sharedTempRoot: string;
@@ -259,21 +264,36 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(current.ok).toBe(true);
 
-    // Patch with the same config — no actual changes
-    const res = await rpcReq<{
+    // Normalize through config.set first so the subsequent config.patch reapply
+    // checks the true no-op path instead of first-write normalization.
+    const setRes = await rpcReq<{
+      ok?: boolean;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.set", {
+      raw: JSON.stringify(current.payload?.config ?? {}),
+      baseHash: current.payload?.hash,
+    });
+    expect(setRes.ok).toBe(true);
+
+    const normalized = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+    expect(normalized.ok).toBe(true);
+    expect(typeof normalized.payload?.hash).toBe("string");
+
+    // Re-apply the normalized config via config.patch — this must be a no-op.
+    const second = await rpcReq<{
       ok?: boolean;
       noop?: boolean;
       config?: Record<string, unknown>;
     }>(requireWs(), "config.patch", {
-      raw: JSON.stringify(current.payload?.config ?? {}),
-      baseHash: current.payload?.hash,
+      raw: JSON.stringify(setRes.payload?.config ?? {}),
+      baseHash: normalized.payload?.hash,
     });
 
-    expect(res.ok).toBe(true);
-    expect(res.payload?.noop).toBe(true);
-    // Config hash should not change (no file write)
+    expect(second.ok).toBe(true);
+    expect(second.payload?.noop).toBe(true);
+    // Config hash should not change on no-op reapply.
     const after = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
-    expect(after.payload?.hash).toBe(current.payload?.hash);
+    expect(after.payload?.hash).toBe(normalized.payload?.hash);
   });
 
   it("rejects config.patch when raw is null", async () => {

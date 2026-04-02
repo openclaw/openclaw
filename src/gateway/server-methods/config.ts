@@ -10,6 +10,7 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { applyLegacyMigrations } from "../../config/legacy.js";
+import { materializeRuntimeConfig } from "../../config/materialize.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import {
   redactConfigObject,
@@ -474,7 +475,10 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!(await ensureResolvableSecretRefsOrRespond({ config: validated.config, respond }))) {
       return;
     }
-    const changedPaths = diffConfigPaths(snapshot.config, validated.config);
+    // snapshot.config is materializeRuntimeConfig(..., "snapshot") from read; compare the same
+    // shape so identity patches (e.g. config.get → JSON → config.patch) hit the noop path.
+    const materializedCandidate = materializeRuntimeConfig(validated.config, "snapshot");
+    const changedPaths = diffConfigPaths(snapshot.config, materializedCandidate);
     const actor = resolveControlPlaneActor(client);
 
     // No-op: if the validated config is identical to the current config,
@@ -559,7 +563,8 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!(await ensureResolvableSecretRefsOrRespond({ config: parsed.config, respond }))) {
       return;
     }
-    const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
+    const materializedApplied = materializeRuntimeConfig(parsed.config, "snapshot");
+    const changedPaths = diffConfigPaths(snapshot.config, materializedApplied);
     const actor = resolveControlPlaneActor(client);
     context?.logGateway?.info(
       `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,
