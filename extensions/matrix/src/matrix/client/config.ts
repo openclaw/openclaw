@@ -41,8 +41,21 @@ type MatrixCredentialsReadDeps = {
 
 let matrixAuthClientDepsPromise: Promise<MatrixAuthClientDeps> | undefined;
 let matrixCredentialsReadDepsPromise: Promise<MatrixCredentialsReadDeps> | undefined;
+let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
+
+export function setMatrixAuthClientDepsForTest(
+  deps?: {
+    MatrixClient: typeof import("../sdk.js").MatrixClient;
+    ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+  } | undefined,
+): void {
+  matrixAuthClientDepsForTest = deps;
+}
 
 async function loadMatrixAuthClientDeps(): Promise<MatrixAuthClientDeps> {
+  if (matrixAuthClientDepsForTest) {
+    return matrixAuthClientDepsForTest;
+  }
   matrixAuthClientDepsPromise ??= Promise.all([import("../sdk.js"), import("./logging.js")]).then(
     ([sdkModule, loggingModule]) => ({
       MatrixClient: sdkModule.MatrixClient,
