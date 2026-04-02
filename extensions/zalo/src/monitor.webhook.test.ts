@@ -397,6 +397,120 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
+  it("keeps replay dedupe isolated when path/account values collide under colon-joined keys", async () => {
+    const sinkA = vi.fn();
+    const sinkB = vi.fn();
+    // Old key format `${path}:${accountId}:${event_name}:${messageId}` would collide for these two targets.
+    const unregisterA = registerTarget({
+      path: "/hook-replay-collision:a",
+      secret: "secret-a",
+      statusSink: sinkA,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        accountId: "team",
+      },
+    });
+    const unregisterB = registerTarget({
+      path: "/hook-replay-collision",
+      secret: "secret-b",
+      statusSink: sinkB,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        accountId: "a:team",
+      },
+    });
+    const payload = createTextUpdate({
+      messageId: "msg-replay-collision-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const first = await fetch(`${baseUrl}/hook-replay-collision:a`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret-a",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        const second = await fetch(`${baseUrl}/hook-replay-collision`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret-b",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+      });
+
+      expect(sinkA).toHaveBeenCalledTimes(1);
+      expect(sinkB).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterA();
+      unregisterB();
+    }
+  });
+
+  it("keeps replay dedupe isolated across different webhook paths", async () => {
+    const sinkA = vi.fn();
+    const sinkB = vi.fn();
+    const sharedSecret = "secret";
+    const unregisterA = registerTarget({
+      path: "/hook-replay-scope-a",
+      secret: sharedSecret,
+      statusSink: sinkA,
+    });
+    const unregisterB = registerTarget({
+      path: "/hook-replay-scope-b",
+      secret: sharedSecret,
+      statusSink: sinkB,
+    });
+    const payload = createTextUpdate({
+      messageId: "msg-replay-cross-path-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const first = await fetch(`${baseUrl}/hook-replay-scope-a`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": sharedSecret,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        const second = await fetch(`${baseUrl}/hook-replay-scope-b`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": sharedSecret,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+      });
+
+      expect(sinkA).toHaveBeenCalledTimes(1);
+      expect(sinkB).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterA();
+      unregisterB();
+    }
+  });
+
   it("downloads inbound image media from webhook photo_url and preserves display_name", async () => {
     const {
       core,
