@@ -157,7 +157,7 @@ export function createTelegramInboundBufferRuntime(params: {
         mediaMaxBytes,
         opts.token,
         telegramTransport,
-        telegramCfg.apiRoot,
+        telegramCfg?.apiRoot,
       );
       if (!media) {
         return [];
