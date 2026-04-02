@@ -544,6 +544,51 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
+  it("keeps explicit plugin-owned web fetch config while filling missing legacy fields", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          fetch: {
+            provider: "firecrawl",
+            firecrawl: {
+              apiKey: "legacy-firecrawl-key",
+              baseUrl: "https://api.firecrawl.dev",
+              onlyMainContent: false,
+            },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          firecrawl: {
+            enabled: true,
+            config: {
+              webFetch: {
+                apiKey: "explicit-firecrawl-key",
+                timeoutSeconds: 30,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(res.config.plugins?.entries?.firecrawl).toEqual({
+      enabled: true,
+      config: {
+        webFetch: {
+          apiKey: "explicit-firecrawl-key",
+          timeoutSeconds: 30,
+          baseUrl: "https://api.firecrawl.dev",
+          onlyMainContent: false,
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Merged tools.web.fetch.firecrawl → plugins.entries.firecrawl.config.webFetch (filled missing fields from legacy; kept explicit plugin config values).",
+    ]);
+  });
+
   it("migrates legacy talk flat fields to provider/providers", () => {
     const res = normalizeCompatibilityConfigValues({
       talk: {

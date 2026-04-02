@@ -67,19 +67,6 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
     : undefined
   : undefined;
 
-export type FetchFirecrawlContentParams = {
-  url: string;
-  extractMode: ExtractMode;
-  apiKey: string;
-  baseUrl: string;
-  onlyMainContent: boolean;
-  maxAgeMs: number;
-  proxy: "auto" | "basic" | "stealth";
-  storeInCache: boolean;
-  timeoutSeconds: number;
-  maxChars?: number;
-};
-
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   const fetch = cfg?.tools?.web?.fetch;
   if (!fetch || typeof fetch !== "object") {
@@ -245,65 +232,6 @@ function normalizeContentType(value: string | null | undefined): string | undefi
   const [raw] = value.split(";");
   const trimmed = raw?.trim();
   return trimmed || undefined;
-}
-
-export async function fetchFirecrawlContent(params: FetchFirecrawlContentParams): Promise<{
-  text: string;
-  title?: string;
-  finalUrl?: string;
-  status?: number;
-  warning?: string;
-}> {
-  const config: OpenClawConfig = {
-    tools: {
-      web: {
-        fetch: {
-          provider: "firecrawl",
-        },
-      },
-    },
-    plugins: {
-      entries: {
-        firecrawl: {
-          enabled: true,
-          config: {
-            webFetch: {
-              apiKey: params.apiKey,
-              baseUrl: params.baseUrl,
-              onlyMainContent: params.onlyMainContent,
-              maxAgeMs: params.maxAgeMs,
-              timeoutSeconds: params.timeoutSeconds,
-            },
-          },
-        },
-      },
-    },
-  };
-
-  const resolved = resolveWebFetchDefinition({
-    config,
-    preferRuntimeProviders: false,
-    providerId: "firecrawl",
-  });
-  if (!resolved) {
-    throw new Error("Firecrawl web fetch provider is unavailable.");
-  }
-
-  const payload = await resolved.definition.execute({
-    url: params.url,
-    extractMode: params.extractMode,
-    maxChars: params.maxChars ?? DEFAULT_FETCH_MAX_CHARS,
-    proxy: params.proxy,
-    storeInCache: params.storeInCache,
-  });
-
-  return {
-    text: typeof payload.text === "string" ? payload.text : "",
-    title: typeof payload.title === "string" ? payload.title : undefined,
-    finalUrl: typeof payload.finalUrl === "string" ? payload.finalUrl : undefined,
-    status: typeof payload.status === "number" ? payload.status : undefined,
-    warning: typeof payload.warning === "string" ? payload.warning : undefined,
-  };
 }
 
 type WebFetchRuntimeParams = {

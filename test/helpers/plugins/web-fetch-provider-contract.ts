@@ -39,6 +39,7 @@ export function describeWebFetchProviderContracts(pluginId: string) {
           }
           return entry.credentialValue;
         },
+        pluginId,
       });
     });
   }

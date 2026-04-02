@@ -136,6 +136,7 @@ export function installWebSearchProviderContractSuite(params: {
 export function installWebFetchProviderContractSuite(params: {
   provider: Lazy<WebFetchProviderPlugin>;
   credentialValue: Lazy<unknown>;
+  pluginId?: string;
 }) {
   it("satisfies the base web fetch provider contract", () => {
     const provider = resolveLazy(params.provider);
@@ -152,10 +153,27 @@ export function installWebFetchProviderContractSuite(params: {
 
     expect(provider.envVars).toEqual([...new Set(provider.envVars)]);
     expect(provider.envVars.every((entry) => entry.trim().length > 0)).toBe(true);
+    expect(provider.credentialPath.trim()).not.toBe("");
+    if (provider.inactiveSecretPaths) {
+      expect(provider.inactiveSecretPaths).toEqual([...new Set(provider.inactiveSecretPaths)]);
+      // Runtime inactive-path classification uses inactiveSecretPaths as the complete list.
+      expect(provider.inactiveSecretPaths).toContain(provider.credentialPath);
+    }
 
     const fetchConfigTarget: Record<string, unknown> = {};
     provider.setCredentialValue(fetchConfigTarget, credentialValue);
     expect(provider.getCredentialValue(fetchConfigTarget)).toEqual(credentialValue);
+
+    if (provider.setConfiguredCredentialValue && provider.getConfiguredCredentialValue) {
+      const configTarget = {} as OpenClawConfig;
+      provider.setConfiguredCredentialValue(configTarget, credentialValue);
+      expect(provider.getConfiguredCredentialValue(configTarget)).toEqual(credentialValue);
+    }
+
+    if (provider.applySelectionConfig && params.pluginId) {
+      const applied = provider.applySelectionConfig({} as OpenClawConfig);
+      expect(applied.plugins?.entries?.[params.pluginId]?.enabled).toBe(true);
+    }
 
     const config = {
       tools: {
