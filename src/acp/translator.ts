@@ -1052,6 +1052,11 @@ export class AcpGatewayAgent implements Agent {
     pending.reject(error);
   }
 
+  private clearPendingDisconnectState(pending: PendingPrompt): void {
+    pending.disconnectGeneration = undefined;
+    pending.disconnectReason = undefined;
+  }
+
   private async reconcilePendingPrompts(
     observedDisconnectGeneration: number,
     deadlineExpired: boolean,
@@ -1116,10 +1121,7 @@ export class AcpGatewayAgent implements Agent {
     } catch (err) {
       this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
       if (deadlineExpired) {
-        this.rejectPendingPrompt(
-          pending,
-          new Error(`Gateway disconnected: ${pending.disconnectReason}`),
-        );
+        this.clearPendingDisconnectState(pending);
         return false;
       }
       return true;
@@ -1138,10 +1140,7 @@ export class AcpGatewayAgent implements Agent {
       return false;
     }
     if (deadlineExpired) {
-      this.rejectPendingPrompt(
-        currentPending,
-        new Error(`Gateway disconnected: ${currentPending.disconnectReason}`),
-      );
+      this.clearPendingDisconnectState(currentPending);
       return false;
     }
     return true;
