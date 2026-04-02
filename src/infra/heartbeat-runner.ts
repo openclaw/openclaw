@@ -27,14 +27,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
-  resolveSessionFilePath,
-  resolveStorePath,
-  saveSessionStore,
-  updateSessionStore,
-} from "../config/sessions.js";
+} from "../config/sessions/main-session.js";
+import { resolveSessionFilePath, resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
+import { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -43,6 +40,7 @@ import { CommandLane } from "../process/lanes.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
