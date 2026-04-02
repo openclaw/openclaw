@@ -273,7 +273,7 @@ export function parseMemoryToMB(value: string | null): number | null {
     return null;
   }
   const trimmed = value.trim().toLowerCase();
-  const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(gb|mb|g|m|tb|t)?$/);
+  const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(gb|mb|g|m|tb|t|b)?$/);
   if (!match) {
     return null;
   }
@@ -281,7 +281,9 @@ export function parseMemoryToMB(value: string | null): number | null {
   if (Number.isNaN(num)) {
     return null;
   }
-  const unit = match[2] ?? "mb";
+  // .wslconfig treats bare numbers (no unit suffix) as bytes.
+  // See: https://learn.microsoft.com/en-us/windows/wsl/wsl-config
+  const unit = match[2] ?? "b";
   switch (unit) {
     case "tb":
     case "t":
@@ -292,6 +294,8 @@ export function parseMemoryToMB(value: string | null): number | null {
     case "mb":
     case "m":
       return num;
+    case "b":
+      return num / (1024 * 1024);
     default:
       return null;
   }
