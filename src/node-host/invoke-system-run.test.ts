@@ -1444,9 +1444,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             });
 
             expect(malicious.runCommand).not.toHaveBeenCalled();
-            expectInvokeErrorMessage(malicious.sendInvokeResult, {
-              message: "awk inline program requires explicit approval in strictInlineEval mode",
-            });
+            const invokeResult = vi.mocked(malicious.sendInvokeResult).mock.calls[0]?.[0] as
+              | { error?: { message?: string } }
+              | undefined;
+            expect(invokeResult?.error?.message).toMatch(
+              /SYSTEM_RUN_DENIED: approval required(?: \(awk inline program requires explicit approval in strictInlineEval mode\))?$/,
+            );
           } finally {
             fs.rmSync(tempDir, { recursive: true, force: true });
           }

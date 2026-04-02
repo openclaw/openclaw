@@ -77,11 +77,18 @@ export function normalizeMessageActionInput(params: {
 
   if ((action === "react" || action === "reactions") && !normalizedArgs.messageId) {
     const inferredMessageId = toolContext?.currentMessageTs?.trim();
-    const normalizedTarget = normalizeCurrentTargetComparable(normalizedArgs.target);
+    const comparableArgs = { ...normalizedArgs };
+    applyTargetToParams({ action, args: comparableArgs });
+    const normalizedTarget = normalizeCurrentTargetComparable(comparableArgs.target);
     const normalizedCurrentTarget = normalizeCurrentTargetComparable(toolContext?.currentChannelId);
-    const shouldInferMessageId =
-      !normalizedTarget ||
-      (!!normalizedCurrentTarget && normalizedTarget === normalizedCurrentTarget);
+    const hasAnyExplicitTarget = actionHasTarget(action, normalizedArgs, {
+      channel: inferredChannel,
+    });
+    const sameTargetAsContext =
+      !!normalizedTarget &&
+      !!normalizedCurrentTarget &&
+      normalizedTarget === normalizedCurrentTarget;
+    const shouldInferMessageId = !hasAnyExplicitTarget || sameTargetAsContext;
     if (inferredMessageId && shouldInferMessageId) {
       normalizedArgs.messageId = inferredMessageId;
     }

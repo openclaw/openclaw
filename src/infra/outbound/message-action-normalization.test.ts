@@ -193,6 +193,24 @@ describe("normalizeMessageActionInput", () => {
     expect(normalized.messageId).toBeUndefined();
   });
 
+  it("does not infer react messageId when an alias target field is explicitly provided", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "react",
+      args: {
+        chatId: "C2",
+        emoji: "👍",
+      },
+      toolContext: {
+        currentChannelId: "channel:C1",
+        currentChannelProvider: "slack",
+        currentMessageTs: "1710000000.123456",
+      },
+    });
+
+    expect(normalized.messageId).toBeUndefined();
+    expect(normalized.chatId).toBe("C2");
+  });
+
   it("infers react messageId when the target is omitted and current target is implied", () => {
     const normalized = normalizeMessageActionInput({
       action: "react",
