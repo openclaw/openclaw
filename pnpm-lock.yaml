@@ -34,6 +34,9 @@ importers:
       '@anthropic-ai/vertex-sdk':
         specifier: ^0.14.4
         version: 0.14.4(zod@4.3.6)
+      '@aws-sdk/client-bedrock':
+        specifier: 3.1020.0
+        version: 3.1020.0
       '@clack/prompts':
         specifier: ^1.1.0
         version: 1.1.0
