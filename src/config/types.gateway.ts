@@ -129,7 +129,7 @@ export type GatewayTrustedProxyConfig = {
   userHeader: string;
   /**
    * Additional headers that MUST be present for the request to be trusted.
-   * Use this to verify the request actually came from the proxy.
+   * Use this to verify the request actually came through the proxy.
    * Example: ["x-forwarded-proto", "x-forwarded-host"]
    */
   requiredHeaders?: string[];
@@ -382,6 +382,11 @@ export type GatewayToolsConfig = {
   deny?: string[];
   /** Tools to explicitly allow (removes from default deny list). */
   allow?: string[];
+};
+
+export type GatewayWebchatConfig = {
+  /** Max characters per text field in chat.history responses before truncation (default: 12000). */
+  chatHistoryMaxChars?: number;
 };
 
 /**
