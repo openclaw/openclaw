@@ -6,8 +6,8 @@ import {
   resolveMentionGatingWithBypass,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
@@ -29,13 +29,13 @@ import type {
 } from "./bot-message-context.types.js";
 import {
   buildSenderLabel,
-  buildTelegramGroupPeerId,
   expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
   resolveTelegramMediaPlaceholder,
-} from "./bot/helpers.js";
+} from "./bot/body-helpers.js";
+import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 

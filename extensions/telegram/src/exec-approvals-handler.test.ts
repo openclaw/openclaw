@@ -114,6 +114,50 @@ describe("TelegramExecApprovalHandler", () => {
     );
   });
 
+  it("hides allow-always actions when ask=always", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["8460800771"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested({
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        ask: "always",
+      },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "-1003841603622",
+      expect.not.stringContaining("allow-always"),
+      expect.objectContaining({
+        buttons: [
+          [
+            {
+              text: "Allow Once",
+              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once",
+              style: "success",
+            },
+            {
+              text: "Deny",
+              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 deny",
+              style: "danger",
+            },
+          ],
+        ],
+      }),
+    );
+  });
+
   it("falls back to approver DMs when channel routing is unavailable", async () => {
     const cfg = {
       channels: {
@@ -241,6 +285,34 @@ describe("TelegramExecApprovalHandler", () => {
         ]),
       }),
     );
+  });
+
+  it("delivers plugin approvals when the agent only exists in the Telegram session key", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["8460800771"],
+            agentFilter: ["main"],
+            target: "dm",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested({
+      ...pluginRequest,
+      request: {
+        ...pluginRequest.request,
+        agentId: undefined,
+      },
+    });
+
+    const [chatId, text] = sendMessage.mock.calls[0] ?? [];
+    expect(chatId).toBe("8460800771");
+    expect(text).toContain("Plugin approval required");
   });
 
   it("does not deliver plugin approvals for a different Telegram account", async () => {

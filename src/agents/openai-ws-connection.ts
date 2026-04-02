@@ -15,7 +15,7 @@
 
 import { EventEmitter } from "node:events";
 import WebSocket, { type ClientOptions } from "ws";
-import { resolveProviderAttributionHeaders } from "./provider-attribution.js";
+import { resolveProviderRequestAttributionHeaders } from "./provider-attribution.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WebSocket Event Types (Server → Client)
@@ -259,14 +259,6 @@ const MAX_RETRIES = 5;
 /** Backoff delays in ms: 1s, 2s, 4s, 8s, 16s */
 const BACKOFF_DELAYS_MS = [1000, 2000, 4000, 8000, 16000] as const;
 
-function isOpenAIPublicWebSocketUrl(url: string): boolean {
-  try {
-    return new URL(url).hostname.toLowerCase() === "api.openai.com";
-  } catch {
-    return url.toLowerCase().includes("api.openai.com");
-  }
-}
-
 export interface OpenAIWebSocketManagerOptions {
   /** Override the default WebSocket URL (useful for testing) */
   url?: string;
@@ -414,9 +406,13 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
           "OpenAI-Beta": "responses-websocket=v1",
-          ...(isOpenAIPublicWebSocketUrl(this.wsUrl)
-            ? resolveProviderAttributionHeaders("openai")
-            : undefined),
+          ...resolveProviderRequestAttributionHeaders({
+            provider: "openai",
+            api: "openai-responses",
+            baseUrl: this.wsUrl,
+            capability: "llm",
+            transport: "websocket",
+          }),
         },
       });
 
