@@ -1,9 +1,13 @@
-import { Button } from "@/components/ui/button";
+import { RouterProvider } from "@tanstack/react-router";
+import { Toaster } from "@/components/ui/sonner";
+import { GatewayProvider } from "@/components/layout/gateway-provider";
+import { router } from "@/routes";
 
 export function App() {
   return (
-    <div className="flex items-center justify-center min-h-screen">
-      <Button>OpenClaw</Button>
-    </div>
+    <GatewayProvider>
+      <RouterProvider router={router} />
+      <Toaster />
+    </GatewayProvider>
   );
 }
