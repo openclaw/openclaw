@@ -103,32 +103,82 @@ function extractScriptTargetFromCommand(
     return null;
   }
 
-  const findLastPositionalScriptArg = (
-    tokens: string[],
-    extension: ".py" | ".js",
-  ): string | null => {
-    for (let i = tokens.length - 1; i >= 0; i -= 1) {
+  const args = argv.slice(commandIdx + 1);
+  const findFirstPythonScriptArg = (tokens: string[]): string | null => {
+    const optionsWithSeparateValue = new Set(["-W", "-X", "-Q", "--check-hash-based-pycs"]);
+    for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
+      if (token === "--") {
+        const next = tokens[i + 1];
+        return next?.toLowerCase().endsWith(".py") ? next : null;
+      }
+      if (token === "-") {
+        return null;
+      }
+      if (token === "-c" || token === "-m") {
+        return null;
+      }
+      if ((token.startsWith("-c") || token.startsWith("-m")) && token.length > 2) {
+        return null;
+      }
+      if (optionsWithSeparateValue.has(token)) {
+        i += 1;
+        continue;
+      }
       if (token.startsWith("-")) {
         continue;
       }
-      if (token.toLowerCase().endsWith(extension)) {
-        return token;
+      return token.toLowerCase().endsWith(".py") ? token : null;
+    }
+    return null;
+  };
+  const findFirstNodeScriptArg = (tokens: string[]): string | null => {
+    const optionsWithSeparateValue = new Set(["-r", "--require", "--import"]);
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (token === "--") {
+        const next = tokens[i + 1];
+        return next?.toLowerCase().endsWith(".js") ? next : null;
       }
+      if (
+        token === "-e" ||
+        token === "-p" ||
+        token === "--eval" ||
+        token === "--print" ||
+        token.startsWith("--eval=") ||
+        token.startsWith("--print=") ||
+        ((token.startsWith("-e") || token.startsWith("-p")) && token.length > 2)
+      ) {
+        return null;
+      }
+      if (optionsWithSeparateValue.has(token)) {
+        i += 1;
+        continue;
+      }
+      if (
+        (token.startsWith("-r") && token.length > 2) ||
+        token.startsWith("--require=") ||
+        token.startsWith("--import=")
+      ) {
+        continue;
+      }
+      if (token.startsWith("-")) {
+        continue;
+      }
+      return token.toLowerCase().endsWith(".js") ? token : null;
     }
     return null;
   };
 
-  const args = argv.slice(commandIdx + 1);
   if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
-    const script = findLastPositionalScriptArg(args, ".py");
+    const script = findFirstPythonScriptArg(args);
     if (script) {
       return { kind: "python", relOrAbsPath: script };
     }
     return null;
   }
   if (executable === "node") {
-    const script = findLastPositionalScriptArg(args, ".js");
+    const script = findFirstNodeScriptArg(args);
     if (script) {
       return { kind: "node", relOrAbsPath: script };
     }

@@ -73,29 +73,44 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
-  it("validates the final positional python script instead of earlier .py flag values", async () => {
+  it("validates the first positional python script operand when extra args follow", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      await fs.writeFile(path.join(tmp, "config.py"), "print('ok')", "utf-8");
-      await fs.writeFile(path.join(tmp, "script.py"), "payload = $DM_JSON", "utf-8");
+      await fs.writeFile(path.join(tmp, "bad.py"), "payload = $DM_JSON", "utf-8");
+      await fs.writeFile(path.join(tmp, "ghost.py"), "print('ok')", "utf-8");
 
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
       await expect(
-        tool.execute("call-python-final-script", {
-          command: "python --config config.py script.py",
+        tool.execute("call-python-first-script", {
+          command: "python bad.py ghost.py",
           workdir: tmp,
         }),
       ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
     });
   });
 
-  it("validates the final positional node script instead of earlier .js flag values", async () => {
+  it("validates the first positional node script operand when extra args follow", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(path.join(tmp, "app.js"), "const value = $DM_JSON;", "utf-8");
+      await fs.writeFile(path.join(tmp, "config.js"), "console.log('ok')", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-node-first-script", {
+          command: "node app.js config.js",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
+  it("still resolves node script when --require consumes a preceding .js option value", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bootstrap.js"), "console.log('bootstrap')", "utf-8");
       await fs.writeFile(path.join(tmp, "app.js"), "const value = $DM_JSON;", "utf-8");
 
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
       await expect(
-        tool.execute("call-node-final-script", {
+        tool.execute("call-node-require-script", {
           command: "node --require bootstrap.js app.js",
           workdir: tmp,
         }),
