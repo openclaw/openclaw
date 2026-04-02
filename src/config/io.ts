@@ -2075,7 +2075,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
   ): Promise<{ persistedHash: string }> {
-    clearConfigCache();
+    clearConfigCacheEntry();
     let persistCandidate: unknown = cfg;
     const { snapshot } = await readConfigFileSnapshotInternal();
     let envRefMap: Map<string, string> | null = null;
@@ -2612,8 +2612,12 @@ export function resetConfigStatFingerprintAtLastLoadForTest(): void {
   configStatFingerprintAtLastLoad = null;
 }
 
-export function clearConfigCache(): void {
+function clearConfigCacheEntry(): void {
   configCache = null;
+}
+
+export function clearConfigCache(): void {
+  clearConfigCacheEntry();
   resetConfigRuntimeState();
 }
 
