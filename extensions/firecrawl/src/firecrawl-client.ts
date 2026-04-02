@@ -3,13 +3,13 @@ import {
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
   normalizeCacheKey,
-  postTrustedWebToolsJson,
   readCache,
   resolveCacheTtlMs,
   truncateText,
   withTrustedWebToolsEndpoint,
   writeCache,
-} from "openclaw/plugin-sdk/provider-web-search";
+} from "openclaw/plugin-sdk/provider-web-fetch";
+import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveFirecrawlApiKey,

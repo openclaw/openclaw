@@ -122,7 +122,7 @@ function normalizeLegacyWebFetchConfigRecord<T extends JsonRecord>(
   config: T;
   changes: string[];
 } {
-  const nextRoot = cloneRecord(raw);
+  const nextRoot = structuredClone(raw);
   const tools = ensureRecord(nextRoot, "tools");
   const web = ensureRecord(tools, "web");
   const fetch = resolveLegacyFetchConfig(nextRoot);
