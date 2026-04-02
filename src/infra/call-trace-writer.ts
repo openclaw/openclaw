@@ -5,7 +5,10 @@
  * to a single JSONL file per day under `diagnostics.callTrace.dir`.
  *
  * File pattern: <dir>/YYYY-MM-DD.jsonl
- * Each line is a JSON object with a `type` field ("model.call" | "tool.call").
+ * Each line is a JSON object with a `type` field:
+ *   - "model.usage": full per-turn aggregate (usage, cost, context, trigger metadata)
+ *   - "model.call":  per-LLM-call record (tokens for that call, duration)
+ *   - "tool.call":   per-tool record (duration, error status)
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -63,9 +66,10 @@ export function startCallTraceWriter(config: OpenClawConfig): (() => void) | und
     return undefined;
   }
 
-  const logLlmCalls = ct.logLlmCalls !== false; // default true
-  const logToolCalls = ct.logToolCalls === true; // default false
-  if (!logLlmCalls && !logToolCalls) {
+  const logLlmUsage = ct.logLlmUsage !== false; // default true  — model.usage (per-turn aggregate)
+  const logLlmCalls = ct.logLlmCalls !== false; // default true  — model.call  (per-LLM-call)
+  const logToolCalls = ct.logToolCalls === true; // default false — tool.call   (per-tool)
+  if (!logLlmUsage && !logLlmCalls && !logToolCalls) {
     return undefined;
   }
 
@@ -76,13 +80,16 @@ export function startCallTraceWriter(config: OpenClawConfig): (() => void) | und
   purgeOldFiles(baseDir, retainDays);
 
   const unsub = onDiagnosticEvent((evt: DiagnosticEventPayload) => {
+    if (evt.type === "model.usage" && !logLlmUsage) {
+      return;
+    }
     if (evt.type === "model.call" && !logLlmCalls) {
       return;
     }
     if (evt.type === "tool.call" && !logToolCalls) {
       return;
     }
-    if (evt.type !== "model.call" && evt.type !== "tool.call") {
+    if (evt.type !== "model.usage" && evt.type !== "model.call" && evt.type !== "tool.call") {
       return;
     }
 
