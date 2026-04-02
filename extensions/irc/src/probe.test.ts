@@ -54,12 +54,12 @@ describe("probeIrc", () => {
   it("returns latency and quits the probe client on success", async () => {
     resolveIrcAccountMock.mockReturnValue({
       configured: true,
-      host: "irc.libera.chat",
+      host: "localhost",
       port: 6697,
       tls: true,
       nick: "openclaw",
     });
-    buildIrcConnectOptionsMock.mockReturnValue({ host: "irc.libera.chat" });
+    buildIrcConnectOptionsMock.mockReturnValue({ host: "localhost" });
     const quit = vi.fn();
     connectIrcClientMock.mockResolvedValue({ quit });
     const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
@@ -68,12 +68,12 @@ describe("probeIrc", () => {
       const result = await probeIrc({} as never, { timeoutMs: 5000 });
 
       expect(buildIrcConnectOptionsMock).toHaveBeenCalledWith(
-        expect.objectContaining({ host: "irc.libera.chat" }),
+        expect.objectContaining({ host: "localhost" }),
         { connectTimeoutMs: 5000 },
       );
       expect(result).toEqual({
         ok: true,
-        host: "irc.libera.chat",
+        host: "localhost",
         port: 6697,
         tls: true,
         nick: "openclaw",
@@ -88,17 +88,17 @@ describe("probeIrc", () => {
   it("formats non-Error probe failures into the returned error field", async () => {
     resolveIrcAccountMock.mockReturnValue({
       configured: true,
-      host: "irc.libera.chat",
+      host: "localhost",
       port: 6667,
       tls: false,
       nick: "openclaw",
     });
-    buildIrcConnectOptionsMock.mockReturnValue({ host: "irc.libera.chat" });
+    buildIrcConnectOptionsMock.mockReturnValue({ host: "localhost" });
     connectIrcClientMock.mockRejectedValue({ code: "ECONNREFUSED" });
 
     await expect(probeIrc({} as never)).resolves.toEqual({
       ok: false,
-      host: "irc.libera.chat",
+      host: "localhost",
       port: 6667,
       tls: false,
       nick: "openclaw",

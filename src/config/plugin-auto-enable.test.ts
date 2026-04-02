@@ -341,7 +341,7 @@ describe("applyPluginAutoEnable", () => {
     const result = applyPluginAutoEnable({
       config: {},
       env: {
-        IRC_HOST: "irc.libera.chat",
+        IRC_HOST: "localhost",
         IRC_NICK: "openclaw-bot",
       },
     });

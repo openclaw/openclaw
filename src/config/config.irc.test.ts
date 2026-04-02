@@ -22,7 +22,7 @@ describe("config irc", () => {
     const res = validateConfigObject({
       channels: {
         irc: {
-          host: "irc.libera.chat",
+          host: "localhost",
           nick: "openclaw-bot",
           channels: ["#openclaw"],
         },
@@ -30,7 +30,7 @@ describe("config irc", () => {
     });
 
     const config = expectValidConfig(res);
-    expect(config.channels?.irc?.host).toBe("irc.libera.chat");
+    expect(config.channels?.irc?.host).toBe("localhost");
     expect(config.channels?.irc?.nick).toBe("openclaw-bot");
   });
 

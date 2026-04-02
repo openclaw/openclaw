@@ -4,7 +4,7 @@ import { buildIrcConnectOptions } from "./connect-options.js";
 describe("buildIrcConnectOptions", () => {
   it("copies resolved account connection fields and NickServ config", () => {
     const account = {
-      host: "irc.libera.chat",
+      host: "localhost",
       port: 6697,
       tls: true,
       nick: "openclaw",
@@ -27,7 +27,7 @@ describe("buildIrcConnectOptions", () => {
         connectTimeoutMs: 1234,
       }),
     ).toEqual({
-      host: "irc.libera.chat",
+      host: "localhost",
       port: 6697,
       tls: true,
       nick: "openclaw",

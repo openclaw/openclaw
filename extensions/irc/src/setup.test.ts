@@ -135,7 +135,7 @@ describe("irc setup", () => {
 
     expect(
       updateIrcAccountConfig(cfg, "work", {
-        host: "irc.libera.chat",
+        host: "localhost",
         nick: "openclaw-work",
       }),
     ).toMatchObject({
@@ -143,7 +143,7 @@ describe("irc setup", () => {
         irc: {
           accounts: {
             work: {
-              host: "irc.libera.chat",
+              host: "localhost",
               nick: "openclaw-work",
             },
           },
@@ -210,13 +210,13 @@ describe("irc setup", () => {
 
     expect(
       validateInput!({
-        input: { host: "irc.libera.chat", nick: "" },
+        input: { host: "localhost", nick: "" },
       } as never),
     ).toBe("IRC requires nick.");
 
     expect(
       validateInput!({
-        input: { host: "irc.libera.chat", nick: "openclaw" },
+        input: { host: "localhost", nick: "openclaw" },
       } as never),
     ).toBeNull();
 
@@ -226,7 +226,7 @@ describe("irc setup", () => {
         accountId: "default",
         input: {
           name: "Default",
-          host: " irc.libera.chat ",
+          host: " localhost ",
           port: "7000",
           tls: true,
           nick: " openclaw ",
@@ -241,7 +241,7 @@ describe("irc setup", () => {
         irc: {
           enabled: true,
           name: "Default",
-          host: "irc.libera.chat",
+          host: "localhost",
           port: 7000,
           tls: true,
           nick: "openclaw",
@@ -258,7 +258,7 @@ describe("irc setup", () => {
     const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC server host") {
-          return "irc.libera.chat";
+          return "localhost";
         }
         if (message === "IRC server port") {
           return "6697";
@@ -300,7 +300,7 @@ describe("irc setup", () => {
 
     expect(result.accountId).toBe("default");
     expect(result.cfg.channels?.irc?.enabled).toBe(true);
-    expect(result.cfg.channels?.irc?.host).toBe("irc.libera.chat");
+    expect(result.cfg.channels?.irc?.host).toBe("localhost");
     expect(result.cfg.channels?.irc?.nick).toBe("openclaw-bot");
     expect(result.cfg.channels?.irc?.tls).toBe(true);
     expect(result.cfg.channels?.irc?.channels).toEqual(["#openclaw", "#ops"]);
@@ -329,7 +329,7 @@ describe("irc setup", () => {
         irc: {
           accounts: {
             work: {
-              host: "irc.libera.chat",
+              host: "localhost",
               nick: "openclaw-work",
             },
           },
