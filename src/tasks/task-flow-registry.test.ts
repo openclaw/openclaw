@@ -194,7 +194,7 @@ describe("task-flow-registry", () => {
     });
   });
 
-  it("emits restored, upserted, and deleted flow hook events", () => {
+  it("emits restored, upserted, and deleted flow observer events", () => {
     const onEvent = vi.fn();
     configureTaskFlowRegistryRuntime({
       store: {
@@ -203,15 +203,15 @@ describe("task-flow-registry", () => {
         }),
         saveSnapshot: () => {},
       },
-      hooks: {
+      observers: {
         onEvent,
       },
     });
 
     const created = createManagedTaskFlow({
       ownerKey: "agent:main:main",
-      controllerId: "tests/hooks",
-      goal: "Observe hooks",
+      controllerId: "tests/observers",
+      goal: "Observe observers",
     });
 
     deleteTaskFlowRecordById(created.flowId);
