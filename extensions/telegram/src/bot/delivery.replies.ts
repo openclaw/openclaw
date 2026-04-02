@@ -570,6 +570,15 @@ function emitMessageSentHooks(
   emitInternalMessageSentHook(params);
 }
 
+export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams): void {
+  const hookRunner = getGlobalHookRunner();
+  emitMessageSentHooks({
+    ...params,
+    hookRunner,
+    enabled: hookRunner?.hasHooks("message_sent") ?? false,
+  });
+}
+
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   chatId: string;

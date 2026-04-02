@@ -58,6 +58,7 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
@@ -70,6 +71,7 @@ import {
 } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
+import { recordSentMessage } from "./sent-message-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
@@ -78,6 +80,11 @@ type TelegramNativeCommandContext = Context & { match?: string };
 type TelegramChunkMode = ReturnType<
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").resolveChunkMode
 >;
+type TelegramNativeReplyPayload = import("openclaw/plugin-sdk/reply-dispatch-runtime").ReplyPayload;
+type TelegramNativeReplyChannelData = {
+  buttons?: TelegramInlineButtons;
+  pin?: boolean;
+};
 
 type TelegramCommandAuthResult = {
   chatId: number;
@@ -108,6 +115,53 @@ let telegramNativeCommandRuntimePromise:
 async function loadTelegramNativeCommandRuntime() {
   telegramNativeCommandRuntimePromise ??= import("./bot-native-commands.runtime.js");
   return await telegramNativeCommandRuntimePromise;
+}
+
+function resolveTelegramProgressPlaceholder(command: {
+  telegramNativeProgressMessage?: string;
+}): string | null {
+  const text = command.telegramNativeProgressMessage?.trim();
+  return text ? text : null;
+}
+
+function resolveTelegramNativeReplyChannelData(
+  result: TelegramNativeReplyPayload,
+): TelegramNativeReplyChannelData | undefined {
+  return result.channelData?.telegram as TelegramNativeReplyChannelData | undefined;
+}
+
+function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): boolean {
+  const telegramData = resolveTelegramNativeReplyChannelData(result);
+  return Boolean(
+    typeof result.text === "string" &&
+    result.text.trim() &&
+    !result.mediaUrl &&
+    (!result.mediaUrls || result.mediaUrls.length === 0) &&
+    !result.interactive &&
+    !result.btw &&
+    telegramData?.pin !== true,
+  );
+}
+
+async function cleanupTelegramProgressPlaceholder(params: {
+  bot: Bot;
+  chatId: number;
+  progressMessageId?: number;
+  runtime: RuntimeEnv;
+}): Promise<void> {
+  const progressMessageId = params.progressMessageId;
+  if (progressMessageId == null) {
+    return;
+  }
+  try {
+    await withTelegramApiErrorLogging({
+      operation: "deleteMessage",
+      runtime: params.runtime,
+      fn: () => params.bot.api.deleteMessage(params.chatId, progressMessageId),
+    });
+  } catch {
+    // Best-effort cleanup before fallback or suppression exits.
+  }
 }
 
 export type RegisterTelegramHandlerParams = {
@@ -956,7 +1010,31 @@ export const registerTelegramNativeCommands = ({
         });
         const from = isGroup ? buildTelegramGroupFrom(chatId, threadSpec.id) : `telegram:${chatId}`;
         const to = `telegram:${chatId}`;
-        const { deliverReplies } = await loadTelegramNativeCommandDeliveryRuntime();
+        const { deliverReplies, emitTelegramMessageSentHooks } =
+          await loadTelegramNativeCommandDeliveryRuntime();
+        let progressMessageId: number | undefined;
+        const progressPlaceholder = resolveTelegramProgressPlaceholder(match.command);
+
+        if (progressPlaceholder) {
+          try {
+            const sent = await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(
+                  chatId,
+                  progressPlaceholder,
+                  buildTelegramThreadParams(threadSpec),
+                ),
+            });
+            const maybeMessageId = (sent as { message_id?: unknown } | undefined)?.message_id;
+            if (typeof maybeMessageId === "number") {
+              progressMessageId = maybeMessageId;
+            }
+          } catch {
+            // Fall back to the normal final reply path if the placeholder send fails.
+          }
+        }
 
         const result = await nativeCommandRuntime.executePluginCommand({
           command: match.command,
@@ -974,18 +1052,65 @@ export const registerTelegramNativeCommands = ({
         });
 
         if (
-          !shouldSuppressLocalTelegramExecApprovalPrompt({
+          shouldSuppressLocalTelegramExecApprovalPrompt({
             cfg: runtimeCfg,
             accountId: route.accountId,
             payload: result,
           })
         ) {
-          await deliverReplies({
-            replies: [result],
-            ...deliveryBaseOptions,
-            silent: runtimeTelegramCfg.silentErrorReplies === true && result.isError === true,
+          await cleanupTelegramProgressPlaceholder({
+            bot,
+            chatId,
+            progressMessageId,
+            runtime,
           });
+          return;
         }
+
+        const progressResultText =
+          typeof result.text === "string" && result.text.trim().length > 0 ? result.text : null;
+        const telegramResultData = resolveTelegramNativeReplyChannelData(result);
+        if (
+          progressMessageId != null &&
+          telegramDeps.editMessageTelegram &&
+          progressResultText &&
+          isEditableTelegramProgressResult(result)
+        ) {
+          try {
+            await telegramDeps.editMessageTelegram(chatId, progressMessageId, progressResultText, {
+              cfg: runtimeCfg,
+              accountId: route.accountId,
+              textMode: "markdown",
+              linkPreview: runtimeTelegramCfg.linkPreview,
+              buttons: telegramResultData?.buttons,
+            });
+            recordSentMessage(chatId, progressMessageId);
+            emitTelegramMessageSentHooks({
+              sessionKeyForInternalHooks: route.sessionKey,
+              chatId: String(chatId),
+              accountId: route.accountId,
+              content: progressResultText,
+              success: true,
+              messageId: progressMessageId,
+              isGroup,
+              groupId: isGroup ? String(chatId) : undefined,
+            });
+            return;
+          } catch {
+            // Fall through to cleanup + normal delivered reply if editing fails.
+          }
+        }
+        await cleanupTelegramProgressPlaceholder({
+          bot,
+          chatId,
+          progressMessageId,
+          runtime,
+        });
+        await deliverReplies({
+          replies: [result],
+          ...deliveryBaseOptions,
+          silent: runtimeTelegramCfg.silentErrorReplies === true && result.isError === true,
+        });
       });
     }
   } else if (nativeDisabledExplicit) {
