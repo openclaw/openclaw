@@ -1,4 +1,5 @@
 export function safeJsonStringify(value: unknown): string | null {
+  const seen = new WeakSet<object>();
   try {
     return JSON.stringify(value, (_key, val) => {
       if (typeof val === "bigint") {
@@ -12,6 +13,12 @@ export function safeJsonStringify(value: unknown): string | null {
       }
       if (val instanceof Uint8Array) {
         return { type: "Uint8Array", data: Buffer.from(val).toString("base64") };
+      }
+      if (val && typeof val === "object") {
+        if (seen.has(val)) {
+          return "[Circular]";
+        }
+        seen.add(val);
       }
       return val;
     });

@@ -7,6 +7,8 @@ set -euo pipefail
 # upstream openclaw@latest.
 
 OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
+# Runtime JSON profile files bundled into the archive (override for your machine).
+OPENCLAW_MAC_PROFILE_SOURCE="${OPENCLAW_MAC_PROFILE_SOURCE:-/Users/lidongdong/Desktop/openclaw}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ARTIFACTS_ROOT="${OPENCLAW_MAC_BUNDLE_OUTPUT_DIR:-${REPO_ROOT}/.artifacts/openclaw-mac-bundles}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -19,6 +21,7 @@ LOCAL_PACKAGE_PATH=""
 BUNDLE_ENV_PATH="${OUT_DIR}/.openclaw/.env"
 
 echo "Packing OpenClaw runtime profile from: ${OPENCLAW_HOME}"
+echo "Bundling config JSON from: ${OPENCLAW_MAC_PROFILE_SOURCE}"
 echo "Using local repository: ${REPO_ROOT}"
 echo "Writing bundle artifacts to: ${ARTIFACTS_ROOT}"
 
@@ -36,6 +39,28 @@ copy_if_exists() {
   else
     echo "  [profile] skipped missing file: ${src}"
   fi
+}
+
+# Match scripts/openclaw-prepack.ts: prepack skips rebuild when OPENCLAW_PREPACK_PREPARED is set
+# only if these artifacts exist.
+openclaw_dist_looks_ready() {
+  local root="$1"
+  if [ ! -f "${root}/dist/control-ui/index.html" ]; then
+    return 1
+  fi
+  if [ ! -f "${root}/dist/index.js" ] && [ ! -f "${root}/dist/index.mjs" ]; then
+    return 1
+  fi
+  shopt -s nullglob
+  local assets=( "${root}/dist/control-ui/assets/"* )
+  shopt -u nullglob
+  local p
+  for p in "${assets[@]}"; do
+    if [ -f "${p}" ]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 dotenv_quote() {
@@ -93,6 +118,30 @@ EOF
 echo
 echo "Building and packing local OpenClaw package..."
 pushd "${REPO_ROOT}" >/dev/null
+
+# Fast path: if dist/ is already complete, prepack only verifies (no pnpm build / ui:build).
+# Slow path: force full prepack with OPENCLAW_MAC_PACK_FORCE_PREPACK_BUILD=1
+#   (or any incomplete dist — we run build here, then pack with skip so prepack does not rebuild twice).
+force_prepack="${OPENCLAW_MAC_PACK_FORCE_PREPACK_BUILD:-}"
+if [ "${force_prepack}" = "1" ] || [ "${force_prepack}" = "true" ]; then
+  echo "  [pack] OPENCLAW_MAC_PACK_FORCE_PREPACK_BUILD: prepack will run full build + ui:build (slow)."
+  unset OPENCLAW_PREPACK_PREPARED
+elif openclaw_dist_looks_ready "${REPO_ROOT}"; then
+  echo "  [pack] dist/ looks ready — OPENCLAW_PREPACK_PREPARED=1 (prepack verifies only, no rebuild)."
+  export OPENCLAW_PREPACK_PREPARED=1
+else
+  echo "  [pack] dist/ missing or incomplete — running pnpm build && pnpm ui:build..."
+  pnpm build
+  pnpm ui:build
+  echo "  [pack] OPENCLAW_PREPACK_PREPARED=1 for pack (prepack verifies only)."
+  export OPENCLAW_PREPACK_PREPARED=1
+fi
+
+# Prepack is fast when OPENCLAW_PREPACK_PREPARED=1; pnpm pack still walks and gzip-compresses
+# everything in package.json "files" (dist/, docs/, skills/, assets/, …). That step alone often
+# takes several minutes on a large tree — not stuck, just I/O + compression.
+echo "  [pack] Creating npm tarball (dist + docs + skills + …) — this can take a few minutes…"
+
 LOCAL_PACKAGE_TGZ="$(pnpm pack --pack-destination "${PACKAGE_DIR}" | tail -n 1 | tr -d '\r')"
 popd >/dev/null
 
@@ -115,8 +164,9 @@ fi
 
 echo "  [package] ${LOCAL_PACKAGE_PATH}"
 
-copy_if_exists "${OPENCLAW_HOME}/openclaw.json" "${OUT_DIR}/.openclaw/openclaw.json"
-copy_if_exists "${OPENCLAW_HOME}/exec-approvals.json" "${OUT_DIR}/.openclaw/exec-approvals.json"
+copy_if_exists "${OPENCLAW_MAC_PROFILE_SOURCE}/openclaw.json" "${OUT_DIR}/.openclaw/openclaw.json"
+copy_if_exists "${OPENCLAW_MAC_PROFILE_SOURCE}/exec-approvals.json" "${OUT_DIR}/.openclaw/exec-approvals.json"
+copy_if_exists "${OPENCLAW_MAC_PROFILE_SOURCE}/control-plane-state.json" "${OUT_DIR}/.openclaw/control-plane-state.json"
 copy_if_exists "${OPENCLAW_HOME}/workspace/SOUL.md" "${OUT_DIR}/.openclaw/workspace/SOUL.md"
 create_bundle_env "${BUNDLE_ENV_PATH}"
 
@@ -130,6 +180,7 @@ This bundle contains:
 - .openclaw/.env
 - .openclaw/openclaw.json
 - .openclaw/exec-approvals.json
+- .openclaw/control-plane-state.json
 - .openclaw/workspace/SOUL.md
 
 Important:
@@ -158,6 +209,7 @@ To import on a target Mac:
    sed "s#__OPENCLAW_HOME__#\$HOME/.openclaw#g" ~/${OUT_BASENAME}/.openclaw/.env > ~/.openclaw/.env
    cp ~/${OUT_BASENAME}/.openclaw/openclaw.json ~/.openclaw/openclaw.json
    cp ~/${OUT_BASENAME}/.openclaw/exec-approvals.json ~/.openclaw/exec-approvals.json
+   cp ~/${OUT_BASENAME}/.openclaw/control-plane-state.json ~/.openclaw/control-plane-state.json
    cp ~/${OUT_BASENAME}/.openclaw/workspace/SOUL.md ~/.openclaw/workspace/SOUL.md
 
 5. Choose how you want to run the Gateway:
@@ -212,6 +264,9 @@ if [ -f "\${BUNDLE_DIR}/.openclaw/openclaw.json" ]; then
 fi
 if [ -f "\${BUNDLE_DIR}/.openclaw/exec-approvals.json" ]; then
   cp "\${BUNDLE_DIR}/.openclaw/exec-approvals.json" "\$HOME/.openclaw/exec-approvals.json"
+fi
+if [ -f "\${BUNDLE_DIR}/.openclaw/control-plane-state.json" ]; then
+  cp "\${BUNDLE_DIR}/.openclaw/control-plane-state.json" "\$HOME/.openclaw/control-plane-state.json"
 fi
 if [ -f "\${BUNDLE_DIR}/.openclaw/workspace/SOUL.md" ]; then
   mkdir -p "\$HOME/.openclaw/workspace"

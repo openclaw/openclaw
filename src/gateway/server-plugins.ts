@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import type { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -388,16 +389,24 @@ export function loadGatewayPlugins(params: {
   };
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
+  pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
 }) {
-  const pluginRegistry = loadOpenClawPlugins({
+  const resolvedConfig = applyPluginAutoEnable({
     config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    onlyPluginIds: resolveGatewayStartupPluginIds({
-      config: params.cfg,
+    env: process.env,
+  }).config;
+  const pluginIds =
+    params.pluginIds ??
+    resolveGatewayStartupPluginIds({
+      config: resolvedConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
-    }),
+    });
+  const pluginRegistry = loadOpenClawPlugins({
+    config: resolvedConfig,
+    workspaceDir: params.workspaceDir,
+    onlyPluginIds: pluginIds,
     logger: {
       info: (msg) => params.log.info(msg),
       warn: (msg) => params.log.warn(msg),

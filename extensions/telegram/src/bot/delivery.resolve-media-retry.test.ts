@@ -1,5 +1,6 @@
 import type { Message } from "@grammyjs/types";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
@@ -33,15 +34,13 @@ vi.mock("../sticker-cache.js", () => ({
   describeStickerImage: async () => null,
 }));
 
-let resolveMedia: typeof import("./delivery.js").resolveMedia;
-
 const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
 
 function makeCtx(
   mediaField: "voice" | "audio" | "photo" | "video" | "document" | "animation" | "sticker",
   getFile: TelegramContext["getFile"],
-  opts?: { file_name?: string },
+  opts?: { file_name?: string; mime_type?: string },
 ): TelegramContext {
   const msg: Record<string, unknown> = {
     message_id: 1,
@@ -49,7 +48,12 @@ function makeCtx(
     chat: { id: 1, type: "private" },
   };
   if (mediaField === "voice") {
-    msg.voice = { file_id: "v1", duration: 5, file_unique_id: "u1" };
+    msg.voice = {
+      file_id: "v1",
+      duration: 5,
+      file_unique_id: "u1",
+      ...(opts?.mime_type && { mime_type: opts.mime_type }),
+    };
   }
   if (mediaField === "audio") {
     msg.audio = {
@@ -57,6 +61,7 @@ function makeCtx(
       duration: 5,
       file_unique_id: "u2",
       ...(opts?.file_name && { file_name: opts.file_name }),
+      ...(opts?.mime_type && { mime_type: opts.mime_type }),
     };
   }
   if (mediaField === "photo") {
@@ -75,6 +80,7 @@ function makeCtx(
       file_id: "d1",
       file_unique_id: "u4",
       ...(opts?.file_name && { file_name: opts.file_name }),
+      ...(opts?.mime_type && { mime_type: opts.mime_type }),
     };
   }
   if (mediaField === "animation") {
@@ -156,7 +162,7 @@ async function expectTransientGetFileRetrySuccess() {
       url: `https://api.telegram.org/file/bot${BOT_TOKEN}/voice/file_0.oga`,
       ssrfPolicy: {
         allowRfc2544BenchmarkRange: true,
-        allowedHostnames: ["api.telegram.org"],
+        hostnameAllowlist: ["api.telegram.org"],
       },
     }),
   );
@@ -168,11 +174,6 @@ async function flushRetryTimers() {
 }
 
 describe("resolveMedia getFile retry", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ resolveMedia } = await import("./delivery.js"));
-  });
-
   beforeEach(() => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockReset();
@@ -365,13 +366,18 @@ describe("resolveMedia getFile retry", () => {
   it("uses local absolute file paths directly for media downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
 
-    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMedia(
+      makeCtx("document", getFile, { mime_type: "application/pdf" }),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+    );
 
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
     expect(saveMediaBuffer).not.toHaveBeenCalled();
     expect(result).toEqual(
       expect.objectContaining({
         path: "/var/lib/telegram-bot-api/file.pdf",
+        contentType: "application/pdf",
         placeholder: "<media:document>",
       }),
     );
@@ -511,6 +517,31 @@ describe("resolveMedia original filename preservation", () => {
       "inbound",
       MAX_MEDIA_BYTES,
       "documents/file_42.pdf",
+    );
+    expect(result).not.toBeNull();
+  });
+
+  it("allows a configured custom apiRoot host while keeping the hostname allowlist", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const ctx = makeCtx("document", getFile);
+    const result = await resolveMedia(
+      ctx,
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      "http://192.168.1.50:8081/custom-bot-api/",
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: {
+          hostnameAllowlist: ["api.telegram.org", "192.168.1.50"],
+          allowedHostnames: ["192.168.1.50"],
+          allowRfc2544BenchmarkRange: true,
+        },
+      }),
     );
     expect(result).not.toBeNull();
   });

@@ -23,6 +23,8 @@ If you want a higher-level overview first, start with:
 
 - [/concepts/session](/concepts/session)
 - [/concepts/compaction](/concepts/compaction)
+- [/concepts/memory](/concepts/memory)
+- [/concepts/memory-search](/concepts/memory-search)
 - [/concepts/session-pruning](/concepts/session-pruning)
 - [/reference/transcript-hygiene](/reference/transcript-hygiene)
 

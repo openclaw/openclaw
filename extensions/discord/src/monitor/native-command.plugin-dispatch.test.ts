@@ -1,9 +1,9 @@
 import { ChannelType } from "discord-api-types/v10";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import { setDefaultChannelPluginRegistryForTests } from "openclaw/plugin-sdk/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
-import { setDefaultChannelPluginRegistryForTests } from "../../../../src/commands/channel-test-helpers.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { clearPluginCommands, registerPluginCommand } from "../../../../src/plugins/commands.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,
@@ -39,6 +39,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
 function createInteraction(params?: {
   channelType?: ChannelType;
   channelId?: string;
+  threadParentId?: string | null;
   guildId?: string;
   guildName?: string;
 }): MockCommandInteraction {
@@ -48,6 +49,7 @@ function createInteraction(params?: {
     globalName: "Tester",
     channelType: params?.channelType ?? ChannelType.DM,
     channelId: params?.channelId ?? "dm-1",
+    threadParentId: params?.threadParentId,
     guildId: params?.guildId ?? null,
     guildName: params?.guildName,
     interactionId: "interaction-1",
@@ -464,6 +466,41 @@ describe("Discord native plugin command dispatch", () => {
     );
   });
 
+  it("rejects group DM slash commands outside dm.groupChannels before dispatch", async () => {
+    const cfg = {
+      commands: {
+        allowFrom: {
+          discord: ["user:owner"],
+        },
+      },
+      channels: {
+        discord: {
+          dm: {
+            enabled: true,
+            policy: "open",
+            groupEnabled: true,
+            groupChannels: ["allowed-group"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const interaction = createInteraction({
+      channelType: ChannelType.GroupDM,
+      channelId: "blocked-group",
+    });
+    const dispatchSpy = createDispatchSpy();
+    const command = await createStatusCommand(cfg);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "This group DM is not allowed.",
+      }),
+    );
+  });
+
   it("executes matched plugin commands directly without invoking the agent dispatcher", async () => {
     const cfg = createConfig();
     const commandSpec: NativeCommandSpec = {
@@ -498,6 +535,74 @@ describe("Discord native plugin command dispatch", () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
     expect(interaction.reply).toHaveBeenCalledWith(
       expect.objectContaining({ content: "direct plugin output" }),
+    );
+  });
+
+  it("forwards Discord thread metadata into direct plugin command execution", async () => {
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            "345678901234567890": {
+              channels: {
+                "thread-123": {
+                  allow: true,
+                  requireMention: false,
+                },
+                "parent-456": {
+                  allow: true,
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "cron_jobs",
+      description: "List cron jobs",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction({
+      channelType: ChannelType.PublicThread,
+      channelId: "thread-123",
+      threadParentId: "parent-456",
+      guildId: "345678901234567890",
+      guildName: "Test Guild",
+    });
+    const pluginMatch = {
+      command: {
+        name: "cron_jobs",
+        description: "List cron jobs",
+        pluginId: "cron-jobs",
+        acceptsArgs: false,
+        handler: vi.fn().mockResolvedValue({ text: "jobs" }),
+      },
+      args: undefined,
+    };
+
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
+    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+      text: "direct plugin output",
+    });
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        from: "discord:channel:thread-123",
+        to: "slash:owner",
+        sessionKey: "agent:main:discord:channel:thread-123",
+        messageThreadId: "thread-123",
+        threadParentId: "parent-456",
+      }),
     );
   });
 

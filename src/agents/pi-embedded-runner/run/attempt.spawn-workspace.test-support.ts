@@ -283,8 +283,8 @@ vi.mock("../../model-tool-support.js", () => ({
   supportsModelTools: () => true,
 }));
 
-vi.mock("../../ollama-stream.js", () => ({
-  createConfiguredOllamaStreamFn: vi.fn(),
+vi.mock("../../provider-stream.js", () => ({
+  registerProviderStreamForModel: vi.fn(),
 }));
 
 vi.mock("../../owner-display.js", () => ({
@@ -636,6 +636,7 @@ export async function createContextEngineAttemptRunner(params: {
     }) => Promise<CompactResult>;
     info?: Partial<ContextEngineInfo>;
   };
+  attemptOverrides?: Partial<Parameters<Awaited<ReturnType<typeof loadRunEmbeddedAttempt>>>[0]>;
   sessionKey: string;
   tempPaths: string[];
 }) {
@@ -712,5 +713,6 @@ export async function createContextEngineAttemptRunner(params: {
         version: infoVersion,
       },
     },
+    ...params.attemptOverrides,
   });
 }

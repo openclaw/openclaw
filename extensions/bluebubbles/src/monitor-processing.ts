@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
+import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import {
@@ -833,14 +834,15 @@ export async function processMessage(
     ? (chatGuid ?? chatIdentifier ?? (chatId ? String(chatId) : "group"))
     : message.senderId;
 
-  const route = core.channel.routing.resolveAgentRoute({
+  const route = resolveBlueBubblesConversationRoute({
     cfg: config,
-    channel: "bluebubbles",
     accountId: account.accountId,
-    peer: {
-      kind: isGroup ? "group" : "direct",
-      id: peerId,
-    },
+    isGroup,
+    peerId,
+    sender: message.senderId,
+    chatId,
+    chatGuid,
+    chatIdentifier,
   });
 
   // Mention gating for group chats (parity with iMessage/WhatsApp)
@@ -1672,14 +1674,15 @@ export async function processReaction(
     return;
   }
 
-  const route = core.channel.routing.resolveAgentRoute({
+  const route = resolveBlueBubblesConversationRoute({
     cfg: config,
-    channel: "bluebubbles",
     accountId: account.accountId,
-    peer: {
-      kind: reaction.isGroup ? "group" : "direct",
-      id: peerId,
-    },
+    isGroup: reaction.isGroup,
+    peerId,
+    sender: reaction.senderId,
+    chatId,
+    chatGuid,
+    chatIdentifier,
   });
 
   const senderLabel = reaction.senderName || reaction.senderId;

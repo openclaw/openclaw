@@ -23,6 +23,7 @@ import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { safeJsonStringify } from "../utils/safe-json.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   loadControlPlaneRuntimeState,
@@ -112,7 +113,9 @@ function isSseRequest(req: IncomingMessage): boolean {
 }
 
 function writePortalStreamEvent(res: ServerResponse, type: string, data: unknown): void {
-  res.write(`data: ${JSON.stringify({ type, data })}\n\n`);
+  const serialized =
+    safeJsonStringify({ type, data }) ?? '{"type":"serialization.error","data":"[Unserializable]"}';
+  res.write(`data: ${serialized}\n\n`);
 }
 
 function asJsonObject(value: unknown): JsonObject | undefined {
@@ -659,12 +662,7 @@ function truncateText(value: string | undefined, maxChars: number): string | und
 }
 
 function stringifyJson(value: unknown): string | undefined {
-  try {
-    const serialized = JSON.stringify(value);
-    return typeof serialized === "string" ? serialized : undefined;
-  } catch {
-    return undefined;
-  }
+  return safeJsonStringify(value) ?? undefined;
 }
 
 function buildPortalSessionKey(params: {
@@ -1044,7 +1042,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
-  res.end(JSON.stringify(body));
+  res.end(safeJsonStringify(body) ?? '{"ok":false,"error":"serialization failure"}');
 }
 
 async function readBody(req: IncomingMessage): Promise<JsonObject> {

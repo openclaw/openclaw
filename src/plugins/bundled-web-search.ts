@@ -1,6 +1,6 @@
 import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-capability-metadata.js";
+import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import { resolveBundledWebSearchPluginId as resolveBundledWebSearchPluginIdFromMap } from "./bundled-web-search-provider-ids.js";
-import { webSearchProviderContractRegistry } from "./contracts/registry.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
@@ -11,9 +11,12 @@ let bundledWebSearchProvidersCache: BundledWebSearchProviderEntry[] | null = nul
 
 function loadBundledWebSearchProviders(): BundledWebSearchProviderEntry[] {
   if (!bundledWebSearchProvidersCache) {
-    bundledWebSearchProvidersCache = webSearchProviderContractRegistry.map((entry) => ({
-      ...entry.provider,
+    bundledWebSearchProvidersCache = loadBundledCapabilityRuntimeRegistry({
+      pluginIds: BUNDLED_WEB_SEARCH_PLUGIN_IDS,
+      pluginSdkResolution: "dist",
+    }).webSearchProviders.map((entry) => ({
       pluginId: entry.pluginId,
+      ...entry.provider,
     }));
   }
   return bundledWebSearchProvidersCache;

@@ -39,6 +39,7 @@ import { probeIrc } from "./probe.js";
 import {
   buildBaseChannelStatusSummary,
   createAccountStatusSink,
+  chunkTextForOutbound,
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
   PAIRING_APPROVED_MESSAGE,
@@ -333,7 +334,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
   outbound: {
     base: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getIrcRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 350,
     },

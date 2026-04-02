@@ -2,14 +2,14 @@ import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import {
   Category,
+  MemoryStore,
+  SyncAccumulator,
   type ISyncData,
   type IRooms,
   type ISyncResponse,
   type IStoredClientOpts,
-} from "matrix-js-sdk";
-import { MemoryStore } from "matrix-js-sdk/lib/store/memory.js";
-import { SyncAccumulator } from "matrix-js-sdk/lib/sync-accumulator.js";
-import { writeJsonFileAtomically } from "../../runtime-api.js";
+} from "matrix-js-sdk/lib/matrix.js";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { createAsyncLock } from "../async-lock.js";
 import { LogService } from "../sdk/logger.js";
 

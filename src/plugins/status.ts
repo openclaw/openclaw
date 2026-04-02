@@ -1,14 +1,20 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import {
+  withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat,
+} from "./bundled-compat.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
+import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
 import type { PluginDiagnostic, PluginHookName } from "./types.js";
 
@@ -117,6 +123,16 @@ function buildCompatibilityNoticesForInspect(
 
 const log = createSubsystemLogger("plugins");
 
+function resolveStatusConfig(
+  config: ReturnType<typeof loadConfig>,
+  env: NodeJS.ProcessEnv | undefined,
+) {
+  return applyPluginAutoEnable({
+    config,
+    env: env ?? process.env,
+  }).config;
+}
+
 function resolveReportedPluginVersion(
   plugin: PluginRegistry["plugins"][number],
   env: NodeJS.ProcessEnv | undefined,
@@ -125,7 +141,7 @@ function resolveReportedPluginVersion(
     return plugin.version;
   }
   return (
-    normalizeOpenClawVersionBase(resolveRuntimeServiceVersion(env)) ??
+    normalizeOpenClawVersionBase(resolveCompatibilityHostVersion(env)) ??
     normalizeOpenClawVersionBase(plugin.version) ??
     plugin.version
   );
@@ -137,14 +153,35 @@ export function buildPluginStatusReport(params?: {
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
 }): PluginStatusReport {
-  const config = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? loadConfig();
+  const config = resolveStatusConfig(rawConfig, params?.env);
   const workspaceDir = params?.workspaceDir
     ? params.workspaceDir
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
       resolveDefaultAgentWorkspaceDir());
 
-  const registry = loadOpenClawPlugins({
+  // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
+  // report the same loaded/disabled status the gateway uses at runtime.  Without
+  // this, bundled provider plugins are incorrectly shown as "disabled" when
+  // `plugins.allow` is set because the allowlist check runs before the
+  // bundled-default-enable check.  Scoped to bundled providers only (not all
+  // bundled plugins) to match the runtime compat surface in providers.runtime.ts.
+  const bundledProviderIds = resolveBundledProviderCompatPluginIds({
     config,
+    workspaceDir,
+    env: params?.env,
+  });
+  const effectiveConfig = withBundledPluginAllowlistCompat({
+    config,
+    pluginIds: bundledProviderIds,
+  });
+  const runtimeCompatConfig = withBundledPluginEnablementCompat({
+    config: effectiveConfig,
+    pluginIds: bundledProviderIds,
+  });
+
+  const registry = loadOpenClawPlugins({
+    config: runtimeCompatConfig,
     workspaceDir,
     env: params?.env,
     logger: createPluginLoaderLogger(log),
@@ -210,7 +247,8 @@ export function buildPluginInspectReport(params: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
-  const config = params.config ?? loadConfig();
+  const rawConfig = params.config ?? loadConfig();
+  const config = resolveStatusConfig(rawConfig, params.env);
   const report =
     params.report ??
     buildPluginStatusReport({
@@ -343,7 +381,8 @@ export function buildAllPluginInspectReports(params?: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
-  const config = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? loadConfig();
+  const config = resolveStatusConfig(rawConfig, params?.env);
   const report =
     params?.report ??
     buildPluginStatusReport({

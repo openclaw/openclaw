@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  installRequestBodyLimitGuard,
   isRequestBodyLimitError,
   readJsonBodyWithLimit,
   readRequestBodyWithLimit,
@@ -11,7 +12,9 @@ import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
 
 export {
+  installRequestBodyLimitGuard,
   isRequestBodyLimitError,
+  readJsonBodyWithLimit,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../infra/http-body.js";

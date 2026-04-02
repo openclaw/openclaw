@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
@@ -27,6 +30,7 @@ import {
   archiveSessionTranscripts,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  readSessionMessages,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
@@ -251,6 +255,54 @@ export async function cleanupSessionBeforeMutation(params: {
   });
 }
 
+function emitGatewayBeforeResetPluginHook(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  key: string;
+  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  storePath: string;
+  entry?: SessionEntry;
+  reason: "new" | "reset";
+}): void {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("before_reset")) {
+    return;
+  }
+
+  const sessionKey = params.target.canonicalKey ?? params.key;
+  const sessionId = params.entry?.sessionId;
+  const sessionFile = params.entry?.sessionFile;
+  const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+  let messages: unknown[] = [];
+  try {
+    if (typeof sessionId === "string" && sessionId.trim().length > 0) {
+      messages = readSessionMessages(sessionId, params.storePath, sessionFile);
+    }
+  } catch (err) {
+    logVerbose(
+      `before_reset: failed to read session messages for ${sessionId ?? "(none)"}; firing hook with empty messages (${String(err)})`,
+    );
+  }
+
+  void hookRunner
+    .runBeforeReset(
+      {
+        sessionFile,
+        messages,
+        reason: params.reason,
+      },
+      {
+        agentId,
+        sessionKey,
+        sessionId,
+        workspaceDir,
+      },
+    )
+    .catch((err) => {
+      logVerbose(`before_reset hook failed: ${String(err)}`);
+    });
+}
+
 export async function performGatewaySessionReset(params: {
   key: string;
   reason: "new" | "reset";
@@ -293,6 +345,7 @@ export async function performGatewaySessionReset(params: {
 
   let oldSessionId: string | undefined;
   let oldSessionFile: string | undefined;
+  let resetSourceEntry: SessionEntry | undefined;
   const next = await updateSessionStore(storePath, (store) => {
     const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
       cfg,
@@ -300,6 +353,7 @@ export async function performGatewaySessionReset(params: {
       store,
     });
     const currentEntry = store[primaryKey];
+    resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
     const resetEntry = stripRuntimeModelState(currentEntry);
     const parsed = parseAgentSessionKey(primaryKey);
     const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
@@ -310,7 +364,7 @@ export async function performGatewaySessionReset(params: {
     const nextSessionId = randomUUID();
     const sessionFile = resolveSessionFilePath(
       nextSessionId,
-      undefined,
+      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
       resolveSessionFilePathOptions({
         storePath,
         agentId: sessionAgentId,
@@ -365,6 +419,9 @@ export async function performGatewaySessionReset(params: {
       space: currentEntry?.space,
       origin: snapshotSessionOrigin(currentEntry),
       deliveryContext: currentEntry?.deliveryContext,
+      cliSessionBindings: currentEntry?.cliSessionBindings,
+      cliSessionIds: currentEntry?.cliSessionIds,
+      claudeCliSessionId: currentEntry?.claudeCliSessionId,
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
       lastAccountId: currentEntry?.lastAccountId,
@@ -379,6 +436,14 @@ export async function performGatewaySessionReset(params: {
     store[primaryKey] = nextEntry;
     return nextEntry;
   });
+  emitGatewayBeforeResetPluginHook({
+    cfg,
+    key: params.key,
+    target,
+    storePath,
+    entry: resetSourceEntry,
+    reason: params.reason,
+  });
 
   archiveSessionTranscriptsForSession({
     sessionId: oldSessionId,
@@ -387,6 +452,20 @@ export async function performGatewaySessionReset(params: {
     agentId: target.agentId,
     reason: "reset",
   });
+  fs.mkdirSync(path.dirname(next.sessionFile as string), { recursive: true });
+  if (!fs.existsSync(next.sessionFile as string)) {
+    const header = {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: next.sessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    };
+    fs.writeFileSync(next.sessionFile as string, `${JSON.stringify(header)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+  }
   if (hadExistingEntry) {
     await emitSessionUnboundLifecycleEvent({
       targetSessionKey: target.canonicalKey ?? params.key,

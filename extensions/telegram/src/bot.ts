@@ -15,9 +15,9 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { formatUncaughtError } from "openclaw/plugin-sdk/infra-runtime";
+import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -91,8 +91,21 @@ export function setTelegramBotRuntimeForTest(runtime?: TelegramBotRuntime): void
 
 type TelegramFetchInput = Parameters<NonNullable<ApiClientOptions["fetch"]>>[0];
 type TelegramFetchInit = Parameters<NonNullable<ApiClientOptions["fetch"]>>[1];
-type GlobalFetchInput = Parameters<typeof globalThis.fetch>[0];
-type GlobalFetchInit = Parameters<typeof globalThis.fetch>[1];
+type TelegramClientFetch = NonNullable<ApiClientOptions["fetch"]>;
+type TelegramCompatFetch = (
+  input: TelegramFetchInput,
+  init?: TelegramFetchInit,
+) => ReturnType<TelegramClientFetch>;
+
+function asTelegramClientFetch(
+  fetchImpl: TelegramCompatFetch | typeof globalThis.fetch,
+): TelegramClientFetch {
+  return fetchImpl as unknown as TelegramClientFetch;
+}
+
+function asTelegramCompatFetch(fetchImpl: TelegramClientFetch): TelegramCompatFetch {
+  return fetchImpl as unknown as TelegramCompatFetch;
+}
 
 function readRequestUrl(input: TelegramFetchInput): string | null {
   if (typeof input === "string") {
@@ -101,9 +114,8 @@ function readRequestUrl(input: TelegramFetchInput): string | null {
   if (input instanceof URL) {
     return input.toString();
   }
-  if (typeof input === "object" && input !== null && "url" in input) {
-    const url = (input as { url?: unknown }).url;
-    return typeof url === "string" ? url : null;
+  if (input instanceof Request) {
+    return input.url;
   }
   return null;
 }
@@ -163,43 +175,47 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const shouldProvideFetch = Boolean(telegramTransport.fetch);
   // grammY's ApiClientOptions types still track `node-fetch` types; Node 22+ global fetch
   // (undici) is structurally compatible at runtime but not assignable in TS.
-  const fetchForClient = telegramTransport.fetch as unknown as NonNullable<
-    ApiClientOptions["fetch"]
-  >;
+  const fetchForClient = telegramTransport.fetch
+    ? asTelegramCompatFetch(asTelegramClientFetch(telegramTransport.fetch))
+    : undefined;
 
   // Wrap fetch so polling requests cannot hang indefinitely on a wedged network path,
   // and so shutdown still aborts in-flight Telegram API requests immediately.
-  let finalFetch = shouldProvideFetch ? fetchForClient : undefined;
+  let finalFetch: TelegramCompatFetch | undefined = shouldProvideFetch ? fetchForClient : undefined;
   if (finalFetch || opts.fetchAbortSignal) {
-    const baseFetch =
-      finalFetch ?? (globalThis.fetch as unknown as NonNullable<ApiClientOptions["fetch"]>);
+    const baseFetch = finalFetch ?? asTelegramCompatFetch(asTelegramClientFetch(globalThis.fetch));
     // Cast baseFetch to global fetch to avoid node-fetch ↔ global-fetch type divergence;
     // they are runtime-compatible (the codebase already casts at every fetch boundary).
-    const callFetch = baseFetch as unknown as typeof globalThis.fetch;
+    const callFetch = baseFetch;
     // Use manual event forwarding instead of AbortSignal.any() to avoid the cross-realm
     // AbortSignal issue in Node.js (grammY's signal may come from a different module context,
     // causing "signals[0] must be an instance of AbortSignal" errors).
-    finalFetch = ((input: TelegramFetchInput, init?: TelegramFetchInit) => {
+    finalFetch = (input: TelegramFetchInput, init?: TelegramFetchInit) => {
       const controller = new AbortController();
       const abortWith = (signal: AbortSignal) => controller.abort(signal.reason);
       const shutdownSignal = opts.fetchAbortSignal;
-      const onShutdown = () => abortWith(shutdownSignal as AbortSignal);
+      const onShutdown = () => {
+        if (shutdownSignal) {
+          abortWith(shutdownSignal);
+        }
+      };
       const method = extractTelegramApiMethod(input);
       const requestTimeoutMs =
         method === "getupdates" ? TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS : undefined;
       let requestTimeout: ReturnType<typeof setTimeout> | undefined;
       let onRequestAbort: (() => void) | undefined;
+      const requestSignal = init?.signal;
       if (shutdownSignal?.aborted) {
         abortWith(shutdownSignal);
       } else if (shutdownSignal) {
         shutdownSignal.addEventListener("abort", onShutdown, { once: true });
       }
-      if (init?.signal) {
-        if (init.signal.aborted) {
-          abortWith(init.signal as unknown as AbortSignal);
+      if (requestSignal) {
+        if (requestSignal.aborted) {
+          abortWith(requestSignal);
         } else {
-          onRequestAbort = () => abortWith(init.signal as AbortSignal);
-          init.signal.addEventListener("abort", onRequestAbort);
+          onRequestAbort = () => abortWith(requestSignal);
+          requestSignal.addEventListener("abort", onRequestAbort);
         }
       }
       if (requestTimeoutMs) {
@@ -208,23 +224,23 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }, requestTimeoutMs);
         requestTimeout.unref?.();
       }
-      return callFetch(input as GlobalFetchInput, {
-        ...(init as GlobalFetchInit),
+      return callFetch(input, {
+        ...init,
         signal: controller.signal,
       }).finally(() => {
         if (requestTimeout) {
           clearTimeout(requestTimeout);
         }
         shutdownSignal?.removeEventListener("abort", onShutdown);
-        if (init?.signal && onRequestAbort) {
-          init.signal.removeEventListener("abort", onRequestAbort);
+        if (requestSignal && onRequestAbort) {
+          requestSignal.removeEventListener("abort", onRequestAbort);
         }
       });
-    }) as unknown as NonNullable<ApiClientOptions["fetch"]>;
+    };
   }
   if (finalFetch) {
     const baseFetch = finalFetch;
-    finalFetch = ((input: TelegramFetchInput, init?: TelegramFetchInit) => {
+    finalFetch = (input: TelegramFetchInput, init?: TelegramFetchInit) => {
       return Promise.resolve(baseFetch(input, init)).catch((err: unknown) => {
         try {
           tagTelegramNetworkError(err, {
@@ -237,7 +253,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }
         throw err;
       });
-    }) as unknown as NonNullable<ApiClientOptions["fetch"]>;
+    };
   }
 
   const timeoutSeconds =
@@ -248,7 +264,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const client: ApiClientOptions | undefined =
     finalFetch || timeoutSeconds || apiRoot
       ? {
-          ...(finalFetch ? { fetch: finalFetch } : {}),
+          ...(finalFetch ? { fetch: asTelegramClientFetch(finalFetch) } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
           ...(apiRoot ? { apiRoot } : {}),
         }
@@ -423,7 +439,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     try {
-      const store = loadSessionStore(storePath);
+      const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath);
       const entry = store[sessionKey];
       if (entry?.groupActivation === "always") {
         return false;
@@ -491,11 +507,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   // from ANY chat are tracked together — prevents infinite retry storms.
   const sendChatActionHandler = createTelegramSendChatActionHandler({
     sendChatActionFn: (chatId, action, threadParams) =>
-      bot.api.sendChatAction(
-        chatId,
-        action,
-        threadParams as Parameters<typeof bot.api.sendChatAction>[2],
-      ),
+      bot.api.sendChatAction(chatId, action, threadParams),
     logger: (message) => logVerbose(`telegram: ${message}`),
   });
 
