@@ -34,6 +34,7 @@ describe("plugin activation boundary", () => {
         DEFAULT_OPENCLAW_BROWSER_COLOR: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_OPENCLAW_BROWSER_COLOR;
         DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
         DEFAULT_UPLOAD_DIR: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_UPLOAD_DIR;
+        closeTrackedBrowserTabsForSessions: typeof import("./plugin-sdk/browser-runtime.js").closeTrackedBrowserTabsForSessions;
         redactCdpUrl: typeof import("./plugin-sdk/browser-runtime.js").redactCdpUrl;
         resolveBrowserConfig: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserConfig;
         resolveBrowserControlAuth: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserControlAuth;
@@ -41,6 +42,11 @@ describe("plugin activation boundary", () => {
       }>
     | undefined;
   let browserAmbientImportsPromise: Promise<void> | undefined;
+  let discordMaintenancePromise:
+    | Promise<{
+        unbindThreadBindingsBySessionKey: typeof import("./plugin-sdk/discord-thread-bindings.js").unbindThreadBindingsBySessionKey;
+      }>
+    | undefined;
 
   function importAmbientModules() {
     ambientImportsPromise ??= Promise.all([
@@ -77,6 +83,7 @@ describe("plugin activation boundary", () => {
       DEFAULT_OPENCLAW_BROWSER_COLOR: module.DEFAULT_OPENCLAW_BROWSER_COLOR,
       DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: module.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
       DEFAULT_UPLOAD_DIR: module.DEFAULT_UPLOAD_DIR,
+      closeTrackedBrowserTabsForSessions: module.closeTrackedBrowserTabsForSessions,
       redactCdpUrl: module.redactCdpUrl,
       resolveBrowserConfig: module.resolveBrowserConfig,
       resolveBrowserControlAuth: module.resolveBrowserControlAuth,
@@ -94,6 +101,15 @@ describe("plugin activation boundary", () => {
       import("./security/audit-extra.sync.js"),
     ]).then(() => undefined);
     return browserAmbientImportsPromise;
+  }
+
+  function importDiscordMaintenance() {
+    discordMaintenancePromise ??= import("./plugin-sdk/discord-thread-bindings.js").then(
+      (module) => ({
+        unbindThreadBindingsBySessionKey: module.unbindThreadBindingsBySessionKey,
+      }),
+    );
+    return discordMaintenancePromise;
   }
 
   it("does not load bundled provider plugins on ambient command imports", async () => {
@@ -143,9 +159,30 @@ describe("plugin activation boundary", () => {
         cdpHost: "127.0.0.1",
       }),
     );
-    expect(browser.redactCdpUrl("wss://user:secret@example.com/devtools/browser/123")).not.toContain(
-      "secret",
-    );
+    expect(
+      browser.redactCdpUrl("wss://user:secret@example.com/devtools/browser/123"),
+    ).not.toContain("secret");
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps browser cleanup helpers cold when browser is disabled", async () => {
+    const browser = await importBrowserHelpers();
+
+    await expect(browser.closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps discord cleanup helpers cold when discord is disabled", async () => {
+    const discord = await importDiscordMaintenance();
+
+    expect(
+      discord.unbindThreadBindingsBySessionKey({
+        targetSessionKey: "agent:main:test",
+        targetKind: "acp",
+        reason: "session-reset",
+        sendFarewell: true,
+      }),
+    ).toEqual([]);
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
