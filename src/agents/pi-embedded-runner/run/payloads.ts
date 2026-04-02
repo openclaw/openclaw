@@ -146,9 +146,12 @@ export function buildEmbeddedRunPayloads(params: {
 
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
-  const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
+  const lastAssistantStopReason = params.lastAssistant?.stopReason;
+  const lastAssistantErrored = lastAssistantStopReason === "error";
+  const lastAssistantAborted = lastAssistantStopReason === "aborted";
+  const lastAssistantNeedsErrorSurface = lastAssistantErrored || lastAssistantAborted;
   const errorText =
-    params.lastAssistant && lastAssistantErrored
+    params.lastAssistant && lastAssistantNeedsErrorSurface
       ? suppressAssistantArtifacts
         ? undefined
         : formatAssistantErrorText(params.lastAssistant, {
@@ -158,7 +161,7 @@ export function buildEmbeddedRunPayloads(params: {
             model: params.model,
           })
       : undefined;
-  const rawErrorMessage = lastAssistantErrored
+  const rawErrorMessage = lastAssistantNeedsErrorSurface
     ? normalizeOptionalString(params.lastAssistant?.errorMessage)
     : undefined;
   const rawErrorFingerprint = rawErrorMessage
@@ -208,18 +211,19 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
 
-  const reasoningText = suppressAssistantArtifacts
-    ? ""
-    : params.lastAssistant && params.reasoningLevel === "on"
-      ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
-      : "";
+  const reasoningText =
+    suppressAssistantArtifacts || lastAssistantAborted
+      ? ""
+      : params.lastAssistant && params.reasoningLevel === "on"
+        ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
+        : "";
   if (reasoningText) {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
   const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
   const shouldSuppressRawErrorText = (text: string) => {
-    if (!lastAssistantErrored) {
+    if (!lastAssistantNeedsErrorSurface) {
       return false;
     }
     const trimmed = text.trim();
@@ -268,14 +272,15 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
-  const answerTexts = suppressAssistantArtifacts
-    ? []
-    : (params.assistantTexts.length
-        ? params.assistantTexts
-        : fallbackAnswerText
-          ? [fallbackAnswerText]
-          : []
-      ).filter((text) => !shouldSuppressRawErrorText(text));
+  const answerTexts =
+    suppressAssistantArtifacts || lastAssistantAborted
+      ? []
+      : (params.assistantTexts.length
+          ? params.assistantTexts
+          : fallbackAnswerText
+            ? [fallbackAnswerText]
+            : []
+        ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {

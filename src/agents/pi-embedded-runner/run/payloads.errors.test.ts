@@ -92,6 +92,57 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.some((payload) => payload.text === errorJsonPretty)).toBe(false);
   });
 
+  it("suppresses aborted assistant partial text and surfaces a clean timeout error", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        "Need answer concise mention not fully E2E tested tomorrow.\n[[reply_to_current]] Final draft",
+      ],
+      lastAssistant: makeAssistant({
+        stopReason: "aborted",
+        errorMessage: "request timed out",
+        content: [
+          {
+            type: "text",
+            text: "Need answer concise mention not fully E2E tested tomorrow.\n[[reply_to_current]] Final draft",
+          },
+        ],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request timed out.",
+      isError: true,
+    });
+    expect(payloads[0]?.text).not.toContain("Need answer concise");
+    expect(payloads[0]?.text).not.toContain("[[reply_to_current]]");
+  });
+
+  it("suppresses aborted assistant reasoning text as well as partial answer text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["partial answer that should not leak"],
+      lastAssistant: makeAssistant({
+        stopReason: "aborted",
+        errorMessage: "request timed out",
+        content: [
+          { type: "thinking", thinking: "partial hidden reasoning" },
+          { type: "text", text: "partial answer that should not leak" },
+        ],
+      }),
+      reasoningLevel: "on",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request timed out.",
+      isError: true,
+    });
+    expect(payloads.map((payload) => payload.text).join("\n")).not.toContain(
+      "partial hidden reasoning",
+    );
+    expect(payloads.map((payload) => payload.text).join("\n")).not.toContain(
+      "partial answer that should not leak",
+    );
+  });
+
   it("suppresses raw error JSON from fallback assistant text", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({ content: [{ type: "text", text: errorJsonPretty }] }),
