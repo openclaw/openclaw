@@ -74,6 +74,43 @@ describe("markdownToMatrixHtml", () => {
     });
   });
 
+  it("treats mxids that begin with room as user mentions", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "hello @room:example.org",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain('href="https://matrix.to/#/%40room%3Aexample.org"');
+    expect(result.mentions).toEqual({
+      user_ids: ["@room:example.org"],
+    });
+  });
+
+  it("treats hyphenated room-prefixed mxids as user mentions", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "hello @room-admin:example.org",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain('href="https://matrix.to/#/%40room-admin%3Aexample.org"');
+    expect(result.mentions).toEqual({
+      user_ids: ["@room-admin:example.org"],
+    });
+  });
+
+  it("keeps explicit room mentions as room mentions", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "hello @room",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain("@room");
+    expect(result.html).not.toContain("matrix.to");
+    expect(result.mentions).toEqual({
+      room: true,
+    });
+  });
+
   it("leaves bare localpart text unmentioned", async () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "hello @alice",

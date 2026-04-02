@@ -30,7 +30,7 @@ type MatrixMentionCandidate = {
 };
 
 const ESCAPED_MENTION_SENTINEL = "\uE000";
-const MENTION_PATTERN = /@room\b|@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?::\d+)?/g;
+const MENTION_PATTERN = /@[A-Za-z0-9._=+\-/:]+/g;
 const TRIMMABLE_MENTION_SUFFIX = /[),.!?:;\]]/;
 
 function shouldSuppressAutoLink(
