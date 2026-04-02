@@ -3,9 +3,11 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
-  addAllowlistEntry,
-  recordAllowlistUse,
-  resolveAllowAlwaysPatterns,
+  addDurableCommandApproval,
+  hasDurableExecApproval,
+  persistAllowAlwaysPatterns,
+  recordAllowlistMatchesUse,
+  resolveApprovalAuditCandidatePath,
   resolveExecApprovals,
   type ExecAllowlistEntry,
   type ExecAsk,
@@ -13,9 +15,17 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
+import {
+  describeInterpreterInlineEval,
+  detectInterpreterInlineEvalArgv,
+} from "../infra/exec-inline-eval.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
-import { resolveSystemRunCommand } from "../infra/system-run-command.js";
+import {
+  inspectHostExecEnvOverrides,
+  sanitizeSystemRunEnvOverrides,
+} from "../infra/host-env-security.js";
+import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
+import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
@@ -27,10 +37,13 @@ import {
 import {
   hardenApprovedExecutionPaths,
   revalidateApprovedCwdSnapshot,
+  revalidateApprovedMutableFileOperand,
+  resolveMutableFileOperandSnapshotSync,
   type ApprovedCwdSnapshot,
 } from "./invoke-system-run-plan.js";
 import type {
   ExecEventPayload,
+  ExecFinishedResult,
   ExecFinishedEventParams,
   RunResult,
   SkillBinsProvider,
@@ -54,15 +67,18 @@ type SystemRunDeniedReason =
 type SystemRunExecutionContext = {
   sessionKey: string;
   runId: string;
-  cmdText: string;
+  commandText: string;
+  suppressNotifyOnExit: boolean;
 };
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 
 type SystemRunParsePhase = {
   argv: string[];
-  shellCommand: string | null;
-  cmdText: string;
+  shellPayload: string | null;
+  commandText: string;
+  commandPreview: string | null;
+  approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null;
   agentId: string | undefined;
   sessionKey: string;
   runId: string;
@@ -74,12 +90,16 @@ type SystemRunParsePhase = {
   timeoutMs: number | undefined;
   needsScreenRecording: boolean;
   approved: boolean;
+  suppressNotifyOnExit: boolean;
 };
 
 type SystemRunPolicyPhase = SystemRunParsePhase & {
   approvals: ResolvedExecApprovals;
   security: ExecSecurity;
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
+  durableApprovalSatisfied: boolean;
+  strictInlineEval: boolean;
+  inlineEvalHit: ReturnType<typeof detectInterpreterInlineEvalArgv>;
   allowlistMatches: ExecAllowlistEntry[];
   analysisOk: boolean;
   allowlistSatisfied: boolean;
@@ -92,6 +112,10 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
 const safeBinTrustedDirWarningCache = new Set<string>();
 const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval cwd changed before execution";
+const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval missing script operand binding";
+const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval script operand changed before execution";
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.has(message)) {
@@ -160,13 +184,33 @@ async function sendSystemRunDenied(
       sessionKey: execution.sessionKey,
       runId: execution.runId,
       host: "node",
-      command: execution.cmdText,
+      command: execution.commandText,
       reason: params.reason,
+      suppressNotifyOnExit: execution.suppressNotifyOnExit,
     }),
   );
   await opts.sendInvokeResult({
     ok: false,
     error: { code: "UNAVAILABLE", message: params.message },
+  });
+}
+
+async function sendSystemRunCompleted(
+  opts: Pick<HandleSystemRunInvokeOptions, "sendExecFinishedEvent" | "sendInvokeResult">,
+  execution: SystemRunExecutionContext,
+  result: ExecFinishedResult,
+  payloadJSON: string,
+) {
+  await opts.sendExecFinishedEvent({
+    sessionKey: execution.sessionKey,
+    runId: execution.runId,
+    commandText: execution.commandText,
+    result,
+    suppressNotifyOnExit: execution.suppressNotifyOnExit,
+  });
+  await opts.sendInvokeResult({
+    ok: true,
+    payloadJSON,
   });
 }
 
@@ -176,7 +220,7 @@ export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 async function parseSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
 ): Promise<SystemRunParsePhase | null> {
-  const command = resolveSystemRunCommand({
+  const command = resolveSystemRunCommandRequest({
     command: opts.params.command,
     rawCommand: opts.params.rawCommand,
   });
@@ -195,23 +239,65 @@ async function parseSystemRunPhase(
     return null;
   }
 
-  const shellCommand = command.shellCommand;
-  const cmdText = command.cmdText;
+  const shellPayload = command.shellPayload;
+  const commandText = command.commandText;
+  const approvalPlan =
+    opts.params.systemRunPlan === undefined
+      ? null
+      : normalizeSystemRunApprovalPlan(opts.params.systemRunPlan);
+  if (opts.params.systemRunPlan !== undefined && !approvalPlan) {
+    await opts.sendInvokeResult({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "systemRunPlan invalid" },
+    });
+    return null;
+  }
   const agentId = opts.params.agentId?.trim() || undefined;
   const sessionKey = opts.params.sessionKey?.trim() || "node";
   const runId = opts.params.runId?.trim() || crypto.randomUUID();
+  const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
+  const envOverrideDiagnostics = inspectHostExecEnvOverrides({
+    overrides: opts.params.env ?? undefined,
+    blockPathOverrides: true,
+  });
+  if (
+    envOverrideDiagnostics.rejectedOverrideBlockedKeys.length > 0 ||
+    envOverrideDiagnostics.rejectedOverrideInvalidKeys.length > 0
+  ) {
+    const details: string[] = [];
+    if (envOverrideDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
+      details.push(
+        `blocked override keys: ${envOverrideDiagnostics.rejectedOverrideBlockedKeys.join(", ")}`,
+      );
+    }
+    if (envOverrideDiagnostics.rejectedOverrideInvalidKeys.length > 0) {
+      details.push(
+        `invalid non-portable override keys: ${envOverrideDiagnostics.rejectedOverrideInvalidKeys.join(", ")}`,
+      );
+    }
+    await opts.sendInvokeResult({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `SYSTEM_RUN_DENIED: environment override rejected (${details.join("; ")})`,
+      },
+    });
+    return null;
+  }
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
-    shellWrapper: shellCommand !== null,
+    shellWrapper: shellPayload !== null,
   });
   return {
     argv: command.argv,
-    shellCommand,
-    cmdText,
+    shellPayload,
+    commandText,
+    commandPreview: command.previewText,
+    approvalPlan,
     agentId,
     sessionKey,
     runId,
-    execution: { sessionKey, runId, cmdText },
+    execution: { sessionKey, runId, commandText, suppressNotifyOnExit },
     approvalDecision: resolveExecApprovalDecision(opts.params.approvalDecision),
     envOverrides,
     env: opts.sanitizeEnv(envOverrides),
@@ -219,6 +305,7 @@ async function parseSystemRunPhase(
     timeoutMs: opts.params.timeoutMs ?? undefined,
     needsScreenRecording: opts.params.needsScreenRecording === true,
     approved: opts.params.approved === true,
+    suppressNotifyOnExit,
   };
 }
 
@@ -247,36 +334,70 @@ async function evaluateSystemRunPolicyPhase(
     onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  let { analysisOk, allowlistMatches, allowlistSatisfied, segments } = evaluateSystemRunAllowlist({
-    shellCommand: parsed.shellCommand,
-    argv: parsed.argv,
-    approvals,
-    security,
-    safeBins,
-    safeBinProfiles,
-    trustedSafeBinDirs,
-    cwd: parsed.cwd,
-    env: parsed.env,
-    skillBins: bins,
-    autoAllowSkills,
-  });
+  let { analysisOk, allowlistMatches, allowlistSatisfied, segments, segmentAllowlistEntries } =
+    evaluateSystemRunAllowlist({
+      shellCommand: parsed.shellPayload,
+      argv: parsed.argv,
+      approvals,
+      security,
+      safeBins,
+      safeBinProfiles,
+      trustedSafeBinDirs,
+      cwd: parsed.cwd,
+      env: parsed.env,
+      skillBins: bins,
+      autoAllowSkills,
+    });
+  const strictInlineEval =
+    agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
+  const inlineEvalHit = strictInlineEval
+    ? (segments
+        .map((segment) =>
+          detectInterpreterInlineEvalArgv(segment.resolution?.effectiveArgv ?? segment.argv),
+        )
+        .find((entry) => entry !== null) ?? null)
+    : null;
   const isWindows = process.platform === "win32";
-  const cmdInvocation = parsed.shellCommand
+  const cmdInvocation = parsed.shellPayload
     ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
     : opts.isCmdExeInvocation(parsed.argv);
+  const durableApprovalSatisfied = hasDurableExecApproval({
+    analysisOk,
+    segmentAllowlistEntries,
+    allowlist: approvals.allowlist,
+    commandText: parsed.commandText,
+  });
+  const inlineEvalExecutableTrusted =
+    inlineEvalHit !== null &&
+    segmentAllowlistEntries.some((entry) => entry?.source === "allow-always");
   const policy = evaluateSystemRunPolicy({
     security,
     ask,
     analysisOk,
     allowlistSatisfied,
+    durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
     approvalDecision: parsed.approvalDecision,
     approved: parsed.approved,
     isWindows,
     cmdInvocation,
-    shellWrapperInvocation: parsed.shellCommand !== null,
+    shellWrapperInvocation: parsed.shellPayload !== null,
   });
   analysisOk = policy.analysisOk;
   allowlistSatisfied = policy.allowlistSatisfied;
+  const strictInlineEvalRequiresApproval =
+    inlineEvalHit !== null &&
+    !policy.approvedByAsk &&
+    (policy.allowed ? true : policy.eventReason !== "security=deny");
+  if (strictInlineEvalRequiresApproval) {
+    await sendSystemRunDenied(opts, parsed.execution, {
+      reason: "approval-required",
+      message:
+        `SYSTEM_RUN_DENIED: approval required (` +
+        `${describeInterpreterInlineEval(inlineEvalHit)} requires explicit approval in strictInlineEval mode)`,
+    });
+    return null;
+  }
+
   if (!policy.allowed) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: policy.eventReason,
@@ -286,7 +407,12 @@ async function evaluateSystemRunPolicyPhase(
   }
 
   // Fail closed if policy/runtime drift re-allows unapproved shell wrappers.
-  if (security === "allowlist" && parsed.shellCommand && !policy.approvedByAsk) {
+  if (
+    security === "allowlist" &&
+    parsed.shellPayload &&
+    !policy.approvedByAsk &&
+    !durableApprovalSatisfied
+  ) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: "SYSTEM_RUN_DENIED: approval required",
@@ -297,7 +423,7 @@ async function evaluateSystemRunPolicyPhase(
   const hardenedPaths = hardenApprovedExecutionPaths({
     approvedByAsk: policy.approvedByAsk,
     argv: parsed.argv,
-    shellCommand: parsed.shellCommand,
+    shellCommand: parsed.shellPayload,
     cwd: parsed.cwd,
   });
   if (!hardenedPaths.ok) {
@@ -318,7 +444,7 @@ async function evaluateSystemRunPolicyPhase(
 
   const plannedAllowlistArgv = resolvePlannedAllowlistArgv({
     security,
-    shellCommand: parsed.shellCommand,
+    shellCommand: parsed.shellPayload,
     policy,
     segments,
   });
@@ -336,6 +462,9 @@ async function evaluateSystemRunPolicyPhase(
     approvals,
     security,
     policy,
+    durableApprovalSatisfied,
+    strictInlineEval,
+    inlineEvalHit,
     allowlistMatches,
     analysisOk,
     allowlistSatisfied,
@@ -361,6 +490,44 @@ async function executeSystemRunPhase(
     });
     return;
   }
+  const expectedMutableFileOperand = phase.approvalPlan
+    ? resolveMutableFileOperandSnapshotSync({
+        argv: phase.argv,
+        cwd: phase.cwd,
+        shellCommand: phase.shellPayload,
+      })
+    : null;
+  if (expectedMutableFileOperand && !expectedMutableFileOperand.ok) {
+    logWarn(`security: system.run approval script binding blocked (runId=${phase.runId})`);
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: expectedMutableFileOperand.message,
+    });
+    return;
+  }
+  if (expectedMutableFileOperand?.snapshot && !phase.approvalPlan?.mutableFileOperand) {
+    logWarn(`security: system.run approval script binding missing (runId=${phase.runId})`);
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE,
+    });
+    return;
+  }
+  if (
+    phase.approvalPlan?.mutableFileOperand &&
+    !revalidateApprovedMutableFileOperand({
+      snapshot: phase.approvalPlan.mutableFileOperand,
+      argv: phase.argv,
+      cwd: phase.cwd,
+    })
+  ) {
+    logWarn(`security: system.run approval script drift blocked (runId=${phase.runId})`);
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+    });
+    return;
+  }
 
   const useMacAppExec = opts.preferMacAppExecHost;
   if (useMacAppExec) {
@@ -368,7 +535,7 @@ async function executeSystemRunPhase(
       command: phase.plannedAllowlistArgv ?? phase.argv,
       // Forward canonical display text so companion approval/prompt surfaces bind to
       // the exact command context already validated on the node-host.
-      rawCommand: phase.cmdText || null,
+      rawCommand: phase.commandText || null,
       cwd: phase.cwd ?? null,
       env: phase.envOverrides ?? null,
       timeoutMs: phase.timeoutMs ?? null,
@@ -397,52 +564,38 @@ async function executeSystemRunPhase(
       return;
     } else {
       const result: ExecHostRunResult = response.payload;
-      await opts.sendExecFinishedEvent({
-        sessionKey: phase.sessionKey,
-        runId: phase.runId,
-        cmdText: phase.cmdText,
-        result,
-      });
-      await opts.sendInvokeResult({
-        ok: true,
-        payloadJSON: JSON.stringify(result),
-      });
+      await sendSystemRunCompleted(opts, phase.execution, result, JSON.stringify(result));
       return;
     }
   }
 
-  if (phase.policy.approvalDecision === "allow-always" && phase.security === "allowlist") {
-    if (phase.policy.analysisOk) {
-      const patterns = resolveAllowAlwaysPatterns({
-        segments: phase.segments,
-        cwd: phase.cwd,
-        env: phase.env,
-        platform: process.platform,
-      });
-      for (const pattern of patterns) {
-        if (pattern) {
-          addAllowlistEntry(phase.approvals.file, phase.agentId, pattern);
-        }
-      }
+  if (phase.policy.approvalDecision === "allow-always" && phase.inlineEvalHit === null) {
+    const patterns = phase.policy.analysisOk
+      ? persistAllowAlwaysPatterns({
+          approvals: phase.approvals.file,
+          agentId: phase.agentId,
+          segments: phase.segments,
+          cwd: phase.cwd,
+          env: phase.env,
+          platform: process.platform,
+          strictInlineEval: phase.strictInlineEval,
+        })
+      : [];
+    if (patterns.length === 0) {
+      addDurableCommandApproval(phase.approvals.file, phase.agentId, phase.commandText);
     }
   }
 
-  if (phase.allowlistMatches.length > 0) {
-    const seen = new Set<string>();
-    for (const match of phase.allowlistMatches) {
-      if (!match?.pattern || seen.has(match.pattern)) {
-        continue;
-      }
-      seen.add(match.pattern);
-      recordAllowlistUse(
-        phase.approvals.file,
-        phase.agentId,
-        match,
-        phase.cmdText,
-        phase.segments[0]?.resolution?.resolvedPath,
-      );
-    }
-  }
+  recordAllowlistMatchesUse({
+    approvals: phase.approvals.file,
+    agentId: phase.agentId,
+    matches: phase.allowlistMatches,
+    command: phase.commandText,
+    resolvedPath: resolveApprovalAuditCandidatePath(
+      phase.segments[0]?.resolution ?? null,
+      phase.cwd,
+    ),
+  });
 
   if (phase.needsScreenRecording) {
     await sendSystemRunDenied(opts, phase.execution, {
@@ -458,22 +611,17 @@ async function executeSystemRunPhase(
     security: phase.security,
     isWindows: phase.isWindows,
     policy: phase.policy,
-    shellCommand: phase.shellCommand,
+    shellCommand: phase.shellPayload,
     segments: phase.segments,
   });
 
   const result = await opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs);
   applyOutputTruncation(result);
-  await opts.sendExecFinishedEvent({
-    sessionKey: phase.sessionKey,
-    runId: phase.runId,
-    cmdText: phase.cmdText,
+  await sendSystemRunCompleted(
+    opts,
+    phase.execution,
     result,
-  });
-
-  await opts.sendInvokeResult({
-    ok: true,
-    payloadJSON: JSON.stringify({
+    JSON.stringify({
       exitCode: result.exitCode,
       timedOut: result.timedOut,
       success: result.success,
@@ -481,7 +629,7 @@ async function executeSystemRunPhase(
       stderr: result.stderr,
       error: result.error ?? null,
     }),
-  });
+  );
 }
 
 export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions): Promise<void> {

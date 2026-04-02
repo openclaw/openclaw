@@ -245,7 +245,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     record.request.systemRunPlan = {
       argv: ["/usr/bin/echo", "SAFE"],
       cwd: "/real/cwd",
-      rawCommand: "/usr/bin/echo SAFE",
+      commandText: "/usr/bin/echo SAFE",
       agentId: "main",
       sessionKey: "agent:main:main",
     };
@@ -278,6 +278,15 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     const forwarded = result.params as Record<string, unknown>;
     expect(forwarded.command).toEqual(["/usr/bin/echo", "SAFE"]);
     expect(forwarded.rawCommand).toBe("/usr/bin/echo SAFE");
+    expect(forwarded.systemRunPlan).toEqual(
+      expect.objectContaining({
+        argv: ["/usr/bin/echo", "SAFE"],
+        cwd: "/real/cwd",
+        commandText: "/usr/bin/echo SAFE",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    );
     expect(forwarded.cwd).toBe("/real/cwd");
     expect(forwarded.agentId).toBe("main");
     expect(forwarded.sessionKey).toBe("agent:main:main");
@@ -325,33 +334,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       nowMs: now,
     });
     expectRejectedForwardingResult(result, "APPROVAL_ENV_MISMATCH");
-  });
-
-  test("accepts matching env hash with reordered keys", () => {
-    const record = makeRecord("git diff", ["git", "diff"]);
-    const binding = buildSystemRunApprovalEnvBinding({ SAFE_A: "1", SAFE_B: "2" });
-    record.request.systemRunBinding = {
-      argv: ["git", "diff"],
-      cwd: null,
-      agentId: null,
-      sessionKey: null,
-      envHash: binding.envHash,
-    };
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["git", "diff"],
-        rawCommand: "git diff",
-        env: { SAFE_B: "2", SAFE_A: "1" },
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(record),
-      nowMs: now,
-    });
-    expectAllowOnceForwardingResult(result);
   });
 
   test("consumes allow-once approvals and blocks same runId replay", async () => {

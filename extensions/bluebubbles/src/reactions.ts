@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 export type BlueBubblesReactionOpts = {
@@ -149,7 +149,7 @@ export async function sendBlueBubblesReaction(params: {
     throw new Error("BlueBubbles reaction requires messageGuid.");
   }
   const reaction = normalizeBlueBubblesReactionInput(params.emoji, params.remove);
-  const { baseUrl, password, accountId } = resolveAccount(params.opts ?? {});
+  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(params.opts ?? {});
   if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
     throw new Error(
       "BlueBubbles reaction requires Private API, but it is disabled on the BlueBubbles server.",
@@ -166,6 +166,7 @@ export async function sendBlueBubblesReaction(params: {
     reaction,
     partIndex: typeof params.partIndex === "number" ? params.partIndex : 0,
   };
+  const ssrfPolicy = allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
   const res = await blueBubblesFetchWithTimeout(
     url,
     {
@@ -174,6 +175,7 @@ export async function sendBlueBubblesReaction(params: {
       body: JSON.stringify(payload),
     },
     params.opts?.timeoutMs,
+    ssrfPolicy,
   );
   if (!res.ok) {
     const errorText = await res.text();

@@ -8,7 +8,10 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
+import type { SessionsPatchParams } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
 
@@ -97,7 +100,7 @@ export type MessageSentHookEvent = InternalHookEvent & {
   context: MessageSentHookContext;
 };
 
-export type MessageTranscribedHookContext = {
+type MessageEnrichedBodyHookContext = {
   /** Sender identifier (e.g., phone number, user ID) */
   from?: string;
   /** Recipient identifier */
@@ -106,8 +109,6 @@ export type MessageTranscribedHookContext = {
   body?: string;
   /** Enriched body shown to the agent, including transcript */
   bodyForAgent?: string;
-  /** The transcribed text from audio */
-  transcript: string;
   /** Unix timestamp when the message was received */
   timestamp?: number;
   /** Channel identifier (e.g., "telegram", "whatsapp") */
@@ -132,45 +133,20 @@ export type MessageTranscribedHookContext = {
   mediaType?: string;
 };
 
+export type MessageTranscribedHookContext = MessageEnrichedBodyHookContext & {
+  /** The transcribed text from audio */
+  transcript: string;
+};
+
 export type MessageTranscribedHookEvent = InternalHookEvent & {
   type: "message";
   action: "transcribed";
   context: MessageTranscribedHookContext;
 };
 
-export type MessagePreprocessedHookContext = {
-  /** Sender identifier (e.g., phone number, user ID) */
-  from?: string;
-  /** Recipient identifier */
-  to?: string;
-  /** Original raw message body */
-  body?: string;
-  /** Fully enriched body shown to the agent (transcripts, image descriptions, link summaries) */
-  bodyForAgent?: string;
+export type MessagePreprocessedHookContext = MessageEnrichedBodyHookContext & {
   /** Transcribed audio text, if the message contained audio */
   transcript?: string;
-  /** Unix timestamp when the message was received */
-  timestamp?: number;
-  /** Channel identifier (e.g., "telegram", "whatsapp") */
-  channelId: string;
-  /** Conversation/chat ID */
-  conversationId?: string;
-  /** Message ID from the provider */
-  messageId?: string;
-  /** Sender user ID */
-  senderId?: string;
-  /** Sender display name */
-  senderName?: string;
-  /** Sender username */
-  senderUsername?: string;
-  /** Provider name */
-  provider?: string;
-  /** Surface name */
-  surface?: string;
-  /** Path to the media file, if present */
-  mediaPath?: string;
-  /** MIME type of the media, if present */
-  mediaType?: string;
   /** Whether this message was sent in a group/channel context */
   isGroup?: boolean;
   /** Group or channel identifier, if applicable */
@@ -181,6 +157,18 @@ export type MessagePreprocessedHookEvent = InternalHookEvent & {
   type: "message";
   action: "preprocessed";
   context: MessagePreprocessedHookContext;
+};
+
+export type SessionPatchHookContext = {
+  sessionEntry: SessionEntry;
+  patch: SessionsPatchParams;
+  cfg: OpenClawConfig;
+};
+
+export type SessionPatchHookEvent = InternalHookEvent & {
+  type: "session";
+  action: "patch";
+  context: SessionPatchHookContext;
 };
 
 export interface InternalHookEvent {
@@ -210,13 +198,11 @@ export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | 
  * are invisible to triggerInternalHook in another chunk, causing hooks
  * to silently fire with zero handlers.
  */
-const _g = globalThis as typeof globalThis & {
-  __openclaw_internal_hook_handlers__?: Map<string, InternalHookHandler[]>;
-};
-const handlers = (_g.__openclaw_internal_hook_handlers__ ??= new Map<
-  string,
-  InternalHookHandler[]
->());
+const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
+const handlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
+  INTERNAL_HOOK_HANDLERS_KEY,
+  () => new Map<string, InternalHookHandler[]>(),
+);
 const log = createSubsystemLogger("internal-hooks");
 
 /**
@@ -282,6 +268,12 @@ export function getRegisteredEventKeys(): string[] {
   return Array.from(handlers.keys());
 }
 
+export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
+  return (
+    (handlers.get(type)?.length ?? 0) > 0 || (handlers.get(`${type}:${action}`)?.length ?? 0) > 0
+  );
+}
+
 /**
  * Trigger a hook event
  *
@@ -295,14 +287,13 @@ export function getRegisteredEventKeys(): string[] {
  * @param event - The event to trigger
  */
 export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
-  const typeHandlers = handlers.get(event.type) ?? [];
-  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
-
-  const allHandlers = [...typeHandlers, ...specificHandlers];
-
-  if (allHandlers.length === 0) {
+  if (!hasInternalHookListeners(event.type, event.action)) {
     return;
   }
+
+  const typeHandlers = handlers.get(event.type) ?? [];
+  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers];
 
   for (const handler of allHandlers) {
     try {
@@ -445,4 +436,22 @@ export function isMessagePreprocessedEvent(
     return false;
   }
   return hasStringContextField(context, "channelId");
+}
+
+export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {
+  if (!isHookEventTypeAndAction(event, "session", "patch")) {
+    return false;
+  }
+  const context = getHookContext<SessionPatchHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    typeof context.patch === "object" &&
+    context.patch !== null &&
+    typeof context.cfg === "object" &&
+    context.cfg !== null &&
+    typeof context.sessionEntry === "object" &&
+    context.sessionEntry !== null
+  );
 }

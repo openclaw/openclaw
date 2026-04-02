@@ -1,9 +1,15 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
-import { resolveSpawnCommand, type SpawnCommandCache } from "./process.js";
+import { createWindowsCmdShimFixture } from "openclaw/plugin-sdk/testing";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveSpawnCommand,
+  spawnAndCollect,
+  type SpawnCommandCache,
+  waitForExit,
+} from "./process.js";
 
 const tempDirs: string[] = [];
 
@@ -22,6 +28,7 @@ async function createTempDir(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (!dir) {
@@ -54,6 +61,88 @@ describe("resolveSpawnCommand", () => {
     expect(resolved).toEqual({
       command: "acpx",
       args: ["--help"],
+    });
+  });
+
+  it("routes node shebang wrappers through the current node runtime on posix", async () => {
+    const dir = await createTempDir();
+    const scriptPath = path.join(dir, "acpx");
+    await writeFile(scriptPath, "#!/usr/bin/env node\nconsole.log('ok')\n", "utf8");
+    await chmod(scriptPath, 0o755);
+
+    const resolved = resolveSpawnCommand(
+      {
+        command: scriptPath,
+        args: ["--help"],
+      },
+      undefined,
+      {
+        platform: "linux",
+        env: {},
+        execPath: "/custom/node",
+      },
+    );
+
+    expect(resolved).toEqual({
+      command: "/custom/node",
+      args: [scriptPath, "--help"],
+    });
+  });
+
+  it("routes PATH-resolved node shebang wrappers through the current node runtime on posix", async () => {
+    const dir = await createTempDir();
+    const binDir = path.join(dir, "bin");
+    const scriptPath = path.join(binDir, "acpx");
+    await mkdir(binDir, { recursive: true });
+    await writeFile(scriptPath, "#!/usr/bin/env node\nconsole.log('ok')\n", "utf8");
+    await chmod(scriptPath, 0o755);
+
+    const resolved = resolveSpawnCommand(
+      {
+        command: "acpx",
+        args: ["--help"],
+      },
+      undefined,
+      {
+        platform: "linux",
+        env: { PATH: binDir },
+        execPath: "/custom/node",
+      },
+    );
+
+    expect(resolved).toEqual({
+      command: "/custom/node",
+      args: [scriptPath, "--help"],
+    });
+  });
+
+  it("falls back to node on PATH when execPath is unavailable for a node shebang wrapper", async () => {
+    const dir = await createTempDir();
+    const binDir = path.join(dir, "bin");
+    const scriptPath = path.join(binDir, "acpx");
+    const nodePath = path.join(binDir, "node");
+    await mkdir(binDir, { recursive: true });
+    await writeFile(scriptPath, "#!/usr/bin/env node\nconsole.log('ok')\n", "utf8");
+    await writeFile(nodePath, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(scriptPath, 0o755);
+    await chmod(nodePath, 0o755);
+
+    const resolved = resolveSpawnCommand(
+      {
+        command: scriptPath,
+        args: ["--help"],
+      },
+      undefined,
+      {
+        platform: "darwin",
+        env: { PATH: binDir },
+        execPath: "/missing/node",
+      },
+    );
+
+    expect(resolved).toEqual({
+      command: nodePath,
+      args: [scriptPath, "--help"],
     });
   });
 
@@ -223,5 +312,151 @@ describe("resolveSpawnCommand", () => {
     expect(second.command).toBe("C:\\node\\node.exe");
     expect(first.args[0]).toBe(scriptPath);
     expect(second.args[0]).toBe(scriptPath);
+  });
+});
+
+describe("waitForExit", () => {
+  it("resolves when the child already exited before waiting starts", async () => {
+    const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      child.once("close", () => {
+        resolve();
+      });
+      child.once("error", reject);
+    });
+
+    const exit = await waitForExit(child);
+    expect(exit.code).toBe(0);
+    expect(exit.signal).toBeNull();
+    expect(exit.error).toBeNull();
+  });
+});
+
+describe("spawnAndCollect", () => {
+  type SpawnedEnvSnapshot = {
+    openai?: string;
+    github?: string;
+    hf?: string;
+    openclaw?: string;
+    shell?: string;
+  };
+
+  function stubProviderAuthEnv(env: Record<string, string>) {
+    for (const [key, value] of Object.entries(env)) {
+      vi.stubEnv(key, value);
+    }
+  }
+
+  async function collectSpawnedEnvSnapshot(options?: {
+    stripProviderAuthEnvVars?: boolean;
+    openAiEnvKey?: string;
+    githubEnvKey?: string;
+    hfEnvKey?: string;
+  }): Promise<SpawnedEnvSnapshot> {
+    const openAiEnvKey = options?.openAiEnvKey ?? "OPENAI_API_KEY";
+    const githubEnvKey = options?.githubEnvKey ?? "GITHUB_TOKEN";
+    const hfEnvKey = options?.hfEnvKey ?? "HF_TOKEN";
+    const result = await spawnAndCollect({
+      command: process.execPath,
+      args: [
+        "-e",
+        `process.stdout.write(JSON.stringify({openai:process.env.${openAiEnvKey},github:process.env.${githubEnvKey},hf:process.env.${hfEnvKey},openclaw:process.env.OPENCLAW_API_KEY,shell:process.env.OPENCLAW_SHELL}), () => process.exit(0))`,
+      ],
+      cwd: process.cwd(),
+      stripProviderAuthEnvVars: options?.stripProviderAuthEnvVars,
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.error).toBeNull();
+    return JSON.parse(result.stdout.trim()) as SpawnedEnvSnapshot;
+  }
+
+  it("returns abort error immediately when signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await spawnAndCollect(
+      {
+        command: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        cwd: process.cwd(),
+      },
+      undefined,
+      { signal: controller.signal },
+    );
+
+    expect(result.code).toBeNull();
+    expect(result.error?.name).toBe("AbortError");
+  });
+
+  it("terminates a running process when signal aborts", async () => {
+    const controller = new AbortController();
+    const resultPromise = spawnAndCollect(
+      {
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => process.stdout.write('done'), 10_000)"],
+        cwd: process.cwd(),
+      },
+      undefined,
+      { signal: controller.signal },
+    );
+
+    setTimeout(() => {
+      controller.abort();
+    }, 10);
+
+    const result = await resultPromise;
+    expect(result.error?.name).toBe("AbortError");
+  });
+
+  it("strips shared provider auth env vars from spawned acpx children", async () => {
+    stubProviderAuthEnv({
+      OPENAI_API_KEY: "openai-secret",
+      GITHUB_TOKEN: "gh-secret",
+      HF_TOKEN: "hf-secret",
+      OPENCLAW_API_KEY: "keep-me",
+    });
+    const parsed = await collectSpawnedEnvSnapshot({
+      stripProviderAuthEnvVars: true,
+    });
+    expect(parsed.openai).toBeUndefined();
+    expect(parsed.github).toBeUndefined();
+    expect(parsed.hf).toBeUndefined();
+    expect(parsed.openclaw).toBe("keep-me");
+    expect(parsed.shell).toBe("acp");
+  });
+
+  it("strips provider auth env vars case-insensitively", async () => {
+    stubProviderAuthEnv({
+      OpenAI_Api_Key: "openai-secret",
+      Github_Token: "gh-secret",
+      OPENCLAW_API_KEY: "keep-me",
+    });
+    const parsed = await collectSpawnedEnvSnapshot({
+      stripProviderAuthEnvVars: true,
+      openAiEnvKey: "OpenAI_Api_Key",
+      githubEnvKey: "Github_Token",
+    });
+    expect(parsed.openai).toBeUndefined();
+    expect(parsed.github).toBeUndefined();
+    expect(parsed.openclaw).toBe("keep-me");
+    expect(parsed.shell).toBe("acp");
+  });
+
+  it("preserves provider auth env vars for explicit custom commands by default", async () => {
+    stubProviderAuthEnv({
+      OPENAI_API_KEY: "openai-secret",
+      GITHUB_TOKEN: "gh-secret",
+      HF_TOKEN: "hf-secret",
+      OPENCLAW_API_KEY: "keep-me",
+    });
+    const parsed = await collectSpawnedEnvSnapshot();
+    expect(parsed.openai).toBe("openai-secret");
+    expect(parsed.github).toBe("gh-secret");
+    expect(parsed.hf).toBe("hf-secret");
+    expect(parsed.openclaw).toBe("keep-me");
+    expect(parsed.shell).toBe("acp");
   });
 });

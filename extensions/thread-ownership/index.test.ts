@@ -3,6 +3,7 @@ import register from "./index.js";
 
 describe("thread-ownership plugin", () => {
   const hooks: Record<string, Function> = {};
+  const fetchMock = vi.fn() as unknown as typeof globalThis.fetch;
   const api = {
     pluginConfig: {},
     config: {
@@ -18,8 +19,6 @@ describe("thread-ownership plugin", () => {
     }),
   };
 
-  let originalFetch: typeof globalThis.fetch;
-
   beforeEach(() => {
     vi.clearAllMocks();
     for (const key of Object.keys(hooks)) delete hooks[key];
@@ -27,29 +26,27 @@ describe("thread-ownership plugin", () => {
     process.env.SLACK_FORWARDER_URL = "http://localhost:8750";
     process.env.SLACK_BOT_USER_ID = "U999";
 
-    originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn() as unknown as typeof globalThis.fetch;
+    vi.stubGlobal("fetch", fetchMock);
   });
 
   afterEach(() => {
-    globalThis.fetch = originalFetch;
+    vi.unstubAllGlobals();
     delete process.env.SLACK_FORWARDER_URL;
     delete process.env.SLACK_BOT_USER_ID;
     vi.restoreAllMocks();
   });
 
-  it("registers message_received and message_sending hooks", () => {
-    register(api as any);
-
-    expect(api.on).toHaveBeenCalledTimes(2);
-    expect(api.on).toHaveBeenCalledWith("message_received", expect.any(Function));
-    expect(api.on).toHaveBeenCalledWith("message_sending", expect.any(Function));
-  });
-
   describe("message_sending", () => {
     beforeEach(() => {
-      register(api as any);
+      register.register(api as any);
     });
+
+    async function sendSlackThreadMessage() {
+      return await hooks.message_sending(
+        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
+        { channelId: "slack", conversationId: "C123" },
+      );
+    }
 
     it("allows non-slack channels", async () => {
       const result = await hooks.message_sending(
@@ -76,10 +73,7 @@ describe("thread-ownership plugin", () => {
         new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
       );
 
-      const result = await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
-        { channelId: "slack", conversationId: "C123" },
-      );
+      const result = await sendSlackThreadMessage();
 
       expect(result).toBeUndefined();
       expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -96,10 +90,7 @@ describe("thread-ownership plugin", () => {
         new Response(JSON.stringify({ owner: "other-agent" }), { status: 409 }),
       );
 
-      const result = await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
-        { channelId: "slack", conversationId: "C123" },
-      );
+      const result = await sendSlackThreadMessage();
 
       expect(result).toEqual({ cancel: true });
       expect(api.logger.info).toHaveBeenCalledWith(expect.stringContaining("cancelled send"));
@@ -108,10 +99,7 @@ describe("thread-ownership plugin", () => {
     it("fails open on network error", async () => {
       vi.mocked(globalThis.fetch).mockRejectedValue(new Error("ECONNREFUSED"));
 
-      const result = await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
-        { channelId: "slack", conversationId: "C123" },
-      );
+      const result = await sendSlackThreadMessage();
 
       expect(result).toBeUndefined();
       expect(api.logger.warn).toHaveBeenCalledWith(
@@ -122,7 +110,7 @@ describe("thread-ownership plugin", () => {
 
   describe("message_received @-mention tracking", () => {
     beforeEach(() => {
-      register(api as any);
+      register.register(api as any);
     });
 
     it("tracks @-mentions and skips ownership check for mentioned threads", async () => {

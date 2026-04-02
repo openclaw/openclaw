@@ -1,7 +1,7 @@
 ---
 summary: "Microsoft Teams bot support status, capabilities, and configuration"
 read_when:
-  - Working on MS Teams channel features
+  - Working on Microsoft Teams channel features
 title: "Microsoft Teams"
 ---
 
@@ -11,15 +11,15 @@ title: "Microsoft Teams"
 
 Updated: 2026-01-21
 
-Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards.
+Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
 
 ## Plugin required
 
 Microsoft Teams ships as a plugin and is not bundled with the core install.
 
-**Breaking change (2026.1.15):** MS Teams moved out of core. If you use it, you must install the plugin.
+**Breaking change (2026.1.15):** Microsoft Teams moved out of core. If you use it, you must install the plugin.
 
-Explainable: keeps core installs lighter and lets MS Teams dependencies update independently.
+Explainable: keeps core installs lighter and lets Microsoft Teams dependencies update independently.
 
 Install via CLI (npm registry):
 
@@ -30,10 +30,10 @@ openclaw plugins install @openclaw/msteams
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/msteams
+openclaw plugins install ./path/to/local/msteams-plugin
 ```
 
-If you choose Teams during configure/onboarding and a git checkout is detected,
+If you choose Teams during setup and a git checkout is detected,
 OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
@@ -114,11 +114,11 @@ Example:
 **Teams + channel allowlist**
 
 - Scope group/channel replies by listing teams and channels under `channels.msteams.teams`.
-- Keys can be team IDs or names; channel keys can be conversation IDs or names.
+- Keys should use stable team IDs and channel conversation IDs.
 - When `groupPolicy="allowlist"` and a teams allowlist is present, only listed teams/channels are accepted (mention‑gated).
 - The configure wizard accepts `Team/Channel` entries and stores them for you.
 - On startup, OpenClaw resolves team/channel and user allowlist names to IDs (when Graph permissions allow)
-  and logs the mapping; unresolved entries are kept as typed.
+  and logs the mapping; unresolved team/channel names are kept as typed but ignored for routing by default unless `channels.msteams.dangerouslyAllowNameMatching: true` is enabled.
 
 Example:
 
@@ -242,7 +242,7 @@ This is often easier than hand-editing JSON manifests.
 
 1. **Install the Microsoft Teams plugin**
    - From npm: `openclaw plugins install @openclaw/msteams`
-   - From a local checkout: `openclaw plugins install ./extensions/msteams`
+   - From a local checkout: `openclaw plugins install ./path/to/local/msteams-plugin`
 
 2. **Bot registration**
    - Create an Azure Bot (see above) and note:
@@ -260,15 +260,17 @@ This is often easier than hand-editing JSON manifests.
 
 4. **Configure OpenClaw**
 
-   ```json
+   ```json5
    {
-     "msteams": {
-       "enabled": true,
-       "appId": "<APP_ID>",
-       "appPassword": "<APP_PASSWORD>",
-       "tenantId": "<TENANT_ID>",
-       "webhook": { "port": 3978, "path": "/api/messages" }
-     }
+     channels: {
+       msteams: {
+         enabled: true,
+         appId: "<APP_ID>",
+         appPassword: "<APP_PASSWORD>",
+         tenantId: "<TENANT_ID>",
+         webhook: { port: 3978, path: "/api/messages" },
+       },
+     },
    }
    ```
 
@@ -284,10 +286,24 @@ This is often easier than hand-editing JSON manifests.
 6. **Run the gateway**
    - The Teams channel starts automatically when the plugin is installed and `msteams` config exists with credentials.
 
+## Member info action
+
+OpenClaw exposes a Graph-backed `member-info` action for Microsoft Teams so agents and automations can resolve channel member details (display name, email, role) directly from Microsoft Graph.
+
+Requirements:
+
+- `Member.Read.Group` RSC permission (already in the recommended manifest)
+- For cross-team lookups: `User.Read.All` Graph Application permission with admin consent
+
+The action is gated by `channels.msteams.actions.memberInfo` (default: enabled when Graph credentials are available).
+
 ## History context
 
 - `channels.msteams.historyLimit` controls how many recent channel/group messages are wrapped into the prompt.
 - Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
+- Fetched thread history is filtered by sender allowlists (`allowFrom` / `groupAllowFrom`), so thread context seeding only includes messages from allowed senders.
+- Quoted attachment context (`ReplyTo*` derived from Teams reply HTML) is currently passed as received.
+- In other words, allowlists gate who can trigger the agent; only specific supplemental context paths are filtered today.
 - DM history can be limited with `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
 
 ## Current Teams RSC Permissions (Manifest)
@@ -312,49 +328,49 @@ These are the **existing resourceSpecific permissions** in our Teams app manifes
 
 Minimal, valid example with the required fields. Replace IDs and URLs.
 
-```json
+```json5
 {
-  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.23/MicrosoftTeams.schema.json",
-  "manifestVersion": "1.23",
-  "version": "1.0.0",
-  "id": "00000000-0000-0000-0000-000000000000",
-  "name": { "short": "OpenClaw" },
-  "developer": {
-    "name": "Your Org",
-    "websiteUrl": "https://example.com",
-    "privacyUrl": "https://example.com/privacy",
-    "termsOfUseUrl": "https://example.com/terms"
+  $schema: "https://developer.microsoft.com/en-us/json-schemas/teams/v1.23/MicrosoftTeams.schema.json",
+  manifestVersion: "1.23",
+  version: "1.0.0",
+  id: "00000000-0000-0000-0000-000000000000",
+  name: { short: "OpenClaw" },
+  developer: {
+    name: "Your Org",
+    websiteUrl: "https://example.com",
+    privacyUrl: "https://example.com/privacy",
+    termsOfUseUrl: "https://example.com/terms",
   },
-  "description": { "short": "OpenClaw in Teams", "full": "OpenClaw in Teams" },
-  "icons": { "outline": "outline.png", "color": "color.png" },
-  "accentColor": "#5B6DEF",
-  "bots": [
+  description: { short: "OpenClaw in Teams", full: "OpenClaw in Teams" },
+  icons: { outline: "outline.png", color: "color.png" },
+  accentColor: "#5B6DEF",
+  bots: [
     {
-      "botId": "11111111-1111-1111-1111-111111111111",
-      "scopes": ["personal", "team", "groupChat"],
-      "isNotificationOnly": false,
-      "supportsCalling": false,
-      "supportsVideo": false,
-      "supportsFiles": true
-    }
+      botId: "11111111-1111-1111-1111-111111111111",
+      scopes: ["personal", "team", "groupChat"],
+      isNotificationOnly: false,
+      supportsCalling: false,
+      supportsVideo: false,
+      supportsFiles: true,
+    },
   ],
-  "webApplicationInfo": {
-    "id": "11111111-1111-1111-1111-111111111111"
+  webApplicationInfo: {
+    id: "11111111-1111-1111-1111-111111111111",
   },
-  "authorization": {
-    "permissions": {
-      "resourceSpecific": [
-        { "name": "ChannelMessage.Read.Group", "type": "Application" },
-        { "name": "ChannelMessage.Send.Group", "type": "Application" },
-        { "name": "Member.Read.Group", "type": "Application" },
-        { "name": "Owner.Read.Group", "type": "Application" },
-        { "name": "ChannelSettings.Read.Group", "type": "Application" },
-        { "name": "TeamMember.Read.Group", "type": "Application" },
-        { "name": "TeamSettings.Read.Group", "type": "Application" },
-        { "name": "ChatMessage.Read.Chat", "type": "Application" }
-      ]
-    }
-  }
+  authorization: {
+    permissions: {
+      resourceSpecific: [
+        { name: "ChannelMessage.Read.Group", type: "Application" },
+        { name: "ChannelMessage.Send.Group", type: "Application" },
+        { name: "Member.Read.Group", type: "Application" },
+        { name: "Owner.Read.Group", type: "Application" },
+        { name: "ChannelSettings.Read.Group", type: "Application" },
+        { name: "TeamMember.Read.Group", type: "Application" },
+        { name: "TeamSettings.Read.Group", type: "Application" },
+        { name: "ChatMessage.Read.Chat", type: "Application" },
+      ],
+    },
+  },
 }
 ```
 
@@ -457,7 +473,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.webhook.path` (default `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)
 - `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). The wizard resolves names to IDs during setup when Graph access is available.
-- `channels.msteams.dangerouslyAllowNameMatching`: break-glass toggle to re-enable mutable UPN/display-name matching.
+- `channels.msteams.dangerouslyAllowNameMatching`: break-glass toggle to re-enable mutable UPN/display-name matching and direct team/channel name routing.
 - `channels.msteams.textChunkLimit`: outbound text chunk size.
 - `channels.msteams.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains).
@@ -474,6 +490,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
 - `toolsBySender` keys should use explicit prefixes:
   `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
+- `channels.msteams.actions.memberInfo`: enable or disable the Graph-backed member info action (default: enabled when Graph credentials are available).
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
 
 ## Routing & Sessions
@@ -500,20 +517,22 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 
 **Solution:** Configure `replyStyle` per-channel based on how the channel is set up:
 
-```json
+```json5
 {
-  "msteams": {
-    "replyStyle": "thread",
-    "teams": {
-      "19:abc...@thread.tacv2": {
-        "channels": {
-          "19:xyz...@thread.tacv2": {
-            "replyStyle": "top-level"
-          }
-        }
-      }
-    }
-  }
+  channels: {
+    msteams: {
+      replyStyle: "thread",
+      teams: {
+        "19:abc...@thread.tacv2": {
+          channels: {
+            "19:xyz...@thread.tacv2": {
+              replyStyle: "top-level",
+            },
+          },
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -523,6 +542,7 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 
 - **DMs:** Images and file attachments work via Teams bot file APIs.
 - **Channels/groups:** Attachments live in M365 storage (SharePoint/OneDrive). The webhook payload only includes an HTML stub, not the actual file bytes. **Graph API permissions are required** to download channel attachments.
+- For explicit file-first sends, use `action=upload-file` with `media` / `filePath` / `path`; optional `message` becomes the accompanying text/comment, and `filename` overrides the uploaded name.
 
 Without Graph permissions, channel messages with images will be received as text-only (the image content is not accessible to the bot).
 By default, OpenClaw only downloads media from Microsoft/Teams hostnames. Override with `channels.msteams.mediaAllowHosts` (use `["*"]` to allow any host).
@@ -616,16 +636,16 @@ The `card` parameter accepts an Adaptive Card JSON object. When `card` is provid
 
 **Agent tool:**
 
-```json
+```json5
 {
-  "action": "send",
-  "channel": "msteams",
-  "target": "user:<id>",
-  "card": {
-    "type": "AdaptiveCard",
-    "version": "1.5",
-    "body": [{ "type": "TextBlock", "text": "Hello!" }]
-  }
+  action: "send",
+  channel: "msteams",
+  target: "user:<id>",
+  card: {
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: [{ type: "TextBlock", text: "Hello!" }],
+  },
 }
 ```
 
@@ -669,25 +689,25 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 
 **Agent tool examples:**
 
-```json
+```json5
 {
-  "action": "send",
-  "channel": "msteams",
-  "target": "user:John Smith",
-  "message": "Hello!"
+  action: "send",
+  channel: "msteams",
+  target: "user:John Smith",
+  message: "Hello!",
 }
 ```
 
-```json
+```json5
 {
-  "action": "send",
-  "channel": "msteams",
-  "target": "conversation:19:abc...@thread.tacv2",
-  "card": {
-    "type": "AdaptiveCard",
-    "version": "1.5",
-    "body": [{ "type": "TextBlock", "text": "Hello" }]
-  }
+  action: "send",
+  channel: "msteams",
+  target: "conversation:19:abc...@thread.tacv2",
+  card: {
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: [{ type: "TextBlock", text: "Hello" }],
+  },
 }
 ```
 
@@ -774,3 +794,11 @@ Bots have limited support in private channels:
 - [RSC permissions reference](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent)
 - [Teams bot file handling](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/bots-filesv4) (channel/group requires Graph)
 - [Proactive messaging](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages)
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

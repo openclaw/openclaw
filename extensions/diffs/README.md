@@ -15,8 +15,10 @@ The tool can return:
 - `details.viewerUrl`: a gateway URL that can be opened in the canvas
 - `details.filePath`: a local rendered artifact path when file rendering is requested
 - `details.fileFormat`: the rendered file format (`png` or `pdf`)
+- `details.artifactId` and `details.expiresAt`: artifact identity and TTL metadata
+- `details.context`: available routing metadata such as `agentId`, `sessionId`, `messageChannel`, and `agentAccountId`
 
-When the plugin is enabled, it also ships a companion skill from `skills/` that guides when to use `diffs`. This guidance is delivered through normal skill loading, not unconditional prompt-hook injection on every turn.
+When the plugin is enabled, it also ships a companion skill from `skills/` and prepends stable tool-usage guidance into system-prompt space via `before_prompt_build`. The hook uses `prependSystemContext`, so the guidance stays out of user-prompt space while still being available every turn.
 
 This means an agent can:
 
@@ -49,6 +51,7 @@ Patch:
 Useful options:
 
 - `mode`: `view`, `file`, or `both`
+  Deprecated alias: `image` behaves like `file` and is still accepted for backward compatibility.
 - `layout`: `unified` or `split`
 - `theme`: `light` or `dark` (default: `dark`)
 - `fileFormat`: `png` or `pdf` (default: `png`)
@@ -60,6 +63,7 @@ Useful options:
 - `title`: explicit viewer title
 - `ttlSeconds`: artifact lifetime
 - `baseUrl`: override the gateway base URL used in the returned viewer link (origin or origin+base path only; no query/hash)
+- `viewerBaseUrl` plugin config: persistent fallback used when a tool call omits `baseUrl`
 
 Input safety limits:
 
@@ -106,6 +110,24 @@ Explicit tool parameters still win over these defaults.
 Security options:
 
 - `security.allowRemoteViewer` (default `false`): allows non-loopback access to `/plugins/diffs/view/...` token URLs
+- `viewerBaseUrl` (optional): persistent viewer-link origin/path fallback for shareable URLs
+
+Example:
+
+```json5
+{
+  plugins: {
+    entries: {
+      diffs: {
+        enabled: true,
+        config: {
+          viewerBaseUrl: "https://gateway.example.com/openclaw",
+        },
+      },
+    },
+  },
+}
+```
 
 ## Example Agent Prompts
 
@@ -174,7 +196,9 @@ diff --git a/src/example.ts b/src/example.ts
 
 - The viewer is hosted locally through the gateway under `/plugins/diffs/...`.
 - Artifacts are ephemeral and stored in the plugin temp subfolder (`$TMPDIR/openclaw-diffs`).
-- Default viewer URLs use loopback (`127.0.0.1`) unless you set `baseUrl` (or use `gateway.bind=custom` + `gateway.customBindHost`).
+- Default viewer URLs use loopback (`127.0.0.1`) unless you set plugin `viewerBaseUrl`, pass `baseUrl`, or use `gateway.bind=custom` + `gateway.customBindHost`.
+- If `gateway.trustedProxies` includes loopback for a same-host proxy (for example Tailscale Serve), raw `127.0.0.1` viewer requests without forwarded client-IP headers fail closed by design.
+- In that topology, prefer `mode=file` / `mode=both` for attachments, or intentionally enable remote viewers and set plugin `viewerBaseUrl` (or pass a proxy/public `baseUrl`) when you need a shareable viewer URL.
 - Remote viewer misses are throttled to reduce token-guess abuse.
 - PNG or PDF rendering requires a Chromium-compatible browser. Set `browser.executablePath` if auto-detection is not enough.
 - If your delivery channel compresses images heavily (for example Telegram or WhatsApp), prefer `fileFormat: "pdf"` to preserve readability.

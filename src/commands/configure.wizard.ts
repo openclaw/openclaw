@@ -2,9 +2,8 @@ import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
+import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -12,6 +11,7 @@ import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
+import { resolveSetupSecretInputString } from "../wizard/setup.secret-input.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -37,7 +37,6 @@ import {
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
   guardCancel,
-  printWizardHeader,
   probeGatewayReachable,
   resolveControlUiLinks,
   summarizeExistingConfig,
@@ -47,6 +46,23 @@ import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
+
+async function resolveGatewaySecretInputForWizard(params: {
+  cfg: OpenClawConfig;
+  value: unknown;
+  path: string;
+}): Promise<string | undefined> {
+  try {
+    return await resolveSetupSecretInputString({
+      config: params.cfg,
+      value: params.value,
+      path: params.path,
+      env: process.env,
+    });
+  } catch {
+    return undefined;
+  }
+}
 
 async function runGatewayHealthCheck(params: {
   cfg: OpenClawConfig;
@@ -61,10 +77,18 @@ async function runGatewayHealthCheck(params: {
   });
   const remoteUrl = params.cfg.gateway?.remote?.url?.trim();
   const wsUrl = params.cfg.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
-  const token = params.cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN;
-  const password =
-    normalizeSecretInputString(params.cfg.gateway?.auth?.password) ??
-    process.env.OPENCLAW_GATEWAY_PASSWORD;
+  const configuredToken = await resolveGatewaySecretInputForWizard({
+    cfg: params.cfg,
+    value: params.cfg.gateway?.auth?.token,
+    path: "gateway.auth.token",
+  });
+  const configuredPassword = await resolveGatewaySecretInputForWizard({
+    cfg: params.cfg,
+    value: params.cfg.gateway?.auth?.password,
+    path: "gateway.auth.password",
+  });
+  const token = process.env.OPENCLAW_GATEWAY_TOKEN ?? configuredToken;
+  const password = process.env.OPENCLAW_GATEWAY_PASSWORD ?? configuredPassword;
 
   await waitForGatewayReachable({
     url: wsUrl,
@@ -134,15 +158,20 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
 async function promptWebToolsConfig(
   nextConfig: OpenClawConfig,
   runtime: RuntimeEnv,
+  prompter: ReturnType<typeof createClackPrompter>,
 ): Promise<OpenClawConfig> {
+  type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const hasSearchKey = Boolean(existingSearch?.apiKey);
+  const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
+  const { describeCodexNativeWebSearch, isCodexNativeWebSearchRelevant } =
+    await import("../agents/codex-native-web-search.js");
+  const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
 
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "It requires a Brave Search API key (you can store it in the config or set BRAVE_API_KEY in the Gateway environment).",
+      "Choose a managed provider now, and Codex-capable models can also use native Codex web search.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -150,39 +179,116 @@ async function promptWebToolsConfig(
 
   const enableSearch = guardCancel(
     await confirm({
-      message: "Enable web_search (Brave Search)?",
-      initialValue: existingSearch?.enabled ?? hasSearchKey,
+      message: "Enable web_search?",
+      initialValue: existingSearch?.enabled ?? searchProviderOptions.length > 0,
     }),
     runtime,
   );
 
-  let nextSearch = {
+  let nextSearch: WebSearchConfig = {
     ...existingSearch,
     enabled: enableSearch,
   };
+  let workingConfig = nextConfig;
 
   if (enableSearch) {
-    const keyInput = guardCancel(
-      await text({
-        message: hasSearchKey
-          ? "Brave Search API key (leave blank to keep current or use BRAVE_API_KEY)"
-          : "Brave Search API key (paste it here; leave blank to use BRAVE_API_KEY)",
-        placeholder: hasSearchKey ? "Leave blank to keep current" : "BSA...",
-      }),
-      runtime,
-    );
-    const key = String(keyInput ?? "").trim();
-    if (key) {
-      nextSearch = { ...nextSearch, apiKey: key };
-    } else if (!hasSearchKey) {
+    const codexRelevant = isCodexNativeWebSearchRelevant({ config: nextConfig });
+    let configureManagedProvider = true;
+
+    if (codexRelevant) {
       note(
         [
-          "No key stored yet, so web_search will stay unavailable.",
-          "Store a key here or set BRAVE_API_KEY in the Gateway environment.",
-          "Docs: https://docs.openclaw.ai/tools/web",
+          "Codex-capable models can optionally use native Codex web search.",
+          "Managed web_search still controls non-Codex models.",
+          "If no managed provider is configured, non-Codex models still rely on provider auto-detect and may have no search available.",
+          ...(describeCodexNativeWebSearch(nextConfig)
+            ? [describeCodexNativeWebSearch(nextConfig)!]
+            : ["Recommended mode: cached."]),
         ].join("\n"),
-        "Web search",
+        "Codex native search",
       );
+
+      const enableCodexNative = guardCancel(
+        await confirm({
+          message: "Enable native Codex web search for Codex-capable models?",
+          initialValue: existingSearch?.openaiCodex?.enabled === true,
+        }),
+        runtime,
+      );
+
+      if (enableCodexNative) {
+        const codexMode = guardCancel(
+          await select({
+            message: "Codex native web search mode",
+            options: [
+              {
+                value: "cached",
+                label: "cached (recommended)",
+                hint: "Uses cached web content",
+              },
+              {
+                value: "live",
+                label: "live",
+                hint: "Allows live external web access",
+              },
+            ],
+            initialValue: existingSearch?.openaiCodex?.mode ?? "cached",
+          }),
+          runtime,
+        );
+        nextSearch = {
+          ...nextSearch,
+          openaiCodex: {
+            ...existingSearch?.openaiCodex,
+            enabled: true,
+            mode: codexMode,
+          },
+        };
+        configureManagedProvider = guardCancel(
+          await confirm({
+            message: "Configure or change a managed web search provider now?",
+            initialValue: Boolean(existingSearch?.provider),
+          }),
+          runtime,
+        );
+      } else {
+        nextSearch = {
+          ...nextSearch,
+          openaiCodex: {
+            ...existingSearch?.openaiCodex,
+            enabled: false,
+          },
+        };
+      }
+    }
+
+    if (searchProviderOptions.length === 0) {
+      if (configureManagedProvider) {
+        note(
+          [
+            "No web search providers are currently available under this plugin policy.",
+            "Enable plugins or remove deny rules, then rerun configure.",
+            "Docs: https://docs.openclaw.ai/tools/web",
+          ].join("\n"),
+          "Web search",
+        );
+      }
+      if (nextSearch.openaiCodex?.enabled !== true) {
+        nextSearch = {
+          ...existingSearch,
+          enabled: false,
+        };
+      }
+    } else if (configureManagedProvider) {
+      workingConfig = await setupSearch(workingConfig, runtime, prompter);
+      nextSearch = {
+        ...workingConfig.tools?.web?.search,
+        enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
+        openaiCodex: {
+          ...existingSearch?.openaiCodex,
+          ...(nextSearch.openaiCodex as Record<string, unknown> | undefined),
+        },
+      };
     }
   }
 
@@ -200,11 +306,11 @@ async function promptWebToolsConfig(
   };
 
   return {
-    ...nextConfig,
+    ...workingConfig,
     tools: {
-      ...nextConfig.tools,
+      ...workingConfig.tools,
       web: {
-        ...nextConfig.tools?.web,
+        ...workingConfig.tools?.web,
         search: nextSearch,
         fetch: nextFetch,
       },
@@ -217,12 +323,14 @@ export async function runConfigureWizard(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   try {
-    printWizardHeader(runtime);
     intro(opts.command === "update" ? "OpenClaw update wizard" : "OpenClaw configure");
     const prompter = createClackPrompter();
 
     const snapshot = await readConfigFileSnapshot();
-    const baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+    let currentBaseHash = snapshot.hash;
+    const baseConfig: OpenClawConfig = snapshot.valid
+      ? (snapshot.sourceConfig ?? snapshot.config)
+      : {};
 
     if (snapshot.exists) {
       const title = snapshot.valid ? "Existing config detected" : "Invalid config";
@@ -247,18 +355,31 @@ export async function runConfigureWizard(
     }
 
     const localUrl = "ws://127.0.0.1:18789";
+    const baseLocalProbeToken = await resolveGatewaySecretInputForWizard({
+      cfg: baseConfig,
+      value: baseConfig.gateway?.auth?.token,
+      path: "gateway.auth.token",
+    });
+    const baseLocalProbePassword = await resolveGatewaySecretInputForWizard({
+      cfg: baseConfig,
+      value: baseConfig.gateway?.auth?.password,
+      path: "gateway.auth.password",
+    });
     const localProbe = await probeGatewayReachable({
       url: localUrl,
-      token: baseConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
-      password:
-        normalizeSecretInputString(baseConfig.gateway?.auth?.password) ??
-        process.env.OPENCLAW_GATEWAY_PASSWORD,
+      token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
+      password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
     });
     const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
+    const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
+      cfg: baseConfig,
+      value: baseConfig.gateway?.remote?.token,
+      path: "gateway.remote.token",
+    });
     const remoteProbe = remoteUrl
       ? await probeGatewayReachable({
           url: remoteUrl,
-          token: normalizeSecretInputString(baseConfig.gateway?.remote?.token),
+          token: baseRemoteProbeToken,
         })
       : null;
 
@@ -293,7 +414,11 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await writeConfigFile(remoteConfig);
+      await replaceConfigFile({
+        nextConfig: remoteConfig,
+        ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+      });
+      currentBaseHash = undefined;
       logConfigUpdated(runtime);
       outro("Remote gateway configured.");
       return;
@@ -316,17 +441,17 @@ export async function runConfigureWizard(
       baseConfig.agents?.defaults?.workspace ??
       DEFAULT_WORKSPACE;
     let gatewayPort = resolveGatewayPort(baseConfig);
-    let gatewayToken: string | undefined =
-      normalizeSecretInputString(nextConfig.gateway?.auth?.token) ??
-      normalizeSecretInputString(baseConfig.gateway?.auth?.token) ??
-      process.env.OPENCLAW_GATEWAY_TOKEN;
 
     const persistConfig = async () => {
       nextConfig = applyWizardMetadata(nextConfig, {
         command: opts.command,
         mode,
       });
-      await writeConfigFile(nextConfig);
+      await replaceConfigFile({
+        nextConfig,
+        ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+      });
+      currentBaseHash = undefined;
       logConfigUpdated(runtime);
     };
 
@@ -421,14 +546,13 @@ export async function runConfigureWizard(
       }
 
       if (selected.includes("web")) {
-        nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+        nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
       }
 
       if (selected.includes("gateway")) {
         const gateway = await promptGatewayConfig(nextConfig, runtime);
         nextConfig = gateway.config;
         gatewayPort = gateway.port;
-        gatewayToken = gateway.token;
       }
 
       if (selected.includes("channels")) {
@@ -447,7 +571,7 @@ export async function runConfigureWizard(
           await promptDaemonPort();
         }
 
-        await maybeInstallDaemon({ runtime, port: gatewayPort, gatewayToken });
+        await maybeInstallDaemon({ runtime, port: gatewayPort });
       }
 
       if (selected.includes("health")) {
@@ -475,7 +599,7 @@ export async function runConfigureWizard(
         }
 
         if (choice === "web") {
-          nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+          nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
           await persistConfig();
         }
 
@@ -483,7 +607,6 @@ export async function runConfigureWizard(
           const gateway = await promptGatewayConfig(nextConfig, runtime);
           nextConfig = gateway.config;
           gatewayPort = gateway.port;
-          gatewayToken = gateway.token;
           didConfigureGateway = true;
           await persistConfig();
         }
@@ -506,7 +629,6 @@ export async function runConfigureWizard(
           await maybeInstallDaemon({
             runtime,
             port: gatewayPort,
-            gatewayToken,
           });
         }
 
@@ -538,21 +660,33 @@ export async function runConfigureWizard(
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
     });
-    // Try both new and old passwords since gateway may still have old config.
     const newPassword =
-      normalizeSecretInputString(nextConfig.gateway?.auth?.password) ??
-      process.env.OPENCLAW_GATEWAY_PASSWORD;
+      process.env.OPENCLAW_GATEWAY_PASSWORD ??
+      (await resolveGatewaySecretInputForWizard({
+        cfg: nextConfig,
+        value: nextConfig.gateway?.auth?.password,
+        path: "gateway.auth.password",
+      }));
     const oldPassword =
-      normalizeSecretInputString(baseConfig.gateway?.auth?.password) ??
-      process.env.OPENCLAW_GATEWAY_PASSWORD;
-    const token = nextConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN;
+      process.env.OPENCLAW_GATEWAY_PASSWORD ??
+      (await resolveGatewaySecretInputForWizard({
+        cfg: baseConfig,
+        value: baseConfig.gateway?.auth?.password,
+        path: "gateway.auth.password",
+      }));
+    const token =
+      process.env.OPENCLAW_GATEWAY_TOKEN ??
+      (await resolveGatewaySecretInputForWizard({
+        cfg: nextConfig,
+        value: nextConfig.gateway?.auth?.token,
+        path: "gateway.auth.token",
+      }));
 
     let gatewayProbe = await probeGatewayReachable({
       url: links.wsUrl,
       token,
       password: newPassword,
     });
-    // If new password failed and it's different from old password, try old too.
     if (!gatewayProbe.ok && newPassword !== oldPassword && oldPassword) {
       gatewayProbe = await probeGatewayReachable({
         url: links.wsUrl,

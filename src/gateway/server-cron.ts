@@ -284,6 +284,13 @@ export function buildGatewayCronService(params: {
     },
     runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      let sessionKey = `cron:${job.id}`;
+      if (job.sessionTarget.startsWith("session:")) {
+        const customSessionId = job.sessionTarget.slice(8).trim();
+        if (customSessionId) {
+          sessionKey = customSessionId;
+        }
+      }
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
@@ -291,7 +298,7 @@ export function buildGatewayCronService(params: {
         message,
         abortSignal,
         agentId,
-        sessionKey: `cron:${job.id}`,
+        sessionKey,
         lane: "cron",
       });
     },
@@ -409,9 +416,7 @@ export function buildGatewayCronService(params: {
         if (evt.status === "error" && job) {
           const failureDest = resolveFailureDestination(job, params.cfg.cron?.failureDestination);
           if (failureDest) {
-            const isBestEffort =
-              job.delivery?.bestEffort === true ||
-              (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+            const isBestEffort = job.delivery?.bestEffort === true;
 
             if (!isBestEffort) {
               const failureMessage = `Cron job "${job.name}" failed: ${evt.error ?? "unknown error"}`;

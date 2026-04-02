@@ -1,20 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
-} from "./google-gemini-model-default.js";
-import {
-  applyOpenAICodexModelDefault,
-  OPENAI_CODEX_DEFAULT_MODEL,
-} from "./openai-codex-model-default.js";
+} from "../plugin-sdk/google.js";
 import {
   applyOpenAIConfig,
   applyOpenAIProviderConfig,
   OPENAI_DEFAULT_MODEL,
-} from "./openai-model-default.js";
+} from "../plugin-sdk/openai.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
   applyOpencodeZenModelDefault,
   OPENCODE_ZEN_DEFAULT_MODEL,
@@ -116,7 +112,7 @@ describe("applyDefaultModelChoice", () => {
   });
 
   it("uses applyDefaultConfig path when setDefaultModel is true", async () => {
-    const defaultModel = "openai/gpt-5.1-codex";
+    const defaultModel = "openai/gpt-5.4";
     const applied = await applyDefaultModelChoice({
       config: {},
       setDefaultModel: true,
@@ -194,38 +190,6 @@ describe("applyOpenAIConfig", () => {
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] } } },
     });
     expect(next.agents?.defaults?.model).toEqual({ primary: OPENAI_DEFAULT_MODEL, fallbacks: [] });
-  });
-});
-
-describe("applyOpenAICodexModelDefault", () => {
-  it("sets openai-codex default when model is unset", () => {
-    const cfg: OpenClawConfig = { agents: { defaults: {} } };
-    const applied = applyOpenAICodexModelDefault(cfg);
-    expectPrimaryModelChanged(applied, OPENAI_CODEX_DEFAULT_MODEL);
-  });
-
-  it("sets openai-codex default when model is openai/*", () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: OPENAI_DEFAULT_MODEL } } },
-    };
-    const applied = applyOpenAICodexModelDefault(cfg);
-    expectPrimaryModelChanged(applied, OPENAI_CODEX_DEFAULT_MODEL);
-  });
-
-  it("does not override openai-codex/*", () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: OPENAI_CODEX_DEFAULT_MODEL } } },
-    };
-    const applied = applyOpenAICodexModelDefault(cfg);
-    expectConfigUnchanged(applied, cfg);
-  });
-
-  it("does not override non-openai models", () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-    };
-    const applied = applyOpenAICodexModelDefault(cfg);
-    expectConfigUnchanged(applied, cfg);
   });
 });
 

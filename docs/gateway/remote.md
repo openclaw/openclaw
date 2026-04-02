@@ -103,17 +103,21 @@ When the gateway is loopback-only, keep the URL at `ws://127.0.0.1:18789` and op
 
 ## Credential precedence
 
-Gateway call/probe credential resolution now follows one shared contract:
+Gateway credential resolution follows one shared contract across call/probe/status paths and Discord exec-approval monitoring. Node-host uses the same base contract with one local-mode exception (it intentionally ignores `gateway.remote.*`):
 
-- Explicit credentials (`--token`, `--password`, or tool `gatewayToken`) always win.
+- Explicit credentials (`--token`, `--password`, or tool `gatewayToken`) always win on call paths that accept explicit auth.
+- URL override safety:
+  - CLI URL overrides (`--url`) never reuse implicit config/env credentials.
+  - Env URL overrides (`OPENCLAW_GATEWAY_URL`) may use env credentials only (`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`).
 - Local mode defaults:
-  - token: `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token` -> `gateway.remote.token`
-  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.auth.password` -> `gateway.remote.password`
+  - token: `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token` -> `gateway.remote.token` (remote fallback applies only when local auth token input is unset)
+  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.auth.password` -> `gateway.remote.password` (remote fallback applies only when local auth password input is unset)
 - Remote mode defaults:
   - token: `gateway.remote.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token`
   - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` -> `gateway.auth.password`
+- Node-host local-mode exception: `gateway.remote.token` / `gateway.remote.password` are ignored.
 - Remote probe/status token checks are strict by default: they use `gateway.remote.token` only (no local token fallback) when targeting remote mode.
-- Legacy `CLAWDBOT_GATEWAY_*` env vars are only used by compatibility call paths; probe/status/auth resolution uses `OPENCLAW_GATEWAY_*` only.
+- Gateway env overrides use `OPENCLAW_GATEWAY_*` only.
 
 ## Chat UI over SSH
 
@@ -122,7 +126,7 @@ WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects direct
 - Forward `18789` over SSH (see above), then connect clients to `ws://127.0.0.1:18789`.
 - On macOS, prefer the app’s “Remote over SSH” mode, which manages the tunnel automatically.
 
-## macOS app “Remote over SSH”
+## macOS app "Remote over SSH"
 
 The macOS menu bar app can drive the same setup end-to-end (remote status checks, WebChat, and Voice Wake forwarding).
 
@@ -137,7 +141,8 @@ Short version: **keep the Gateway loopback-only** unless you’re sure you need 
   set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
 - **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use auth tokens/passwords.
 - `gateway.remote.token` / `.password` are client credential sources. They do **not** configure server auth by themselves.
-- Local call paths can use `gateway.remote.*` as fallback when `gateway.auth.*` is unset.
+- Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
+- If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert when using `wss://`.
 - **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity
   headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints still
@@ -146,3 +151,98 @@ Short version: **keep the Gateway loopback-only** unless you’re sure you need 
 - Treat browser control like operator access: tailnet-only + deliberate node pairing.
 
 Deep dive: [Security](/gateway/security).
+
+### macOS: persistent SSH tunnel via LaunchAgent
+
+For macOS clients connecting to a remote gateway, the easiest persistent setup uses an SSH `LocalForward` config entry plus a LaunchAgent to keep the tunnel alive across reboots and crashes.
+
+#### Step 1: add SSH config
+
+Edit `~/.ssh/config`:
+
+```ssh
+Host remote-gateway
+    HostName <REMOTE_IP>
+    User <REMOTE_USER>
+    LocalForward 18789 127.0.0.1:18789
+    IdentityFile ~/.ssh/id_rsa
+```
+
+Replace `<REMOTE_IP>` and `<REMOTE_USER>` with your values.
+
+#### Step 2: copy SSH key (one-time)
+
+```bash
+ssh-copy-id -i ~/.ssh/id_rsa <REMOTE_USER>@<REMOTE_IP>
+```
+
+#### Step 3: configure the gateway token
+
+Store the token in config so it persists across restarts:
+
+```bash
+openclaw config set gateway.remote.token "<your-token>"
+```
+
+#### Step 4: create the LaunchAgent
+
+Save this as `~/Library/LaunchAgents/ai.openclaw.ssh-tunnel.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.openclaw.ssh-tunnel</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/ssh</string>
+        <string>-N</string>
+        <string>remote-gateway</string>
+    </array>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+```
+
+#### Step 5: load the LaunchAgent
+
+```bash
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.ssh-tunnel.plist
+```
+
+The tunnel will start automatically at login, restart on crash, and keep the forwarded port live.
+
+Note: if you have a leftover `com.openclaw.ssh-tunnel` LaunchAgent from an older setup, unload and delete it.
+
+#### Troubleshooting
+
+Check if the tunnel is running:
+
+```bash
+ps aux | grep "ssh -N remote-gateway" | grep -v grep
+lsof -i :18789
+```
+
+Restart the tunnel:
+
+```bash
+launchctl kickstart -k gui/$UID/ai.openclaw.ssh-tunnel
+```
+
+Stop the tunnel:
+
+```bash
+launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
+```
+
+| Config entry                         | What it does                                                 |
+| ------------------------------------ | ------------------------------------------------------------ |
+| `LocalForward 18789 127.0.0.1:18789` | Forwards local port 18789 to remote port 18789               |
+| `ssh -N`                             | SSH without executing remote commands (port-forwarding only) |
+| `KeepAlive`                          | Automatically restarts the tunnel if it crashes              |
+| `RunAtLoad`                          | Starts the tunnel when the LaunchAgent loads at login        |

@@ -83,17 +83,75 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         #expect(json.contains("\"value\""))
     }
 
-    @Test @MainActor func chatSessionKeyDefaultsToIOSBase() {
+    @Test @MainActor func chatSessionKeyDefaultsToMainBase() {
         let appModel = NodeAppModel()
-        #expect(appModel.chatSessionKey == "ios")
+        #expect(appModel.chatSessionKey == "main")
     }
 
     @Test @MainActor func chatSessionKeyUsesAgentScopedKeyForNonDefaultAgent() {
         let appModel = NodeAppModel()
         appModel.gatewayDefaultAgentId = "main"
         appModel.setSelectedAgentId("agent-123")
-        #expect(appModel.chatSessionKey == SessionKey.makeAgentSessionKey(agentId: "agent-123", baseKey: "ios"))
+        #expect(appModel.chatSessionKey == SessionKey.makeAgentSessionKey(agentId: "agent-123", baseKey: "main"))
         #expect(appModel.mainSessionKey == "agent:agent-123:main")
+    }
+
+    @Test func operatorLoopWaitsForBootstrapHandoffBeforeUsingStoredToken() {
+        #expect(
+            !NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: true)
+        )
+        #expect(
+            !NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                hasStoredOperatorToken: false)
+        )
+        #expect(
+            NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                hasStoredOperatorToken: true)
+        )
+        #expect(
+            NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: "shared-token",
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: false)
+        )
+    }
+
+    @Test func clearingBootstrapTokenStripsReconnectConfigEvenWithoutPersistence() {
+        let config = GatewayConnectConfig(
+            url: URL(string: "wss://gateway.example")!,
+            stableID: "test-gateway",
+            tls: nil,
+            token: nil,
+            bootstrapToken: "spent-bootstrap-token",
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: nil))
+
+        let cleared = NodeAppModel.clearingBootstrapToken(in: config)
+        #expect(cleared?.bootstrapToken == nil)
+        #expect(cleared?.url == config.url)
+        #expect(cleared?.stableID == config.stableID)
+        #expect(cleared?.token == config.token)
+        #expect(cleared?.password == config.password)
+        #expect(cleared?.nodeOptions.role == config.nodeOptions.role)
     }
 
     @Test @MainActor func handleInvokeRejectsBackgroundCommands() async {
@@ -177,6 +235,41 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         let payloadData = try #require(evalRes.payloadJSON?.data(using: .utf8))
         let payload = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
         #expect(payload?["result"] as? String == "2")
+    }
+
+    @Test @MainActor func pendingForegroundActionsReplayCanvasNavigate() async throws {
+        let appModel = NodeAppModel()
+        let navigateParams = OpenClawCanvasNavigateParams(url: "http://example.com/")
+        let navData = try JSONEncoder().encode(navigateParams)
+        let navJSON = String(decoding: navData, as: UTF8.self)
+
+        await appModel._test_applyPendingForegroundNodeActions([
+            (
+                id: "pending-nav-1",
+                command: OpenClawCanvasCommand.navigate.rawValue,
+                paramsJSON: navJSON
+            ),
+        ])
+
+        #expect(appModel.screen.urlString == "http://example.com/")
+    }
+
+    @Test @MainActor func pendingForegroundActionsDoNotApplyWhileBackgrounded() async throws {
+        let appModel = NodeAppModel()
+        appModel.setScenePhase(.background)
+        let navigateParams = OpenClawCanvasNavigateParams(url: "http://example.com/")
+        let navData = try JSONEncoder().encode(navigateParams)
+        let navJSON = String(decoding: navData, as: UTF8.self)
+
+        await appModel._test_applyPendingForegroundNodeActions([
+            (
+                id: "pending-nav-bg",
+                command: OpenClawCanvasCommand.navigate.rawValue,
+                paramsJSON: navJSON
+            ),
+        ])
+
+        #expect(appModel.screen.urlString.isEmpty)
     }
 
     @Test @MainActor func handleInvokeA2UICommandsFailWhenHostMissing() async throws {
@@ -414,6 +507,20 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         await appModel.approvePendingAgentDeepLinkPrompt()
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(appModel.openChatRequestID == 1)
+    }
+
+    @Test @MainActor func handleDeepLinkCoalescesPromptWhenRateLimited() async throws {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+
+        await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "first prompt"))
+        let firstPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
+
+        await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "second prompt"))
+        let coalescedPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
+
+        #expect(coalescedPrompt.id != firstPrompt.id)
+        #expect(coalescedPrompt.messagePreview.contains("second prompt"))
     }
 
     @Test @MainActor func handleDeepLinkStripsDeliveryFieldsWhenUnkeyed() async throws {

@@ -6,14 +6,14 @@ import OpenClawKit
 import OSLog
 
 actor CameraCaptureService {
-    struct CameraDeviceInfo: Encodable, Sendable {
+    struct CameraDeviceInfo: Encodable {
         let id: String
         let name: String
         let position: String
         let deviceType: String
     }
 
-    enum CameraError: LocalizedError, Sendable {
+    enum CameraError: LocalizedError {
         case cameraUnavailable
         case microphoneUnavailable
         case permissionDenied(kind: String)

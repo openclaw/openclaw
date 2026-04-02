@@ -6,7 +6,11 @@ read_when:
 title: "Authentication"
 ---
 
-# Authentication
+# Authentication (Model Providers)
+
+<Note>
+This page covers **model provider** authentication (API keys, OAuth, setup tokens). For **gateway connection** authentication (token, password, trusted-proxy), see [Configuration](/gateway/configuration) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
+</Note>
 
 OpenClaw supports OAuth and API keys for model providers. For always-on gateway
 hosts, API keys are usually the most predictable option. Subscription/OAuth
@@ -15,6 +19,8 @@ flows are also supported when they match your provider account model.
 See [/concepts/oauth](/concepts/oauth) for the full OAuth flow and storage
 layout.
 For SecretRef-based auth (`env`/`file`/`exec` providers), see [Secrets Management](/gateway/secrets).
+For credential eligibility/reason-code rules used by `models status --probe`, see
+[Auth Credential Semantics](/auth-credential-semantics).
 
 ## Recommended setup (API key, any provider)
 
@@ -47,7 +53,7 @@ openclaw models status
 openclaw doctor
 ```
 
-If you’d rather not manage env vars yourself, the onboarding wizard can store
+If you’d rather not manage env vars yourself, onboarding can store
 API keys for daemon use: `openclaw onboard`.
 
 See [Help](/help) for details on env inheritance (`env.shellEnv`,
@@ -99,6 +105,7 @@ Auth profile refs are also supported for static credentials:
 
 - `api_key` credentials can use `keyRef: { source, provider, id }`
 - `token` credentials can use `tokenRef: { source, provider, id }`
+- OAuth-mode profiles do not support SecretRef credentials; if `auth.profiles.<id>.mode` is set to `"oauth"`, SecretRef-backed `keyRef`/`tokenRef` input for that profile is rejected.
 
 Automation-friendly check (exit `1` when expired/missing, `2` when expiring):
 
@@ -107,9 +114,29 @@ openclaw models status --check
 ```
 
 Optional ops scripts (systemd/Termux) are documented here:
-[/automation/auth-monitoring](/automation/auth-monitoring)
+[Auth monitoring scripts](/help/scripts#auth-monitoring-scripts)
 
 > `claude setup-token` requires an interactive TTY.
+
+## Anthropic: Claude CLI migration
+
+If Claude CLI is already installed and signed in on the gateway host, you can
+switch an existing Anthropic setup over to the CLI backend instead of pasting a
+setup-token:
+
+```bash
+openclaw models auth login --provider anthropic --method cli --set-default
+```
+
+This keeps your existing Anthropic auth profiles for rollback, but changes the
+default model selection to `claude-cli/...` and adds matching Claude CLI
+allowlist entries under `agents.defaults.models`.
+
+Onboarding shortcut:
+
+```bash
+openclaw onboard --auth-choice anthropic-cli
+```
 
 ## Checking model auth status
 
@@ -157,7 +184,7 @@ Use `--agent <id>` to target a specific agent; omit it to use the configured def
 
 ## Troubleshooting
 
-### “No credentials found”
+### "No credentials found"
 
 If the Anthropic token profile is missing, run `claude setup-token` on the
 **gateway host**, then re-check:

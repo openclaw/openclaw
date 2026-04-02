@@ -17,9 +17,8 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 - [Index](/)
 - [Getting Started](/start/getting-started)
-- [Quick start](/start/quickstart)
 - [Onboarding](/start/onboarding)
-- [Wizard](/start/wizard)
+- [Onboarding (CLI)](/start/wizard)
 - [Setup](/start/setup)
 - [Dashboard (local Gateway)](http://127.0.0.1:18789/)
 - [Help](/help)
@@ -80,8 +79,8 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [iMessage (legacy)](/channels/imessage)
 - [Location parsing](/channels/location)
 - [WebChat](/web/webchat)
-- [Webhooks](/automation/webhook)
-- [Gmail Pub/Sub](/automation/gmail-pubsub)
+- [Webhooks](/automation/cron-jobs#webhooks)
+- [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration)
 
 ## Gateway + operations
 
@@ -112,7 +111,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [PDF tool](/tools/pdf)
 - [Elevated mode](/tools/elevated)
 - [Cron jobs](/automation/cron-jobs)
-- [Cron vs Heartbeat](/automation/cron-vs-heartbeat)
+- [Automation & Tasks](/automation)
 - [Thinking + verbose](/tools/thinking)
 - [Models](/concepts/models)
 - [Sub-agents](/tools/subagents)
@@ -120,7 +119,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Terminal UI](/web/tui)
 - [Browser control](/tools/browser)
 - [Browser (Linux troubleshooting)](/tools/browser-linux-troubleshooting)
-- [Polls](/automation/poll)
+- [Polls](/cli/message)
 
 ## Nodes, media, voice
 
@@ -157,11 +156,22 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS permissions](/platforms/mac/permissions)
 - [macOS remote](/platforms/mac/remote)
 - [macOS signing](/platforms/mac/signing)
-- [macOS release](/platforms/mac/release)
 - [macOS gateway (launchd)](/platforms/mac/bundled-gateway)
 - [macOS XPC](/platforms/mac/xpc)
 - [macOS skills](/platforms/mac/skills)
 - [macOS Peekaboo](/platforms/mac/peekaboo)
+
+## Extensions + plugins
+
+- [Plugins overview](/tools/plugin)
+- [Building plugins](/plugins/building-plugins)
+- [Plugin manifest](/plugins/manifest)
+- [Agent tools](/plugins/building-plugins#registering-agent-tools)
+- [Plugin bundles](/plugins/bundles)
+- [Community plugins](/plugins/community)
+- [Capability cookbook](/tools/capability-cookbook)
+- [Voice call plugin](/plugins/voice-call)
+- [Zalo user plugin](/plugins/zalouser)
 
 ## Workspace + templates
 
@@ -177,12 +187,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Templates: TOOLS](/reference/templates/TOOLS)
 - [Templates: USER](/reference/templates/USER)
 
-## Experiments (exploratory)
-
-- [Onboarding config protocol](/experiments/onboarding-config-protocol)
-- [Research: memory](/experiments/research/memory)
-- [Model config exploration](/experiments/proposals/model-config)
-
 ## Project
 
 - [Credits](/reference/credits)
@@ -190,5 +194,5 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Testing + release
 
 - [Testing](/reference/test)
-- [Release checklist](/reference/RELEASING)
+- [Release policy](/reference/RELEASING)
 - [Device models](/reference/device-models)

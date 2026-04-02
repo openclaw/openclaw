@@ -6,6 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClientOptions } from "ws";
 import type {
   ClientEvent,
   OpenAIWebSocketEvent,
@@ -34,12 +35,12 @@ const { MockWebSocket } = vi.hoisted(() => {
 
     readyState: number = MockWebSocket.CONNECTING;
     url: string;
-    options: Record<string, unknown>;
+    options: ClientOptions | undefined;
     sentMessages: string[] = [];
 
     private _listeners: Map<string, AnyFn[]> = new Map();
 
-    constructor(url: string, options?: Record<string, unknown>) {
+    constructor(url: string, options?: ClientOptions) {
       this.url = url;
       this.options = options ?? {};
       MockWebSocket.lastInstance = this;
@@ -167,6 +168,7 @@ function buildManager(opts?: ConstructorParameters<typeof OpenAIWebSocketManager
   return new OpenAIWebSocketManager({
     // Use faster backoff in tests to avoid slow timer waits
     backoffDelaysMs: [10, 20, 40, 80, 160],
+    socketFactory: (url, options) => new MockWebSocket(url, options) as never,
     ...opts,
   });
 }
@@ -230,6 +232,58 @@ describe("OpenAIWebSocketManager", () => {
 
       sock.simulateOpen();
       await connectPromise;
+    });
+
+    it("adds OpenClaw attribution headers on the native OpenAI websocket", async () => {
+      const manager = buildManager();
+      const connectPromise = manager.connect("sk-test-key");
+
+      const sock = lastSocket();
+      expect(sock.options).toMatchObject({
+        headers: expect.objectContaining({
+          originator: "openclaw",
+          version: expect.any(String),
+          "User-Agent": expect.stringMatching(/^openclaw\//),
+        }),
+      });
+
+      sock.simulateOpen();
+      await connectPromise;
+    });
+
+    it("does not add hidden attribution headers on custom websocket endpoints", async () => {
+      const manager = buildManager({
+        url: "wss://proxy.example.com/v1/responses",
+      });
+      const connectPromise = manager.connect("sk-test-key");
+
+      const sock = lastSocket();
+      expect(sock.options).toMatchObject({
+        headers: expect.objectContaining({
+          Authorization: "Bearer sk-test-key",
+          "OpenAI-Beta": "responses-websocket=v1",
+        }),
+      });
+      const headers = sock.options?.headers as Record<string, string>;
+      expect(headers.originator).toBeUndefined();
+      expect(headers.version).toBeUndefined();
+      expect(headers["User-Agent"]).toBeUndefined();
+
+      sock.simulateOpen();
+      await connectPromise;
+    });
+
+    it("rejects insecure websocket TLS overrides", async () => {
+      const manager = buildManager({
+        request: {
+          tls: {
+            insecureSkipVerify: true,
+          },
+        },
+      });
+
+      await expect(manager.connect("sk-test-key")).rejects.toThrow(/insecureskipverify/i);
+      expect(MockWebSocket.lastInstance).toBeNull();
     });
 
     it("resolves when the connection opens", async () => {
@@ -506,6 +560,53 @@ describe("OpenAIWebSocketManager", () => {
       expect(maxRetryError).toBeDefined();
     });
 
+    it("does not double-count retries when error and close both fire on a reconnect attempt", async () => {
+      // In the real `ws` library, a failed connection fires "error" followed
+      // by "close". Previously, both the onClose handler AND the promise
+      // .catch() in _scheduleReconnect called _scheduleReconnect(), which
+      // double-incremented retryCount and exhausted the retry budget
+      // prematurely (e.g. 3 retries became ~1-2 actual attempts).
+      const manager = buildManager({ maxRetries: 3, backoffDelaysMs: [5, 5, 5] });
+      const errors = attachErrorCollector(manager);
+      const p = manager.connect("sk-test");
+      lastSocket().simulateOpen();
+      await p;
+
+      // Drop the established connection — triggers first reconnect schedule
+      lastSocket().simulateClose(1006, "Network error");
+
+      // Advance past first retry delay — a new socket is created
+      await vi.advanceTimersByTimeAsync(10);
+      const sock2 = lastSocket();
+
+      // Simulate a realistic failure: error fires first, then close follows.
+      sock2.simulateError(new Error("ECONNREFUSED"));
+      sock2.simulateClose(1006, "Connection failed");
+
+      // Advance past second retry delay — another socket should be created
+      // because we've only used 2 retries (not 3 from double-counting).
+      await vi.advanceTimersByTimeAsync(10);
+      const sock3 = lastSocket();
+      expect(sock3).not.toBe(sock2);
+
+      // Third attempt also fails with error+close
+      sock3.simulateError(new Error("ECONNREFUSED"));
+      sock3.simulateClose(1006, "Connection failed");
+
+      // Advance past third retry delay — one more attempt (retry 3 of 3)
+      await vi.advanceTimersByTimeAsync(10);
+      const sock4 = lastSocket();
+      expect(sock4).not.toBe(sock3);
+
+      // Fourth socket also fails — now retries should be exhausted (3/3)
+      sock4.simulateError(new Error("ECONNREFUSED"));
+      sock4.simulateClose(1006, "Connection failed");
+      await vi.advanceTimersByTimeAsync(10);
+
+      const maxRetryError = errors.find((e) => e.message.includes("max reconnect retries"));
+      expect(maxRetryError).toBeDefined();
+    });
+
     it("resets retry count after a successful reconnect", async () => {
       const manager = buildManager({ maxRetries: 3, backoffDelaysMs: [5, 10, 20] });
       const p = manager.connect("sk-test");
@@ -548,14 +649,12 @@ describe("OpenAIWebSocketManager", () => {
 
       manager.warmUp({
         model: "gpt-5.2",
-        tools: [{ type: "function", function: { name: "exec", description: "Run a command" } }],
+        tools: [{ type: "function", name: "exec", description: "Run a command" }],
       });
 
       const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<string, unknown>;
       expect(sent["tools"]).toHaveLength(1);
-      expect((sent["tools"] as Array<{ function?: { name?: string } }>)[0]?.function?.name).toBe(
-        "exec",
-      );
+      expect((sent["tools"] as Array<{ name?: string }>)[0]?.name).toBe("exec");
     });
   });
 

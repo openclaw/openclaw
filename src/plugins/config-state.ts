@@ -1,7 +1,21 @@
 import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginRecord } from "./registry.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import {
+  BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
+  BUNDLED_PROVIDER_PLUGIN_ID_ALIASES,
+} from "./bundled-capability-metadata.js";
+import { defaultSlotIdForKey, hasKind } from "./slots.js";
+import type { PluginKind, PluginOrigin } from "./types.js";
+
+export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
+
+export type PluginActivationState = {
+  enabled: boolean;
+  activated: boolean;
+  explicitlyEnabled: boolean;
+  source: PluginActivationSource;
+  reason?: string;
+};
 
 export type NormalizedPluginsConfig = {
   enabled: boolean;
@@ -11,20 +25,39 @@ export type NormalizedPluginsConfig = {
   slots: {
     memory?: string | null;
   };
-  entries: Record<string, { enabled?: boolean; config?: unknown }>;
+  entries: Record<
+    string,
+    {
+      enabled?: boolean;
+      hooks?: {
+        allowPromptInjection?: boolean;
+      };
+      subagent?: {
+        allowModelOverride?: boolean;
+        allowedModels?: string[];
+        hasAllowedModelsConfig?: boolean;
+      };
+      config?: unknown;
+    }
+  >;
 };
 
-export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
-  "device-pair",
-  "phone-control",
-  "talk-voice",
-]);
+export function normalizePluginId(id: string): string {
+  const trimmed = id.trim();
+  return (
+    BUNDLED_LEGACY_PLUGIN_ID_ALIASES[trimmed] ??
+    BUNDLED_PROVIDER_PLUGIN_ID_ALIASES[trimmed] ??
+    trimmed
+  );
+}
 
 const normalizeList = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return value
+    .map((entry) => (typeof entry === "string" ? normalizePluginId(entry) : ""))
+    .filter(Boolean);
 };
 
 const normalizeSlotValue = (value: unknown): string | null | undefined => {
@@ -47,17 +80,67 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
   }
   const normalized: NormalizedPluginsConfig["entries"] = {};
   for (const [key, value] of Object.entries(entries)) {
-    if (!key.trim()) {
+    const normalizedKey = normalizePluginId(key);
+    if (!normalizedKey) {
       continue;
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) {
-      normalized[key] = {};
+      normalized[normalizedKey] = {};
       continue;
     }
     const entry = value as Record<string, unknown>;
-    normalized[key] = {
-      enabled: typeof entry.enabled === "boolean" ? entry.enabled : undefined,
-      config: "config" in entry ? entry.config : undefined,
+    const hooksRaw = entry.hooks;
+    const hooks =
+      hooksRaw && typeof hooksRaw === "object" && !Array.isArray(hooksRaw)
+        ? {
+            allowPromptInjection: (hooksRaw as { allowPromptInjection?: unknown })
+              .allowPromptInjection,
+          }
+        : undefined;
+    const normalizedHooks =
+      hooks && typeof hooks.allowPromptInjection === "boolean"
+        ? {
+            allowPromptInjection: hooks.allowPromptInjection,
+          }
+        : undefined;
+    const subagentRaw = entry.subagent;
+    const subagent =
+      subagentRaw && typeof subagentRaw === "object" && !Array.isArray(subagentRaw)
+        ? {
+            allowModelOverride: (subagentRaw as { allowModelOverride?: unknown })
+              .allowModelOverride,
+            hasAllowedModelsConfig: Array.isArray(
+              (subagentRaw as { allowedModels?: unknown }).allowedModels,
+            ),
+            allowedModels: Array.isArray((subagentRaw as { allowedModels?: unknown }).allowedModels)
+              ? ((subagentRaw as { allowedModels?: unknown }).allowedModels as unknown[])
+                  .map((model) => (typeof model === "string" ? model.trim() : ""))
+                  .filter(Boolean)
+              : undefined,
+          }
+        : undefined;
+    const normalizedSubagent =
+      subagent &&
+      (typeof subagent.allowModelOverride === "boolean" ||
+        subagent.hasAllowedModelsConfig ||
+        (Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0))
+        ? {
+            ...(typeof subagent.allowModelOverride === "boolean"
+              ? { allowModelOverride: subagent.allowModelOverride }
+              : {}),
+            ...(subagent.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
+            ...(Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0
+              ? { allowedModels: subagent.allowedModels }
+              : {}),
+          }
+        : undefined;
+    normalized[normalizedKey] = {
+      ...normalized[normalizedKey],
+      enabled:
+        typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
+      hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
+      subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
+      config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
     };
   }
   return normalized;
@@ -85,7 +168,7 @@ const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.entries && Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"));
 
-const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
+export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
   if (!plugins) {
     return false;
   }
@@ -162,37 +245,181 @@ export function isTestDefaultMemorySlotDisabled(
   return true;
 }
 
+function resolveExplicitPluginSelection(params: {
+  id: string;
+  origin: PluginOrigin;
+  config: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
+}): { explicitlyEnabled: boolean; reason?: string } {
+  if (params.config.entries[params.id]?.enabled === true) {
+    return { explicitlyEnabled: true, reason: "enabled in config" };
+  }
+  if (
+    params.origin === "bundled" &&
+    isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
+  ) {
+    return { explicitlyEnabled: true, reason: "channel enabled in config" };
+  }
+  if (params.config.slots.memory === params.id) {
+    return { explicitlyEnabled: true, reason: "selected memory slot" };
+  }
+  if (params.origin !== "bundled" && params.config.allow.includes(params.id)) {
+    return { explicitlyEnabled: true, reason: "selected in allowlist" };
+  }
+  return { explicitlyEnabled: false };
+}
+
+export function resolvePluginActivationState(params: {
+  id: string;
+  origin: PluginOrigin;
+  config: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
+  enabledByDefault?: boolean;
+  sourceConfig?: NormalizedPluginsConfig;
+  sourceRootConfig?: OpenClawConfig;
+  autoEnabledReason?: string;
+}): PluginActivationState {
+  const explicitSelection = resolveExplicitPluginSelection({
+    id: params.id,
+    origin: params.origin,
+    config: params.sourceConfig ?? params.config,
+    rootConfig: params.sourceRootConfig ?? params.rootConfig,
+  });
+
+  if (!params.config.enabled) {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      reason: "plugins disabled",
+    };
+  }
+  if (params.config.deny.includes(params.id)) {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      reason: "blocked by denylist",
+    };
+  }
+  const entry = params.config.entries[params.id];
+  if (entry?.enabled === false) {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      reason: "disabled in config",
+    };
+  }
+  const explicitlyAllowed = params.config.allow.includes(params.id);
+  if (params.origin === "workspace" && !explicitlyAllowed && entry?.enabled !== true) {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      reason: "workspace plugin (disabled by default)",
+    };
+  }
+  if (params.config.slots.memory === params.id) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "selected memory slot",
+    };
+  }
+  if (params.config.allow.length > 0 && !explicitlyAllowed) {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      reason: "not in allowlist",
+    };
+  }
+  if (explicitSelection.explicitlyEnabled) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: explicitSelection.reason,
+    };
+  }
+  if (params.autoEnabledReason) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto",
+      reason: params.autoEnabledReason,
+    };
+  }
+  if (entry?.enabled === true) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto",
+      reason: "enabled by effective config",
+    };
+  }
+  if (
+    params.origin === "bundled" &&
+    isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
+  ) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto",
+      reason: "channel configured",
+    };
+  }
+  if (params.origin === "bundled" && params.enabledByDefault === true) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "default",
+      reason: "bundled default enablement",
+    };
+  }
+  if (params.origin === "bundled") {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: false,
+      source: "disabled",
+      reason: "bundled (disabled by default)",
+    };
+  }
+  return {
+    enabled: true,
+    activated: true,
+    explicitlyEnabled: explicitSelection.explicitlyEnabled,
+    source: "default",
+  };
+}
+
 export function resolveEnableState(
   id: string,
-  origin: PluginRecord["origin"],
+  origin: PluginOrigin,
   config: NormalizedPluginsConfig,
+  enabledByDefault?: boolean,
 ): { enabled: boolean; reason?: string } {
-  if (!config.enabled) {
-    return { enabled: false, reason: "plugins disabled" };
-  }
-  if (config.deny.includes(id)) {
-    return { enabled: false, reason: "blocked by denylist" };
-  }
-  if (config.allow.length > 0 && !config.allow.includes(id)) {
-    return { enabled: false, reason: "not in allowlist" };
-  }
-  if (config.slots.memory === id) {
-    return { enabled: true };
-  }
-  const entry = config.entries[id];
-  if (entry?.enabled === true) {
-    return { enabled: true };
-  }
-  if (entry?.enabled === false) {
-    return { enabled: false, reason: "disabled in config" };
-  }
-  if (origin === "bundled" && BUNDLED_ENABLED_BY_DEFAULT.has(id)) {
-    return { enabled: true };
-  }
-  if (origin === "bundled") {
-    return { enabled: false, reason: "bundled (disabled by default)" };
-  }
-  return { enabled: true };
+  const state = resolvePluginActivationState({
+    id,
+    origin,
+    config,
+    enabledByDefault,
+  });
+  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
 }
 
 export function isBundledChannelEnabledByChannelConfig(
@@ -216,47 +443,55 @@ export function isBundledChannelEnabledByChannelConfig(
 
 export function resolveEffectiveEnableState(params: {
   id: string;
-  origin: PluginRecord["origin"];
+  origin: PluginOrigin;
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
+  enabledByDefault?: boolean;
 }): { enabled: boolean; reason?: string } {
-  const base = resolveEnableState(params.id, params.origin, params.config);
-  if (
-    !base.enabled &&
-    base.reason === "bundled (disabled by default)" &&
-    isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
-  ) {
-    return { enabled: true };
-  }
-  return base;
+  const state = resolveEffectivePluginActivationState(params);
+  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
+}
+
+export function resolveEffectivePluginActivationState(params: {
+  id: string;
+  origin: PluginOrigin;
+  config: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
+  enabledByDefault?: boolean;
+  sourceConfig?: NormalizedPluginsConfig;
+  sourceRootConfig?: OpenClawConfig;
+  autoEnabledReason?: string;
+}): PluginActivationState {
+  return resolvePluginActivationState(params);
 }
 
 export function resolveMemorySlotDecision(params: {
   id: string;
-  kind?: string;
+  kind?: string | string[];
   slot: string | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
-  if (params.kind !== "memory") {
+  if (!hasKind(params.kind as PluginKind | PluginKind[] | undefined, "memory")) {
     return { enabled: true };
   }
+  // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the
+  // memory slot must stay enabled so its other slot role can still load.
+  const isMultiKind = Array.isArray(params.kind) && params.kind.length > 1;
   if (params.slot === null) {
-    return { enabled: false, reason: "memory slot disabled" };
+    return isMultiKind ? { enabled: true } : { enabled: false, reason: "memory slot disabled" };
   }
   if (typeof params.slot === "string") {
     if (params.slot === params.id) {
       return { enabled: true, selected: true };
     }
-    return {
-      enabled: false,
-      reason: `memory slot set to "${params.slot}"`,
-    };
+    return isMultiKind
+      ? { enabled: true }
+      : { enabled: false, reason: `memory slot set to "${params.slot}"` };
   }
   if (params.selectedId && params.selectedId !== params.id) {
-    return {
-      enabled: false,
-      reason: `memory slot already filled by "${params.selectedId}"`,
-    };
+    return isMultiKind
+      ? { enabled: true }
+      : { enabled: false, reason: `memory slot already filled by "${params.selectedId}"` };
   }
   return { enabled: true, selected: true };
 }

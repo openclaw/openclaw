@@ -6,16 +6,17 @@ import {
   resolveStorePath,
 } from "../../config/sessions.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
+import { normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-targets.js";
+import { resolveWhatsAppAccount } from "../../plugin-sdk/whatsapp.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
-import { resolveWhatsAppAccount } from "../../web/accounts.js";
-import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export type DeliveryTargetResolution =
   | {
@@ -42,6 +43,7 @@ export async function resolveDeliveryTarget(
   jobPayload: {
     channel?: "last" | ChannelId;
     to?: string;
+    threadId?: string | number;
     /** Explicit accountId from job.delivery — overrides session-derived and binding-derived values. */
     accountId?: string;
     sessionKey?: string;
@@ -66,6 +68,7 @@ export async function resolveDeliveryTarget(
     entry: main,
     requestedChannel,
     explicitTo,
+    explicitThreadId: jobPayload.threadId,
     allowMismatchedLastTo,
   });
 
@@ -92,6 +95,7 @@ export async function resolveDeliveryTarget(
         entry: main,
         requestedChannel,
         explicitTo,
+        explicitThreadId: jobPayload.threadId,
         fallbackChannel,
         allowMismatchedLastTo,
         mode: preliminary.mode,
@@ -190,10 +194,16 @@ export async function resolveDeliveryTarget(
       error: docked.error,
     };
   }
+  const idLikeTarget = await maybeResolveIdLikeTarget({
+    cfg,
+    channel,
+    input: docked.to,
+    accountId,
+  });
   return {
     ok: true,
     channel,
-    to: docked.to,
+    to: idLikeTarget?.to ?? docked.to,
     accountId,
     threadId,
     mode,

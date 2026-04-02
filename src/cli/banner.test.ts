@@ -1,60 +1,49 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCliBannerLine } from "./banner.js";
 
-const loadConfigMock = vi.fn();
+const readCliBannerTaglineModeMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: loadConfigMock,
+vi.mock("./banner-config-lite.js", () => ({
+  readCliBannerTaglineMode: readCliBannerTaglineModeMock,
 }));
 
-let formatCliBannerLine: typeof import("./banner.js").formatCliBannerLine;
-
-beforeAll(async () => {
-  ({ formatCliBannerLine } = await import("./banner.js"));
-});
-
 beforeEach(() => {
-  loadConfigMock.mockReset();
-  loadConfigMock.mockReturnValue({});
+  readCliBannerTaglineModeMock.mockReset();
+  readCliBannerTaglineModeMock.mockReturnValue(undefined);
 });
 
 describe("formatCliBannerLine", () => {
   it("hides tagline text when cli.banner.taglineMode is off", () => {
-    loadConfigMock.mockReturnValue({
-      cli: { banner: { taglineMode: "off" } },
-    });
+    readCliBannerTaglineModeMock.mockReturnValue("off");
 
-    const line = formatCliBannerLine("2026.3.3", {
+    const line = formatCliBannerLine("2026.3.7", {
       commit: "abc1234",
       richTty: false,
     });
 
-    expect(line).toBe("🦞 OpenClaw 2026.3.3 (abc1234)");
+    expect(line).toBe("🦞 OpenClaw 2026.3.7 (abc1234)");
   });
 
   it("uses default tagline when cli.banner.taglineMode is default", () => {
-    loadConfigMock.mockReturnValue({
-      cli: { banner: { taglineMode: "default" } },
-    });
+    readCliBannerTaglineModeMock.mockReturnValue("default");
 
-    const line = formatCliBannerLine("2026.3.3", {
+    const line = formatCliBannerLine("2026.3.7", {
       commit: "abc1234",
       richTty: false,
     });
 
-    expect(line).toBe("🦞 OpenClaw 2026.3.3 (abc1234) — All your chats, one OpenClaw.");
+    expect(line).toBe("🦞 OpenClaw 2026.3.7 (abc1234) — All your chats, one OpenClaw.");
   });
 
   it("prefers explicit tagline mode over config", () => {
-    loadConfigMock.mockReturnValue({
-      cli: { banner: { taglineMode: "off" } },
-    });
+    readCliBannerTaglineModeMock.mockReturnValue("off");
 
-    const line = formatCliBannerLine("2026.3.3", {
+    const line = formatCliBannerLine("2026.3.7", {
       commit: "abc1234",
       richTty: false,
       mode: "default",
     });
 
-    expect(line).toBe("🦞 OpenClaw 2026.3.3 (abc1234) — All your chats, one OpenClaw.");
+    expect(line).toBe("🦞 OpenClaw 2026.3.7 (abc1234) — All your chats, one OpenClaw.");
   });
 });

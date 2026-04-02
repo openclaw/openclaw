@@ -1,0 +1,436 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const {
+  loadModelCatalogMock,
+  getModelRefStatusMock,
+  normalizeModelSelectionMock,
+  resolveAllowedModelRefMock,
+  resolveConfiguredModelRefMock,
+  resolveHooksGmailModelMock,
+} = vi.hoisted(() => ({
+  loadModelCatalogMock: vi.fn(),
+  getModelRefStatusMock: vi.fn(),
+  normalizeModelSelectionMock: vi.fn((value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim() : undefined,
+  ),
+  resolveAllowedModelRefMock: vi.fn(),
+  resolveConfiguredModelRefMock: vi.fn(),
+  resolveHooksGmailModelMock: vi.fn(),
+}));
+
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: loadModelCatalogMock,
+}));
+
+vi.mock("../agents/model-selection.js", () => ({
+  getModelRefStatus: getModelRefStatusMock,
+  normalizeModelSelection: normalizeModelSelectionMock,
+  resolveAllowedModelRef: resolveAllowedModelRefMock,
+  resolveConfiguredModelRef: resolveConfiguredModelRefMock,
+  resolveHooksGmailModel: resolveHooksGmailModelMock,
+}));
+
+import { resolveCronModelSelection } from "./isolated-agent/model-selection.js";
+
+const DEFAULT_MESSAGE = "do it";
+const DEFAULT_PROVIDER = "anthropic";
+const DEFAULT_MODEL = "claude-opus-4-5";
+
+type AgentTurnPayload = {
+  kind: "agentTurn";
+  message: string;
+  model?: string;
+};
+
+type SelectModelOptions = {
+  cfg?: Record<string, unknown>;
+  agentConfigOverride?: {
+    subagents?: {
+      model?: unknown;
+    };
+  };
+  payload?: AgentTurnPayload;
+  sessionEntry?: {
+    modelOverride?: string;
+    providerOverride?: string;
+  };
+  isGmailHook?: boolean;
+};
+
+function parseModelRef(raw: string): { provider: string; model: string } | { error: string } {
+  const trimmed = raw.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash === trimmed.length - 1) {
+    return { error: "invalid model" };
+  }
+
+  const providerRaw = trimmed.slice(0, slash).trim().toLowerCase();
+  const modelRaw = trimmed.slice(slash + 1).trim();
+  if (!providerRaw || !modelRaw) {
+    return { error: "invalid model" };
+  }
+
+  const provider = providerRaw === "bedrock" ? "amazon-bedrock" : providerRaw;
+  const model = provider === "anthropic" && modelRaw === "opus-4.5" ? "claude-opus-4-5" : modelRaw;
+  return { provider, model };
+}
+
+function resolveConfiguredModelForTest(cfg: Record<string, unknown>): {
+  provider: string;
+  model: string;
+} {
+  const modelValue = (cfg.agents as { defaults?: { model?: unknown } } | undefined)?.defaults
+    ?.model;
+  const rawModel =
+    typeof modelValue === "string"
+      ? modelValue
+      : typeof modelValue === "object" &&
+          modelValue &&
+          typeof (modelValue as { primary?: unknown }).primary === "string"
+        ? (modelValue as { primary: string }).primary
+        : undefined;
+
+  if (typeof rawModel === "string") {
+    const parsed = parseModelRef(rawModel);
+    if (!("error" in parsed)) {
+      return parsed;
+    }
+  }
+
+  return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
+}
+
+function defaultPayload(): AgentTurnPayload {
+  return {
+    kind: "agentTurn",
+    message: DEFAULT_MESSAGE,
+  };
+}
+
+async function selectModel(options: SelectModelOptions = {}) {
+  const cfg = options.cfg ?? {};
+  return resolveCronModelSelection({
+    cfg: cfg as never,
+    cfgWithAgentDefaults: cfg as never,
+    agentConfigOverride: options.agentConfigOverride,
+    sessionEntry: options.sessionEntry ?? {},
+    payload: options.payload ?? defaultPayload(),
+    isGmailHook: options.isGmailHook ?? false,
+  });
+}
+
+async function expectSelectedModel(
+  options: SelectModelOptions,
+  expected: { provider: string; model: string },
+) {
+  const result = await selectModel(options);
+  expect(result).toEqual({ ok: true, ...expected });
+}
+
+async function expectDefaultSelectedModel(options: SelectModelOptions = {}) {
+  await expectSelectedModel(options, { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL });
+}
+
+describe("cron model formatting and precedence edge cases", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    loadModelCatalogMock.mockResolvedValue([]);
+    getModelRefStatusMock.mockReturnValue({ allowed: false });
+    resolveHooksGmailModelMock.mockReturnValue(null);
+    resolveConfiguredModelRefMock.mockImplementation(({ cfg }: { cfg?: Record<string, unknown> }) =>
+      resolveConfiguredModelForTest(cfg ?? {}),
+    );
+    resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
+      const parsed = parseModelRef(raw);
+      return "error" in parsed ? parsed : { ref: parsed };
+    });
+  });
+
+  describe("parseModelRef formatting", () => {
+    it("splits standard provider/model", async () => {
+      await expectSelectedModel(
+        {
+          payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/gpt-4.1-mini" },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+    });
+
+    it("handles leading/trailing whitespace in model string", async () => {
+      await expectSelectedModel(
+        {
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "  openai/gpt-4.1-mini  ",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+    });
+
+    it("handles openrouter nested provider paths", async () => {
+      await expectSelectedModel(
+        {
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "openrouter/meta-llama/llama-3.3-70b:free",
+          },
+        },
+        { provider: "openrouter", model: "meta-llama/llama-3.3-70b:free" },
+      );
+    });
+
+    it("rejects model with trailing slash (empty model name)", async () => {
+      await expect(
+        selectModel({
+          payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/" },
+        }),
+      ).resolves.toEqual({ ok: false, error: "invalid model" });
+    });
+
+    it("rejects model with leading slash (empty provider)", async () => {
+      await expect(
+        selectModel({
+          payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "/gpt-4.1-mini" },
+        }),
+      ).resolves.toEqual({ ok: false, error: "invalid model" });
+    });
+
+    it("normalizes provider casing", async () => {
+      await expectSelectedModel(
+        {
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "OpenAI/gpt-4.1-mini",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+    });
+
+    it("normalizes anthropic model aliases", async () => {
+      await expectSelectedModel(
+        {
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "anthropic/opus-4.5",
+          },
+        },
+        { provider: "anthropic", model: "claude-opus-4-5" },
+      );
+    });
+
+    it("normalizes bedrock provider alias", async () => {
+      await expectSelectedModel(
+        {
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "bedrock/claude-sonnet-4-5",
+          },
+        },
+        { provider: "amazon-bedrock", model: "claude-sonnet-4-5" },
+      );
+    });
+  });
+
+  describe("model precedence isolation", () => {
+    it("job payload model overrides default (anthropic -> openai)", async () => {
+      await expectSelectedModel(
+        {
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "openai/gpt-4.1-mini",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+    });
+
+    it("session override applies when no job payload model is present", async () => {
+      await expectSelectedModel(
+        {
+          sessionEntry: {
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+    });
+
+    it("job payload model wins over conflicting session override", async () => {
+      await expectSelectedModel(
+        {
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "anthropic/claude-sonnet-4-5",
+          },
+          sessionEntry: {
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
+          },
+        },
+        { provider: "anthropic", model: "claude-sonnet-4-5" },
+      );
+    });
+
+    it("falls through to default when no override is present", async () => {
+      await expectDefaultSelectedModel();
+    });
+  });
+
+  describe("sequential model switches (CI failure regression)", () => {
+    it("openai override -> session openai -> job anthropic: each step resolves correctly", async () => {
+      await expectSelectedModel(
+        {
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "openai/gpt-4.1-mini",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+
+      await expectSelectedModel(
+        {
+          sessionEntry: {
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+
+      await expectSelectedModel(
+        {
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "anthropic/claude-opus-4-5",
+          },
+          sessionEntry: {
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
+          },
+        },
+        { provider: "anthropic", model: "claude-opus-4-5" },
+      );
+    });
+
+    it("provider does not leak between isolated sequential runs", async () => {
+      await expectSelectedModel(
+        {
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "openai/gpt-4.1-mini",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+
+      await expectDefaultSelectedModel();
+    });
+  });
+
+  describe("stored session overrides", () => {
+    it("stored modelOverride/providerOverride are applied", async () => {
+      await expectSelectedModel(
+        {
+          sessionEntry: {
+            providerOverride: "openai",
+            modelOverride: "gpt-4.1-mini",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+    });
+
+    it("default remains when store has no override", async () => {
+      await expectDefaultSelectedModel({ sessionEntry: {} });
+    });
+  });
+
+  describe("whitespace and empty model strings", () => {
+    it("whitespace-only model treated as unset (falls to default)", async () => {
+      await expectDefaultSelectedModel({
+        payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "   " },
+      });
+    });
+
+    it("empty string model treated as unset", async () => {
+      await expectDefaultSelectedModel({
+        payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "" },
+      });
+    });
+
+    it("whitespace-only session modelOverride is ignored", async () => {
+      await expectDefaultSelectedModel({
+        sessionEntry: {
+          providerOverride: "openai",
+          modelOverride: "   ",
+        },
+      });
+    });
+  });
+
+  describe("config model format variations", () => {
+    it("default model as string 'provider/model'", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "openai/gpt-4.1",
+              },
+            },
+          },
+        },
+        { provider: "openai", model: "gpt-4.1" },
+      );
+    });
+
+    it("default model as object with primary field", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: { primary: "openai/gpt-4.1" },
+              },
+            },
+          },
+        },
+        { provider: "openai", model: "gpt-4.1" },
+      );
+    });
+
+    it("job override switches away from object default", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: { primary: "openai/gpt-4.1" },
+              },
+            },
+          },
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "anthropic/claude-sonnet-4-5",
+          },
+        },
+        { provider: "anthropic", model: "claude-sonnet-4-5" },
+      );
+    });
+  });
+});

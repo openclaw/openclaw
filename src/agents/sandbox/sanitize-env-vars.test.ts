@@ -5,9 +5,9 @@ describe("sanitizeEnvVars", () => {
   it("keeps normal env vars and blocks obvious credentials", () => {
     const result = sanitizeEnvVars({
       NODE_ENV: "test",
-      OPENAI_API_KEY: "sk-live-xxx",
+      OPENAI_API_KEY: "sk-live-xxx", // pragma: allowlist secret
       FOO: "bar",
-      GITHUB_TOKEN: "gh-token",
+      GITHUB_TOKEN: "gh-token", // pragma: allowlist secret
     });
 
     expect(result.allowed).toEqual({
@@ -53,5 +53,16 @@ describe("sanitizeEnvVars", () => {
 
     expect(result.allowed).toEqual({ NODE_ENV: "test" });
     expect(result.blocked).toEqual(["FOO"]);
+  });
+
+  it("skips undefined values when sanitizing process-style env maps", () => {
+    const result = sanitizeEnvVars({
+      NODE_ENV: "test",
+      OPTIONAL_SECRET: undefined,
+      OPENAI_API_KEY: undefined,
+    });
+
+    expect(result.allowed).toEqual({ NODE_ENV: "test" });
+    expect(result.blocked).toEqual([]);
   });
 });

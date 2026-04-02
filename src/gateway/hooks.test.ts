@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createMSTeamsTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../test-utils/imessage-test-plugin.js";
 import {
   extractHookToken,
@@ -14,6 +14,22 @@ import {
   normalizeWakePayload,
   resolveHooksConfig,
 } from "./hooks.js";
+
+const createDemoAliasPlugin = () => ({
+  ...createChannelTestPluginBase({
+    id: "demo-alias-channel",
+    label: "Demo Alias Channel",
+    docsPath: "/channels/demo-alias-channel",
+  }),
+  meta: {
+    ...createChannelTestPluginBase({
+      id: "demo-alias-channel",
+      label: "Demo Alias Channel",
+      docsPath: "/channels/demo-alias-channel",
+    }).meta,
+    aliases: ["workspace-chat"],
+  },
+});
 
 describe("gateway hooks helpers", () => {
   const resolveHooksConfigOrThrow = (cfg: OpenClawConfig) => {
@@ -128,16 +144,16 @@ describe("gateway hooks helpers", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: "msteams",
+          pluginId: "demo-alias-channel",
           source: "test",
-          plugin: createMSTeamsTestPlugin({ aliases: ["teams"] }),
+          plugin: createDemoAliasPlugin(),
         },
       ]),
     );
-    const teams = normalizeAgentPayload({ message: "yo", channel: "teams" });
-    expect(teams.ok).toBe(true);
-    if (teams.ok) {
-      expect(teams.value.channel).toBe("msteams");
+    const aliasChannel = normalizeAgentPayload({ message: "yo", channel: "workspace-chat" });
+    expect(aliasChannel.ok).toBe(true);
+    if (aliasChannel.ok) {
+      expect(aliasChannel.value.channel).toBe("demo-alias-channel");
     }
 
     const bad = normalizeAgentPayload({ message: "yo", channel: "sms" });
@@ -281,22 +297,22 @@ describe("gateway hooks helpers", () => {
     expect(resolvedKey).toEqual({ ok: true, value: "hook:ingress" });
   });
 
-  test("normalizeHookDispatchSessionKey strips duplicate target agent prefix", () => {
+  test("normalizeHookDispatchSessionKey preserves target agent scope", () => {
     expect(
       normalizeHookDispatchSessionKey({
         sessionKey: "agent:hooks:slack:channel:c123",
         targetAgentId: "hooks",
       }),
-    ).toBe("slack:channel:c123");
+    ).toBe("agent:hooks:slack:channel:c123");
   });
 
-  test("normalizeHookDispatchSessionKey preserves non-target agent scoped keys", () => {
+  test("normalizeHookDispatchSessionKey rebinds non-target agent scoped keys to the target agent", () => {
     expect(
       normalizeHookDispatchSessionKey({
         sessionKey: "agent:main:slack:channel:c123",
         targetAgentId: "hooks",
       }),
-    ).toBe("agent:main:slack:channel:c123");
+    ).toBe("agent:hooks:slack:channel:c123");
   });
 
   test("resolveHooksConfig validates defaultSessionKey and generated fallback against prefixes", () => {

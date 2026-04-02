@@ -19,7 +19,6 @@ export function renderPendingPairingRequestsTable(params: {
     IP: r.remoteIp ?? "",
     Requested:
       typeof r.ts === "number" ? formatTimeAgo(Math.max(0, now - r.ts)) : theme.muted("unknown"),
-    Repair: r.isRepair ? theme.warn("yes") : "",
   }));
   return {
     heading: theme.heading("Pending"),
@@ -30,7 +29,6 @@ export function renderPendingPairingRequestsTable(params: {
         { key: "Node", header: "Node", minWidth: 14, flex: true },
         { key: "IP", header: "IP", minWidth: 10 },
         { key: "Requested", header: "Requested", minWidth: 12 },
-        { key: "Repair", header: "Repair", minWidth: 6 },
       ],
       rows,
     }).trimEnd(),

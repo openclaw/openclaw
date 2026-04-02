@@ -1,9 +1,11 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { isCronSessionKey } from "../../../routing/session-key.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -18,16 +20,10 @@ import {
   extractAssistantThinking,
   formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
+import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
-type LastToolError = {
-  toolName: string;
-  meta?: string;
-  error?: string;
-  mutatingAction?: boolean;
-  actionFingerprint?: string;
-};
 type ToolErrorWarningPolicy = {
   showWarning: boolean;
   includeDetails: boolean;
@@ -52,19 +48,37 @@ function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
 }
 
+function shouldIncludeToolErrorDetails(params: {
+  lastToolError: ToolErrorSummary;
+  isCronTrigger?: boolean;
+  sessionKey: string;
+  verboseLevel?: VerboseLevel;
+}): boolean {
+  if (isVerboseToolDetailEnabled(params.verboseLevel)) {
+    return true;
+  }
+  return (
+    isExecLikeToolName(params.lastToolError.toolName) &&
+    params.lastToolError.timedOut === true &&
+    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
+  );
+}
+
 function resolveToolErrorWarningPolicy(params: {
-  lastToolError: LastToolError;
+  lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
+  isCronTrigger?: boolean;
+  sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
-  const includeDetails = isVerboseToolDetailEnabled(params.verboseLevel);
+  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
+  const includeDetails = shouldIncludeToolErrorDetails(params);
   if (params.suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }
-  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
-  if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !includeDetails) {
+  if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
@@ -91,8 +105,9 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: LastToolError;
+  lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
+  isCronTrigger?: boolean;
   sessionKey: string;
   provider?: string;
   model?: string;
@@ -102,6 +117,7 @@ export function buildEmbeddedRunPayloads(params: {
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
+  didSendDeterministicApprovalPrompt?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -125,15 +141,19 @@ export function buildEmbeddedRunPayloads(params: {
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
+  const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
   const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
-  const errorText = params.lastAssistant
-    ? formatAssistantErrorText(params.lastAssistant, {
-        cfg: params.config,
-        sessionKey: params.sessionKey,
-        provider: params.provider,
-        model: params.model,
-      })
-    : undefined;
+  const errorText =
+    params.lastAssistant && lastAssistantErrored
+      ? suppressAssistantArtifacts
+        ? undefined
+        : formatAssistantErrorText(params.lastAssistant, {
+            cfg: params.config,
+            sessionKey: params.sessionKey,
+            provider: params.provider,
+            model: params.model,
+          })
+      : undefined;
   const rawErrorMessage = lastAssistantErrored
     ? params.lastAssistant?.errorMessage?.trim() || undefined
     : undefined;
@@ -184,8 +204,9 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
 
-  const reasoningText =
-    params.lastAssistant && params.reasoningLevel === "on"
+  const reasoningText = suppressAssistantArtifacts
+    ? ""
+    : params.lastAssistant && params.reasoningLevel === "on"
       ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
       : "";
   if (reasoningText) {
@@ -243,13 +264,14 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
-  const answerTexts = (
-    params.assistantTexts.length
-      ? params.assistantTexts
-      : fallbackAnswerText
-        ? [fallbackAnswerText]
-        : []
-  ).filter((text) => !shouldSuppressRawErrorText(text));
+  const answerTexts = suppressAssistantArtifacts
+    ? []
+    : (params.assistantTexts.length
+        ? params.assistantTexts
+        : fallbackAnswerText
+          ? [fallbackAnswerText]
+          : []
+      ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {
@@ -281,6 +303,8 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      isCronTrigger: params.isCronTrigger,
+      sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
     });
 
@@ -329,10 +353,10 @@ export function buildEmbeddedRunPayloads(params: {
       audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
     }))
     .filter((p) => {
-      if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) {
+      if (!hasOutboundReplyContent(p)) {
         return false;
       }
-      if (p.text && isSilentReplyText(p.text, SILENT_REPLY_TOKEN)) {
+      if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {
         return false;
       }
       return true;

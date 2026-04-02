@@ -17,23 +17,72 @@ public struct GatewayTLSParams: Sendable {
 }
 
 public enum GatewayTLSStore {
-    private static let suiteName = "ai.openclaw.shared"
-    private static let keyPrefix = "gateway.tls."
+    private static let keychainService = "ai.openclaw.tls-pinning"
 
-    private static var defaults: UserDefaults {
-        UserDefaults(suiteName: suiteName) ?? .standard
-    }
+    // Legacy UserDefaults location used before Keychain migration.
+    private static let legacySuiteName = "ai.openclaw.shared"
+    private static let legacyKeyPrefix = "gateway.tls."
 
     public static func loadFingerprint(stableID: String) -> String? {
-        let key = self.keyPrefix + stableID
-        let raw = self.defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.migrateFromUserDefaultsIfNeeded(stableID: stableID)
+        let raw = GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if raw?.isEmpty == false { return raw }
         return nil
     }
 
     public static func saveFingerprint(_ value: String, stableID: String) {
-        let key = self.keyPrefix + stableID
-        self.defaults.set(value, forKey: key)
+        _ = GenericPasswordKeychainStore.saveString(value, service: self.keychainService, account: stableID)
+    }
+
+    @discardableResult
+    public static func clearFingerprint(stableID: String) -> Bool {
+        let removedKeychain = GenericPasswordKeychainStore.delete(
+            service: self.keychainService,
+            account: stableID)
+        self.clearLegacyFingerprint(stableID: stableID)
+        return removedKeychain
+    }
+
+    @discardableResult
+    public static func clearAllFingerprints() -> Bool {
+        let removedKeychain = SecItemDelete([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: self.keychainService,
+        ] as CFDictionary)
+        self.clearAllLegacyFingerprints()
+        return removedKeychain == errSecSuccess || removedKeychain == errSecItemNotFound
+    }
+
+    // MARK: - Migration
+
+    /// On first Keychain read for a given stableID, move any legacy UserDefaults
+    /// fingerprint into Keychain and remove the old entry.
+    private static func migrateFromUserDefaultsIfNeeded(stableID: String) {
+        guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
+        let legacyKey = self.legacyKeyPrefix + stableID
+        guard let existing = defaults.string(forKey: legacyKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !existing.isEmpty
+        else { return }
+        if GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID) == nil {
+            guard GenericPasswordKeychainStore.saveString(existing, service: self.keychainService, account: stableID) else {
+                return
+            }
+        }
+        defaults.removeObject(forKey: legacyKey)
+    }
+
+    private static func clearLegacyFingerprint(stableID: String) {
+        guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
+        defaults.removeObject(forKey: self.legacyKeyPrefix + stableID)
+    }
+
+    private static func clearAllLegacyFingerprints() {
+        guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(self.legacyKeyPrefix) {
+            defaults.removeObject(forKey: key)
+        }
     }
 }
 

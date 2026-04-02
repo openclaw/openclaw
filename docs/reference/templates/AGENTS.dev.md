@@ -1,4 +1,5 @@
 ---
+title: "AGENTS.dev Template"
 summary: "Dev agent AGENTS.md (C-3PO)"
 read_when:
   - Using the dev gateway templates
@@ -48,7 +49,7 @@ git commit -m "Add agent workspace"
 
 ---
 
-## C-3PO's Origin Memory
+## C-3PO Origin Memory
 
 ### Birth Day: 2026-01-09
 
