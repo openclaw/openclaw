@@ -86,6 +86,61 @@ function buildExecForegroundResult(params: {
   });
 }
 
+const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
+  "-C",
+  "-S",
+  "-u",
+  "--argv0",
+  "--block-signal",
+  "--chdir",
+  "--default-signal",
+  "--ignore-signal",
+  "--split-string",
+  "--unset",
+]);
+
+function isShellEnvAssignmentToken(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
+}
+
+function stripPreflightEnvPrefix(argv: string[]): string[] {
+  if (argv.length === 0) {
+    return argv;
+  }
+  let idx = 0;
+  while (idx < argv.length && isShellEnvAssignmentToken(argv[idx])) {
+    idx += 1;
+  }
+  if ((argv[idx] ?? "").toLowerCase() !== "env") {
+    return argv;
+  }
+  idx += 1;
+  while (idx < argv.length) {
+    const token = argv[idx];
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (isShellEnvAssignmentToken(token)) {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-") || token === "-") {
+      break;
+    }
+    idx += 1;
+    const option = token.split("=", 1)[0];
+    if (
+      PREFLIGHT_ENV_OPTIONS_WITH_VALUES.has(option) &&
+      !token.includes("=") &&
+      idx < argv.length
+    ) {
+      idx += 1;
+    }
+  }
+  return argv.slice(idx);
+}
+
 function extractScriptTargetFromCommand(
   command: string,
 ): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null {
@@ -246,9 +301,12 @@ function extractScriptTargetFromCommand(
   };
 
   for (const argv of candidateArgv) {
-    const target = extractTargetFromArgv(argv);
-    if (target) {
-      return target;
+    const attempts = [argv, argv ? stripPreflightEnvPrefix(argv) : null];
+    for (const attempt of attempts) {
+      const target = extractTargetFromArgv(attempt);
+      if (target) {
+        return target;
+      }
     }
   }
   return null;
@@ -383,7 +441,8 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   isDirectInterpreterCommand: boolean;
 } {
   const raw = command.trim();
-  const argv = splitShellArgs(raw);
+  const rawArgv = splitShellArgs(raw);
+  const argv = rawArgv ? stripPreflightEnvPrefix(rawArgv) : null;
   let commandIdx = 0;
   while (
     argv &&
@@ -402,6 +461,19 @@ function shouldFailClosedInterpreterPreflight(command: string): {
 
   const unquotedRaw = extractUnquotedShellText(raw) ?? raw;
   const topLevel = analyzeInterpreterHeuristicsFromUnquoted(unquotedRaw);
+  const unwrappedRaw = argv ? argv.join(" ") : "";
+  const unwrappedUnquotedRaw = unwrappedRaw
+    ? (extractUnquotedShellText(unwrappedRaw) ?? unwrappedRaw)
+    : "";
+  const unwrapped = unwrappedRaw
+    ? analyzeInterpreterHeuristicsFromUnquoted(unwrappedUnquotedRaw)
+    : {
+        hasPython: false,
+        hasNode: false,
+        hasComplexSyntax: false,
+        hasProcessSubstitution: false,
+        hasScriptHint: false,
+      };
 
   const shellWrappedPayload = extractShellWrappedCommandPayload(directExecutable, args);
   const nestedUnquoted = shellWrappedPayload
@@ -419,11 +491,15 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   const hasShellWrappedInterpreter = nested.hasPython || nested.hasNode;
 
   return {
-    hasPython: topLevel.hasPython || nested.hasPython,
-    hasNode: topLevel.hasNode || nested.hasNode,
-    hasComplexSyntax: topLevel.hasComplexSyntax || hasShellWrappedInterpreter,
-    hasProcessSubstitution: topLevel.hasProcessSubstitution || nested.hasProcessSubstitution,
-    hasScriptHint: topLevel.hasScriptHint || nested.hasScriptHint,
+    hasPython: topLevel.hasPython || unwrapped.hasPython || nested.hasPython,
+    hasNode: topLevel.hasNode || unwrapped.hasNode || nested.hasNode,
+    hasComplexSyntax:
+      topLevel.hasComplexSyntax || unwrapped.hasComplexSyntax || hasShellWrappedInterpreter,
+    hasProcessSubstitution:
+      topLevel.hasProcessSubstitution ||
+      unwrapped.hasProcessSubstitution ||
+      nested.hasProcessSubstitution,
+    hasScriptHint: topLevel.hasScriptHint || unwrapped.hasScriptHint || nested.hasScriptHint,
     isDirectInterpreterCommand,
   };
 }
