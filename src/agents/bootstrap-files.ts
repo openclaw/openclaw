@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
@@ -31,6 +32,7 @@ function sanitizeBootstrapFiles(
   warn?: (message: string) => void,
 ): WorkspaceBootstrapFile[] {
   const sanitized: WorkspaceBootstrapFile[] = [];
+  const seenPaths = new Set<string>();
   for (const file of files) {
     const pathValue = typeof file.path === "string" ? file.path.trim() : "";
     if (!pathValue) {
@@ -39,6 +41,12 @@ function sanitizeBootstrapFiles(
       );
       continue;
     }
+    const dedupePath = path.resolve(pathValue);
+    if (seenPaths.has(dedupePath)) {
+      warn?.(`skipping duplicate bootstrap file "${file.name}" (${dedupePath})`);
+      continue;
+    }
+    seenPaths.add(dedupePath);
     sanitized.push({ ...file, path: pathValue });
   }
   return sanitized;

@@ -81,6 +81,37 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
   });
+
+  it("deduplicates bootstrap files by resolved path", async () => {
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      const duplicatePath = path.join(context.workspaceDir, "MEMORY.md");
+      context.bootstrapFiles = [
+        ...context.bootstrapFiles,
+        {
+          name: "MEMORY.md",
+          path: duplicatePath,
+          content: "from hook",
+          missing: false,
+        } as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "memory content", "utf8");
+    const warnings: string[] = [];
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      warn: (message) => warnings.push(message),
+    });
+
+    const memoryFiles = files.filter((file) => file.path === path.join(workspaceDir, "MEMORY.md"));
+    expect(memoryFiles).toHaveLength(1);
+    expect(warnings.some((message) => message.includes("skipping duplicate bootstrap file"))).toBe(
+      true,
+    );
+  });
 });
 
 describe("resolveBootstrapContextForRun", () => {
