@@ -395,7 +395,6 @@ Example:
 
     - `user:<id>`
     - `<@id>` mention
-    - bot sender IDs should be listed as bare IDs in `allowFrom`; `bot:` is not a recognized prefix
 
     Bare numeric IDs are ambiguous and rejected unless an explicit user/channel target kind is provided.
 
