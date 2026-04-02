@@ -55,14 +55,17 @@ export function resolveBundledWebFetchResolutionConfig(params: {
 }): {
   config: PluginLoadOptions["config"];
   normalized: NormalizedPluginsConfig;
+  activationSourceConfig?: PluginLoadOptions["config"];
+  autoEnabledReasons: Record<string, string[]>;
 } {
-  const autoEnabledConfig =
+  const autoEnabled =
     params.config !== undefined
       ? applyPluginAutoEnable({
           config: params.config,
           env: params.env ?? process.env,
-        }).config
+        })
       : undefined;
+  const autoEnabledConfig = autoEnabled?.config;
   const bundledCompatPluginIds = resolveBundledWebFetchCompatPluginIds({
     config: autoEnabledConfig,
     workspaceDir: params.workspaceDir,
@@ -87,5 +90,7 @@ export function resolveBundledWebFetchResolutionConfig(params: {
   return {
     config,
     normalized: normalizePluginsConfig(config?.plugins),
+    activationSourceConfig: params.config,
+    autoEnabledReasons: autoEnabled?.autoEnabledReasons ?? {},
   };
 }
