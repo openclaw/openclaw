@@ -17,7 +17,6 @@ const withBundledPluginAllowlistCompatMock = vi.fn();
 const withBundledPluginEnablementCompatMock = vi.fn();
 const listImportedBundledPluginFacadeIdsMock = vi.fn();
 const listImportedRuntimePluginIdsMock = vi.fn();
-let buildPluginStatusReport: typeof import("./status.js").buildPluginStatusReport;
 let buildPluginSnapshotReport: typeof import("./status.js").buildPluginSnapshotReport;
 let buildPluginDiagnosticsReport: typeof import("./status.js").buildPluginDiagnosticsReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
@@ -242,7 +241,7 @@ function expectBundleInspectState(
   expect(inspect.shape).toBe(params.shape);
 }
 
-describe("buildPluginStatusReport", () => {
+describe("plugin status reports", () => {
   beforeAll(async () => {
     ({
       buildAllPluginInspectReports,
@@ -251,7 +250,6 @@ describe("buildPluginStatusReport", () => {
       buildPluginCompatibilityWarnings,
       buildPluginInspectReport,
       buildPluginSnapshotReport,
-      buildPluginStatusReport,
       formatPluginCompatibilityNotice,
       summarizePluginCompatibility,
     } = await import("./status.js"));
@@ -454,7 +452,7 @@ describe("buildPluginStatusReport", () => {
       }),
     );
 
-    const report = buildPluginStatusReport({
+    const report = buildPluginDiagnosticsReport({
       config: {},
       env: {
         OPENCLAW_VERSION: "2026.3.23-1",
