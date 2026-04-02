@@ -343,6 +343,39 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('agents.runner.ask="always"');
   });
 
+  it("ignores malformed host policy fields when attributing doctor conflicts", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        defaults: {
+          ask: "always",
+        },
+        agents: {
+          runner: {
+            ask: "foo",
+          },
+        },
+      },
+      async () => {
+        await noteSecurityWarnings({
+          tools: {
+            exec: {
+              ask: "off",
+            },
+          },
+          agents: {
+            list: [{ id: "runner" }],
+          },
+        } as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("agents.list.runner.tools.exec is broader than the host exec policy");
+    expect(message).toContain('defaults.ask="always"');
+    expect(message).not.toContain('agents.runner.ask="foo"');
+  });
+
   it('does not warn about durable allow-always trust when ask="always" is enforced', async () => {
     await withExecApprovalsFile(
       {
