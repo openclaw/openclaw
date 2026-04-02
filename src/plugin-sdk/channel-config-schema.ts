@@ -7,6 +7,7 @@ export {
 } from "../channels/plugins/config-schema.js";
 export {
   BlockStreamingCoalesceSchema,
+  ContextVisibilityModeSchema,
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,

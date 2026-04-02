@@ -169,6 +169,29 @@ If more than one person can DM your bot:
 - Never combine shared DMs with broad tool access.
 - This hardens cooperative/shared inboxes, but is not designed as hostile co-tenant isolation when users share host/config write access.
 
+## Context visibility model
+
+OpenClaw separates two concepts:
+
+- **Trigger authorization**: who can trigger the agent (`dmPolicy`, `groupPolicy`, allowlists, mention gates).
+- **Context visibility**: what supplemental context is injected into model input (reply body, quoted text, thread history, forwarded metadata).
+
+In the current product, allowlists primarily gate triggers and command authorization. They are not a guaranteed universal redaction boundary for every supplemental context field on every channel.
+
+Current behavior is channel-specific:
+
+- Some channels already filter parts of supplemental context by sender allowlists.
+- Other channels still pass supplemental context through as received.
+
+Advisory triage guidance:
+
+- Claims that only show "model can see quoted or historical text from non-allowlisted senders" are usually hardening and consistency findings, not auth or sandbox boundary bypasses by themselves.
+- To be security-impacting, reports still need a demonstrated trust-boundary bypass (auth, policy, sandbox, approval, or another documented boundary).
+
+Hardening direction:
+
+- OpenClaw maintainers may introduce explicit context visibility modes such as `all`, `allowlist`, and `allowlist_quote` to make this behavior intentional and configurable across channels.
+
 ## What the audit checks (high level)
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?

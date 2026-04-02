@@ -56,6 +56,7 @@ These are frequently reported but are typically closed with no code change:
 - Authorized user-triggered local actions presented as privilege escalation. Example: an allowlisted/owner sender running `/export-session /absolute/path.html` to write on the host. In this trust model, authorized user actions are trusted host actions unless you demonstrate an auth/sandbox/boundary bypass.
 - Reports that only show a malicious plugin executing privileged actions after a trusted operator installs/enables it.
 - Reports that assume per-user multi-tenant authorization on a shared gateway host/config.
+- Reports that only show quoted/replied/thread/forwarded supplemental context from non-allowlisted senders being visible to the model, without demonstrating an auth, policy, approval, or sandbox boundary bypass.
 - Reports that treat the Gateway HTTP compatibility endpoints (`POST /v1/chat/completions`, `POST /v1/responses`) as if they implemented scoped operator auth (`operator.write` vs `operator.admin`). These endpoints authenticate the shared Gateway bearer secret/password and are documented full operator-access surfaces, not per-user/per-scope boundaries.
 - Reports that assume `x-openclaw-scopes` can reduce or redefine shared-secret bearer auth on the OpenAI-compatible HTTP endpoints. For shared-secret auth (`gateway.auth.mode="token"` or `"password"`), those endpoints ignore narrower bearer-declared scopes and restore the full default operator scope set plus owner semantics.
 - Reports that treat `POST /tools/invoke` under shared-secret bearer auth (`gateway.auth.mode="token"` or `"password"`) as a narrower per-request/per-scope authorization surface. That endpoint is designed as the same trusted-operator HTTP boundary: shared-secret bearer auth is full operator access there, narrower `x-openclaw-scopes` values do not reduce that path, and owner-only tool policy follows the shared-secret operator contract.
@@ -166,6 +167,24 @@ OpenClaw's security model is "personal assistant" (one trusted operator, potenti
 - A company-shared agent can be a valid setup when users are in the same trust boundary and the agent is strictly business-only.
 - For company-shared setups, use a dedicated machine/VM/container and dedicated accounts; avoid mixing personal data on that runtime.
 - If that host/browser profile is logged into personal accounts (for example Apple/Google/personal password manager), you have collapsed the boundary and increased personal-data exposure risk.
+
+## Context Visibility and Allowlists
+
+OpenClaw distinguishes:
+
+- **Trigger authorization**: who can trigger the agent (`dmPolicy`, `groupPolicy`, allowlists, mention gates)
+- **Context visibility**: what supplemental context is provided to the model (reply body, quoted text, thread history, forwarded metadata)
+
+In current releases, allowlists primarily gate triggering and owner-style command access. They do not guarantee universal supplemental-context redaction across every channel/surface.
+
+Current channel behavior is not fully uniform:
+
+- some channels already filter parts of supplemental context by sender allowlist
+- other channels still pass supplemental context as received
+
+Reports that only show supplemental-context visibility differences are typically hardening/consistency findings unless they also demonstrate a documented boundary bypass (auth, policy, approvals, sandbox, or equivalent).
+
+Hardening roadmap may add explicit visibility modes (for example `all`, `allowlist`, `allowlist_quote`) so operators can opt into stricter context filtering with predictable tradeoffs.
 
 ## Agent and Model Assumptions
 

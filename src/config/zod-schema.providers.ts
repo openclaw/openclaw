@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ChannelsConfig } from "./types.channels.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
-import { GroupPolicySchema } from "./zod-schema.core.js";
+import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
 import {
   BlueBubblesConfigSchema,
   DiscordConfigSchema,
@@ -107,6 +107,7 @@ export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
     defaults: z
       .object({
         groupPolicy: GroupPolicySchema.optional(),
+        contextVisibility: ContextVisibilityModeSchema.optional(),
         heartbeat: ChannelHeartbeatVisibilitySchema,
       })
       .strict()

@@ -759,6 +759,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound Telegram media size.
     - `channels.telegram.timeoutSeconds` overrides Telegram API client timeout (if unset, grammY default applies).
     - group context history uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables.
+    - reply/quote/forward supplemental context is currently passed as received.
+    - Telegram allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
     - DM history controls:
       - `channels.telegram.dmHistoryLimit`
       - `channels.telegram.dms["<user_id>"].historyLimit`
