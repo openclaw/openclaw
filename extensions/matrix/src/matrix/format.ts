@@ -30,8 +30,9 @@ type MatrixMentionCandidate = {
 };
 
 const ESCAPED_MENTION_SENTINEL = "\uE000";
-const MENTION_PATTERN = /@[A-Za-z0-9._=+\-/:]+/g;
-const MATRIX_MENTION_USER_ID_PATTERN = /^@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?::\d+)?$/;
+const MENTION_PATTERN = /@[A-Za-z0-9._=+\-/:\[\]]+/g;
+const MATRIX_MENTION_USER_ID_PATTERN =
+  /^@[A-Za-z0-9._=+\-/]+:(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?$/;
 const TRIMMABLE_MENTION_SUFFIX = /[),.!?:;\]]/;
 
 function shouldSuppressAutoLink(
@@ -115,6 +116,9 @@ function isMentionStartBoundary(charBefore: string | undefined): boolean {
 
 function trimMentionSuffix(raw: string, end: number): { raw: string; end: number } | null {
   while (raw.length > 1 && TRIMMABLE_MENTION_SUFFIX.test(raw.at(-1) ?? "")) {
+    if (raw.at(-1) === "]" && /\[[0-9A-Fa-f:.]+\](?::\d+)?$/i.test(raw)) {
+      break;
+    }
     raw = raw.slice(0, -1);
     end -= 1;
   }

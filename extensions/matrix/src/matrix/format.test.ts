@@ -161,6 +161,33 @@ describe("markdownToMatrixHtml", () => {
     expect(result.mentions).toEqual({});
   });
 
+  it("accepts bracketed homeservers in matrix mentions", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "hello @alice:[2001:db8::1]",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain('href="https://matrix.to/#/%40alice%3A%5B2001%3Adb8%3A%3A1%5D"');
+    expect(result.mentions).toEqual({
+      user_ids: ["@alice:[2001:db8::1]"],
+    });
+  });
+
+  it("accepts bracketed homeservers with ports in matrix mentions", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "hello @alice:[2001:db8::1]:8448.",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toContain(
+      'href="https://matrix.to/#/%40alice%3A%5B2001%3Adb8%3A%3A1%5D%3A8448"',
+    );
+    expect(result.html).toContain("@alice:[2001:db8::1]:8448</a>.");
+    expect(result.mentions).toEqual({
+      user_ids: ["@alice:[2001:db8::1]:8448"],
+    });
+  });
+
   it("leaves bare localpart text unmentioned", async () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "hello @alice",
