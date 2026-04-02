@@ -28,7 +28,7 @@ function runTests() {
   const isolatedLock =
     process.env.OPENCLAW_GATEWAY_LOCK ??
     path.join(os.tmpdir(), `openclaw-gateway.lock.test.${Date.now()}`);
-  const result = spawnSync("pnpm", ["vitest", "run"], {
+  const result = spawnSync("pnpm", ["exec", "vitest", "run"], {
     stdio: "inherit",
     env: {
       ...process.env,
