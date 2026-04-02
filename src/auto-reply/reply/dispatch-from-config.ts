@@ -42,7 +42,12 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
+import {
+  getReplyPayloadMetadata,
+  type BlockReplyContext,
+  type GetReplyOptions,
+  type ReplyPayload,
+} from "../types.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
@@ -703,6 +708,18 @@ export async function dispatchReplyFromConfig(params: {
               accumulatedBlockText += payload.text;
               blockCount++;
             }
+            // Channels that keep a live draft preview may need to rotate their
+            // preview state at the logical block boundary before queued block
+            // delivery drains asynchronously through the dispatcher.
+            const payloadMetadata = getReplyPayloadMetadata(payload);
+            const queuedContext =
+              payloadMetadata?.assistantMessageIndex !== undefined
+                ? {
+                    ...context,
+                    assistantMessageIndex: payloadMetadata.assistantMessageIndex,
+                  }
+                : context;
+            await params.replyOptions?.onBlockReplyQueued?.(payload, queuedContext);
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
               cfg,

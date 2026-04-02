@@ -6,6 +6,8 @@ import type { TypingController } from "./reply/typing.js";
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  /** Source assistant message index from the upstream stream, when available. */
+  assistantMessageIndex?: number;
 };
 
 /** Context passed to onModelSelected callback with actual model used. */
@@ -54,6 +56,10 @@ export type GetReplyOptions = {
   onReasoningEnd?: () => Promise<void> | void;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
   onAssistantMessageStart?: () => Promise<void> | void;
+  /** Called synchronously when a block reply is logically emitted, before async
+   * delivery drains. Useful for channels that need to rotate preview state at
+   * block boundaries without waiting for transport acks. */
+  onBlockReplyQueued?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
@@ -101,3 +107,22 @@ export type ReplyPayload = {
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };
+
+export type ReplyPayloadMetadata = {
+  assistantMessageIndex?: number;
+};
+
+const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
+
+export function setReplyPayloadMetadata<T extends object>(
+  payload: T,
+  metadata: ReplyPayloadMetadata,
+): T {
+  const previous = replyPayloadMetadata.get(payload);
+  replyPayloadMetadata.set(payload, { ...previous, ...metadata });
+  return payload;
+}
+
+export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
+  return replyPayloadMetadata.get(payload);
+}

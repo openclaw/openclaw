@@ -154,10 +154,13 @@ export type MatrixConfig = {
   actions?: MatrixActionConfig;
   /**
    * Streaming mode for Matrix replies.
-   * - `"partial"`: edit a single message in place as the model generates text.
+   * - `"partial"`: edit a single draft message in place for the current
+   *   assistant block as the model generates text.
    * - `"off"`: deliver the full reply once the model finishes.
-   * - Use `blockStreaming: true` when you want separate progress messages
-   *   while `streaming` remains `"off"`.
+   * - Use `blockStreaming: true` when you want completed assistant blocks to
+   *   stay visible as separate progress messages. When combined with
+   *   `"partial"`, Matrix keeps a live draft for the current block and
+   *   preserves completed blocks as separate messages.
    * - `true` maps to `"partial"`, `false` maps to `"off"`.
    * Default: `"off"`.
    */
