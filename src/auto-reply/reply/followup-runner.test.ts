@@ -989,6 +989,105 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     };
   }
 
+  it("drops payloads already sent via messaging tool", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        messagingToolSentTexts: ["hello world!"],
+      },
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers payloads when not duplicates", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: makeTextReplyDedupeResult(),
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses replies when a messaging tool sent via the same provider + target", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        ...makeTextReplyDedupeResult(),
+        messagingToolSentTargets: [
+          { tool: "slack", provider: "slack", to: "channel:C1", sentText: true },
+        ],
+      },
+      queued: baseQueuedRun("slack"),
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses replies when provider is synthetic but originating channel matches", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        ...makeTextReplyDedupeResult(),
+        messagingToolSentTargets: [
+          { tool: "telegram", provider: "telegram", to: "268300329", sentText: true },
+        ],
+      },
+      queued: {
+        ...baseQueuedRun("heartbeat"),
+        originatingChannel: "telegram",
+        originatingTo: "268300329",
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress replies for same target when account differs", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        ...makeTextReplyDedupeResult(),
+        messagingToolSentTargets: [
+          { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
+        ],
+      },
+      queued: {
+        ...baseQueuedRun("heartbeat"),
+        originatingChannel: "telegram",
+        originatingTo: "268300329",
+        originatingAccountId: "personal",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "268300329",
+        accountId: "personal",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("drops media URL from payload when messaging tool already sent it", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ mediaUrl: "/tmp/img.png" }],
+        messagingToolSentMediaUrls: ["/tmp/img.png"],
+      },
+    });
+
+    // Media stripped -> payload becomes non-renderable -> not delivered.
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers media payload when not a duplicate", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ mediaUrl: "/tmp/img.png" }],
+        messagingToolSentMediaUrls: ["/tmp/other.png"],
+      },
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
   it("persists usage even when replies are suppressed", async () => {
     const storePath = "/tmp/openclaw-followup-usage.json";
     const sessionKey = "main";
@@ -1013,7 +1112,9 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
         ...makeTextReplyDedupeResult(),
-        messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+        messagingToolSentTargets: [
+          { tool: "slack", provider: "slack", to: "channel:C1", sentText: true },
+        ],
         meta: {
           agentMeta: {
             usage: { input: 1_000, output: 50 },

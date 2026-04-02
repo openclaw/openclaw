@@ -19,7 +19,9 @@ async function expectSameTargetRepliesSuppressed(params: { provider: string; to:
     originatingChannel: "feishu",
     originatingTo: "ou_abc123",
     messagingToolSentTexts: ["different message"],
-    messagingToolSentTargets: [{ tool: "message", provider: params.provider, to: params.to }],
+    messagingToolSentTargets: [
+      { tool: "message", provider: params.provider, to: params.to, sentText: true },
+    ],
   });
 
   expect(replyPayloads).toHaveLength(0);
@@ -151,7 +153,9 @@ describe("buildReplyPayloads media filter integration", () => {
       originatingChannel: "telegram",
       originatingTo: "268300329",
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "268300329", sentText: true },
+      ],
     });
 
     expect(replyPayloads).toHaveLength(0);

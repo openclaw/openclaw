@@ -136,6 +136,9 @@ export function shouldSuppressMessagingToolReplies(params: {
     return false;
   }
   return sentTargets.some((target) => {
+    if (!target.sentText) {
+      return false;
+    }
     const targetProvider = resolveTargetProviderForComparison({
       currentProvider: provider,
       targetProvider: target?.provider,

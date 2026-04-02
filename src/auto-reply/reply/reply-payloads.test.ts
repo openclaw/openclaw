@@ -117,7 +117,7 @@ describe("shouldSuppressMessagingToolReplies", () => {
       shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "123",
-        messagingToolSentTargets: [{ tool: "message", provider: "", to: "123" }],
+        messagingToolSentTargets: [{ tool: "message", provider: "", to: "123", sentText: true }],
       }),
     ).toBe(true);
   });
@@ -127,7 +127,9 @@ describe("shouldSuppressMessagingToolReplies", () => {
       shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "123",
-        messagingToolSentTargets: [{ tool: "message", provider: "message", to: "123" }],
+        messagingToolSentTargets: [
+          { tool: "message", provider: "message", to: "123", sentText: true },
+        ],
       }),
     ).toBe(true);
   });
@@ -149,7 +151,7 @@ describe("shouldSuppressMessagingToolReplies", () => {
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123:topic:77",
         messagingToolSentTargets: [
-          { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
+          { tool: "message", provider: "telegram", to: "-100123", threadId: "77", sentText: true },
         ],
       }),
     ).toBe(true);
@@ -183,9 +185,21 @@ describe("shouldSuppressMessagingToolReplies", () => {
       shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123",
-        messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "-100123" }],
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "-100123", sentText: true },
+        ],
       }),
     ).toBe(true);
+  });
+
+  it("does not suppress when message tool sent media-only to the same channel", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "telegram:group:-100123",
+        messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "-100123" }],
+      }),
+    ).toBe(false);
   });
 
   it("suppresses telegram replies even when the active plugin registry omits telegram", () => {
@@ -197,7 +211,7 @@ describe("shouldSuppressMessagingToolReplies", () => {
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123:topic:77",
         messagingToolSentTargets: [
-          { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
+          { tool: "message", provider: "telegram", to: "-100123", threadId: "77", sentText: true },
         ],
       }),
     ).toBe(true);
