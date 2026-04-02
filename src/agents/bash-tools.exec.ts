@@ -144,7 +144,7 @@ function extractScriptTargetFromCommand(
   };
   const hasWindowsPathSyntax = /(?:^|[\s"'`])(?:[A-Za-z]:\\|\.\\|\.\.\\|\\\\)/.test(raw);
   const candidateArgv = hasWindowsPathSyntax
-    ? [splitShellArgsPreservingBackslashes(raw), splitShellArgs(raw)]
+    ? [splitShellArgsPreservingBackslashes(raw)]
     : [splitShellArgs(raw)];
 
   const findFirstPythonScriptArg = (tokens: string[]): string | null => {

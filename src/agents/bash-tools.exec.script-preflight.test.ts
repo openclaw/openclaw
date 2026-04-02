@@ -103,6 +103,21 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("preserves windows-style drive paths during python script extraction", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const winDrivePath = "C:\\tmp\\bad.py";
+      await fs.writeFile(path.join(tmp, winDrivePath), "payload = $DM_JSON", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-windows-python-drive-path", {
+          command: "python C:\\tmp\\bad.py",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
   it("validates the first positional python script operand when extra args follow", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.py"), "payload = $DM_JSON", "utf-8");
