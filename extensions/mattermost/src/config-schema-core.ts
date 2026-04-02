@@ -12,10 +12,6 @@ const MattermostGroupSchema = z
   .object({
     /** Whether mentions are required to trigger the bot in this group. */
     requireMention: z.boolean().optional(),
-    /** Whether the bot is enabled in this group. */
-    enabled: z.boolean().optional(),
-    /** Allowlist of sender IDs permitted to interact in this group. */
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   })
   .strict();
 
