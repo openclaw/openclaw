@@ -56,6 +56,7 @@ type AnnounceQueueState = {
   dropPolicy: QueueDropPolicy;
   droppedCount: number;
   summaryLines: string[];
+  collectForceIndividual: boolean;
   send: (item: AnnounceQueueItem) => Promise<void>;
   /** Consecutive drain failures — drives exponential backoff on errors. */
   consecutiveFailures: number;
@@ -99,6 +100,7 @@ function getAnnounceQueue(
     dropPolicy: settings.dropPolicy ?? "summarize",
     droppedCount: 0,
     summaryLines: [],
+    collectForceIndividual: false,
     send,
     consecutiveFailures: 0,
   };
@@ -129,7 +131,7 @@ function scheduleAnnounceDrain(key: string) {
   }
   void (async () => {
     try {
-      const collectState = { forceIndividualCollect: false };
+      const collectState = { forceIndividualCollect: queue.collectForceIndividual };
       for (;;) {
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
@@ -142,6 +144,9 @@ function scheduleAnnounceDrain(key: string) {
             items: queue.items,
             run: async (item) => await queue.send(item),
           });
+          if (collectState.forceIndividualCollect) {
+            queue.collectForceIndividual = true;
+          }
           if (collectDrainResult === "empty") {
             break;
           }
@@ -175,6 +180,7 @@ function scheduleAnnounceDrain(key: string) {
               clearQueueSummaryState(queue);
             }
             collectState.forceIndividualCollect = true;
+            queue.collectForceIndividual = true;
             continue;
           }
           const internalEvents = items.flatMap((item) => item.internalEvents ?? []);

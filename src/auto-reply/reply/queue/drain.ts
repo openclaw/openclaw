@@ -149,10 +149,15 @@ export function scheduleFollowupDrain(
               });
               clearQueueSummaryState(queue);
             }
+            let drainedAnyFallbackItem = false;
             while (queue.items.length > 0) {
+              if (drainedAnyFallbackItem) {
+                await waitForQueueDebounce(queue);
+              }
               if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup))) {
                 break;
               }
+              drainedAnyFallbackItem = true;
             }
             continue;
           }
