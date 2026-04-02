@@ -41,3 +41,22 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 });
+
+  it("returns actionable error for node:sqlite missing (runtime compatibility)", async () => {
+    setMemorySearchImpl(async () => {
+      throw new Error(
+        "SQLite support is unavailable in this Node runtime (missing node:sqlite). No such built-in module: node:sqlite",
+      );
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("sqlite", { query: "hello" });
+    expectUnavailableMemorySearchDetails(result.details, {
+      error: "SQLite support is unavailable in this Node runtime (missing node:sqlite). No such built-in module: node:sqlite",
+      warning:
+        "Memory search is unavailable because node:sqlite is not available in this Node.js runtime.",
+      action:
+        "node:sqlite requires Node.js 22.5+ compiled with SQLite support. " +
+        "Check your Node.js build or run: openclaw doctor --memory to see remediation options.",
+    });
+  });
