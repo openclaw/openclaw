@@ -1,36 +1,43 @@
 ---
-summary: "Compatibility note for the mistakenly documented `openclaw flows` command"
+summary: "CLI reference for `openclaw flows` commands"
 read_when:
-  - You encounter openclaw flows in older release notes, issue threads, or search results
-  - You want to know what command replaced openclaw flows
+  - You want to list, inspect, or cancel TaskFlow flows from the CLI
+  - You encounter openclaw flows in release notes or docs
 title: "flows"
 ---
 
 # `openclaw flows`
 
-`openclaw flows` is **not** a current OpenClaw CLI command.
+Inspect and manage [TaskFlow](/automation/taskflow) flows from the command line.
 
-Some older release notes and docs mistakenly documented a `flows` command surface. The supported operator surface is [`openclaw tasks`](/automation/tasks).
+## Commands
+
+### `flows list`
 
 ```bash
-openclaw tasks list
-openclaw tasks show <lookup>
-openclaw tasks cancel <lookup>
+openclaw flows list [--json]
 ```
 
-## Use instead
+List active and recent flows with status and sync mode.
 
-- `openclaw tasks list` — list tracked background tasks
-- `openclaw tasks show <lookup>` — inspect one task by task id, run id, or session key
-- `openclaw tasks cancel <lookup>` — cancel a running background task
-- `openclaw tasks notify <lookup> <policy>` — change task notification behavior
-- `openclaw tasks audit` — surface stale or broken task runs
+### `flows show`
 
-## Why this page exists
+```bash
+openclaw flows show <lookup>
+```
 
-This page stays in place so existing links from older changelog entries, issue threads, and search results have a clear correction instead of a dead end.
+Show details for a specific flow by flow id or lookup key, including state, revision history, and associated tasks.
+
+### `flows cancel`
+
+```bash
+openclaw flows cancel <lookup>
+```
+
+Cancel a running flow and its active tasks.
 
 ## Related
 
-- [Background Tasks](/automation/tasks) — detached work ledger
+- [TaskFlow](/automation/taskflow) — flow orchestration overview
+- [Background Tasks](/automation/tasks) — the detached work ledger
 - [CLI reference](/cli/index) — full command tree

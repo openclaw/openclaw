@@ -368,8 +368,9 @@ export function handleMessageUpdate(
     evtType === "text_end" &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
+    const assistantMessageIndex = ctx.state.assistantMessageIndex;
     void Promise.resolve()
-      .then(() => ctx.flushBlockReplyBuffer())
+      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex }))
       .catch((err) => {
         ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
       });

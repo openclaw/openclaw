@@ -312,6 +312,9 @@ API key auth, and dynamic model resolution.
       | 20 | `resolveUsageAuth` | Custom usage credential parsing |
       | 21 | `fetchUsageSnapshot` | Custom usage endpoint |
       | 22 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | 23 | `buildReplayPolicy` | Custom transcript policy (e.g. thinking-block stripping) |
+      | 24 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | 25 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
 
       For detailed descriptions and real-world examples, see
       [Internals: Provider Runtime Hooks](/plugins/architecture#provider-runtime-hooks).

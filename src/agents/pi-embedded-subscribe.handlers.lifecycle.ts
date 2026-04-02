@@ -136,20 +136,13 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   };
 
   const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+  finalizeAgentEnd();
   if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-    return flushBlockReplyBufferResult
-      .then(() => flushPendingMediaAndChannel())
-      .finally(() => {
-        finalizeAgentEnd();
-      });
+    return flushBlockReplyBufferResult.then(() => flushPendingMediaAndChannel());
   }
 
   const flushPendingMediaAndChannelResult = flushPendingMediaAndChannel();
   if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
-    return flushPendingMediaAndChannelResult.finally(() => {
-      finalizeAgentEnd();
-    });
+    return flushPendingMediaAndChannelResult;
   }
-
-  finalizeAgentEnd();
 }
