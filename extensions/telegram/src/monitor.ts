@@ -8,7 +8,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
-import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
+import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
 import { resolveTelegramHeartbeatApiBase, resolveTelegramTransport } from "./fetch.js";
 import {
   isRecoverableTelegramNetworkError,
@@ -146,13 +146,15 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     if (opts.useWebhook) {
       const { TelegramExecApprovalHandler, startTelegramWebhook } =
         await loadTelegramMonitorWebhookRuntime();
-      execApprovalsHandler = new TelegramExecApprovalHandler({
-        token,
-        accountId: account.accountId,
-        cfg,
-        runtime: opts.runtime,
-      });
-      await execApprovalsHandler.start();
+      if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
+        execApprovalsHandler = new TelegramExecApprovalHandler({
+          token,
+          accountId: account.accountId,
+          cfg,
+          runtime: opts.runtime,
+        });
+        await execApprovalsHandler.start();
+      }
       await startTelegramWebhook({
         token,
         accountId: account.accountId,
@@ -178,13 +180,15 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       writeTelegramUpdateOffset,
     } = await loadTelegramMonitorPollingRuntime();
 
-    execApprovalsHandler = new TelegramExecApprovalHandler({
-      token,
-      accountId: account.accountId,
-      cfg,
-      runtime: opts.runtime,
-    });
-    await execApprovalsHandler.start();
+    if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
+      execApprovalsHandler = new TelegramExecApprovalHandler({
+        token,
+        accountId: account.accountId,
+        cfg,
+        runtime: opts.runtime,
+      });
+      await execApprovalsHandler.start();
+    }
 
     const persistedOffsetRaw = await readTelegramUpdateOffset({
       accountId: account.accountId,
