@@ -27,6 +27,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   private val prefs = nodeApp.prefs
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
   private var foreground = true
+  private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
+  val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
+  private val _chatDraft = MutableStateFlow<String?>(null)
+  val chatDraft: StateFlow<String?> = _chatDraft
 
   private fun ensureRuntime(): NodeRuntime {
     runtimeRef.value?.let { return it }
@@ -244,6 +248,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setVoiceScreenActive(active: Boolean) {
     ensureRuntime().setVoiceScreenActive(active)
+  }
+
+  fun handleAssistantLaunch(request: AssistantLaunchRequest) {
+    _requestedHomeDestination.value = HomeDestination.Chat
+    _chatDraft.value = request.prompt
+  }
+
+  fun clearRequestedHomeDestination() {
+    _requestedHomeDestination.value = null
+  }
+
+  fun clearChatDraft() {
+    _chatDraft.value = null
   }
 
   fun setMicEnabled(enabled: Boolean) {
