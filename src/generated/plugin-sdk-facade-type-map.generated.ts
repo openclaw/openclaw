@@ -723,6 +723,15 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
+  yandex: {
+    module: typeof import("@openclaw/yandex/api.js");
+    sourceModules: {
+      source1: {
+        module: typeof import("@openclaw/yandex/api.js");
+      };
+    };
+    types: {};
+  };
   zai: {
     module: typeof import("@openclaw/zai/api.js");
     sourceModules: {
