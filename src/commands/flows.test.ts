@@ -170,6 +170,48 @@ describe("flows commands", () => {
     });
   });
 
+  it("sanitizes TaskFlow text output before printing to the terminal", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const unsafeOwnerKey = "agent:main:\u001b[31mowner";
+      const flow = createManagedTaskFlow({
+        ownerKey: unsafeOwnerKey,
+        controllerId: "tests/flows-command",
+        goal: "Investigate\nqueue\tstate",
+        status: "blocked",
+        currentStep: "spawn\u001b[2K_child",
+        blockedSummary: "Waiting\u001b[31m on child\nforged: yes",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: unsafeOwnerKey,
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:child",
+        runId: "run-child-3",
+        label: "Collect\nlogs\u001b[2K",
+        task: "Collect logs",
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+
+      const runtime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
+
+      const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
+      expect(lines).toContain("goal: Investigate\\nqueue\\tstate");
+      expect(lines).toContain("currentStep: spawn_child");
+      expect(lines).toContain("owner: agent:main:owner");
+      expect(lines).toContain("state: Waiting on child\\nforged: yes");
+      expect(
+        lines.some((line) => line.includes("run-child-3") && line.includes("Collect\\nlogs")),
+      ).toBe(true);
+      expect(lines.join("\n")).not.toContain("\u001b[");
+    });
+  });
+
   it("cancels a managed TaskFlow with no active children", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const flow = createManagedTaskFlow({

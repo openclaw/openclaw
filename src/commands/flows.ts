@@ -9,6 +9,7 @@ import {
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 const ID_PAD = 10;
@@ -25,6 +26,14 @@ function truncate(value: string, maxChars: number) {
     return value.slice(0, maxChars);
   }
   return `${value.slice(0, maxChars - 1)}…`;
+}
+
+function safeFlowDisplayText(value: string | undefined, maxChars?: number): string {
+  const sanitized = sanitizeTerminalText(value ?? "").trim();
+  if (!sanitized) {
+    return "n/a";
+  }
+  return typeof maxChars === "number" ? truncate(sanitized, maxChars) : sanitized;
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
@@ -75,9 +84,9 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
         flow.syncMode.padEnd(MODE_PAD),
         formatFlowStatusCell(flow.status, rich),
         String(flow.revision).padEnd(REV_PAD),
-        truncate(flow.controllerId ?? "n/a", CTRL_PAD).padEnd(CTRL_PAD),
+        safeFlowDisplayText(flow.controllerId, CTRL_PAD).padEnd(CTRL_PAD),
         counts.padEnd(14),
-        truncate(flow.goal, 80),
+        safeFlowDisplayText(flow.goal, 80),
       ].join(" "),
     );
   }
@@ -205,11 +214,11 @@ export async function flowsShowCommand(
     "TaskFlow:",
     `flowId: ${flow.flowId}`,
     `status: ${flow.status}`,
-    `goal: ${flow.goal}`,
-    `currentStep: ${flow.currentStep ?? "n/a"}`,
-    `owner: ${flow.ownerKey}`,
+    `goal: ${safeFlowDisplayText(flow.goal)}`,
+    `currentStep: ${safeFlowDisplayText(flow.currentStep)}`,
+    `owner: ${safeFlowDisplayText(flow.ownerKey)}`,
     `notify: ${flow.notifyPolicy}`,
-    ...(stateSummary ? [`state: ${stateSummary}`] : []),
+    ...(stateSummary ? [`state: ${safeFlowDisplayText(stateSummary)}`] : []),
     ...(flow.cancelRequestedAt
       ? [`cancelRequestedAt: ${new Date(flow.cancelRequestedAt).toISOString()}`]
       : []),
@@ -227,9 +236,8 @@ export async function flowsShowCommand(
   }
   runtime.log("Linked tasks:");
   for (const task of tasks) {
-    runtime.log(
-      `- ${task.taskId} ${task.status} ${task.runId ?? "n/a"} ${task.label ?? task.task}`,
-    );
+    const safeLabel = safeFlowDisplayText(task.label ?? task.task);
+    runtime.log(`- ${task.taskId} ${task.status} ${task.runId ?? "n/a"} ${safeLabel}`);
   }
 }
 
