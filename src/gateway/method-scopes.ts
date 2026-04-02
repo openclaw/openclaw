@@ -160,12 +160,12 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (explicitScope) {
     return explicitScope;
   }
+  if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
+    return ADMIN_SCOPE;
+  }
   const pluginScope = getActivePluginRegistry()?.gatewayMethodScopes?.[method];
   if (pluginScope) {
     return pluginScope;
-  }
-  if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
-    return ADMIN_SCOPE;
   }
   return undefined;
 }

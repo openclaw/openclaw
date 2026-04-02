@@ -50,6 +50,22 @@ describe("method scope resolution", () => {
       "operator.write",
     ]);
   });
+
+  it("keeps admin-prefixed plugin methods admin-only", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayMethodScopes = {
+      "config.getAll": "operator.read",
+      "exec.approvals.get": "operator.write",
+    };
+    setActivePluginRegistry(registry);
+
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("config.getAll")).toEqual([
+      "operator.admin",
+    ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("exec.approvals.get")).toEqual([
+      "operator.admin",
+    ]);
+  });
 });
 
 describe("operator scope authorization", () => {
@@ -97,6 +113,22 @@ describe("operator scope authorization", () => {
     expect(authorizeOperatorScopesForMethod("unknown.method", ["operator.read"])).toEqual({
       allowed: false,
       missingScope: "operator.admin",
+    });
+  });
+
+  it("rejects non-admin scopes for admin-prefixed plugin methods", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayMethodScopes = {
+      "config.getAll": "operator.read",
+    };
+    setActivePluginRegistry(registry);
+
+    expect(authorizeOperatorScopesForMethod("config.getAll", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+    expect(authorizeOperatorScopesForMethod("config.getAll", ["operator.admin"])).toEqual({
+      allowed: true,
     });
   });
 });
