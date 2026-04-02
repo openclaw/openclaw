@@ -863,7 +863,10 @@ describe("trusted-proxy auth", () => {
         auth: {
           mode: "trusted-proxy",
           allowTailscale: false,
-          trustedProxy: trustedProxyConfig,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            unsafeAllowLoopbackProxies: true,
+          },
         },
         connectAuth: null,
         trustedProxies: ["127.0.0.1"],
