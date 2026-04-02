@@ -70,7 +70,8 @@ export class Resample24kMonoTo48kStereo extends Transform {
   private leftover: Buffer = Buffer.alloc(0);
 
   constructor() {
-    super();
+    // Large buffer: 48kHz stereo s16le = 192KB/s, allow ~5s of buffered audio
+    super({ highWaterMark: 1024 * 1024 });
   }
 
   _transform(chunk: Buffer, _encoding: string, callback: TransformCallback): void {
@@ -163,7 +164,7 @@ export async function streamKyutaiTts(text: string): Promise<KyutaiStreamResult>
   const sampleRate = headerBuf.readUInt32LE(4);
 
   const remainder = headerBuf.subarray(PCMS_HEADER_SIZE);
-  const readable = new Readable({ read() {} });
+  const readable = new Readable({ read() {}, highWaterMark: 1024 * 1024 });
 
   if (remainder.length > 0) {
     readable.push(remainder);
