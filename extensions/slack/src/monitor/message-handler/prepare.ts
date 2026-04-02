@@ -15,7 +15,11 @@ import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import {
+  readSessionUpdatedAt,
+  resolveChannelContextVisibilityMode,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/config-runtime";
 import {
   recordInboundSession,
   resolveConversationLabel,
@@ -446,6 +450,11 @@ export async function prepareSlackMessage(params: {
         ? []
         : allowFromLower
       : [];
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg: ctx.cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
   const channelCommandAuthorized =
     isRoom && channelUsersAllowlistConfigured
       ? resolveSlackUserAllowed({
@@ -681,6 +690,7 @@ export async function prepareSlackMessage(params: {
     sessionKey,
     allowFromLower: threadContextAllowFromLower,
     allowNameMatching: ctx.allowNameMatching,
+    contextVisibilityMode,
     envelopeOptions,
     effectiveDirectMedia,
   });
