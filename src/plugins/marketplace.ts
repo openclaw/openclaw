@@ -811,7 +811,7 @@ async function downloadUrlToTempFile(
 async function ensureInsideMarketplaceRoot(
   rootDir: string,
   candidate: string,
-  options?: { requireCanonicalRoot?: boolean },
+  options?: { enforceCanonicalContainment?: boolean; requireCanonicalRoot?: boolean },
 ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   const resolved = path.resolve(rootDir, candidate);
   const resolvedExists = await pathExists(resolved);
@@ -823,36 +823,38 @@ async function ensureInsideMarketplaceRoot(
     };
   }
 
-  try {
-    const rootLstat = await fs.lstat(rootDir);
-    if (
-      !rootLstat.isDirectory() ||
-      (options?.requireCanonicalRoot === true && rootLstat.isSymbolicLink())
-    ) {
-      throw new Error("invalid marketplace root");
-    }
-
-    const rootRealPath = await fs.realpath(rootDir);
-    let existingPath = resolved;
-    // `pathExists` uses `fs.access`, so dangling symlinks are treated as missing and we walk up
-    // to the nearest existing ancestor. Live symlinks stop here and are canonicalized below.
-    while (!(await pathExists(existingPath))) {
-      const parentPath = path.dirname(existingPath);
-      if (parentPath === existingPath) {
-        throw new Error("unreachable marketplace path");
+  if (options?.enforceCanonicalContainment === true) {
+    try {
+      const rootLstat = await fs.lstat(rootDir);
+      if (
+        !rootLstat.isDirectory() ||
+        (options.requireCanonicalRoot === true && rootLstat.isSymbolicLink())
+      ) {
+        throw new Error("invalid marketplace root");
       }
-      existingPath = parentPath;
-    }
 
-    const existingRealPath = await fs.realpath(existingPath);
-    if (!isPathInside(rootRealPath, existingRealPath)) {
-      throw new Error("marketplace path escapes canonical root");
+      const rootRealPath = await fs.realpath(rootDir);
+      let existingPath = resolved;
+      // `pathExists` uses `fs.access`, so dangling symlinks are treated as missing and we walk up
+      // to the nearest existing ancestor. Live symlinks stop here and are canonicalized below.
+      while (!(await pathExists(existingPath))) {
+        const parentPath = path.dirname(existingPath);
+        if (parentPath === existingPath) {
+          throw new Error("unreachable marketplace path");
+        }
+        existingPath = parentPath;
+      }
+
+      const existingRealPath = await fs.realpath(existingPath);
+      if (!isPathInside(rootRealPath, existingRealPath)) {
+        throw new Error("marketplace path escapes canonical root");
+      }
+    } catch {
+      return {
+        ok: false,
+        error: `plugin source escapes marketplace root: ${candidate}`,
+      };
     }
-  } catch {
-    return {
-      ok: false,
-      error: `plugin source escapes marketplace root: ${candidate}`,
-    };
   }
 
   if (!resolvedExists) {
@@ -894,7 +896,9 @@ async function validateMarketplaceManifest(params: {
             "remote marketplaces may only use relative plugin paths",
         };
       }
-      const resolved = await ensureInsideMarketplaceRoot(params.rootDir, source.path);
+      const resolved = await ensureInsideMarketplaceRoot(params.rootDir, source.path, {
+        enforceCanonicalContainment: true,
+      });
       if (!resolved.ok) {
         return {
           ok: false,
@@ -945,6 +949,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
     const resolved = path.isAbsolute(params.source.path)
       ? { ok: true as const, path: params.source.path }
       : await ensureInsideMarketplaceRoot(params.marketplaceRootDir, params.source.path, {
+          enforceCanonicalContainment: params.marketplaceOrigin === "remote",
           requireCanonicalRoot: params.marketplaceOrigin === "remote",
         });
     if (!resolved.ok) {
@@ -974,7 +979,9 @@ async function resolveMarketplaceEntryInstallPath(params: {
       params.source.kind === "github" || params.source.kind === "git"
         ? params.source.path?.trim() || "."
         : params.source.path.trim();
-    const target = await ensureInsideMarketplaceRoot(cloned.rootDir, subPath);
+    const target = await ensureInsideMarketplaceRoot(cloned.rootDir, subPath, {
+      enforceCanonicalContainment: true,
+    });
     if (!target.ok) {
       await cloned.cleanup();
       return target;
