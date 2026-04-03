@@ -51,6 +51,7 @@ export type ConfigDocBaselineEntry = {
 export type ConfigDocBaseline = {
   generatedBy: "scripts/generate-config-doc-baseline.ts";
   coreEntries: ConfigDocBaselineEntry[];
+  channelEntries: ConfigDocBaselineEntry[];
   pluginEntries: ConfigDocBaselineEntry[];
 };
 
@@ -468,12 +469,18 @@ export function dedupeConfigDocBaselineEntries(
 
 export function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {
   coreEntries: ConfigDocBaselineEntry[];
+  channelEntries: ConfigDocBaselineEntry[];
   pluginEntries: ConfigDocBaselineEntry[];
 } {
   const coreEntries: ConfigDocBaselineEntry[] = [];
+  const channelEntries: ConfigDocBaselineEntry[] = [];
   const pluginEntries: ConfigDocBaselineEntry[] = [];
 
   for (const entry of entries) {
+    if (entry.kind === "channel") {
+      channelEntries.push(entry);
+      continue;
+    }
     if (entry.kind === "plugin") {
       pluginEntries.push(entry);
       continue;
@@ -481,13 +488,13 @@ export function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[])
     coreEntries.push(entry);
   }
 
-  return { coreEntries, pluginEntries };
+  return { coreEntries, channelEntries, pluginEntries };
 }
 
 export function flattenConfigDocBaselineEntries(
   baseline: ConfigDocBaseline,
 ): ConfigDocBaselineEntry[] {
-  return [...baseline.coreEntries, ...baseline.pluginEntries];
+  return [...baseline.coreEntries, ...baseline.channelEntries, ...baseline.pluginEntries];
 }
 
 export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
@@ -507,7 +514,7 @@ export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
     const entries = dedupeConfigDocBaselineEntries(
       collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
     );
-    const { coreEntries, pluginEntries } = splitConfigDocBaselineEntries(entries);
+    const { coreEntries, channelEntries, pluginEntries } = splitConfigDocBaselineEntries(entries);
     logConfigDocBaselineDebug(
       `collect baseline entries done count=${entries.length} elapsedMs=${Date.now() - collectStart}`,
     );
@@ -515,6 +522,7 @@ export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
     return {
       generatedBy: GENERATED_BY,
       coreEntries,
+      channelEntries,
       pluginEntries,
     };
   })();
