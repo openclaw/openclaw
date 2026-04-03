@@ -344,6 +344,14 @@ function buildDeviceAuthToken(params: {
   };
 }
 
+function resolveRoleScopedDeviceTokenScopes(role: string, scopes: string[] | undefined): string[] {
+  const normalized = normalizeDeviceAuthScopes(scopes);
+  if (role === "operator") {
+    return normalized.filter((scope) => scope.startsWith(OPERATOR_SCOPE_PREFIX));
+  }
+  return normalized.filter((scope) => !scope.startsWith(OPERATOR_SCOPE_PREFIX));
+}
+
 function resolveApprovedTokenScopes(params: {
   role: string;
   pending: DevicePairingPendingRequest;
@@ -351,14 +359,12 @@ function resolveApprovedTokenScopes(params: {
   approvedScopes?: string[];
   existing?: PairedDevice;
 }): string[] {
-  const requestedScopes = normalizeDeviceAuthScopes(params.pending.scopes);
+  const requestedScopes = resolveRoleScopedDeviceTokenScopes(params.role, params.pending.scopes);
   if (requestedScopes.length > 0) {
-    if (params.role === "operator") {
-      return requestedScopes;
-    }
-    return requestedScopes.filter((scope) => !scope.startsWith(OPERATOR_SCOPE_PREFIX));
+    return requestedScopes;
   }
-  return normalizeDeviceAuthScopes(
+  return resolveRoleScopedDeviceTokenScopes(
+    params.role,
     params.existingToken?.scopes ??
       params.approvedScopes ??
       params.existing?.approvedScopes ??
