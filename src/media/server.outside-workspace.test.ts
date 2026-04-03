@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
   readFileWithinRoot: vi.fn(),
@@ -27,9 +28,19 @@ vi.mock("./server.runtime.js", () => {
 
 let startMediaServer: typeof import("./server.js").startMediaServer;
 let realFetch: typeof import("undici").fetch;
+const LOOPBACK_FETCH_ENV = {
+  HTTP_PROXY: undefined,
+  HTTPS_PROXY: undefined,
+  ALL_PROXY: undefined,
+  http_proxy: undefined,
+  https_proxy: undefined,
+  all_proxy: undefined,
+  NO_PROXY: "127.0.0.1,localhost",
+  no_proxy: "127.0.0.1,localhost",
+} as const;
 
 async function expectOutsideWorkspaceServerResponse(url: string) {
-  const response = await realFetch(url);
+  const response = await withEnvAsync(LOOPBACK_FETCH_ENV, () => realFetch(url));
   expect(response.status).toBe(400);
   expect(await response.text()).toBe("file is outside workspace root");
 }
