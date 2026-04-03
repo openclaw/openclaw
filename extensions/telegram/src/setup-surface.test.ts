@@ -162,6 +162,59 @@ describe("telegramSetupWizard.finalize", () => {
   });
 });
 
+describe("telegramSetupWizard.dmPolicy", () => {
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      telegramSetupWizard.dmPolicy?.getCurrent(
+        {
+          channels: {
+            telegram: {
+              dmPolicy: "disabled",
+              accounts: {
+                alerts: {
+                  dmPolicy: "allowlist",
+                  botToken: "tok",
+                },
+              },
+            },
+          },
+        },
+        "alerts",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(telegramSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
+      policyKey: "channels.telegram.accounts.alerts.dmPolicy",
+      allowFromKey: "channels.telegram.accounts.alerts.allowFrom",
+    });
+  });
+
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
+    const next = telegramSetupWizard.dmPolicy?.setPolicy(
+      {
+        channels: {
+          telegram: {
+            allowFrom: ["123"],
+            accounts: {
+              alerts: {
+                botToken: "tok",
+              },
+            },
+          },
+        },
+      },
+      "open",
+      "alerts",
+    );
+
+    expect(next?.channels?.telegram?.dmPolicy).toBeUndefined();
+    expect(next?.channels?.telegram?.accounts?.alerts?.dmPolicy).toBe("open");
+    expect(next?.channels?.telegram?.accounts?.alerts?.allowFrom).toEqual(["123", "*"]);
+  });
+});
+
 describe("resolveTelegramAllowFromEntries", () => {
   it("passes apiRoot through username lookups", async () => {
     const globalFetch = vi.fn(async () => {
