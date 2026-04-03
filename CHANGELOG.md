@@ -43,6 +43,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Ollama: prefer real cloud auth credentials over the local-only marker so Ollama instances behind authenticated proxies use the configured API key instead of skipping auth.
 - Plugins/Kimi Coding: parse tagged Kimi tool-call text into structured tool calls on the provider stream path so tools execute instead of echoing raw markup. (#60051) Thanks @obviyus.
 - Channels: emit passive message hooks for mention-skipped Telegram and Signal group messages when `ingest` is enabled, including wildcard/default fallback and per-group override handling. (#60018) Thanks @obviyus.
+- Plugins/manifest registry: stop warning when an explicit manifest `id` intentionally differs from the discovery hint. (#59185) Thanks @samzong.
 
 ## 2026.4.2
 
