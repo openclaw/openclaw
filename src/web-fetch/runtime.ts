@@ -154,10 +154,15 @@ export function resolveWebFetchDefinition(
   }
 
   const providers = sortWebFetchProvidersForAutoDetect(
-    resolveBundledPluginWebFetchProviders({
-      config: options?.config,
-      bundledAllowlistCompat: true,
-    }),
+    options?.preferRuntimeProviders
+      ? resolvePluginWebFetchProviders({
+          config: options?.config,
+          bundledAllowlistCompat: true,
+        })
+      : resolveBundledPluginWebFetchProviders({
+          config: options?.config,
+          bundledAllowlistCompat: true,
+        }),
   ).filter(Boolean);
   if (providers.length === 0) {
     return null;

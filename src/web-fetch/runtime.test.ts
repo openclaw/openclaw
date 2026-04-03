@@ -133,7 +133,6 @@ describe("web fetch runtime", () => {
         }),
       }),
     });
-    resolveBundledPluginWebFetchProvidersMock.mockReturnValue([provider]);
     resolveRuntimeWebFetchProvidersMock.mockReturnValue([provider]);
 
     const runtimeWebFetch: RuntimeWebFetchMetadata = {
@@ -206,7 +205,7 @@ describe("web fetch runtime", () => {
     expect(resolved?.provider.id).toBe("firecrawl");
   });
 
-  it("keeps sandboxed web fetch on bundled providers even when runtime providers are preferred", () => {
+  it("uses runtime-only providers for sandboxed web fetch when runtime providers are preferred", () => {
     const bundled = createProvider({
       pluginId: "firecrawl",
       id: "firecrawl",
@@ -230,10 +229,10 @@ describe("web fetch runtime", () => {
       preferRuntimeProviders: true,
     });
 
-    expect(resolved?.provider.id).toBe("firecrawl");
+    expect(resolved?.provider.id).toBe("thirdparty");
   });
 
-  it("keeps non-sandboxed web fetch on bundled providers even when runtime providers are preferred", () => {
+  it("uses runtime-only providers for non-sandboxed web fetch when runtime providers are preferred", () => {
     const bundled = createProvider({
       pluginId: "firecrawl",
       id: "firecrawl",
@@ -257,6 +256,6 @@ describe("web fetch runtime", () => {
       preferRuntimeProviders: true,
     });
 
-    expect(resolved?.provider.id).toBe("firecrawl");
+    expect(resolved?.provider.id).toBe("thirdparty");
   });
 });
