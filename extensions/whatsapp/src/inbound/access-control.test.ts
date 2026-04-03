@@ -11,7 +11,6 @@ setupAccessControlTestHarness();
 let checkInboundAccessControl: typeof import("./access-control.js").checkInboundAccessControl;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ checkInboundAccessControl } = await import("./access-control.js"));
 });
 
