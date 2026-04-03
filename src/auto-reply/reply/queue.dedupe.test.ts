@@ -30,6 +30,7 @@ function createRun(params: {
 }): FollowupRun {
   return {
     execution: {
+      visibility: "internal-only",
       agentPrompt: params.prompt,
     },
     messageId: params.messageId,
@@ -125,7 +126,7 @@ describe("followup queue deduplication", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(getFollowupAgentPrompt(calls[0])).toContain("[Queued messages while agent was busy]");
+    expect(getFollowupAgentPrompt(calls[0])).toBe("[Discord Guild #test channel id:123] Hello");
   });
 
   it("deduplicates same message_id after queue drain restarts", async () => {
