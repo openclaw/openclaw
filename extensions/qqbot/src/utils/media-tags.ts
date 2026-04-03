@@ -74,13 +74,13 @@ const FUZZY_MEDIA_TAG_REGEX = new RegExp(
   "`?" +
     LEFT_BRACKET + "\\s*(" +
     TAG_NAME_PATTERN +
-    ")\\s*[>＞>]" +
+    ")\\s*" + RIGHT_BRACKET +
     "[\"']?\\s*" +
     "([^<＜<＞>\"'`]+?)" +
     "\\s*[\"']?" +
     LEFT_BRACKET + "\\s*/?\\s*(?:" +
     TAG_NAME_PATTERN +
-    ")\\s*[>＞>]" +
+    ")\\s*" + RIGHT_BRACKET +
     "`?",
   "gi",
 );
