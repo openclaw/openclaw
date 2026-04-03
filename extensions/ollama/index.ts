@@ -145,7 +145,10 @@ export default definePluginEntry({
       },
       createStreamFn: ({ config, model }) => {
         return createConfiguredOllamaStreamFn({
-          model,
+          model: {
+            ...model,
+            timeoutSeconds: config?.models?.providers?.ollama?.timeoutSeconds,
+          },
           providerBaseUrl: config?.models?.providers?.ollama?.baseUrl,
         });
       },

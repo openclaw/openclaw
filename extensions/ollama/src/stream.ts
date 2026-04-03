@@ -668,6 +668,7 @@ function resolveOllamaModelHeaders(model: {
 export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
+  defaultTimeoutMs: number = 120000, // 2 minute default for local Ollama
 ): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
 
@@ -710,11 +711,25 @@ export function createOllamaStreamFn(
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
+        // Apply request timeout if configured and no external signal is provided.
+        // Local Ollama may need longer timeout than the default agent timeout.
+        let finalSignal: AbortSignal | undefined = options?.signal;
+        if (!finalSignal && defaultTimeoutMs && defaultTimeoutMs > 0) {
+          const timeoutController = new AbortController();
+          const timeoutId = setTimeout(() => timeoutController.abort(), defaultTimeoutMs);
+          finalSignal = timeoutController.signal;
+          // Clean up timeout on completion
+          void response.clone().then(
+            () => clearTimeout(timeoutId),
+            () => clearTimeout(timeoutId),
+          );
+        }
+
         const response = await fetch(chatUrl, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
-          signal: options?.signal,
+          signal: finalSignal,
         });
 
         if (!response.ok) {
@@ -828,7 +843,7 @@ export function createOllamaStreamFn(
 }
 
 export function createConfiguredOllamaStreamFn(params: {
-  model: { baseUrl?: string; headers?: unknown };
+  model: { baseUrl?: string; headers?: unknown; timeoutSeconds?: number };
   providerBaseUrl?: string;
 }): StreamFn {
   return createOllamaStreamFn(
@@ -837,5 +852,8 @@ export function createConfiguredOllamaStreamFn(params: {
       providerBaseUrl: params.providerBaseUrl,
     }),
     resolveOllamaModelHeaders(params.model),
+    typeof params.model.timeoutSeconds === "number" && params.model.timeoutSeconds > 0
+      ? params.model.timeoutSeconds * 1000
+      : undefined,
   );
 }
