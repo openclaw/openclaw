@@ -24,7 +24,7 @@
   gap: 2px;
   flex: 1 1 auto;
   max-width: min(900px, 68%);
-  min-width: 604px;
+  min-width: 602px;
   align-items: flex-start;
 }
 
@@ -323,6 +323,7 @@ img.chat-avatar {
 }
 
 @keyframes pulsing-border {
+
   0%,
   100% {
     border-color: var(--border);
