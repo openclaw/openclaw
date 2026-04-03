@@ -10,6 +10,51 @@ vi.mock("./media-understanding.runtime.js", () => ({
 const { resolveTelegramInboundBody } = await import("./bot-message-context.body.js");
 
 describe("resolveTelegramInboundBody", () => {
+  it("keeps the media marker when a captioned video has no downloaded media", async () => {
+    const result = await resolveTelegramInboundBody({
+      cfg: {
+        channels: { telegram: {} },
+      } as never,
+      primaryCtx: {
+        me: { id: 7, username: "bot" },
+      } as never,
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        caption: "episode caption",
+        video: {
+          file_id: "video-1",
+          file_unique_id: "video-u1",
+          duration: 10,
+          width: 320,
+          height: 240,
+        },
+      } as never,
+      allMedia: [],
+      isGroup: false,
+      chatId: 42,
+      senderId: "42",
+      senderUsername: "",
+      routeAgentId: undefined,
+      effectiveGroupAllow: normalizeAllowFrom([]),
+      effectiveDmAllow: normalizeAllowFrom([]),
+      groupConfig: undefined,
+      topicConfig: undefined,
+      requireMention: false,
+      options: undefined,
+      groupHistories: new Map(),
+      historyLimit: 0,
+      logger: { info: vi.fn() },
+    });
+
+    expect(result).toMatchObject({
+      rawBody: "episode caption",
+      bodyText: "<media:video> [file_id:video-1]\nepisode caption",
+    });
+  });
+
   it("does not transcribe group audio for unauthorized senders", async () => {
     transcribeFirstAudioMock.mockReset();
     const logger = { info: vi.fn() };
