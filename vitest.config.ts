@@ -61,6 +61,7 @@ export default defineConfig({
       "scripts/test-runner-manifest.mjs",
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
+      "vitest.bundled.config.ts",
       "vitest.config.ts",
       "vitest.contracts.config.ts",
       "vitest.e2e.config.ts",

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 
 // Mock http and https modules before importing the client
 vi.mock("node:https", () => {
@@ -54,9 +54,13 @@ function mockFailureResponse(statusCode = 500) {
 }
 
 function installFakeTimerHarness() {
+  beforeAll(async () => {
+    ({ sendMessage, sendFileUrl, fetchChatUsers, resolveLegacyWebhookNameToChatUserId } =
+      await import("./client.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.resetModules();
     vi.useFakeTimers();
     fakeNowMs += 10_000;
     vi.setSystemTime(fakeNowMs);
@@ -64,11 +68,6 @@ function installFakeTimerHarness() {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  beforeEach(async () => {
-    ({ sendMessage, sendFileUrl, fetchChatUsers, resolveLegacyWebhookNameToChatUserId } =
-      await import("./client.js"));
   });
 }
 

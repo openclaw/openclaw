@@ -72,7 +72,6 @@ describe("browser control auth bootstrap failures", () => {
 
   afterEach(async () => {
     await stopBrowserControlServer();
-    vi.resetModules();
   });
 
   it("fails closed when auth bootstrap throws and no auth is configured", async () => {

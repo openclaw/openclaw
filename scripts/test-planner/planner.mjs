@@ -1,13 +1,21 @@
 import path from "node:path";
-import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
+import {
+  boundaryTestFiles,
+  isBoundaryTestFile,
+  bundledPluginDependentUnitTestFiles,
+  isBundledPluginDependentUnitTestFile,
+  isUnitConfigTestFile,
+} from "../../vitest.unit-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "../lib/bundled-plugin-paths.mjs";
 import {
   loadChannelTimingManifest,
+  loadExtensionMemoryHotspotManifest,
   loadExtensionTimingManifest,
   loadUnitMemoryHotspotManifest,
   loadUnitTimingManifest,
   packFilesByDuration,
   packFilesByDurationWithBaseLoads,
+  selectMemoryHeavyFiles,
   selectTimedHeavyFiles,
   selectUnitHeavyFileGroups,
 } from "../test-runner-manifest.mjs";
@@ -110,14 +118,21 @@ const normalizeSurfaces = (values = []) => [
   ),
 ];
 
-const EXPLICIT_PLAN_SURFACES = new Set(["unit", "extensions", "channels", "contracts", "gateway"]);
+const EXPLICIT_PLAN_SURFACES = new Set([
+  "unit",
+  "bundled",
+  "extensions",
+  "channels",
+  "contracts",
+  "gateway",
+]);
 const FAILURE_POLICIES = new Set(["fail-fast", "collect-all"]);
 
 const validateExplicitSurfaces = (surfaces) => {
   const invalidSurfaces = surfaces.filter((surface) => !EXPLICIT_PLAN_SURFACES.has(surface));
   if (invalidSurfaces.length > 0) {
     throw new Error(
-      `Unsupported --surface value(s): ${invalidSurfaces.join(", ")}. Supported surfaces: unit, extensions, channels, contracts, gateway.`,
+      `Unsupported --surface value(s): ${invalidSurfaces.join(", ")}. Supported surfaces: unit, bundled, extensions, channels, contracts, gateway.`,
     );
   }
 };
@@ -132,6 +147,9 @@ const buildRequestedSurfaces = (request, env) => {
   const skipDefaultRuns = env.OPENCLAW_TEST_SKIP_DEFAULT === "1";
   if (!skipDefaultRuns) {
     surfaces.push("unit");
+  }
+  if (env.OPENCLAW_TEST_INCLUDE_BUNDLED === "1") {
+    surfaces.push("bundled");
   }
   if (env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1") {
     surfaces.push("extensions");
@@ -206,6 +224,7 @@ const createPlannerContext = (request, options = {}) => {
   const unitTimingManifest = loadUnitTimingManifest();
   const channelTimingManifest = loadChannelTimingManifest();
   const extensionTimingManifest = loadExtensionTimingManifest();
+  const extensionMemoryHotspotManifest = loadExtensionMemoryHotspotManifest();
   const unitMemoryHotspotManifest = loadUnitMemoryHotspotManifest();
   return {
     env,
@@ -215,6 +234,7 @@ const createPlannerContext = (request, options = {}) => {
     unitTimingManifest,
     channelTimingManifest,
     extensionTimingManifest,
+    extensionMemoryHotspotManifest,
     unitMemoryHotspotManifest,
   };
 };
@@ -256,6 +276,16 @@ const resolveEntryTimingEstimator = (entry, context) => {
   const configIndex = entry.args.findIndex((arg) => arg === "--config");
   const config = configIndex >= 0 ? (entry.args[configIndex + 1] ?? "") : "";
   if (config === "vitest.unit.config.ts") {
+    return (file) =>
+      context.unitTimingManifest.files[file]?.durationMs ??
+      context.unitTimingManifest.defaultDurationMs;
+  }
+  if (config === "vitest.boundary.config.ts") {
+    return (file) =>
+      context.unitTimingManifest.files[file]?.durationMs ??
+      context.unitTimingManifest.defaultDurationMs;
+  }
+  if (config === "vitest.bundled.config.ts") {
     return (file) =>
       context.unitTimingManifest.files[file]?.durationMs ??
       context.unitTimingManifest.defaultDurationMs;
@@ -344,6 +374,9 @@ const resolveMaxWorkersForUnit = (unit, context) => {
   if (unit.surface === "extensions") {
     return budget.extensionWorkers;
   }
+  if (unit.surface === "bundled") {
+    return budget.unitSharedWorkers;
+  }
   if (unit.surface === "channels") {
     return budget.channelSharedWorkers ?? budget.unitSharedWorkers;
   }
@@ -386,6 +419,11 @@ const createExecutionUnit = (context, config) => {
 
 const withIncludeFileEnv = (context, unitId, files) => ({
   OPENCLAW_VITEST_INCLUDE_FILE: context.writeTempJsonArtifact(unitId, files),
+});
+
+const withBundledPluginsDisabled = (unitEnv) => ({
+  ...unitEnv,
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
 });
 
 const resolveUnitHeavyFileGroups = (context) => {
@@ -431,28 +469,41 @@ const resolveUnitHeavyFileGroups = (context) => {
   };
 };
 
-const resolveExtensionTimedHeavyFiles = (context) => {
-  const { env, runtime, catalog, extensionTimingManifest } = context;
-  const timedHeavyExtensionFileLimit = parseEnvNumber(
-    env,
-    "OPENCLAW_TEST_HEAVY_EXTENSION_FILE_LIMIT",
-    runtime.isCI ? 16 : 8,
+const resolveExtensionHeavyFileGroups = (context) => {
+  const { env, runtime, catalog, extensionTimingManifest, extensionMemoryHotspotManifest } =
+    context;
+  const extensionCandidates = catalog.allKnownTestFiles.filter(
+    (file) =>
+      file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
+      !catalog.extensionForkIsolatedFileSet.has(file),
   );
-  const timedHeavyExtensionMinDurationMs = parseEnvNumber(
-    env,
-    "OPENCLAW_TEST_HEAVY_EXTENSION_MIN_MS",
-    runtime.isCI ? 9_000 : 12_000,
-  );
-  return selectTimedHeavyFiles({
-    candidates: catalog.allKnownTestFiles.filter(
-      (file) =>
-        file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
-        !catalog.extensionForkIsolatedFileSet.has(file),
+  const memoryHeavyFiles = selectMemoryHeavyFiles({
+    candidates: extensionCandidates,
+    limit: parseEnvNumber(
+      env,
+      "OPENCLAW_TEST_MEMORY_HEAVY_EXTENSION_FILE_LIMIT",
+      runtime.isCI ? 12 : 6,
     ),
-    limit: timedHeavyExtensionFileLimit,
-    minDurationMs: timedHeavyExtensionMinDurationMs,
+    minDeltaKb: parseEnvNumber(
+      env,
+      "OPENCLAW_TEST_MEMORY_HEAVY_EXTENSION_MIN_KB",
+      extensionMemoryHotspotManifest.defaultMinDeltaKb,
+    ),
+    exclude: catalog.extensionForkIsolatedFileSet,
+    hotspots: extensionMemoryHotspotManifest,
+  });
+  const timedHeavyFiles = selectTimedHeavyFiles({
+    candidates: extensionCandidates,
+    limit: parseEnvNumber(env, "OPENCLAW_TEST_HEAVY_EXTENSION_FILE_LIMIT", runtime.isCI ? 16 : 8),
+    minDurationMs: parseEnvNumber(
+      env,
+      "OPENCLAW_TEST_HEAVY_EXTENSION_MIN_MS",
+      runtime.isCI ? 9_000 : 12_000,
+    ),
+    exclude: new Set([...catalog.extensionForkIsolatedFiles, ...memoryHeavyFiles]),
     timings: extensionTimingManifest,
   });
+  return { memoryHeavyFiles, timedHeavyFiles };
 };
 
 const resolveChannelTimedHeavyFiles = (context) => {
@@ -492,6 +543,7 @@ const buildDefaultUnits = (context, request) => {
   const selectedSurfaces = buildRequestedSurfaces(request, env);
   const selectedSurfaceSet = new Set(selectedSurfaces);
   const unitOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("unit");
+  const bundledOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("bundled");
   const channelsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("channels");
   const contractsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("contracts");
   const extensionsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("extensions");
@@ -504,7 +556,11 @@ const buildDefaultUnits = (context, request) => {
   const unitMemoryIsolatedFiles = [...memoryHeavyUnitFiles].filter(
     (file) => !catalog.unitBehaviorOverrideSet.has(file),
   );
-  const extensionTimedHeavyFiles = resolveExtensionTimedHeavyFiles(context);
+  const { memoryHeavyFiles: extensionMemoryHeavyFiles, timedHeavyFiles: extensionTimedHeavyFiles } =
+    resolveExtensionHeavyFileGroups(context);
+  const extensionMemoryIsolatedFiles = [...extensionMemoryHeavyFiles].filter(
+    (file) => !catalog.extensionForkIsolatedFileSet.has(file),
+  );
   const channelTimedHeavyFiles = resolveChannelTimedHeavyFiles(context);
   const unitSchedulingOverrideSet = new Set([
     ...catalog.unitBehaviorOverrideSet,
@@ -512,6 +568,7 @@ const buildDefaultUnits = (context, request) => {
   ]);
   const extensionSchedulingOverrideSet = new Set([
     ...catalog.extensionForkIsolatedFiles,
+    ...extensionMemoryHeavyFiles,
     ...extensionTimedHeavyFiles,
   ]);
   const channelSchedulingOverrideSet = new Set([
@@ -522,6 +579,7 @@ const buildDefaultUnits = (context, request) => {
     ...new Set([
       ...unitSchedulingOverrideSet,
       ...timedHeavyUnitFiles,
+      ...boundaryTestFiles,
       ...catalog.channelIsolatedFiles,
     ]),
   ];
@@ -583,6 +641,35 @@ const buildDefaultUnits = (context, request) => {
   const units = [];
 
   if (selectedSurfaceSet.has("unit")) {
+    if (boundaryTestFiles.length > 0) {
+      units.push(
+        createExecutionUnit(context, {
+          id: "unit-boundary",
+          surface: "unit",
+          isolate: false,
+          serialPhase: unitOnlyRun ? undefined : "unit-fast",
+          includeFiles: boundaryTestFiles,
+          estimatedDurationMs: estimateEntryFilesDurationMs(
+            { args: ["vitest", "run", "--config", "vitest.boundary.config.ts"] },
+            boundaryTestFiles,
+            context,
+          ),
+          env: withBundledPluginsDisabled(
+            withIncludeFileEnv(context, "vitest-boundary-include", boundaryTestFiles),
+          ),
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.boundary.config.ts",
+            "--pool=forks",
+            ...noIsolateArgs,
+          ],
+          reasons: ["unit-boundary-shared"],
+        }),
+      );
+    }
+
     for (const [laneIndex, files] of unitFastBuckets.entries()) {
       const laneName =
         unitFastBuckets.length === 1 ? "unit-fast" : `unit-fast-${String(laneIndex + 1)}`;
@@ -609,10 +696,12 @@ const buildDefaultUnits = (context, request) => {
               batch,
               context,
             ),
-            env: withIncludeFileEnv(
-              context,
-              `vitest-unit-fast-include-${String(laneIndex + 1)}-${String(batchIndex + 1)}`,
-              batch,
+            env: withBundledPluginsDisabled(
+              withIncludeFileEnv(
+                context,
+                `vitest-unit-fast-include-${String(laneIndex + 1)}-${String(batchIndex + 1)}`,
+                batch,
+              ),
             ),
             args: [
               "vitest",
@@ -635,6 +724,7 @@ const buildDefaultUnits = (context, request) => {
           surface: "unit",
           isolate: true,
           estimatedDurationMs: estimateUnitDurationMs(file),
+          env: withBundledPluginsDisabled(),
           args: [
             "vitest",
             "run",
@@ -661,6 +751,7 @@ const buildDefaultUnits = (context, request) => {
           surface: "unit",
           isolate: false,
           estimatedDurationMs: files.reduce((sum, file) => sum + estimateUnitDurationMs(file), 0),
+          env: withBundledPluginsDisabled(),
           args: [
             "vitest",
             "run",
@@ -682,6 +773,7 @@ const buildDefaultUnits = (context, request) => {
           surface: "unit",
           isolate: true,
           estimatedDurationMs: estimateUnitDurationMs(file),
+          env: withBundledPluginsDisabled(),
           args: [
             "vitest",
             "run",
@@ -702,6 +794,7 @@ const buildDefaultUnits = (context, request) => {
           id: "unit-pinned",
           surface: "unit",
           isolate: false,
+          env: withBundledPluginsDisabled(),
           args: [
             "vitest",
             "run",
@@ -715,6 +808,23 @@ const buildDefaultUnits = (context, request) => {
         }),
       );
     }
+  }
+
+  if (selectedSurfaceSet.has("bundled")) {
+    units.push(
+      createExecutionUnit(context, {
+        id: "bundled",
+        surface: "bundled",
+        isolate: false,
+        serialPhase: bundledOnlyRun ? undefined : "bundled",
+        estimatedDurationMs: bundledPluginDependentUnitTestFiles.reduce(
+          (sum, file) => sum + estimateUnitDurationMs(file),
+          0,
+        ),
+        args: ["vitest", "run", "--config", "vitest.bundled.config.ts", ...noIsolateArgs],
+        reasons: ["bundled-surface"],
+      }),
+    );
   }
 
   if (selectedSurfaceSet.has("channels")) {
@@ -783,6 +893,18 @@ const buildDefaultUnits = (context, request) => {
           estimatedDurationMs: estimateExtensionDurationMs(file),
           args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
           reasons: ["extensions-isolated-manifest"],
+        }),
+      );
+    }
+    for (const file of extensionMemoryIsolatedFiles) {
+      units.push(
+        createExecutionUnit(context, {
+          id: `extensions-${path.basename(file, ".test.ts")}-memory-isolated`,
+          surface: "extensions",
+          isolate: true,
+          estimatedDurationMs: estimateExtensionDurationMs(file),
+          args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
+          reasons: ["extensions-memory-heavy"],
         }),
       );
     }
@@ -888,7 +1010,13 @@ const buildDefaultUnits = (context, request) => {
     );
   }
 
-  return { units, unitMemoryIsolatedFiles, channelTimedHeavyFiles };
+  return {
+    units,
+    unitMemoryIsolatedFiles,
+    extensionMemoryIsolatedFiles,
+    extensionTimedHeavyFiles,
+    channelTimedHeavyFiles,
+  };
 };
 
 const createTargetedUnit = (context, classification, filters) => {
@@ -901,12 +1029,26 @@ const createTargetedUnit = (context, classification, filters) => {
         : owner;
   const args = (() => {
     if (owner === "unit") {
+      const config = filters.every((file) => isBoundaryTestFile(file))
+        ? "vitest.boundary.config.ts"
+        : "vitest.unit.config.ts";
       return [
         "vitest",
         "run",
         "--config",
-        "vitest.unit.config.ts",
+        config,
         "--pool=forks",
+        ...context.noIsolateArgs,
+        ...filters,
+      ];
+    }
+    if (owner === "bundled") {
+      return [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.bundled.config.ts",
+        ...(classification.isolated ? ["--pool=forks"] : []),
         ...context.noIsolateArgs,
         ...filters,
       ];
@@ -1000,6 +1142,7 @@ const createTargetedUnit = (context, classification, filters) => {
     surface: classification.legacyBasePinned ? "base" : classification.surface,
     isolate: classification.isolated || owner === "base-pinned",
     args,
+    env: owner === "unit" ? withBundledPluginsDisabled() : undefined,
     reasons: classification.reasons,
   });
 };
@@ -1009,6 +1152,7 @@ const buildTargetedUnits = (context, request) => {
     return [];
   }
   const unitMemoryIsolatedFiles = request.unitMemoryIsolatedFiles ?? [];
+  const extensionMemoryIsolatedFiles = request.extensionMemoryIsolatedFiles ?? [];
   const extensionTimedIsolatedFiles = request.extensionTimedIsolatedFiles ?? [];
   const channelTimedIsolatedFiles = request.channelTimedIsolatedFiles ?? [];
   const estimateUnitDurationMs = (file) =>
@@ -1034,6 +1178,7 @@ const buildTargetedUnits = (context, request) => {
     if (matchedFiles.length === 0) {
       const classification = context.catalog.classifyTestFile(normalizeRepoPath(fileFilter), {
         unitMemoryIsolatedFiles,
+        extensionMemoryIsolatedFiles,
         extensionTimedIsolatedFiles,
         channelTimedIsolatedFiles,
       });
@@ -1048,6 +1193,7 @@ const buildTargetedUnits = (context, request) => {
     for (const matchedFile of matchedFiles) {
       const classification = context.catalog.classifyTestFile(matchedFile, {
         unitMemoryIsolatedFiles,
+        extensionMemoryIsolatedFiles,
         extensionTimedIsolatedFiles,
         channelTimedIsolatedFiles,
       });
@@ -1068,6 +1214,7 @@ const buildTargetedUnits = (context, request) => {
           context,
           context.catalog.classifyTestFile(file, {
             unitMemoryIsolatedFiles,
+            extensionMemoryIsolatedFiles,
             extensionTimedIsolatedFiles,
             channelTimedIsolatedFiles,
           }),
@@ -1206,6 +1353,13 @@ const estimateTopLevelEntryDurationMs = (unit, context) => {
           context.unitTimingManifest.defaultDurationMs)
       );
     }
+    if (isBundledPluginDependentUnitTestFile(file)) {
+      return (
+        totalMs +
+        (context.unitTimingManifest.files[file]?.durationMs ??
+          context.unitTimingManifest.defaultDurationMs)
+      );
+    }
     if (context.catalog.channelTestPrefixes.some((prefix) => file.startsWith(prefix))) {
       return (
         totalMs +
@@ -1330,6 +1484,12 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
 
   const checksFastInclude = nodeEligible
     ? [
+        {
+          check_name: "checks-fast-bundled",
+          runtime: "node",
+          task: "bundled",
+          command: "pnpm test:bundled",
+        },
         ...createShardMatrixEntries({
           checkNamePrefix: "checks-fast-extensions",
           runtime: "node",
@@ -1546,10 +1706,17 @@ export function explainExecutionTarget(request, options = {}) {
   const unitMemoryIsolatedFiles = [...memoryHeavyFiles].filter(
     (file) => !context.catalog.unitBehaviorOverrideSet.has(file),
   );
-  const extensionTimedIsolatedFiles = resolveExtensionTimedHeavyFiles(context);
+  const {
+    memoryHeavyFiles: extensionMemoryHeavyFiles,
+    timedHeavyFiles: extensionTimedIsolatedFiles,
+  } = resolveExtensionHeavyFileGroups(context);
+  const extensionMemoryIsolatedFiles = [...extensionMemoryHeavyFiles].filter(
+    (file) => !context.catalog.extensionForkIsolatedFileSet.has(file),
+  );
   const channelTimedIsolatedFiles = resolveChannelTimedHeavyFiles(context);
   const classification = context.catalog.classifyTestFile(normalizedTarget, {
     unitMemoryIsolatedFiles,
+    extensionMemoryIsolatedFiles,
     extensionTimedIsolatedFiles,
     channelTimedIsolatedFiles,
   });
@@ -1635,15 +1802,14 @@ export function buildExecutionPlan(request, options = {}) {
   }
 
   const defaultPlanning = buildDefaultUnits(context, { ...request, fileFilters });
-  const extensionTimedIsolatedFiles = resolveExtensionTimedHeavyFiles(context);
-  const channelTimedIsolatedFiles = resolveChannelTimedHeavyFiles(context);
   let units = defaultPlanning.units;
   const targetedUnits = buildTargetedUnits(context, {
     ...request,
     fileFilters,
     unitMemoryIsolatedFiles: defaultPlanning.unitMemoryIsolatedFiles,
-    extensionTimedIsolatedFiles,
-    channelTimedIsolatedFiles,
+    extensionMemoryIsolatedFiles: defaultPlanning.extensionMemoryIsolatedFiles,
+    extensionTimedIsolatedFiles: defaultPlanning.extensionTimedHeavyFiles,
+    channelTimedIsolatedFiles: defaultPlanning.channelTimedHeavyFiles,
   });
   if (context.configuredShardCount !== null && context.shardCount > 1) {
     units = expandUnitsAcrossTopLevelShards(context, units);

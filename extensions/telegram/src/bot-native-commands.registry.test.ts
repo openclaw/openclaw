@@ -54,7 +54,6 @@ async function registerPairMenu(params: {
 
 describe("registerTelegramNativeCommands real plugin registry", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ clearPluginCommands, registerPluginCommand } =
       await import("../../../src/plugins/commands.js"));
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));

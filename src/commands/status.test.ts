@@ -383,7 +383,7 @@ vi.mock("../channels/plugins/index.js", () => ({
       },
     ] as unknown,
 }));
-vi.mock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
+vi.mock("../plugins/runtime/runtime-web-channel-boundary.js", () => ({
   webAuthExists: mocks.webAuthExists,
   getWebAuthAgeMs: mocks.getWebAuthAgeMs,
   readWebSelfId: mocks.readWebSelfId,

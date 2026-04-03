@@ -6,6 +6,7 @@ import {
   getProcessTreeRecords,
   parseCompletedTestFileLines,
   sampleProcessTreeRssKb,
+  summarizeDiagnosticReports,
 } from "../test-parallel-memory.mjs";
 import {
   appendCapturedOutput,
@@ -458,6 +459,8 @@ export async function executePlan(plan, options = {}) {
       );
       const heapSnapshotDir =
         heapSnapshotBaseDir === null ? null : path.join(heapSnapshotBaseDir, unit.id);
+      const reportOnSignalEnabled =
+        (env.OPENCLAW_TEST_REPORT_ON_SIGNAL ?? "").trim().toLowerCase() === "1";
       let resolvedNodeOptions =
         maxOldSpaceSizeMb && !nextNodeOptions.includes("--max-old-space-size=")
           ? `${nextNodeOptions} --max-old-space-size=${maxOldSpaceSizeMb}`.trim()
@@ -503,6 +506,23 @@ export async function executePlan(plan, options = {}) {
           "--heapsnapshot-signal=",
           `--heapsnapshot-signal=${heapSnapshotSignal}`,
         );
+        if (reportOnSignalEnabled) {
+          resolvedNodeOptions = ensureNodeOptionFlag(
+            resolvedNodeOptions,
+            "--report-on-signal",
+            "--report-on-signal",
+          );
+          resolvedNodeOptions = ensureNodeOptionFlag(
+            resolvedNodeOptions,
+            "--report-signal=",
+            `--report-signal=${heapSnapshotSignal}`,
+          );
+          resolvedNodeOptions = ensureNodeOptionFlag(
+            resolvedNodeOptions,
+            "--report-directory=",
+            `--report-directory=${heapSnapshotDir}`,
+          );
+        }
       }
       let output = "";
       let fatalSeen = false;
@@ -631,12 +651,24 @@ export async function executePlan(plan, options = {}) {
           .toSorted((left, right) => right.deltaKb - left.deltaKb)
           .slice(0, memoryTraceTopCount)
           .map((record) => `${record.file}:${formatMemoryDeltaKb(record.deltaKb)}`);
+        const reportGrowth =
+          reportOnSignalEnabled && heapSnapshotDir
+            ? summarizeDiagnosticReports(heapSnapshotDir)
+                .filter((record) => record.rssDeltaKb > 0 || record.usedHeapDeltaKb > 0)
+                .slice(0, memoryTraceTopCount)
+                .map(
+                  (record) =>
+                    `pid=${String(record.pid)} rss=${formatMemoryDeltaKb(record.rssDeltaKb)} heap=${formatMemoryDeltaKb(record.usedHeapDeltaKb)} external=${formatMemoryDeltaKb(record.externalDeltaKb)}`,
+                )
+            : [];
         console.log(
           `[test-parallel][mem] summary ${unit.id} files=${memoryFileRecords.length} peak=${formatMemoryKb(
             peakTreeSample?.rssKb ?? 0,
           )} totalDelta=${formatMemoryDeltaKb(totalDeltaKb)} peakAt=${
             peakTreeSample?.reason ?? "n/a"
-          } top=${topGrowthFiles.length > 0 ? topGrowthFiles.join(", ") : "none"}`,
+          } top=${topGrowthFiles.length > 0 ? topGrowthFiles.join(", ") : "none"} reports=${
+            reportGrowth.length > 0 ? reportGrowth.join(", ") : "none"
+          }`,
         );
       };
       const clearChildTimers = () => {
