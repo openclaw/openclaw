@@ -397,6 +397,7 @@ export const en: TranslationMap = {
     ptBR: "Português (Brazilian Portuguese)",
     de: "Deutsch (German)",
     es: "Español (Spanish)",
+    id: "Bahasa Indonesia (Indonesia)",
   },
   cron: {
     summary: {
