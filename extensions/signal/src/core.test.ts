@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import { signalPlugin } from "./channel.js";
@@ -275,7 +276,7 @@ describe("signal setup parsing", () => {
   });
 
   it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       channels: {
         signal: {
           defaultAccount: "work",

@@ -731,7 +731,7 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      name: "keeps bundled channel plugins behind restrictive allowlists even when channels.<id>.enabled=true",
+      name: "lets explicit bundled channel enablement bypass restrictive allowlists",
       config: {
         channels: {
           telegram: {
@@ -744,8 +744,8 @@ describe("loadOpenClawPlugins", () => {
       } satisfies PluginLoadConfig,
       assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
         const telegram = registry.plugins.find((entry) => entry.id === "telegram");
-        expect(telegram?.status).toBe("disabled");
-        expect(telegram?.error).toBe("not in allowlist");
+        expect(telegram?.status).toBe("loaded");
+        expect(telegram?.error).toBeUndefined();
         expect(telegram?.explicitlyEnabled).toBe(true);
       },
     },
