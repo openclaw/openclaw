@@ -423,6 +423,9 @@ Current deterministic manager action matrix:
 - `provider_model_missing`
   - `manager_action = configure_provider`
   - `next_step = check_model_config`
+- `provider_not_ready`
+  - `manager_action = configure_provider`
+  - `next_step = check_provider_config`
 - `selected_model_not_ready` + `retry_decision = recheck_runtime_status_once`
   - `manager_action = retry_once`
 - `selected_model_mismatch` + repeated mismatch / `skip_restart_repeated_mismatch`
@@ -431,6 +434,14 @@ Current deterministic manager action matrix:
   - `manager_action = configure_gpu_runtime`
 - `nim_not_ready`
   - `manager_action = start_nim_runtime`
+- `capability_limited`
+  - `manager_action = review_runtime_capabilities`
+- `default_model_missing`
+  - `manager_action = configure_model`
+  - `next_step = check_default_model_config`
+- `selected_model_missing`
+  - `manager_action = configure_model`
+  - `next_step = check_selected_model_config`
 - `ready_for_runtime_task`
   - `manager_action = run_runtime_task`
 

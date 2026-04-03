@@ -106,6 +106,24 @@ def main() -> int:
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
+    if final_state == 'provider_not_ready':
+        output = build_policy_output(
+            manager_action='configure_provider',
+            manager_reason='provider is configured but runtime is not yet recognizing it, so provider remediation should continue',
+            next_step='check_provider_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'provider_not_ready_configure_provider',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'configure_provider',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
     if (
         final_state == 'selected_model_not_ready'
         and retry_decision == 'recheck_runtime_status_once'
@@ -151,6 +169,60 @@ def main() -> int:
                     'repeated_decision_detected': repeated_decision_detected,
                 },
                 'selected_action': 'stop_and_surface_diff',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if final_state == 'capability_limited':
+        output = build_policy_output(
+            manager_action='review_runtime_capabilities',
+            manager_reason='runtime capabilities are limited and capability review should be performed before runtime work',
+            next_step='review_runtime_capabilities',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'capability_limited_review_runtime_capabilities',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'review_runtime_capabilities',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if final_state == 'default_model_missing':
+        output = build_policy_output(
+            manager_action='configure_model',
+            manager_reason='default model configuration is missing and model remediation should continue',
+            next_step='check_default_model_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'default_model_missing_configure_model',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'configure_model',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if final_state == 'selected_model_missing':
+        output = build_policy_output(
+            manager_action='configure_model',
+            manager_reason='selected model configuration is missing and selected-model remediation should continue',
+            next_step='check_selected_model_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'selected_model_missing_configure_model',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'configure_model',
             },
         )
         print(json.dumps(output, ensure_ascii=False, indent=2))
@@ -248,10 +320,6 @@ def main() -> int:
         return 0
 
     if final_state in {
-        'provider_not_ready',
-        'capability_limited',
-        'default_model_missing',
-        'selected_model_missing',
         'selected_model_not_ready',
         'selected_model_mismatch',
         'model_not_ready',
