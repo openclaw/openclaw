@@ -53,6 +53,8 @@ function withImplicitComponentAttachmentBlock(
   if (!attachmentName || hasComponentAttachmentBlock(spec)) {
     return spec;
   }
+  // Discord File components must point at the uploaded attachment name. Add the
+  // matching file block automatically so callers do not have to duplicate it.
   return {
     ...spec,
     blocks: [
@@ -66,7 +68,25 @@ function withImplicitComponentAttachmentBlock(
 }
 
 function canSendAsClassicDiscordMessage(spec: DiscordComponentMessageSpec): boolean {
-  return (spec.blocks ?? []).every((block) => block.type === "text" || block.type === "file");
+  if (spec.modal || spec.container) {
+    return false;
+  }
+
+  let fileBlockCount = 0;
+  for (const block of spec.blocks ?? []) {
+    if (block.type === "text") {
+      continue;
+    }
+    if (block.type === "file") {
+      fileBlockCount += 1;
+      if (block.spoiler) {
+        return false;
+      }
+      continue;
+    }
+    return false;
+  }
+  return fileBlockCount <= 1;
 }
 
 function collapseClassicComponentText(spec: DiscordComponentMessageSpec): string {
@@ -197,6 +217,9 @@ export async function sendDiscordComponentMessage(
   spec: DiscordComponentMessageSpec,
   opts: DiscordComponentSendOpts = {},
 ): Promise<DiscordSendResult> {
+  // Only downgrade when the spec is semantically identical to a plain Discord
+  // message. Modal triggers, container styling, spoiler files, and multi-file
+  // specs need the component-v2 path so we do not silently drop behavior.
   if (opts.mediaUrl && canSendAsClassicDiscordMessage(spec)) {
     return await sendMessageDiscord(to, collapseClassicComponentText(spec), {
       cfg: opts.cfg,
