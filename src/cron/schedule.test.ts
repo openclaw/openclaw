@@ -103,6 +103,22 @@ describe("cron schedule", () => {
     expect(next).toBe(anchor + 30_000);
   });
 
+  it("returns strictly future time when now is exactly at an interval boundary", () => {
+    const anchor = Date.parse("2025-12-13T00:00:00.000Z");
+    const everyMs = 30_000;
+    // now is exactly at anchor + 1*everyMs
+    const now1 = anchor + everyMs;
+    const next1 = computeNextRunAtMs({ kind: "every", everyMs, anchorMs: anchor }, now1);
+    expect(next1).toBe(anchor + 2 * everyMs);
+    expect(next1).toBeGreaterThan(now1);
+
+    // now is exactly at anchor + 3*everyMs
+    const now3 = anchor + 3 * everyMs;
+    const next3 = computeNextRunAtMs({ kind: "every", everyMs, anchorMs: anchor }, now3);
+    expect(next3).toBe(anchor + 4 * everyMs);
+    expect(next3).toBeGreaterThan(now3);
+  });
+
   it("never returns a past timestamp for Asia/Shanghai daily schedule (#30351)", () => {
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
     const next = computeNextRunAtMs(
