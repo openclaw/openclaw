@@ -56,24 +56,36 @@ vi.mock("undici", () => ({
   setGlobalDispatcher,
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    createSubsystemLogger: () => ({
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({
+    info: loggerInfo,
+    debug: loggerDebug,
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: () => ({
       info: loggerInfo,
       debug: loggerDebug,
       warn: vi.fn(),
       error: vi.fn(),
-      child: () => ({
-        info: loggerInfo,
-        debug: loggerDebug,
-        warn: vi.fn(),
-        error: vi.fn(),
-      }),
     }),
-  };
-});
+  }),
+  isTruthyEnvValue: (value?: string) => {
+    if (typeof value !== "string") {
+      return false;
+    }
+    switch (value.trim().toLowerCase()) {
+      case "":
+      case "0":
+      case "false":
+      case "no":
+      case "off":
+        return false;
+      default:
+        return true;
+    }
+  },
+  isWSL2Sync: () => false,
+}));
 
 let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;

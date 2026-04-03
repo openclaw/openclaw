@@ -1,27 +1,23 @@
 import type { Message } from "@grammyjs/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { retryAsync } from "../../../../src/infra/retry.js";
 import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
 const fetchRemoteMedia = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+vi.mock("./delivery.resolve-media.runtime.js", () => {
   return {
-    ...actual,
-    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
     fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
+    formatErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
     logVerbose: () => {},
+    resolveTelegramApiBase: (apiRoot?: string) =>
+      apiRoot?.trim() ? apiRoot.replace(/\/+$/u, "") : "https://api.telegram.org",
+    retryAsync,
+    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
+    shouldRetryTelegramTransportFallback: vi.fn(() => false),
     warn: (s: string) => s,
-    danger: (s: string) => s,
   };
 });
 
