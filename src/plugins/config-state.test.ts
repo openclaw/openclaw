@@ -177,10 +177,7 @@ describe("resolveEffectiveEnableState", () => {
 
   it.each([
     [{ enabled: true }, { enabled: true }],
-    [
-      { enabled: true, allow: ["browser"] as string[] },
-      { enabled: false, reason: "not in allowlist" },
-    ],
+    [{ enabled: true, allow: ["browser"] as string[] }, { enabled: true }],
     [
       {
         enabled: true,
@@ -324,7 +321,7 @@ describe("resolveEffectivePluginActivationState", () => {
     });
   });
 
-  it("keeps allowlists authoritative over bundled channel activation", () => {
+  it("lets explicit bundled channel activation bypass the allowlist", () => {
     const rawConfig = {
       channels: {
         telegram: {
@@ -346,11 +343,11 @@ describe("resolveEffectivePluginActivationState", () => {
         sourceRootConfig: rawConfig,
       }),
     ).toEqual({
-      enabled: false,
-      activated: false,
+      enabled: true,
+      activated: true,
       explicitlyEnabled: true,
-      source: "disabled",
-      reason: "not in allowlist",
+      source: "explicit",
+      reason: "channel enabled in config",
     });
   });
 
