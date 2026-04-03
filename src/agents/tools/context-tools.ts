@@ -66,7 +66,8 @@ You should provide a meaningful summary that captures:
       },
       { additionalProperties: true },
     ),
-    execute: async (params: Record<string, unknown>) => {
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
       const topic = readStringParam(params, "topic", { required: true });
       const summary = readStringParam(params, "summary", { required: true });
       const importance = (params.importance as "high" | "medium" | "low") ?? "medium";
@@ -115,7 +116,8 @@ Returns a list of archives with their paths, topics, and token counts.`,
       },
       { additionalProperties: true },
     ),
-    execute: async (params: Record<string, unknown>) => {
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
       const date = readStringParam(params, "date");
       const topicKeyword = readStringParam(params, "topic_keyword");
       const limit = (params.limit as number) ?? 10;
@@ -162,7 +164,8 @@ Use this when you need to reference previous discussions that were archived.`,
       },
       { additionalProperties: true },
     ),
-    execute: async (params: Record<string, unknown>) => {
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
       const archivePath = readStringParam(params, "archive_path", { required: true });
       const mode = (params.mode as "summary" | "full" | "key_points") ?? "summary";
 
