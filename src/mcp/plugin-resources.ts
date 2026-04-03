@@ -116,8 +116,26 @@ export function resolvePluginResources(ctx: McpResourceContext): McpResourceDefi
                 if (parsed.username || parsed.password) {
                   parsed.username = parsed.username ? "[redacted]" : "";
                   parsed.password = parsed.password ? "[redacted]" : "";
-                  entry.url = parsed.toString();
                 }
+                // Redact sensitive query parameters that may carry auth tokens
+                const sensitiveParams = [
+                  "token",
+                  "api_key",
+                  "apikey",
+                  "key",
+                  "secret",
+                  "client_secret",
+                  "access_token",
+                  "auth",
+                  "password",
+                  "credential",
+                ];
+                for (const [param] of parsed.searchParams) {
+                  if (sensitiveParams.some((s) => param.toLowerCase().includes(s))) {
+                    parsed.searchParams.set(param, "[redacted]");
+                  }
+                }
+                entry.url = parsed.toString();
               } catch {
                 // Not a valid URL, leave as-is
               }
