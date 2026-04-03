@@ -23,6 +23,7 @@
   "interactive-runtime",
   "outbound-runtime",
   "infra-runtime",
+  "infra-sqlite",
   "runtime-config-snapshot",
   "runtime-group-policy",
   "ssrf-runtime",
