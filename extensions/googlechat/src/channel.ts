@@ -343,7 +343,11 @@ export const googlechatPlugin = createChatChannelPlugin({
     collectWarnings: collectGoogleChatSecurityWarnings,
   },
   threading: {
-    topLevelReplyToMode: "googlechat",
+    scopedAccountReplyToMode: {
+      resolveAccount: (cfg, accountId) => resolveGoogleChatAccount({ cfg, accountId }),
+      resolveReplyToMode: (account) => account.config.replyToMode,
+      fallback: "off",
+    },
   },
   outbound: {
     base: {
