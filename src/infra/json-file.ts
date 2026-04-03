@@ -13,6 +13,24 @@ function trySetSecureMode(pathname: string) {
   }
 }
 
+function trySyncDirectory(pathname: string) {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(path.dirname(pathname), "r");
+    fs.fsyncSync(fd);
+  } catch {
+    // best-effort; some platforms/filesystems do not support syncing directories.
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+}
+
 function resolveJsonWriteTarget(pathname: string): string {
   let stat: fs.Stats;
   try {
@@ -42,10 +60,20 @@ function renameJsonFileWithFallback(tmpPath: string, pathname: string) {
   }
 }
 
-export function loadJsonFile(pathname: string): unknown {
+function writeTempJsonFile(pathname: string, payload: string) {
+  const fd = fs.openSync(pathname, "w", JSON_FILE_MODE);
+  try {
+    fs.writeFileSync(fd, payload, "utf8");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+export function loadJsonFile<T = unknown>(pathname: string): T | undefined {
   try {
     const raw = fs.readFileSync(pathname, "utf8");
-    return JSON.parse(raw) as unknown;
+    return JSON.parse(raw) as T;
   } catch {
     return undefined;
   }
@@ -58,13 +86,11 @@ export function saveJsonFile(pathname: string, data: unknown) {
 
   fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: JSON_DIR_MODE });
   try {
-    fs.writeFileSync(tmpPath, payload, {
-      encoding: "utf8",
-      mode: JSON_FILE_MODE,
-    });
+    writeTempJsonFile(tmpPath, payload);
     trySetSecureMode(tmpPath);
     renameJsonFileWithFallback(tmpPath, targetPath);
     trySetSecureMode(targetPath);
+    trySyncDirectory(targetPath);
   } finally {
     try {
       fs.rmSync(tmpPath, { force: true });
