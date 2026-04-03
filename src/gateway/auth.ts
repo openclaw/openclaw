@@ -353,10 +353,25 @@ function authorizeTrustedProxy(params: {
     if (!trustedProxyConfig.unsafeAllowLoopbackProxies) {
       return { reason: "trusted_proxy_loopback_source" };
     }
-    // unsafeAllowLoopbackProxies is enabled; loopback requests are accepted.
-    // Note: x-forwarded-for and identity headers are client-controlled on direct
-    // localhost requests, enabling local privilege elevation attacks. Only safe if
-    // the host is fully controlled and no untrusted processes can run.
+    // unsafeAllowLoopbackProxies is enabled for same-host reverse proxies.
+    // However, enforce that loopback requests must have a forwarded client chain
+    // (x-forwarded-for) to prove they came through a proxy, not from a direct
+    // localhost process. This prevents local privilege escalation attacks where
+    // untrusted processes on the host could spoof identity headers.
+    const forwardedFor = headerValue(req.headers?.["x-forwarded-for"]);
+    if (!forwardedFor || forwardedFor.trim() === "") {
+      return { reason: "trusted_proxy_loopback_missing_forwarded_for" };
+    }
+    // Validate that the forwarded chain is non-empty and contains at least one
+    // entry. A direct localhost request spoofing headers will not have a proper
+    // forwarded-for chain from an actual reverse proxy.
+    const forwardedChain = forwardedFor
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    if (forwardedChain.length === 0) {
+      return { reason: "trusted_proxy_loopback_invalid_forwarded_chain" };
+    }
   }
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];

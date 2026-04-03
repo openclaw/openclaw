@@ -976,5 +976,110 @@ describe("trusted-proxy auth", () => {
       expect(res.ok).toBe(false);
       expect(res.reason).toBe("trusted_proxy_no_proxies_configured");
     });
+
+    it("rejects unsafe loopback proxy when x-forwarded-for is missing", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            unsafeAllowLoopbackProxies: true,
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+            // x-forwarded-for is missing — direct localhost process spoofing headers
+          },
+        } as never,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("trusted_proxy_loopback_missing_forwarded_for");
+    });
+
+    it("rejects unsafe loopback proxy when x-forwarded-for is empty", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            unsafeAllowLoopbackProxies: true,
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+            "x-forwarded-for": "  ",
+          },
+        } as never,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("trusted_proxy_loopback_missing_forwarded_for");
+    });
+
+    it("rejects unsafe loopback proxy when x-forwarded-for chain is empty", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            unsafeAllowLoopbackProxies: true,
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+            "x-forwarded-for": "  ,  , ",
+          },
+        } as never,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("trusted_proxy_loopback_invalid_forwarded_chain");
+    });
+
+    it("accepts unsafe loopback proxy when x-forwarded-for contains valid client IPs", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            unsafeAllowLoopbackProxies: true,
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+            "x-forwarded-for": "203.0.113.10, 10.0.0.1",
+          },
+        } as never,
+      });
+      expect(res.ok).toBe(true);
+      expect(res.method).toBe("trusted-proxy");
+      expect(res.user).toBe("nick@example.com");
+    });
   });
 });
