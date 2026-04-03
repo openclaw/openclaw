@@ -285,25 +285,28 @@ export function findLatestResetArchive(
 ): string | undefined {
   const prefix = `${sessionId}.jsonl.reset.`;
 
+  // Scan all dirs before deciding; pick the globally newest archive so that
+  // a more-recent file in the legacy dir is not missed when the primary dir
+  // also contains archives (e.g. after a store-path migration).
+  let latestTimestamp = -Infinity;
+  let latestPath: string | undefined;
+
   for (const dir of searchDirs) {
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
-      const archives = entries
-        .filter(
-          (d) =>
-            d.isFile() &&
-            d.name.startsWith(prefix) &&
-            // Validate the timestamp suffix so only well-formed archives are returned.
-            parseSessionArchiveTimestamp(d.name, "reset") != null,
-        )
-        .map((d) => d.name)
-        .toSorted(); // archive timestamps are ISO-derived and sort lexicographically
-      if (archives.length > 0) {
-        return path.join(dir, archives[archives.length - 1]);
+      for (const d of entries) {
+        if (!d.isFile() || !d.name.startsWith(prefix)) {
+          continue;
+        }
+        const ts = parseSessionArchiveTimestamp(d.name, "reset");
+        if (ts != null && ts > latestTimestamp) {
+          latestTimestamp = ts;
+          latestPath = path.join(dir, d.name);
+        }
       }
     } catch {
       // Skip unreadable dirs (missing legacy dir is the common case).
     }
   }
-  return undefined;
+  return latestPath;
 }
