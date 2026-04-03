@@ -150,10 +150,10 @@ function createLogWriters() {
   });
 
   return {
-    logLine: (text: string) => writer.writeLine(process.stdout, text),
-    errorLine: (text: string) => writer.writeLine(process.stderr, text),
+    logLine: (text: string) => writer.writeLineAsync(process.stdout, text),
+    errorLine: (text: string) => writer.writeLineAsync(process.stderr, text),
     emitJsonLine: (payload: Record<string, unknown>, toStdErr = false) =>
-      writer.write(toStdErr ? process.stderr : process.stdout, `${JSON.stringify(payload)}\n`),
+      writer.writeAsync(toStdErr ? process.stderr : process.stdout, `${JSON.stringify(payload)}\n`),
   };
 }
 
@@ -162,8 +162,8 @@ async function emitGatewayError(
   opts: LogsCliOptions,
   mode: "json" | "text",
   rich: boolean,
-  emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
-  errorLine: (text: string) => boolean,
+  emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => Promise<boolean>,
+  errorLine: (text: string) => Promise<boolean>,
 ) {
   const runtime = await loadLogsCliRuntime();
   const message = "Gateway not reachable. Is it running and accessible?";
@@ -173,7 +173,7 @@ async function emitGatewayError(
   const details = runtime.buildGatewayConnectionDetails({ url: opts.url });
   if (mode === "json") {
     if (
-      !emitJsonLine(
+      !(await emitJsonLine(
         {
           type: "error",
           message,
@@ -182,20 +182,20 @@ async function emitGatewayError(
           hint,
         },
         true,
-      )
+      ))
     ) {
       return;
     }
     return;
   }
 
-  if (!errorLine(colorize(rich, theme.error, message))) {
+  if (!(await errorLine(colorize(rich, theme.error, message)))) {
     return;
   }
-  if (!errorLine(details.message)) {
+  if (!(await errorLine(details.message))) {
     return;
   }
-  errorLine(colorize(rich, theme.muted, hint));
+  await errorLine(colorize(rich, theme.muted, hint));
 }
 
 export function registerLogsCli(program: Command) {
@@ -251,12 +251,12 @@ export function registerLogsCli(program: Command) {
       if (jsonMode) {
         if (first) {
           if (
-            !emitJsonLine({
+            !(await emitJsonLine({
               type: "meta",
               file: payload.file,
               cursor: payload.cursor,
               size: payload.size,
-            })
+            }))
           ) {
             return;
           }
@@ -264,31 +264,31 @@ export function registerLogsCli(program: Command) {
         for (const line of lines) {
           const parsed = parseLogLine(line);
           if (parsed) {
-            if (!emitJsonLine({ type: "log", ...parsed })) {
+            if (!(await emitJsonLine({ type: "log", ...parsed }))) {
               return;
             }
           } else {
-            if (!emitJsonLine({ type: "raw", raw: line })) {
+            if (!(await emitJsonLine({ type: "raw", raw: line }))) {
               return;
             }
           }
         }
         if (payload.truncated) {
           if (
-            !emitJsonLine({
+            !(await emitJsonLine({
               type: "notice",
               message: "Log tail truncated (increase --max-bytes).",
-            })
+            }))
           ) {
             return;
           }
         }
         if (payload.reset) {
           if (
-            !emitJsonLine({
+            !(await emitJsonLine({
               type: "notice",
               message: "Log cursor reset (file rotated).",
-            })
+            }))
           ) {
             return;
           }
@@ -296,30 +296,30 @@ export function registerLogsCli(program: Command) {
       } else {
         if (first && payload.file) {
           const prefix = pretty ? colorize(rich, theme.muted, "Log file:") : "Log file:";
-          if (!logLine(`${prefix} ${payload.file}`)) {
+          if (!(await logLine(`${prefix} ${payload.file}`))) {
             return;
           }
         }
         for (const line of lines) {
           if (
-            !logLine(
+            !(await logLine(
               formatLogLine(line, {
                 pretty,
                 rich,
                 localTime,
               }),
-            )
+            ))
           ) {
             return;
           }
         }
         if (payload.truncated) {
-          if (!errorLine("Log tail truncated (increase --max-bytes).")) {
+          if (!(await errorLine("Log tail truncated (increase --max-bytes)."))) {
             return;
           }
         }
         if (payload.reset) {
-          if (!errorLine("Log cursor reset (file rotated).")) {
+          if (!(await errorLine("Log cursor reset (file rotated)."))) {
             return;
           }
         }
