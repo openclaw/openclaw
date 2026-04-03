@@ -9208,6 +9208,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 sessionKey: {
                   type: "string",
                 },
+                systemPrompt: {
+                  type: "string",
+                },
                 messageTemplate: {
                   type: "string",
                 },
@@ -14558,6 +14561,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Explicit session key override for mapping-delivered messages to control thread continuity. Use stable scoped keys so repeated events correlate without leaking into unrelated conversations.",
       tags: ["security", "storage"],
       sensitive: true,
+    },
+    "hooks.mappings[].systemPrompt": {
+      label: "Hook Mapping System Prompt",
+      help: "Literal extra system instructions for hook agent runs; `{{...}}` is not expanded from the webhook payload. Put dynamic payload text in messageTemplate so it stays on the user-message / external-content path.",
+      tags: ["advanced"],
     },
     "hooks.mappings[].messageTemplate": {
       label: "Hook Mapping Message Template",
