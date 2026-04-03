@@ -181,6 +181,14 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
     provider: "default",
     id: resolvedEnvId,
   });
+  if (entry.id.startsWith("models.providers.")) {
+    setPathCreateStrict(
+      config,
+      ["models", "providers", "sample", "baseUrl"],
+      "https://api.example/v1",
+    );
+    setPathCreateStrict(config, ["models", "providers", "sample", "models"], []);
+  }
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");
   }
@@ -254,6 +262,25 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
+  }
+  if (entry.id === "models.providers.*.request.auth.token") {
+    setPathCreateStrict(
+      config,
+      ["models", "providers", "sample", "request", "auth", "mode"],
+      "authorization-bearer",
+    );
+  }
+  if (entry.id === "models.providers.*.request.auth.value") {
+    setPathCreateStrict(
+      config,
+      ["models", "providers", "sample", "request", "auth", "mode"],
+      "header",
+    );
+    setPathCreateStrict(
+      config,
+      ["models", "providers", "sample", "request", "auth", "headerName"],
+      "x-api-key",
+    );
   }
   return config;
 }
