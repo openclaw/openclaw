@@ -35,28 +35,6 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
   }
 }
 
-type DoctorFlowDeps = {
-  noteModule: typeof import("../terminal/note.js");
-  loadAndMaybeMigrateDoctorConfig: typeof import("./doctor-config-flow.js").loadAndMaybeMigrateDoctorConfig;
-};
-
-let cachedDoctorFlowDeps: Promise<DoctorFlowDeps> | undefined;
-
-async function loadFreshDoctorFlowDeps(): Promise<DoctorFlowDeps> {
-  if (!cachedDoctorFlowDeps) {
-    vi.resetModules();
-    cachedDoctorFlowDeps = (async () => {
-      const freshNoteModule = await import("../terminal/note.js");
-      const doctorFlowModule = await import("./doctor-config-flow.js");
-      return {
-        noteModule: freshNoteModule,
-        loadAndMaybeMigrateDoctorConfig: doctorFlowModule.loadAndMaybeMigrateDoctorConfig,
-      };
-    })();
-  }
-  return await cachedDoctorFlowDeps;
-}
-
 type DiscordGuildRule = {
   users: string[];
   roles: string[];
@@ -675,9 +653,7 @@ describe("doctor config flow", () => {
   });
 
   it("sanitizes config-derived doctor warnings and changes before logging", async () => {
-    const { noteModule: freshNoteModule, loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh } =
-      await loadFreshDoctorFlowDeps();
-    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     try {
       await runDoctorConfigWithInput({
         repair: true,
@@ -710,7 +686,7 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadDoctorFlowFresh,
+        run: loadAndMaybeMigrateDoctorConfig,
       });
 
       const outputs = noteSpy.mock.calls
@@ -745,9 +721,7 @@ describe("doctor config flow", () => {
   });
 
   it("warns and continues when Telegram account inspection hits inactive SecretRef surfaces", async () => {
-    const { noteModule: freshNoteModule, loadAndMaybeMigrateDoctorConfig: loadDoctorFlowFresh } =
-      await loadFreshDoctorFlowDeps();
-    const noteSpy = vi.spyOn(freshNoteModule, "note").mockImplementation(() => {});
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     try {
@@ -771,7 +745,7 @@ describe("doctor config flow", () => {
             },
           },
         },
-        run: loadDoctorFlowFresh,
+        run: loadAndMaybeMigrateDoctorConfig,
       });
 
       const cfg = result.cfg as {
@@ -791,7 +765,7 @@ describe("doctor config flow", () => {
       expect(
         noteSpy.mock.calls.some((call) =>
           String(call[0]).includes(
-            "Telegram allowFrom contains @username entries, but no Telegram bot token is configured",
+            "Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path",
           ),
         ),
       ).toBe(true);
@@ -1178,6 +1152,39 @@ describe("doctor config flow", () => {
       model: "anthropic/claude-3-5-haiku-20241022",
       every: "30m",
     });
+  });
+
+  it("warns clearly about legacy config keys and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            String(message).includes("heartbeat:") &&
+            String(message).includes("agents.defaults.heartbeat"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
   });
 
   it("migrates top-level heartbeat visibility into channels.defaults.heartbeat on repair", async () => {

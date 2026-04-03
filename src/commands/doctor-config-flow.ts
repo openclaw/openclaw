@@ -51,7 +51,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   });
   ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
   if (legacyStep.issueLines.length > 0) {
-    note(legacyStep.issueLines.join("\n"), "Compatibility config keys detected");
+    note(legacyStep.issueLines.join("\n"), "Legacy config keys detected");
   }
   if (legacyStep.changeLines.length > 0) {
     note(legacyStep.changeLines.join("\n"), "Doctor changes");
