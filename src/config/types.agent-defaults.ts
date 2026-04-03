@@ -14,6 +14,8 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
+  /** Additional passthrough fields forwarded to the provider-level model definition (e.g. contextWindow, maxTokens). */
+  [key: string]: unknown;
 };
 
 export type AgentModelListConfig = {

@@ -53,6 +53,31 @@ const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
 
+/** Keys that are handled separately in agents.defaults.models and should not be forwarded to provider models. */
+const MODEL_DEFAULTS_KNOWN_KEYS = new Set(["alias", "params", "streaming"]);
+
+/**
+ * Extract passthrough overrides from an agents.defaults.models entry.
+ * Returns only the keys that are not handled by the known schema fields,
+ * so they can be merged into the provider-level model definition.
+ */
+function extractModelDefaultsOverrides(
+  entry: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!entry || typeof entry !== "object") {
+    return undefined;
+  }
+  const overrides: Record<string, unknown> = {};
+  let hasOverrides = false;
+  for (const [key, value] of Object.entries(entry)) {
+    if (!MODEL_DEFAULTS_KNOWN_KEYS.has(key) && value !== undefined) {
+      overrides[key] = value;
+      hasOverrides = true;
+    }
+  }
+  return hasOverrides ? overrides : undefined;
+}
+
 function resolveDefaultProviderApi(
   providerId: string,
   providerApi: ModelDefinitionConfig["api"] | undefined,
@@ -253,10 +278,25 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
         mutated = true;
         nextProvider = { ...nextProvider, api: providerApi };
       }
+      // Build lookup for passthrough overrides from agents.defaults.models.
+      const modelDefaultsEntries = nextCfg.agents?.defaults?.models;
       let providerMutated = false;
       const nextModels = models.map((model) => {
-        const raw = model as ModelDefinitionLike;
+        let raw = model as ModelDefinitionLike;
+
+        // Merge passthrough fields from agents.defaults.models (e.g. contextWindow, maxTokens).
         let modelMutated = false;
+        if (modelDefaultsEntries) {
+          const modelRef = `${providerId}/${raw.id}`;
+          const defaultsEntry = modelDefaultsEntries[modelRef] as
+            | Record<string, unknown>
+            | undefined;
+          const overrides = extractModelDefaultsOverrides(defaultsEntry);
+          if (overrides) {
+            raw = { ...raw, ...overrides } as ModelDefinitionLike;
+            modelMutated = true;
+          }
+        }
 
         const reasoning = typeof raw.reasoning === "boolean" ? raw.reasoning : false;
         if (raw.reasoning !== reasoning) {

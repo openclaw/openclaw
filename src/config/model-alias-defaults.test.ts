@@ -186,4 +186,167 @@ describe("applyModelDefaults", () => {
     const model = next.models?.providers?.myproxy?.models?.[0];
     expect(model?.api).toBe("openai-completions");
   });
+
+  it("merges contextWindow from agents.defaults.models passthrough fields", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "myproxy/gpt-5.2": { contextWindow: 1_000_000 },
+          },
+        },
+      },
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            models: [
+              {
+                id: "gpt-5.2",
+                name: "GPT-5.2",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(1_000_000);
+    expect(model?.maxTokens).toBe(8192);
+  });
+
+  it("merges maxTokens from agents.defaults.models passthrough fields", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "myproxy/gpt-5.2": { maxTokens: 100_000 },
+          },
+        },
+      },
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            models: [
+              {
+                id: "gpt-5.2",
+                name: "GPT-5.2",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.maxTokens).toBe(100_000);
+  });
+
+  it("does not forward alias/params/streaming to provider models", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "myproxy/gpt-5.2": {
+              alias: "my-model",
+              params: { temperature: 0.5 },
+              streaming: false,
+              contextWindow: 500_000,
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            models: [
+              {
+                id: "gpt-5.2",
+                name: "GPT-5.2",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0] as Record<string, unknown>;
+
+    // contextWindow should be merged
+    expect(model?.contextWindow).toBe(500_000);
+    // alias/params/streaming should NOT appear in the provider model
+    expect(model?.alias).toBeUndefined();
+    expect(model?.params).toBeUndefined();
+    expect(model?.streaming).toBeUndefined();
+  });
+
+  it("preserves novel passthrough fields even when no known defaults change", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "myproxy/gpt-5.2": { supportsStore: true },
+          },
+        },
+      },
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            models: [
+              {
+                id: "gpt-5.2",
+                name: "GPT-5.2",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0] as Record<string, unknown>;
+
+    // Novel field should be preserved in the provider model
+    expect(model?.supportsStore).toBe(true);
+    // Known fields should remain unchanged
+    expect(model?.contextWindow).toBe(200_000);
+    expect(model?.maxTokens).toBe(8192);
+  });
 });
