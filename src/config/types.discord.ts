@@ -1,6 +1,7 @@
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -140,9 +141,9 @@ export type DiscordVoiceConfig = {
 };
 
 export type DiscordExecApprovalConfig = {
-  /** Enable exec approval forwarding to Discord DMs. Default: false. */
-  enabled?: boolean;
-  /** Discord user IDs to receive approval prompts. Required if enabled. */
+  /** Enable mode for Discord exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
+  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
+  /** Discord user IDs to receive approval prompts. Optional: falls back to commands.ownerAllowFrom when possible. */
   approvers?: string[];
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
@@ -152,7 +153,7 @@ export type DiscordExecApprovalConfig = {
   cleanupAfterResolve?: boolean;
   /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
    *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
-   *  are only usable by configured approvers; other users receive an ephemeral denial. */
+   *  are only usable by resolved approvers; other users receive an ephemeral denial. */
   target?: "dm" | "channel" | "both";
 };
 
@@ -249,6 +250,8 @@ export type DiscordAccountConfig = {
    * - "allowlist": only allow channels present in discord.guilds.*.channels
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */

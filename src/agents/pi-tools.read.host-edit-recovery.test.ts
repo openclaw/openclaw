@@ -186,6 +186,38 @@ describe("edit tool recovery hardening", () => {
     });
   });
 
+  it("recovers multi-edit payloads after a post-write throw", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    await fs.writeFile(filePath, "alpha beta gamma delta\n", "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        await fs.writeFile(filePath, "ALPHA beta gamma DELTA\n", "utf-8");
+        throw new Error("Simulated post-write failure (e.g. generateDiffString)");
+      },
+    });
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "alpha", newText: "ALPHA" },
+          { oldText: "delta", newText: "DELTA" },
+        ],
+      },
+      undefined,
+    );
+
+    expect(result).toMatchObject({ isError: false });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: `Successfully replaced 2 block(s) in ${filePath}.`,
+    });
+  });
+
   it("applies the same recovery path to sandboxed edit tools", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");

@@ -12,7 +12,6 @@ import {
 } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
-import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
@@ -26,6 +25,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
+import { withProgress } from "../progress.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
@@ -162,6 +162,23 @@ function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): Gate
   return resolved;
 }
 
+function isGatewayLockError(err: unknown): err is GatewayLockError {
+  return (
+    err instanceof GatewayLockError ||
+    (!!err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
+  );
+}
+
+function isHealthyGatewayLockError(err: unknown): boolean {
+  if (!isGatewayLockError(err) || typeof err.message !== "string") {
+    return false;
+  }
+  return (
+    err.message.includes("gateway already running") ||
+    err.message.includes("another gateway instance is already listening")
+  );
+}
+
 async function runGatewayCommand(opts: GatewayRunOpts) {
   const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
@@ -171,7 +188,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
 
-  setConsoleTimestampPrefix(true);
   setVerbose(Boolean(opts.verbose));
   if (opts.cliBackendLogs || opts.claudeCliLogs) {
     setConsoleSubsystemFilter(["agent/cli-backend"]);
@@ -199,10 +215,21 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     process.env.OPENCLAW_RAW_STREAM_PATH = rawStreamPath;
   }
 
+  // The heaviest part of gateway startup is loading the server module tree
+  // (channels, plugins, HTTP stack, etc.). Show a spinner so the user sees
+  // progress instead of a silent 15-20 s pause (especially on Windows/NTFS).
+  const { startGatewayServer } = await withProgress(
+    { label: "Loading gateway modules…", indeterminate: true },
+    async () => import("../../gateway/server.js"),
+  );
+
+  setConsoleTimestampPrefix(true);
+
   if (devMode) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
   }
 
+  gatewayLog.info("loading configuration…");
   const cfg = loadConfig();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
@@ -316,11 +343,17 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
   const tokenRaw = toOptionString(opts.token);
 
+  gatewayLog.info("resolving authentication…");
   const snapshot = await readConfigFileSnapshot().catch(() => null);
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
   const effectiveCfg = snapshot?.valid ? snapshot.config : cfg;
-  const mode = effectiveCfg.gateway?.mode;
+  // Default to "local" when gateway.mode is unset. Prior to v2026.3.24 the
+  // gateway started without an explicit mode; the guard added in 3.24
+  // regressed startup on Windows (and other platforms) when the config file
+  // exists but doesn't contain gateway.mode — e.g. after `openclaw onboard`
+  // writes a minimal config. (#54801)
+  const mode = effectiveCfg.gateway?.mode ?? "local";
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
       defaultRuntime.error(
@@ -424,6 +457,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         }
       : undefined;
 
+  gatewayLog.info("starting gateway…");
   const startLoop = async () =>
     await runGatewayLoop({
       runtime: defaultRuntime,
@@ -457,10 +491,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       }
     }
   } catch (err) {
-    if (
-      err instanceof GatewayLockError ||
-      (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
-    ) {
+    if (isGatewayLockError(err)) {
       const errMessage = describeUnknownError(err);
       defaultRuntime.error(
         `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
@@ -476,7 +507,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         // ignore diagnostics failures
       }
       await maybeExplainGatewayServiceStop();
-      defaultRuntime.exit(1);
+      defaultRuntime.exit(isHealthyGatewayLockError(err) ? 0 : 1);
       return;
     }
     defaultRuntime.error(`Gateway failed to start: ${String(err)}`);

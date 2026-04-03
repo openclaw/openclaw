@@ -22,7 +22,7 @@ import {
   resolveBrowserConfig,
   resolveBrowserControlAuth,
   resolveProfile,
-} from "../plugin-sdk/browser-runtime.js";
+} from "../plugin-sdk/browser-config.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   formatPermissionDetail,
@@ -945,7 +945,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
         {
           id: DEFAULT_AGENT_ID,
           security: cfg.tools?.exec?.security ?? "deny",
-          host: cfg.tools?.exec?.host ?? "sandbox",
+          host: cfg.tools?.exec?.host ?? "auto",
         },
         ...agents
           .filter(
@@ -955,7 +955,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
           .map((entry) => ({
             id: entry.id,
             security: entry.tools?.exec?.security ?? cfg.tools?.exec?.security ?? "deny",
-            host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "sandbox",
+            host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "auto",
           })),
       ].map((entry) => [entry.id, entry] as const),
     ).values(),

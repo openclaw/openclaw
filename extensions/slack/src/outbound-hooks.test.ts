@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
@@ -73,11 +73,13 @@ const expectSlackSendCalledWith = (
 };
 
 describe("slack outbound hook wiring", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ slackOutbound } = await import("./outbound-adapter.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     sendMessageSlackMock.mockResolvedValue({ messageId: "1234.5678", channelId: "C123" });
-    ({ slackOutbound } = await import("./outbound-adapter.js"));
   });
 
   afterEach(() => {

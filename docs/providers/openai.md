@@ -159,11 +159,11 @@ OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
 }
 ```
 
-### OpenAI priority processing
+### OpenAI and Codex priority processing
 
 OpenAI's API exposes priority processing via `service_tier=priority`. In
-OpenClaw, set `agents.defaults.models["openai/<model>"].params.serviceTier` to
-pass that field through on direct `openai/*` Responses requests.
+OpenClaw, set `agents.defaults.models["<provider>/<model>"].params.serviceTier`
+to pass that field through on native OpenAI/Codex Responses endpoints.
 
 ```json5
 {
@@ -171,6 +171,11 @@ pass that field through on direct `openai/*` Responses requests.
     defaults: {
       models: {
         "openai/gpt-5.4": {
+          params: {
+            serviceTier: "priority",
+          },
+        },
+        "openai-codex/gpt-5.4": {
           params: {
             serviceTier: "priority",
           },
@@ -183,6 +188,16 @@ pass that field through on direct `openai/*` Responses requests.
 
 Supported values are `auto`, `default`, `flex`, and `priority`.
 
+OpenClaw forwards `params.serviceTier` to both direct `openai/*` Responses
+requests and `openai-codex/*` Codex Responses requests when those models point
+at the native OpenAI/Codex endpoints.
+
+Important behavior:
+
+- direct `openai/*` must target `api.openai.com`
+- `openai-codex/*` must target `chatgpt.com/backend-api`
+- if you route either provider through another base URL or proxy, OpenClaw leaves `service_tier` untouched
+
 ### OpenAI fast mode
 
 OpenClaw exposes a shared fast-mode toggle for both `openai/*` and
@@ -191,11 +206,12 @@ OpenClaw exposes a shared fast-mode toggle for both `openai/*` and
 - Chat/UI: `/fast status|on|off`
 - Config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
 
-When fast mode is enabled, OpenClaw applies a low-latency OpenAI profile:
+When fast mode is enabled, OpenClaw maps it to OpenAI priority processing:
 
-- `reasoning.effort = "low"` when the payload does not already specify reasoning
-- `text.verbosity = "low"` when the payload does not already specify verbosity
-- `service_tier = "priority"` for direct `openai/*` Responses calls to `api.openai.com`
+- direct `openai/*` Responses calls to `api.openai.com` send `service_tier = "priority"`
+- `openai-codex/*` Responses calls to `chatgpt.com/backend-api` also send `service_tier = "priority"`
+- existing payload `service_tier` values are preserved
+- fast mode does not rewrite `reasoning` or `text.verbosity`
 
 Example:
 

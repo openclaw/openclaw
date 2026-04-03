@@ -473,7 +473,8 @@ describe("gateway agent handler", () => {
       runId: "run-old",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
       requesterDisplayKey: "main",
       task: "initial task",
       cleanup: "keep" as const,
@@ -726,6 +727,48 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
+  it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    const respond = vi.fn();
+    const logInfo = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "best effort delivery fallback",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        bestEffortDeliver: true,
+        idempotencyKey: "test-best-effort-delivery-fallback",
+      },
+      {
+        reqId: "best-effort-delivery-fallback",
+        respond,
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: logInfo, error: vi.fn() },
+          broadcastToConnIds: vi.fn(),
+          getSessionEventSubscriberConnIds: () => new Set(),
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const accepted = respond.mock.calls.find(
+      (call: unknown[]) =>
+        call[0] === true && (call[1] as Record<string, unknown>)?.status === "accepted",
+    );
+    expect(accepted).toBeDefined();
+    const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
+    expect(rejected).toBeUndefined();
+    expect(logInfo).toHaveBeenCalledTimes(1);
+    expect(logInfo).toHaveBeenCalledWith(
+      expect.stringContaining("agent delivery downgraded to session-only (bestEffortDeliver)"),
+    );
+  });
+
   it("rejects public spawned-run metadata fields", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
@@ -846,7 +889,6 @@ describe("gateway agent handler", () => {
       );
 
       expect(findTaskByRunId("task-registry-agent-run")).toMatchObject({
-        source: "background_cli",
         runtime: "cli",
         childSessionKey: "agent:main:main",
         status: "running",

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { collectDockerFlagValues } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
+import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 type SpawnCall = {
   command: string;
@@ -183,12 +184,14 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       workspaceAccess: oldCfg.workspaceAccess,
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     });
     const newHash = computeSandboxConfigHash({
       docker: newCfg.docker,
       workspaceAccess: newCfg.workspaceAccess,
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     });
     expect(newHash).not.toBe(oldHash);
 
@@ -244,6 +247,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       workspaceAccess: cfg.workspaceAccess,
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     });
 
     spawnState.inspectRunning = false;
@@ -275,16 +279,16 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(createCall?.args).toContain(`openclaw.configHash=${expectedHash}`);
 
     const bindArgs = collectDockerFlagValues(createCall?.args ?? [], "-v");
-    const workspaceMountIdx = bindArgs.indexOf("/tmp/workspace:/workspace");
+    const workspaceMountIdx = bindArgs.indexOf("/tmp/workspace:/workspace:z");
     const customMountIdx = bindArgs.indexOf("/tmp/workspace-shared/USER.md:/workspace/USER.md:ro");
     expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
     expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
   });
 
   it.each([
-    { workspaceAccess: "rw" as const, expectedMainMount: "/tmp/workspace:/workspace" },
-    { workspaceAccess: "ro" as const, expectedMainMount: "/tmp/workspace:/workspace:ro" },
-    { workspaceAccess: "none" as const, expectedMainMount: "/tmp/workspace:/workspace:ro" },
+    { workspaceAccess: "rw" as const, expectedMainMount: "/tmp/workspace:/workspace:z" },
+    { workspaceAccess: "ro" as const, expectedMainMount: "/tmp/workspace:/workspace:ro,z" },
+    { workspaceAccess: "none" as const, expectedMainMount: "/tmp/workspace:/workspace:ro,z" },
   ])(
     "uses expected main mount permissions when workspaceAccess=$workspaceAccess",
     async ({ workspaceAccess, expectedMainMount }) => {
@@ -312,4 +316,28 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       expect(bindArgs).toContain(expectedMainMount);
     },
   );
+
+  it("stamps the mount format version label on created containers", async () => {
+    const workspaceDir = "/tmp/workspace";
+    const cfg = createSandboxConfig([]);
+
+    spawnState.inspectRunning = false;
+    spawnState.labelHash = "";
+    registryMocks.readRegistry.mockResolvedValue({ entries: [] });
+
+    await ensureSandboxContainer({
+      sessionKey: "agent:main:session-1",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg,
+    });
+
+    const createCall = spawnState.calls.find(
+      (call) => call.command === "docker" && call.args[0] === "create",
+    );
+    expect(createCall).toBeDefined();
+    expect(createCall?.args).toContain(
+      `openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`,
+    );
+  });
 });

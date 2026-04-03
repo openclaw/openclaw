@@ -22,6 +22,15 @@ afterAll(async () => {
 async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
   return await startGatewayServer(port, {
     host: "127.0.0.1",
+    auth: { mode: "none" },
+    controlUiEnabled: false,
+    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? false,
+  });
+}
+
+async function startTokenServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
+  return await startGatewayServer(port, {
+    host: "127.0.0.1",
     auth: { mode: "token", token: "secret" },
     controlUiEnabled: false,
     openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? false,
@@ -31,7 +40,6 @@ async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?:
 async function getModels(pathname: string, headers?: Record<string, string>) {
   return await fetch(`http://127.0.0.1:${enabledPort}${pathname}`, {
     headers: {
-      authorization: "Bearer secret",
       ...READ_SCOPE_HEADER,
       ...headers,
     },
@@ -114,11 +122,30 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     const server = await startServer(port, { openAiChatCompletionsEnabled: false });
     try {
       const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
-        headers: { authorization: "Bearer secret" },
+        headers: {},
       });
       expect(res.status).toBe(404);
     } finally {
       await server.close({ reason: "models disabled test done" });
+    }
+  });
+
+  it("treats shared-secret bearer auth as full compat operator access", async () => {
+    const port = await getFreePort();
+    const server = await startTokenServer(port, { openAiChatCompletionsEnabled: true });
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        headers: {
+          authorization: "Bearer secret",
+          "x-openclaw-scopes": "operator.approvals",
+        },
+      });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { object?: string; data?: Array<{ id?: string }> };
+      expect(json.object).toBe("list");
+      expect(json.data?.map((entry) => entry.id)).toContain("openclaw/default");
+    } finally {
+      await server.close({ reason: "models token auth compat test done" });
     }
   });
 });

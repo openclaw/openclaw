@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime-api.js";
 
 const verificationMocks = vi.hoisted(() => ({
@@ -11,6 +11,7 @@ vi.mock("./matrix/actions/verification.js", () => ({
 
 import { matrixPlugin } from "./channel.js";
 import { matrixSetupAdapter } from "./setup-core.js";
+import { matrixSetupWizard } from "./setup-surface.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -123,14 +124,21 @@ describe("matrix setup post-write bootstrap", () => {
     }
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js"));
+  });
+
+  beforeEach(() => {
     verificationMocks.bootstrapMatrixVerification.mockReset();
     log.mockClear();
     error.mockClear();
     exit.mockClear();
     installMatrixTestRuntime();
+  });
+
+  it("registers the Matrix guided setup wizard on the channel plugin", () => {
+    expect(matrixPlugin.setupWizard).toBe(matrixSetupWizard);
+    expect(matrixPlugin.setupWizard?.channel).toBe("matrix");
   });
 
   it("bootstraps verification for newly added encrypted accounts", async () => {
@@ -240,13 +248,14 @@ describe("matrix setup post-write bootstrap", () => {
     );
   });
 
-  it("clears allowPrivateNetwork when deleting the default Matrix account config", () => {
+  it("clears allowPrivateNetwork and proxy when deleting the default Matrix account config", () => {
     const updated = matrixPlugin.config.deleteAccount?.({
       cfg: {
         channels: {
           matrix: {
             homeserver: "http://localhost.localdomain:8008",
             allowPrivateNetwork: true,
+            proxy: "http://127.0.0.1:7890",
             accounts: {
               ops: {
                 enabled: true,

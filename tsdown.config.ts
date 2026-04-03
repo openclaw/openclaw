@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
-import { listBundledPluginBuildEntries } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import {
+  listBundledPluginBuildEntries,
+  listBundledPluginRuntimeDependencies,
+} from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -81,6 +84,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
 }
 
 const bundledPluginBuildEntries = listBundledPluginBuildEntries();
+const bundledPluginRuntimeDependencies = listBundledPluginRuntimeDependencies();
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -124,8 +128,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
-    "plugins/runtime/runtime-image-generation.runtime":
-      "src/plugins/runtime/runtime-image-generation.runtime.ts",
     "plugins/runtime/runtime-line.contract": "src/plugins/runtime/runtime-line.contract.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
@@ -134,6 +136,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
+    "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
   };
 }
 
@@ -161,7 +164,12 @@ export default defineConfig([
     // and bundled hooks in one graph so runtime singletons are emitted once.
     entry: buildUnifiedDistEntries(),
     deps: {
-      neverBundle: ["@lancedb/lancedb", "@matrix-org/matrix-sdk-crypto-nodejs", "matrix-js-sdk"],
+      neverBundle: [
+        "@lancedb/lancedb",
+        "@matrix-org/matrix-sdk-crypto-nodejs",
+        "matrix-js-sdk",
+        ...bundledPluginRuntimeDependencies,
+      ],
     },
   }),
 ]);

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
 
 type Sharp = typeof import("sharp");
@@ -11,6 +11,7 @@ export type ImageMetadata = {
 };
 
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
+export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
 
 export function buildImageResizeSideGrid(maxSide: number, sideStart: number): number[] {
   return [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
@@ -33,7 +34,181 @@ function prefersSips(): boolean {
 async function loadSharp(): Promise<(buffer: Buffer) => ReturnType<Sharp>> {
   const mod = (await import("sharp")) as unknown as { default?: Sharp };
   const sharp = mod.default ?? (mod as unknown as Sharp);
-  return (buffer) => sharp(buffer, { failOnError: false });
+  return (buffer) =>
+    sharp(buffer, {
+      failOnError: false,
+      limitInputPixels: MAX_IMAGE_INPUT_PIXELS,
+    });
+}
+
+function isPositiveImageDimension(value: number): boolean {
+  return Number.isInteger(value) && value > 0;
+}
+
+function buildImageMetadata(width: number, height: number): ImageMetadata | null {
+  if (!isPositiveImageDimension(width) || !isPositiveImageDimension(height)) {
+    return null;
+  }
+  return { width, height };
+}
+
+function readPngMetadata(buffer: Buffer): ImageMetadata | null {
+  if (buffer.length < 24) {
+    return null;
+  }
+  if (
+    buffer[0] !== 0x89 ||
+    buffer[1] !== 0x50 ||
+    buffer[2] !== 0x4e ||
+    buffer[3] !== 0x47 ||
+    buffer[4] !== 0x0d ||
+    buffer[5] !== 0x0a ||
+    buffer[6] !== 0x1a ||
+    buffer[7] !== 0x0a ||
+    buffer.toString("ascii", 12, 16) !== "IHDR"
+  ) {
+    return null;
+  }
+  return buildImageMetadata(buffer.readUInt32BE(16), buffer.readUInt32BE(20));
+}
+
+function readGifMetadata(buffer: Buffer): ImageMetadata | null {
+  if (buffer.length < 10) {
+    return null;
+  }
+  const signature = buffer.toString("ascii", 0, 6);
+  if (signature !== "GIF87a" && signature !== "GIF89a") {
+    return null;
+  }
+  return buildImageMetadata(buffer.readUInt16LE(6), buffer.readUInt16LE(8));
+}
+
+function readWebpMetadata(buffer: Buffer): ImageMetadata | null {
+  if (
+    buffer.length < 30 ||
+    buffer.toString("ascii", 0, 4) !== "RIFF" ||
+    buffer.toString("ascii", 8, 12) !== "WEBP"
+  ) {
+    return null;
+  }
+  const chunkType = buffer.toString("ascii", 12, 16);
+  if (chunkType === "VP8X") {
+    if (buffer.length < 30) {
+      return null;
+    }
+    return buildImageMetadata(1 + buffer.readUIntLE(24, 3), 1 + buffer.readUIntLE(27, 3));
+  }
+  if (chunkType === "VP8 ") {
+    if (buffer.length < 30) {
+      return null;
+    }
+    return buildImageMetadata(buffer.readUInt16LE(26) & 0x3fff, buffer.readUInt16LE(28) & 0x3fff);
+  }
+  if (chunkType === "VP8L") {
+    if (buffer.length < 25 || buffer[20] !== 0x2f) {
+      return null;
+    }
+    const bits = buffer[21] | (buffer[22] << 8) | (buffer[23] << 16) | (buffer[24] << 24);
+    return buildImageMetadata((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1);
+  }
+  return null;
+}
+
+function readJpegMetadata(buffer: Buffer): ImageMetadata | null {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+    return null;
+  }
+
+  let offset = 2;
+  while (offset + 8 < buffer.length) {
+    while (offset < buffer.length && buffer[offset] === 0xff) {
+      offset++;
+    }
+    if (offset >= buffer.length) {
+      return null;
+    }
+
+    const marker = buffer[offset];
+    offset++;
+    if (marker === 0xd8 || marker === 0xd9) {
+      continue;
+    }
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      continue;
+    }
+    if (offset + 1 >= buffer.length) {
+      return null;
+    }
+
+    const segmentLength = buffer.readUInt16BE(offset);
+    if (segmentLength < 2 || offset + segmentLength > buffer.length) {
+      return null;
+    }
+
+    const isStartOfFrame =
+      marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (isStartOfFrame) {
+      if (segmentLength < 7 || offset + 6 >= buffer.length) {
+        return null;
+      }
+      return buildImageMetadata(buffer.readUInt16BE(offset + 5), buffer.readUInt16BE(offset + 3));
+    }
+
+    offset += segmentLength;
+  }
+
+  return null;
+}
+
+function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
+  return (
+    readPngMetadata(buffer) ??
+    readGifMetadata(buffer) ??
+    readWebpMetadata(buffer) ??
+    readJpegMetadata(buffer)
+  );
+}
+
+function countImagePixels(meta: ImageMetadata): number | null {
+  const pixels = meta.width * meta.height;
+  return Number.isSafeInteger(pixels) ? pixels : null;
+}
+
+function exceedsImagePixelLimit(meta: ImageMetadata): boolean {
+  return meta.width > Math.floor(MAX_IMAGE_INPUT_PIXELS / meta.height);
+}
+
+function createImagePixelLimitError(meta: ImageMetadata): Error {
+  const pixelCount = countImagePixels(meta);
+  const detail =
+    pixelCount === null
+      ? `${meta.width}x${meta.height}`
+      : `${meta.width}x${meta.height} (${pixelCount} pixels)`;
+  return new Error(
+    `Image dimensions exceed the ${MAX_IMAGE_INPUT_PIXELS.toLocaleString("en-US")} pixel input limit: ${detail}`,
+  );
+}
+
+function validateImagePixelLimit(meta: ImageMetadata): ImageMetadata {
+  if (exceedsImagePixelLimit(meta)) {
+    throw createImagePixelLimitError(meta);
+  }
+  return meta;
+}
+
+async function readImageMetadataForLimit(buffer: Buffer): Promise<ImageMetadata | null> {
+  return readImageMetadataFromHeader(buffer);
+}
+
+async function assertImagePixelLimit(buffer: Buffer): Promise<void> {
+  const meta = await readImageMetadataForLimit(buffer);
+  if (!meta) {
+    if (prefersSips()) {
+      throw new Error("Unable to determine image dimensions; refusing to process");
+    }
+    return;
+  }
+  validateImagePixelLimit(meta);
 }
 
 /**
@@ -134,7 +309,7 @@ function readJpegExifOrientation(buffer: Buffer): number | null {
 }
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-img-"));
+  const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-img-"));
   try {
     return await fn(dir);
   } finally {
@@ -215,6 +390,15 @@ async function sipsConvertToJpeg(buffer: Buffer): Promise<Buffer> {
 }
 
 export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
+  const metadataForLimit = await readImageMetadataForLimit(buffer).catch(() => null);
+  if (metadataForLimit) {
+    try {
+      return validateImagePixelLimit(metadataForLimit);
+    } catch {
+      return null;
+    }
+  }
+
   if (prefersSips()) {
     return await sipsMetadataFromBuffer(buffer).catch(() => null);
   }
@@ -230,7 +414,7 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
     if (width <= 0 || height <= 0) {
       return null;
     }
-    return { width, height };
+    return validateImagePixelLimit({ width, height });
   } catch {
     return null;
   }
@@ -288,6 +472,8 @@ async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promis
  * Falls back to original buffer if normalization fails.
  */
 export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> {
+  await assertImagePixelLimit(buffer);
+
   if (prefersSips()) {
     try {
       const orientation = readJpegExifOrientation(buffer);
@@ -316,6 +502,8 @@ export async function resizeToJpeg(params: {
   quality: number;
   withoutEnlargement?: boolean;
 }): Promise<Buffer> {
+  await assertImagePixelLimit(params.buffer);
+
   if (prefersSips()) {
     // Normalize EXIF orientation BEFORE resizing (sips resize doesn't auto-rotate)
     const normalized = await normalizeExifOrientationSips(params.buffer);
@@ -356,6 +544,8 @@ export async function resizeToJpeg(params: {
 }
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
+  await assertImagePixelLimit(buffer);
+
   if (prefersSips()) {
     return await sipsConvertToJpeg(buffer);
   }
@@ -368,6 +558,8 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
  * Returns true if the image has alpha, false otherwise.
  */
 export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
+  await assertImagePixelLimit(buffer);
+
   try {
     const sharp = await loadSharp();
     const meta = await sharp(buffer).metadata();
@@ -390,6 +582,8 @@ export async function resizeToPng(params: {
   compressionLevel?: number;
   withoutEnlargement?: boolean;
 }): Promise<Buffer> {
+  await assertImagePixelLimit(params.buffer);
+
   const sharp = await loadSharp();
   // Compression level 6 is a good balance (0=fastest, 9=smallest)
   const compressionLevel = params.compressionLevel ?? 6;

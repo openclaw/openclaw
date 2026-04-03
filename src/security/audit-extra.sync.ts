@@ -23,7 +23,7 @@ import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
-import { resolveBrowserConfig } from "../plugin-sdk/browser-runtime.js";
+import { resolveBrowserConfig } from "../plugin-sdk/browser-config.js";
 import { hasBundledWebSearchCredential } from "../plugins/bundled-web-search-registry.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
@@ -526,7 +526,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
-  const internalHooksEnabled = cfg.hooks?.internal?.enabled === true;
+  const internalHooksEnabled = cfg.hooks?.internal?.enabled !== false;
   const browserEnabled = cfg.browser?.enabled ?? true;
 
   const detail =

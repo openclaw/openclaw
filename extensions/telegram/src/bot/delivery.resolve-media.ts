@@ -32,8 +32,8 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
         // still enforcing resolved-IP checks for the default public host.
         allowedHostnames = [customHost];
       }
-    } catch {
-      // invalid URL; fall through to default
+    } catch (err) {
+      logVerbose(`telegram: invalid apiRoot URL "${apiRoot}": ${String(err)}`);
     }
   }
   return {
@@ -41,7 +41,7 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
     // enforcing SSRF checks on the resolved and redirected targets.
     hostnameAllowlist: hostnames,
     ...(allowedHostnames ? { allowedHostnames } : {}),
-    allowRfc2544BenchmarkRange: false,
+    allowRfc2544BenchmarkRange: true,
   };
 }
 
@@ -70,24 +70,39 @@ function isRetryableGetFileError(err: unknown): boolean {
   return true;
 }
 
-function resolveMediaFileRef(msg: TelegramContext["message"]) {
-  return (
-    msg.photo?.[msg.photo.length - 1] ??
-    msg.video ??
-    msg.video_note ??
-    msg.document ??
-    msg.audio ??
-    msg.voice
-  );
+interface MediaMetadata {
+  fileRef?:
+    | NonNullable<TelegramContext["message"]["photo"]>[number]
+    | TelegramContext["message"]["video"]
+    | TelegramContext["message"]["video_note"]
+    | TelegramContext["message"]["document"]
+    | TelegramContext["message"]["audio"]
+    | TelegramContext["message"]["voice"];
+  fileName?: string;
+  mimeType?: string;
 }
 
-function resolveTelegramFileName(msg: TelegramContext["message"]): string | undefined {
-  return (
-    msg.document?.file_name ??
-    msg.audio?.file_name ??
-    msg.video?.file_name ??
-    msg.animation?.file_name
-  );
+function resolveMediaMetadata(msg: TelegramContext["message"]): MediaMetadata {
+  return {
+    fileRef:
+      msg.photo?.[msg.photo.length - 1] ??
+      msg.video ??
+      msg.video_note ??
+      msg.document ??
+      msg.audio ??
+      msg.voice,
+    fileName:
+      msg.document?.file_name ??
+      msg.audio?.file_name ??
+      msg.video?.file_name ??
+      msg.animation?.file_name,
+    mimeType:
+      msg.audio?.mime_type ??
+      msg.voice?.mime_type ??
+      msg.video?.mime_type ??
+      msg.document?.mime_type ??
+      msg.animation?.mime_type,
+  };
 }
 
 async function resolveTelegramFileWithRetry(
@@ -152,10 +167,11 @@ async function downloadAndSaveTelegramFile(params: {
   transport: TelegramTransport;
   maxBytes: number;
   telegramFileName?: string;
+  mimeType?: string;
   apiRoot?: string;
 }) {
   if (path.isAbsolute(params.filePath)) {
-    return { path: params.filePath, contentType: undefined };
+    return { path: params.filePath, contentType: params.mimeType };
   }
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/file/bot${params.token}/${params.filePath}`;
@@ -302,7 +318,8 @@ export async function resolveMedia(
     return stickerResolved;
   }
 
-  const m = resolveMediaFileRef(msg);
+  const metadata = resolveMediaMetadata(msg);
+  const m = metadata.fileRef;
   if (!m?.file_id) {
     return null;
   }
@@ -319,7 +336,8 @@ export async function resolveMedia(
     token,
     transport: resolveRequiredTelegramTransport(transport),
     maxBytes,
-    telegramFileName: resolveTelegramFileName(msg),
+    telegramFileName: metadata.fileName,
+    mimeType: metadata.mimeType,
     apiRoot,
   });
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";

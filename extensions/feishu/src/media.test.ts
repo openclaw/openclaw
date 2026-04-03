@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -82,14 +82,16 @@ function mockResolvedFeishuAccount() {
 }
 
 describe("sendMediaFeishu msg_type routing", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({
       downloadImageFeishu,
       downloadMessageResourceFeishu,
       sanitizeFileNameForUpload,
       sendMediaFeishu,
     } = await import("./media.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     mockResolvedFeishuAccount();
 

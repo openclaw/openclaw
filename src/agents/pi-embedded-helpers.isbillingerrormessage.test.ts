@@ -548,6 +548,24 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     expect(classifyFailoverReasonFromHttpStatus(400, INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
   });
 
+  it("keeps HTTP 400 provider-specific rate limits out of the generic format bucket", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        400,
+        "ThrottlingException: Too many concurrent requests",
+      ),
+    ).toBe("rate_limit");
+  });
+
+  it("does not force HTTP 400 context-overflow payloads into format", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        400,
+        "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
+  });
+
   it("treats HTTP 499 as transient for structured errors", () => {
     expect(classifyFailoverReasonFromHttpStatus(499)).toBe("timeout");
     expect(classifyFailoverReasonFromHttpStatus(499, "499 Client Closed Request")).toBe("timeout");
@@ -599,6 +617,17 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("HTTP 410: authentication failed")).toBe("auth");
     expect(classifyFailoverReason("HTTP 410: insufficient credits")).toBe("billing");
   });
+
+  it("keeps raw HTTP 400 wrappers aligned with structured provider classification", () => {
+    expect(
+      classifyFailoverReason("HTTP 400: ThrottlingException: Too many concurrent requests"),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason(
+        "HTTP 400: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("isFailoverErrorMessage", () => {
@@ -624,6 +653,18 @@ describe("isFailoverErrorMessage", () => {
       "stop reason: error",
       "reason: abort",
       "reason: error",
+    ]);
+  });
+
+  it("matches AbortError / stream-abort messages as timeout (#58315)", () => {
+    expectTimeoutFailoverSamples([
+      "The operation was aborted",
+      "This operation was aborted",
+      "the operation was aborted",
+      "stream closed",
+      "stream was closed",
+      "stream aborted",
+      "stream was aborted",
     ]);
   });
 
@@ -914,6 +955,12 @@ describe("classifyFailoverReason", () => {
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"api_error","message":"Service temporarily unavailable"}}',
+      ),
+    ).toBe("timeout");
+    // Anthropic "unexpected error" variant (#57010)
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"An unexpected error occurred while processing the response"}}',
       ),
     ).toBe("timeout");
   });

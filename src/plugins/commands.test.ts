@@ -177,6 +177,32 @@ describe("registerPluginCommand", () => {
     ]);
   });
 
+  it("accepts Telegram native progress metadata on plugin commands", () => {
+    const result = registerVoiceCommandForTest({
+      telegramNativeProgressMessage: "Running voice command...",
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(matchPluginCommand("/voice")).toMatchObject({
+      command: expect.objectContaining({
+        telegramNativeProgressMessage: "Running voice command...",
+      }),
+    });
+  });
+
+  it("rejects empty Telegram native progress metadata", () => {
+    const result = registerVoiceCommandForTest({
+      telegramNativeProgressMessage: "   ",
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "telegramNativeProgressMessage cannot be empty",
+    });
+  });
+
   it("shares plugin commands across duplicate module instances", async () => {
     const first = await importCommandsModule(`first-${Date.now()}`);
     const second = await importCommandsModule(`second-${Date.now()}`);
@@ -321,52 +347,6 @@ describe("registerPluginCommand", () => {
       },
     },
     {
-      name: "resolves Telegram topic command bindings without a Telegram registry entry",
-      params: {
-        channel: "telegram",
-        from: "telegram:group:-100123",
-        to: "telegram:group:-100123:topic:77",
-        accountId: "default",
-      },
-      expected: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-100123",
-        threadId: 77,
-      },
-    },
-    {
-      name: "resolves Telegram native slash command bindings using the From peer",
-      params: {
-        channel: "telegram",
-        from: "telegram:group:-100123:topic:77",
-        to: "slash:12345",
-        accountId: "default",
-        messageThreadId: 77,
-      },
-      expected: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-100123",
-        threadId: 77,
-      },
-    },
-    {
-      name: "falls back to the parsed From threadId for Telegram slash commands when messageThreadId is missing",
-      params: {
-        channel: "telegram",
-        from: "telegram:group:-100123:topic:77",
-        to: "slash:12345",
-        accountId: "default",
-      },
-      expected: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-100123",
-        threadId: 77,
-      },
-    },
-    {
       name: "does not resolve binding conversations for unsupported command channels",
       params: {
         channel: "slack",
@@ -430,5 +410,41 @@ describe("registerPluginCommand", () => {
     });
 
     expectUnsupportedBindingApiResult(result);
+  });
+
+  it("passes host session identity through to the plugin command context", async () => {
+    let receivedCtx:
+      | {
+          sessionKey?: string;
+          sessionId?: string;
+        }
+      | undefined;
+    const handler = async (ctx: { sessionKey?: string; sessionId?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "sessioncheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "whatsapp",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      sessionKey: "agent:main:whatsapp:direct:123",
+      sessionId: "session-123",
+      commandBody: "/sessioncheck",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx).toMatchObject({
+      sessionKey: "agent:main:whatsapp:direct:123",
+      sessionId: "session-123",
+    });
   });
 });

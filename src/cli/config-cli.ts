@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/config.js";
-import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
@@ -15,7 +15,10 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
-import { validateConfigObjectRaw } from "../config/validation.js";
+import {
+  collectUnsupportedSecretRefPolicyIssues,
+  validateConfigObjectRaw,
+} from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -90,6 +93,7 @@ const CONFIG_SET_DESCRIPTION = [
   CONFIG_SET_EXAMPLE_PROVIDER,
   CONFIG_SET_EXAMPLE_BATCH,
 ].join("\n");
+const CONFIG_SET_POLICY_ERROR_MAX_ISSUES = 5;
 
 class ConfigSetDryRunValidationError extends Error {
   constructor(readonly result: ConfigSetDryRunResult) {
@@ -177,6 +181,17 @@ function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
 
 function formatDoctorHint(message: string): string {
   return `Run \`${formatCliCommand("openclaw doctor")}\` ${message}`;
+}
+
+function formatUnsupportedSecretRefPolicyFailureMessage(issues: string[]): string {
+  const lines = [
+    "Config policy validation failed: unsupported SecretRef usage was detected.",
+    ...issues.slice(0, CONFIG_SET_POLICY_ERROR_MAX_ISSUES).map((issue) => `- ${issue}`),
+  ];
+  if (issues.length > CONFIG_SET_POLICY_ERROR_MAX_ISSUES) {
+    lines.push(`- ... ${issues.length - CONFIG_SET_POLICY_ERROR_MAX_ISSUES} more`);
+  }
+  return lines.join("\n");
 }
 
 function validatePathSegments(path: PathSegment[]): void {
@@ -911,6 +926,23 @@ function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError
   }));
 }
 
+function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {
+  const deduped: ConfigSetDryRunError[] = [];
+  const seen = new Set<string>();
+  for (const error of errors) {
+    const key =
+      error.kind === "resolvability"
+        ? `${error.kind}\u0000${error.ref ?? ""}\u0000${error.message}`
+        : `${error.kind}\u0000${error.message}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(error);
+  }
+  return deduped;
+}
+
 function formatDryRunFailureMessage(params: {
   errors: ConfigSetDryRunError[];
   skippedExecRefs: number;
@@ -992,6 +1024,10 @@ export async function runConfigSet(opts: {
       operations,
     });
     const nextConfig = next as OpenClawConfig;
+    const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
+    const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
+      (line) => line.trim(),
+    );
 
     if (opts.cliOptions.dryRun) {
       const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
@@ -1008,6 +1044,14 @@ export async function runConfigSet(opts: {
         allowExecInDryRun: Boolean(opts.cliOptions.allowExec),
       });
       const errors: ConfigSetDryRunError[] = [];
+      if (!hasJsonMode && policyIssueLines.length > 0) {
+        errors.push(
+          ...policyIssueLines.map((message) => ({
+            kind: "schema" as const,
+            message,
+          })),
+        );
+      }
       if (hasJsonMode) {
         errors.push(...collectDryRunSchemaErrors(nextConfig));
       }
@@ -1025,28 +1069,29 @@ export async function runConfigSet(opts: {
           })),
         );
       }
+      const dedupedErrors = dedupeDryRunErrors(errors);
       const dryRunResult: ConfigSetDryRunResult = {
-        ok: errors.length === 0,
+        ok: dedupedErrors.length === 0,
         operations: operations.length,
         configPath: shortenHomePath(snapshot.path),
         inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
         checks: {
-          schema: hasJsonMode,
+          schema: hasJsonMode || policyIssueLines.length > 0,
           resolvability: hasJsonMode || hasBuilderMode,
           resolvabilityComplete:
             (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
         },
         refsChecked: selectedDryRunRefs.refsToResolve.length,
         skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
-        ...(errors.length > 0 ? { errors } : {}),
+        ...(dedupedErrors.length > 0 ? { errors: dedupedErrors } : {}),
       };
-      if (errors.length > 0) {
+      if (dedupedErrors.length > 0) {
         if (opts.cliOptions.json) {
           throw new ConfigSetDryRunValidationError(dryRunResult);
         }
         throw new Error(
           formatDryRunFailureMessage({
-            errors,
+            errors: dedupedErrors,
             skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
           }),
         );
@@ -1076,8 +1121,14 @@ export async function runConfigSet(opts: {
       }
       return;
     }
+    if (policyIssueLines.length > 0) {
+      throw new Error(formatUnsupportedSecretRefPolicyFailureMessage(policyIssueLines));
+    }
 
-    await writeConfigFile(next);
+    await replaceConfigFile({
+      nextConfig: next,
+      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+    });
     if (removedGatewayAuthPaths.length > 0) {
       runtime.log(
         info(
@@ -1155,7 +1206,11 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
       runtime.exit(1);
       return;
     }
-    await writeConfigFile(next, { unsetPaths: [parsedPath] });
+    await replaceConfigFile({
+      nextConfig: next,
+      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+      writeOptions: { unsetPaths: [parsedPath] },
+    });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {
     runtime.error(danger(String(err)));

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
 const state = vi.hoisted(() => ({
@@ -40,7 +40,6 @@ async function loadModule() {
 
 describe("live model switch", () => {
   beforeEach(() => {
-    vi.resetModules();
     state.abortEmbeddedPiRunMock.mockReset().mockReturnValue(false);
     state.requestEmbeddedRunModelSwitchMock.mockReset();
     state.consumeEmbeddedRunModelSwitchMock.mockReset();
@@ -50,11 +49,6 @@ describe("live model switch", () => {
     state.loadSessionStoreMock.mockReset().mockReturnValue({});
     state.resolveStorePathMock.mockReset().mockReturnValue("/tmp/session-store.json");
   });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
   it("resolves persisted session overrides ahead of agent defaults", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {
@@ -90,6 +84,34 @@ describe("live model switch", () => {
     });
   });
 
+  it("prefers persisted runtime model fields ahead of session overrides", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+  });
+
   it("queues a live switch only when an active run was aborted", async () => {
     state.abortEmbeddedPiRunMock.mockReturnValue(true);
 
@@ -122,6 +144,23 @@ describe("live model switch", () => {
         {
           provider: "openai",
           model: "gpt-5.4",
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not track persisted live selection when the run started on a transient model override", async () => {
+    const { shouldTrackPersistedLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      shouldTrackPersistedLiveSessionModelSelection(
+        {
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+        },
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
         },
       ),
     ).toBe(false);

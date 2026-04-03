@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadTestCatalog } from "../../scripts/test-planner/catalog.mjs";
 import {
   createExecutionArtifacts,
   createTempArtifactWriteStream,
@@ -12,7 +13,31 @@ import {
   buildExecutionPlan,
   explainExecutionTarget,
 } from "../../scripts/test-planner/planner.mjs";
+import {
+  loadChannelTimingManifest,
+  selectTimedHeavyFiles,
+} from "../../scripts/test-runner-manifest.mjs";
 import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
+
+const resolveTimedHeavyChannelFixture = () => {
+  const catalog = loadTestCatalog();
+  const timings = loadChannelTimingManifest();
+  const candidates = catalog.allKnownTestFiles.filter(
+    (file) =>
+      catalog.channelTestPrefixes.some((prefix) => file.startsWith(prefix)) &&
+      !catalog.channelIsolatedFileSet.has(file),
+  );
+  const [file] = selectTimedHeavyFiles({
+    candidates,
+    limit: 1,
+    minDurationMs: 12_000,
+    timings,
+  });
+  if (!file) {
+    throw new Error("No timed-heavy channel fixture found");
+  }
+  return file;
+};
 
 describe("test planner", () => {
   it("builds a capability-aware plan for mid-memory local runs", () => {
@@ -115,7 +140,104 @@ describe("test planner", () => {
     expect(plan.runtimeCapabilities.runtimeProfileName).toBe("ci-linux");
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
     expect(sharedExtensionBatches.length).toBeGreaterThan(1);
-    expect(plan.topLevelParallelLimit).toBe(2);
+    expect(plan.topLevelParallelLimit).toBe(3);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("auto-isolates timed-heavy extension suites in CI", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const hotspotUnit = plan.selectedUnits.find((unit) => unit.id === "extensions-cli-isolated");
+
+    expect(hotspotUnit).toBeTruthy();
+    expect(hotspotUnit?.isolate).toBe(true);
+    expect(hotspotUnit?.reasons).toContain("extensions-timed-heavy");
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("auto-isolates memory-heavy extension suites in CI", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const hotspotFile = bundledPluginFile("feishu", "src/bot.test.ts");
+    const hotspotUnit = plan.selectedUnits.find((unit) => unit.args.includes(hotspotFile));
+
+    expect(hotspotUnit).toBeTruthy();
+    expect(hotspotUnit?.isolate).toBe(true);
+    expect(hotspotUnit?.reasons).toContain("extensions-memory-heavy");
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("auto-isolates timed-heavy channel suites in CI", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["channels"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const timedHeavyFile = resolveTimedHeavyChannelFixture();
+    const hotspotUnit = plan.selectedUnits.find(
+      (unit) => unit.id === `channels-${path.basename(timedHeavyFile, ".test.ts")}-isolated`,
+    );
+
+    expect(hotspotUnit).toBeTruthy();
+    expect(hotspotUnit?.isolate).toBe(true);
+    expect(hotspotUnit?.reasons).toContain("channels-timed-heavy");
     artifacts.cleanupTempArtifacts();
   });
 
@@ -147,10 +269,94 @@ describe("test planner", () => {
     expect(plan.runtimeCapabilities.memoryBand).toBe("mid");
     expect(plan.runtimeCapabilities.loadBand).toBe("saturated");
     expect(plan.executionBudget.unitSharedWorkers).toBe(2);
+    expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
     expect(plan.executionBudget.topLevelParallelLimitIsolated).toBe(1);
     expect(plan.topLevelParallelLimit).toBe(4);
     expect(plan.deferredRunConcurrency).toBe(1);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("splits saturated high-memory local unit bursts into smaller shared batches", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        loadAverage: [18, 18, 18],
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedUnitBatches = plan.selectedUnits.filter(
+      (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+    );
+    const baselinePlan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        loadAverage: [1, 1, 1],
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+    const baselineSharedUnitBatches = baselinePlan.selectedUnits.filter(
+      (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+    );
+
+    expect(plan.runtimeCapabilities.memoryBand).toBe("high");
+    expect(plan.runtimeCapabilities.loadBand).toBe("saturated");
+    expect(sharedUnitBatches.length).toBeGreaterThan(baselineSharedUnitBatches.length);
+    expect(plan.executionBudget.unitIsolatedWorkers).toBe(1);
+    expect(plan.executionBudget.unitFastBatchTargetMs).toBe(22_500);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("keeps full local unit runs phased when isolated and heavy lanes are present", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedUnitBatches = plan.selectedUnits.filter(
+      (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+    );
+
+    expect(sharedUnitBatches.length).toBeGreaterThanOrEqual(4);
+    expect(plan.serialPrefixUnits.some((unit) => unit.serialPhase === "unit-fast")).toBe(true);
+    expect(plan.topLevelParallelLimit).toBe(3);
     artifacts.cleanupTempArtifacts();
   });
 
@@ -257,7 +463,7 @@ describe("test planner", () => {
     const explanation = explainExecutionTarget(
       {
         mode: "local",
-        fileFilters: ["src/infra/outbound/targets.channel-resolution.test.ts"],
+        fileFilters: ["src/infra/outbound/channel-resolution.test.ts"],
       },
       {
         env: {
@@ -274,7 +480,7 @@ describe("test planner", () => {
     const relativeExplanation = explainExecutionTarget(
       {
         mode: "local",
-        fileFilters: ["src/infra/outbound/targets.channel-resolution.test.ts"],
+        fileFilters: ["src/infra/outbound/channel-resolution.test.ts"],
       },
       {
         env: {
@@ -285,9 +491,7 @@ describe("test planner", () => {
     const absoluteExplanation = explainExecutionTarget(
       {
         mode: "local",
-        fileFilters: [
-          path.join(process.cwd(), "src/infra/outbound/targets.channel-resolution.test.ts"),
-        ],
+        fileFilters: [path.join(process.cwd(), "src/infra/outbound/channel-resolution.test.ts")],
       },
       {
         env: {
@@ -301,6 +505,46 @@ describe("test planner", () => {
     expect(absoluteExplanation.pool).toBe(relativeExplanation.pool);
     expect(absoluteExplanation.isolate).toBe(relativeExplanation.isolate);
     expect(absoluteExplanation.reasons).toEqual(relativeExplanation.reasons);
+  });
+
+  it("explains timed-heavy extension suites as isolated", () => {
+    const explanation = explainExecutionTarget(
+      {
+        mode: "ci",
+        fileFilters: ["extensions/matrix/src/cli.test.ts"],
+      },
+      {
+        env: {
+          CI: "true",
+          GITHUB_ACTIONS: "true",
+        },
+      },
+    );
+
+    expect(explanation.surface).toBe("extensions");
+    expect(explanation.isolate).toBe(true);
+    expect(explanation.reasons).toContain("extensions-timed-heavy");
+  });
+
+  it("explains timed-heavy channel suites as isolated", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+    };
+    const timedHeavyFile = resolveTimedHeavyChannelFixture();
+    const explanation = explainExecutionTarget(
+      {
+        mode: "ci",
+        fileFilters: [timedHeavyFile],
+      },
+      {
+        env,
+      },
+    );
+
+    expect(explanation.surface).toBe("channels");
+    expect(explanation.isolate).toBe(true);
+    expect(explanation.reasons).toContain("channels-timed-heavy");
   });
 
   it("does not leak default-plan shard assignments into targeted units with the same id", () => {
@@ -326,9 +570,55 @@ describe("test planner", () => {
 
     expect(targetedUnit).toBeTruthy();
     expect(defaultUnitWithSameId).toBeTruthy();
-    expect(defaultUnitWithSameId).not.toBe(targetedUnit);
-    expect(plan.topLevelSingleShardAssignments.get(targetedUnit)).toBeUndefined();
-    expect(plan.topLevelSingleShardAssignments.get(defaultUnitWithSameId)).toBeDefined();
+    const targetedUnitRecord = targetedUnit!;
+    const defaultUnitRecord = defaultUnitWithSameId as typeof targetedUnitRecord;
+
+    expect(defaultUnitRecord).not.toBe(targetedUnitRecord);
+    expect(plan.topLevelSingleShardAssignments.get(targetedUnitRecord)).toBeUndefined();
+    expect(plan.topLevelSingleShardAssignments.get(defaultUnitRecord)).toBeDefined();
+
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("pins the smallest CI include-file batches to fixed shards", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_TEST_SHARDS: "4",
+      OPENCLAW_TEST_SHARD_INDEX: "1",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        mode: "ci",
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const shardableUnits = plan.parallelUnits.filter(
+      (unit) =>
+        unit.id.startsWith("unit-fast-") &&
+        Array.isArray(unit.includeFiles) &&
+        unit.includeFiles.length > 0,
+    );
+    const smallestIncludeCount = Math.min(
+      ...shardableUnits.map((unit) => unit.includeFiles.length),
+    );
+    const smallestBatches = shardableUnits.filter(
+      (unit) => unit.includeFiles.length === smallestIncludeCount,
+    );
+
+    expect(smallestBatches.length).toBeGreaterThan(0);
+    expect(smallestBatches.every((unit) => typeof unit.fixedShardIndex === "number")).toBe(true);
+    expect(
+      smallestBatches.every((unit) => plan.topLevelSingleShardAssignments.get(unit) === undefined),
+    ).toBe(true);
 
     artifacts.cleanupTempArtifacts();
   });
@@ -363,11 +653,12 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
 
     await expect(
-      new Promise((resolve, reject) => {
+      new Promise<void>((resolve, reject) => {
         stream.on("error", reject);
-        stream.end("after cleanup\n", resolve);
+        stream.write("after cleanup\n");
+        stream.end(() => resolve());
       }),
-    ).resolves.toBeNull();
+    ).resolves.toBeUndefined();
     expect(fs.existsSync(artifactDir)).toBe(false);
   });
 
@@ -392,14 +683,24 @@ describe("test planner", () => {
 
     expect(manifest.jobs.buildArtifacts.enabled).toBe(true);
     expect(manifest.shardCounts.unit).toBe(4);
-    expect(manifest.shardCounts.channels).toBe(3);
+    expect(manifest.shardCounts.channels).toBe(4);
+    expect(manifest.shardCounts.extensionFast).toBeGreaterThanOrEqual(4);
+    expect(manifest.shardCounts.extensionFast).toBeLessThanOrEqual(6);
     expect(manifest.shardCounts.windows).toBe(6);
     expect(manifest.shardCounts.macosNode).toBe(9);
-    expect(manifest.shardCounts.bun).toBe(6);
-    expect(manifest.jobs.checks.matrix.include).toHaveLength(7);
+    expect(manifest.jobs.checks.matrix.include).toHaveLength(8);
     expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(6);
-    expect(manifest.jobs.bunChecks.matrix.include).toHaveLength(6);
     expect(manifest.jobs.macosNode.matrix.include).toHaveLength(9);
+    expect(manifest.jobs.checksFast.matrix.include).toHaveLength(
+      manifest.shardCounts.extensionFast + 1,
+    );
+    expect(
+      manifest.jobs.checksFast.matrix.include
+        .filter((entry) => entry.task === "extensions")
+        .every(
+          (entry) => typeof entry.shard_count === "number" && typeof entry.shard_index === "number",
+        ),
+    ).toBe(true);
     expect(manifest.jobs.macosSwift.enabled).toBe(true);
     expect(manifest.requiredCheckNames).toContain("macos-swift");
     expect(manifest.requiredCheckNames).not.toContain("macos-swift-lint");

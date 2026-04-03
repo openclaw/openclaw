@@ -43,7 +43,7 @@ export function parseTelegramTopicConversation(params: {
   parentConversationId?: string;
 }): ParsedTelegramTopicConversation | null {
   const conversation = params.conversationId.trim();
-  const directMatch = conversation.match(/^(-?\d+):topic:(\d+)$/);
+  const directMatch = conversation.match(/^(-?\d+):topic:(\d+)$/i);
   if (directMatch?.[1] && directMatch[2]) {
     const canonicalConversationId = buildTelegramTopicConversationId({
       chatId: directMatch[1],

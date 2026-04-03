@@ -39,6 +39,7 @@ const MATRIX_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "encryption",
   "allowlistOnly",
   "allowBots",
+  "blockStreaming",
   "replyToMode",
   "threadReplies",
   "textChunkLimit",
@@ -59,6 +60,9 @@ const MATRIX_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "actions",
 ]);
 const MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS = new Set([
+  // When named accounts already exist, only move auth/bootstrap fields into the
+  // promoted account. Delivery-policy fields stay at the top level so they
+  // remain shared inherited defaults for every account.
   "name",
   "homeserver",
   "userId",
@@ -208,6 +212,7 @@ export function applyMatrixSetupAccountConfig(params: {
       enabled: true,
       homeserver: null,
       allowPrivateNetwork: null,
+      proxy: null,
       userId: null,
       accessToken: null,
       password: null,
@@ -226,6 +231,7 @@ export function applyMatrixSetupAccountConfig(params: {
       typeof params.input.allowPrivateNetwork === "boolean"
         ? params.input.allowPrivateNetwork
         : undefined,
+    proxy: params.input.proxy?.trim() || undefined,
     userId: password && !userId ? null : userId,
     accessToken: accessToken || (password ? null : undefined),
     password: password || (accessToken ? null : undefined),

@@ -98,7 +98,7 @@ const whatsappChunkConfig: OpenClawConfig = {
   channels: { whatsapp: { textChunkLimit: 4000 } },
 };
 
-const expectedResolvedTmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+const expectedPreferredTmpRoot = resolvePreferredOpenClawTmpDir();
 
 type DeliverOutboundArgs = Parameters<DeliverModule["deliverOutboundPayloads"]>[0];
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
@@ -209,7 +209,6 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 
 describe("deliverOutboundPayloads", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
   });
 
@@ -491,7 +490,7 @@ describe("deliverOutboundPayloads", () => {
       "123",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
+        mediaLocalRoots: expect.arrayContaining([expectedPreferredTmpRoot]),
       }),
     );
   });
@@ -511,7 +510,7 @@ describe("deliverOutboundPayloads", () => {
       "+1555",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
+        mediaLocalRoots: expect.arrayContaining([expectedPreferredTmpRoot]),
       }),
     );
   });
@@ -574,7 +573,7 @@ describe("deliverOutboundPayloads", () => {
       "+1555",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
+        mediaLocalRoots: expect.arrayContaining([expectedPreferredTmpRoot]),
       }),
     );
   });
@@ -594,7 +593,7 @@ describe("deliverOutboundPayloads", () => {
       "imessage:+15551234567",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
+        mediaLocalRoots: expect.arrayContaining([expectedPreferredTmpRoot]),
       }),
     );
   });

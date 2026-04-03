@@ -1,9 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+
+let normalizeProviderSpecificConfig: typeof import("./models-config.providers.policy.js").normalizeProviderSpecificConfig;
+let resolveProviderConfigApiKeyResolver: typeof import("./models-config.providers.policy.js").resolveProviderConfigApiKeyResolver;
+
+beforeAll(async () => {
+  ({ normalizeProviderSpecificConfig, resolveProviderConfigApiKeyResolver } =
+    await import("./models-config.providers.policy.js"));
+});
 
 describe("models-config.providers.policy", () => {
-  it("resolves config apiKey markers through the local bedrock helper", async () => {
-    const { resolveProviderConfigApiKeyResolver } =
-      await import("./models-config.providers.policy.js");
+  it("resolves config apiKey markers through provider plugin hooks", async () => {
     const env = {
       AWS_PROFILE: "default",
     } as NodeJS.ProcessEnv;
@@ -11,5 +17,29 @@ describe("models-config.providers.policy", () => {
 
     expect(resolver).toBeTypeOf("function");
     expect(resolver?.(env)).toBe("AWS_PROFILE");
+  });
+
+  it("resolves anthropic-vertex ADC markers through provider plugin hooks", async () => {
+    const resolver = resolveProviderConfigApiKeyResolver("anthropic-vertex");
+
+    expect(resolver).toBeTypeOf("function");
+    expect(
+      resolver?.({
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+      } as NodeJS.ProcessEnv),
+    ).toBe("gcp-vertex-credentials");
+  });
+
+  it("normalizes Google provider config through provider plugin hooks", async () => {
+    expect(
+      normalizeProviderSpecificConfig("google", {
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        models: [],
+      }),
+    ).toMatchObject({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    });
   });
 });
