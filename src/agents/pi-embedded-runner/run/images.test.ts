@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import * as webMedia from "../../../media/web-media.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
@@ -266,6 +267,27 @@ describe("loadImageFromRef", () => {
     } finally {
       await fs.rm(sandboxParent, { recursive: true, force: true });
     }
+  });
+  it("should bypass loadWebMedia and use fs.readFile for media-uri refs", async () => {
+    const fsSpy = vi.spyOn(fs, "readFile").mockResolvedValue(Buffer.from("mock data"));
+    const loadWebMediaSpy = vi.spyOn(webMedia, "loadWebMedia");
+
+    const result = await loadImageFromRef(
+      {
+        raw: "media://inbound/test.jpg",
+        type: "media-uri",
+        resolved: "media://inbound/test.jpg",
+      },
+      "mock-workspace",
+      {},
+    );
+
+    expect(fsSpy).toHaveBeenCalled();
+    expect(loadWebMediaSpy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ type: "image", mimeType: "image/jpeg" });
+
+    fsSpy.mockRestore();
+    loadWebMediaSpy.mockRestore();
   });
 });
 
