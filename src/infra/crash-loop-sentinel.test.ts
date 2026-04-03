@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  CrashLoopAbortError,
   checkCrashLoopAndAbort,
   readCrashLoopSentinel,
   writeCrashLoopSentinel,
@@ -14,7 +15,7 @@ describe("crash loop sentinel", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-crash-loop-"));
     process.env.OPENCLAW_STATE_DIR = tempDir;
   });
@@ -26,32 +27,34 @@ describe("crash loop sentinel", () => {
   });
 
   it("single start — no abort", async () => {
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as never);
-    await checkCrashLoopAndAbort();
-    expect(exitSpy).not.toHaveBeenCalled();
+    await expect(checkCrashLoopAndAbort()).resolves.not.toThrow();
   });
 
   it("two starts in 60s — no abort", async () => {
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as never);
     await checkCrashLoopAndAbort();
-    await checkCrashLoopAndAbort();
-    expect(exitSpy).not.toHaveBeenCalled();
+    await expect(checkCrashLoopAndAbort()).resolves.not.toThrow();
   });
 
-  it("three starts in 60s — calls process.exit(78)", async () => {
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as never);
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((() => {}) as never);
+  it("three starts in 60s — throws CrashLoopAbortError with exitCode 78", async () => {
     await checkCrashLoopAndAbort();
     await checkCrashLoopAndAbort();
+    await expect(checkCrashLoopAndAbort()).rejects.toThrow(CrashLoopAbortError);
+    await expect(checkCrashLoopAndAbort()).rejects.toMatchObject({ exitCode: 78 });
+  });
+
+  it("three starts in 60s — error message contains crash loop detected", async () => {
     await checkCrashLoopAndAbort();
-    expect(exitSpy).toHaveBeenCalledWith(78);
-    expect(stderrSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway crash loop detected"),
-    );
+    await checkCrashLoopAndAbort();
+    try {
+      await checkCrashLoopAndAbort();
+      throw new Error("expected CrashLoopAbortError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CrashLoopAbortError);
+      expect((err as CrashLoopAbortError).message).toContain("Gateway crash loop detected");
+    }
   });
 
   it("three starts spread over >60s — no abort (old entries pruned)", async () => {
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as never);
     const now = Date.now();
     // Write two old entries (>60s ago) directly
     await writeCrashLoopSentinel({
@@ -59,21 +62,23 @@ describe("crash loop sentinel", () => {
       startupTimestamps: [now - 90_000, now - 75_000],
     });
     // Third start (now) — old entries are pruned, so count = 1
-    await checkCrashLoopAndAbort();
-    expect(exitSpy).not.toHaveBeenCalled();
+    await expect(checkCrashLoopAndAbort()).resolves.not.toThrow();
     // Verify only recent entry remains
     const data = await readCrashLoopSentinel();
     expect(data.startupTimestamps).toHaveLength(1);
   });
 
   it("diagnostic message includes pointer to openclaw doctor", async () => {
-    vi.spyOn(process, "exit").mockImplementation((() => {}) as never);
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((() => {}) as never);
     await checkCrashLoopAndAbort();
     await checkCrashLoopAndAbort();
-    await checkCrashLoopAndAbort();
-    const msg = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
-    expect(msg).toContain("openclaw doctor");
-    expect(msg).toContain("openclaw.json");
+    try {
+      await checkCrashLoopAndAbort();
+      throw new Error("expected CrashLoopAbortError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CrashLoopAbortError);
+      const msg = (err as CrashLoopAbortError).message;
+      expect(msg).toContain("openclaw doctor");
+      expect(msg).toContain("openclaw.json");
+    }
   });
 });

@@ -30,9 +30,18 @@ describe("buildSystemdUnit", () => {
       programArguments: ["/usr/bin/openclaw", "gateway", "run"],
       environment: {},
     });
-    expect(unit).toContain("StartLimitBurst=5");
-    expect(unit).toContain("StartLimitIntervalSec=60");
-    expect(unit).toContain("RestartPreventExitStatus=78");
+    // StartLimit* must be in [Unit], not [Service] — systemd ignores them in [Service]
+    const lines = unit.split("\n");
+    const unitSectionStart = lines.findIndex((l) => l === "[Unit]");
+    const serviceSectionStart = lines.findIndex((l) => l === "[Service]");
+    const unitLines = lines.slice(unitSectionStart, serviceSectionStart).join("\n");
+    const serviceLines = lines.slice(serviceSectionStart).join("\n");
+    expect(unitLines).toContain("StartLimitBurst=5");
+    expect(unitLines).toContain("StartLimitIntervalSec=60");
+    expect(serviceLines).not.toContain("StartLimitBurst");
+    expect(serviceLines).not.toContain("StartLimitIntervalSec");
+    // RestartPreventExitStatus belongs in [Service]
+    expect(serviceLines).toContain("RestartPreventExitStatus=78");
   });
 
   it("rejects environment values with line breaks", () => {

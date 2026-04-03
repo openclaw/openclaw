@@ -29,7 +29,7 @@ import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
 import { withProgress } from "../progress.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
-import { checkCrashLoopAndAbort } from "../../infra/crash-loop-sentinel.js";
+import { checkCrashLoopAndAbort, CrashLoopAbortError } from "../../infra/crash-loop-sentinel.js";
 import {
   describeUnknownError,
   extractGatewayMiskeys,
@@ -233,9 +233,18 @@ function isHealthyGatewayLockError(err: unknown): boolean {
 }
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
-  // Check for crash loop before any other startup work. Exits with code 78
-  // (EX_CONFIG) if 3+ starts in 60s are detected, preventing infinite restart loops.
-  await checkCrashLoopAndAbort();
+  // Check for crash loop before any other startup work. Throws CrashLoopAbortError
+  // (exitCode 78 / EX_CONFIG) if 3+ starts in 60s are detected, preventing infinite restart loops.
+  try {
+    await checkCrashLoopAndAbort();
+  } catch (err) {
+    if (err instanceof CrashLoopAbortError) {
+      process.stderr.write(err.message);
+      defaultRuntime.exit(err.exitCode);
+      return;
+    }
+    throw err;
+  }
 
   const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;

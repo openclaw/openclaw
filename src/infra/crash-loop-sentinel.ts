@@ -1,12 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveStateDir, resolveConfigPathCandidate } from "../config/paths.js";
 
 const CRASH_LOOP_SENTINEL_FILENAME = "crash-loop-sentinel.json";
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
-const EX_CONFIG = 78;
+export const EX_CONFIG = 78;
+
+/**
+ * Thrown when a crash loop is detected. Callers should catch this,
+ * log the message, and exit with the given exitCode.
+ */
+export class CrashLoopAbortError extends Error {
+  readonly exitCode = EX_CONFIG;
+  constructor(message: string) {
+    super(message);
+    this.name = "CrashLoopAbortError";
+  }
+}
 
 export type CrashLoopSentinelData = {
   version: 1;
@@ -46,8 +58,8 @@ export async function writeCrashLoopSentinel(
  * Checks whether the gateway is in a crash loop and aborts if so.
  *
  * Tracks startup timestamps in a sentinel file. If 3 or more starts occur
- * within 60 seconds, exits with code 78 (EX_CONFIG) after printing a
- * diagnostic message.
+ * within 60 seconds, throws CrashLoopAbortError (exitCode 78) after building
+ * a diagnostic message.
  *
  * This prevents infinite restart loops caused by config errors.
  */
@@ -65,15 +77,14 @@ export async function checkCrashLoopAndAbort(
   const count = recentTimestamps.length;
 
   if (count >= CRASH_LOOP_THRESHOLD) {
-    process.stderr.write(
+    const configPath = resolveConfigPathCandidate(env);
+    throw new CrashLoopAbortError(
       `\n⛔ Gateway crash loop detected: ${count} restarts in the last 60s.\n` +
         `   This usually means openclaw.json has a config error.\n` +
         `   Run: openclaw doctor\n` +
-        `   Or check: ~/.openclaw/openclaw.json\n` +
+        `   Or check: ${configPath}\n` +
         `   Stopping auto-restart to prevent resource exhaustion.\n`,
     );
-    process.exit(EX_CONFIG);
-    return;
   }
 
   // Save updated history
