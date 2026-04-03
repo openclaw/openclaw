@@ -36,6 +36,12 @@ import type { DeliveryMirror } from "./mirror.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
+import {
+  buildCredentialIndex,
+  isSecretSanitizationEnabled,
+  sanitizeSecrets,
+  type CredentialIndex,
+} from "./sanitize-secrets.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
@@ -337,6 +343,7 @@ function normalizePayloadsForChannelDelivery(
   payloads: ReplyPayload[],
   channel: Exclude<OutboundChannel, "none">,
   handler: ChannelHandler,
+  credIndex?: CredentialIndex,
 ): ReplyPayload[] {
   const normalizedPayloads: ReplyPayload[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
@@ -350,6 +357,16 @@ function normalizePayloadsForChannelDelivery(
           ...sanitizedPayload,
           text: sanitizeForPlainText(sanitizedPayload.text),
         };
+      }
+    }
+    // Replace secret values with reference handles before channel delivery.
+    // Applies to all channels — chat is not a secure transport regardless of recipient.
+    // Named credentials produce key(<name>); unknown high-entropy tokens produce [REDACTED:...].
+    // See https://github.com/openclaw/openclaw/issues/50718
+    if (credIndex && sanitizedPayload.text) {
+      const { text, redacted } = sanitizeSecrets(sanitizedPayload.text, credIndex);
+      if (redacted) {
+        sanitizedPayload = { ...sanitizedPayload, text };
       }
     }
     const normalizedPayload = handler.normalizePayload
@@ -650,7 +667,8 @@ async function deliverOutboundPayloadsCore(
       results.push(await handler.sendText(chunk, overrides));
     }
   };
-  const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, channel, handler);
+  const credIndex = isSecretSanitizationEnabled(cfg) ? buildCredentialIndex(cfg) : undefined;
+  const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, channel, handler, credIndex);
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
