@@ -881,7 +881,8 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
 
   for (const workspaceDir of workspaceDirs) {
     const workspacePath = path.resolve(workspaceDir);
-    const workspaceRealPath = await fs.realpath(workspacePath).catch(() => workspacePath);
+    const skillsDirPath = path.join(workspacePath, "skills");
+    const skillsDirRealPath = await fs.realpath(skillsDirPath).catch(() => skillsDirPath);
     const skillFilePaths = await listWorkspaceSkillMarkdownFiles(workspacePath);
 
     for (const skillFilePath of skillFilePaths) {
@@ -895,7 +896,7 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
       if (!skillRealPath) {
         continue;
       }
-      if (isPathInside(workspaceRealPath, skillRealPath)) {
+      if (isPathInside(skillsDirRealPath, skillRealPath)) {
         continue;
       }
       escapedSkillFiles.push({
@@ -913,9 +914,9 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
   findings.push({
     checkId: "skills.workspace.symlink_escape",
     severity: "warn",
-    title: "Workspace skill files resolve outside the workspace root",
+    title: "Workspace skill files resolve outside the skills directory",
     detail:
-      "Detected workspace `skills/**/SKILL.md` paths whose realpath escapes their workspace root:\n" +
+      "Detected workspace `skills/**/SKILL.md` paths whose realpath escapes their skills directory:\n" +
       escapedSkillFiles
         .slice(0, MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS)
         .map(

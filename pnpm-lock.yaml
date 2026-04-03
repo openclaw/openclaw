@@ -604,6 +604,8 @@ importers:
 
   extensions/speech-core: {}
 
+  extensions/stepfun: {}
+
   extensions/synology-chat: {}
 
   extensions/synthetic: {}

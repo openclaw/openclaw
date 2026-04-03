@@ -1391,7 +1391,35 @@ describe("security audit", () => {
         },
       },
       {
-        name: "does not warn for workspace skills that stay inside workspace root",
+        name: "warns when workspace skill resolves inside workspace but outside skills dir",
+        supported: !isWindows,
+        setup: async () => {
+          const tmp = await makeTmpDir("workspace-skill-in-root-outside-skills");
+          const stateDir = path.join(tmp, "state");
+          const workspaceDir = path.join(tmp, "workspace");
+          const otherDir = path.join(workspaceDir, "other-dir");
+          await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+          await fs.mkdir(path.join(workspaceDir, "skills", "leak"), { recursive: true });
+          await fs.mkdir(otherDir, { recursive: true });
+
+          const otherSkillPath = path.join(otherDir, "SKILL.md");
+          await fs.writeFile(otherSkillPath, "# inside workspace, outside skills dir\n", "utf-8");
+          await fs.symlink(otherSkillPath, path.join(workspaceDir, "skills", "leak", "SKILL.md"));
+
+          return { stateDir, workspaceDir, otherSkillPath };
+        },
+        assert: (
+          res: SecurityAuditReport,
+          fixture: { stateDir: string; workspaceDir: string; otherSkillPath?: string },
+        ) => {
+          const finding = res.findings.find((f) => f.checkId === "skills.workspace.symlink_escape");
+          expect(finding?.severity).toBe("warn");
+          expect(fixture.otherSkillPath).toBeTruthy();
+          expect(finding?.detail).toContain(fixture.otherSkillPath ?? "");
+        },
+      },
+      {
+        name: "does not warn for workspace skills that stay inside skills dir",
         supported: true,
         setup: async () => {
           const tmp = await makeTmpDir("workspace-skill-in-root");
