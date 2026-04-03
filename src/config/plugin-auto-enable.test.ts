@@ -48,7 +48,7 @@ function makeRegistry(
     id: string;
     channels: string[];
     autoEnableWhenConfiguredProviders?: string[];
-    contracts?: { webFetchProviders?: string[] };
+    contracts?: { webFetchProviders?: string[]; mediaUnderstandingProviders?: string[] };
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
   }>,
 ): PluginManifestRegistry {
@@ -695,6 +695,69 @@ describe("applyPluginAutoEnable", () => {
     });
 
     expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
+  });
+
+  it("auto-enables bundled media provider plugins referenced from tools.media config", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          media: {
+            audio: {
+              models: [
+                {
+                  type: "provider",
+                  provider: "groq",
+                  model: "whisper-large-v3-turbo",
+                },
+              ],
+            },
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.groq?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "groq"]);
+    expect(result.autoEnabledReasons).toEqual({
+      groq: ["groq media provider configured"],
+    });
+    expect(result.changes).toContain("groq media provider configured, enabled automatically.");
+  });
+
+  it("auto-enables third-party media provider plugins referenced from tools.media config", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          media: {
+            models: [
+              {
+                type: "provider",
+                provider: "acme-media",
+              },
+            ],
+          },
+        },
+      },
+      env: {},
+      manifestRegistry: makeRegistry([
+        {
+          id: "acme-media-plugin",
+          channels: [],
+          contracts: {
+            mediaUnderstandingProviders: ["acme-media"],
+          },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["acme-media-plugin"]?.enabled).toBe(true);
+    expect(result.autoEnabledReasons).toEqual({
+      "acme-media-plugin": ["acme-media media provider configured"],
+    });
   });
 
   it("auto-enables third-party provider plugins when manifest-owned web search config exists", () => {

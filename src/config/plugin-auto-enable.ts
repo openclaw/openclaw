@@ -6,6 +6,7 @@ import {
   listPotentialConfiguredChannelIds,
 } from "../channels/config-presence.js";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { normalizeMediaProviderId } from "../media-understanding/provider-id.js";
 import {
   BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
@@ -57,6 +58,11 @@ export type PluginAutoEnableCandidate =
   | {
       pluginId: "acpx";
       kind: "acp-runtime-configured";
+    }
+  | {
+      pluginId: string;
+      kind: "media-provider-configured";
+      providerId: string;
     };
 
 export type PluginAutoEnableResult = {
@@ -205,6 +211,43 @@ function hasPluginOwnedToolConfig(cfg: OpenClawConfig, pluginId: string): boolea
   return false;
 }
 
+function collectConfiguredMediaProviderIds(cfg: OpenClawConfig): string[] {
+  const providerIds = new Set<string>();
+  const pushModels = (models: unknown) => {
+    if (!Array.isArray(models)) {
+      return;
+    }
+    for (const entry of models) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      const providerId = normalizeMediaProviderId(
+        typeof entry.provider === "string" ? entry.provider : "",
+      );
+      if (providerId) {
+        providerIds.add(providerId);
+      }
+    }
+  };
+
+  pushModels(cfg.tools?.media?.models);
+  pushModels(cfg.tools?.media?.audio?.models);
+  pushModels(cfg.tools?.media?.image?.models);
+  pushModels(cfg.tools?.media?.video?.models);
+
+  return [...providerIds].toSorted((left, right) => left.localeCompare(right));
+}
+
+const BUNDLED_MEDIA_PROVIDER_IDS = new Set(
+  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) =>
+    entry.mediaUnderstandingProviderIds.map((id) => normalizeMediaProviderId(id)),
+  ).filter((id): id is string => id !== undefined),
+);
+
+function isBundledMediaProviderId(id: string): boolean {
+  return BUNDLED_MEDIA_PROVIDER_IDS.has(id);
+}
+
 function resolveProviderPluginsWithOwnedWebSearch(
   registry: PluginManifestRegistry,
 ): ReadonlySet<string> {
@@ -233,6 +276,28 @@ function resolveProviderPluginsWithOwnedWebFetch(): ReadonlySet<string> {
       (entry) => entry.pluginId,
     ),
   );
+}
+
+function resolveMediaUnderstandingProviderPluginIds(
+  registry: PluginManifestRegistry,
+): Readonly<Record<string, string>> {
+  const entries = new Map<string, string>(
+    BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) =>
+      entry.mediaUnderstandingProviderIds.map(
+        (providerId) => [normalizeMediaProviderId(providerId), entry.pluginId] as const,
+      ),
+    ).filter((pair): pair is [string, string] => pair[0] !== undefined),
+  );
+  for (const plugin of registry.plugins) {
+    for (const providerId of plugin.contracts?.mediaUnderstandingProviders ?? []) {
+      const normalizedProviderId = normalizeMediaProviderId(providerId);
+      if (!normalizedProviderId || entries.has(normalizedProviderId)) {
+        continue;
+      }
+      entries.set(normalizedProviderId, plugin.id);
+    }
+  }
+  return Object.fromEntries([...entries].toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
 function resolvePluginIdForConfiguredWebFetchProvider(
@@ -383,16 +448,19 @@ function hasConfiguredWebFetchPluginEntry(cfg: OpenClawConfig): boolean {
 
 function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
-  if (!configuredChannels || typeof configuredChannels !== "object") {
-    return false;
+  if (configuredChannels && typeof configuredChannels === "object") {
+    for (const key of Object.keys(configuredChannels)) {
+      if (key === "defaults" || key === "modelByChannel") {
+        continue;
+      }
+      if (!normalizeChatChannelId(key)) {
+        return true;
+      }
+    }
   }
-  for (const key of Object.keys(configuredChannels)) {
-    if (key === "defaults" || key === "modelByChannel") {
-      continue;
-    }
-    if (!normalizeChatChannelId(key)) {
-      return true;
-    }
+  const mediaProviderIds = collectConfiguredMediaProviderIds(cfg);
+  if (mediaProviderIds.some((id) => !isBundledMediaProviderId(id))) {
+    return true;
   }
   return false;
 }
@@ -428,6 +496,9 @@ function configMayNeedPluginAutoEnable(cfg: OpenClawConfig, env: NodeJS.ProcessE
     hasConfiguredWebSearchPluginEntry(cfg) ||
     hasConfiguredWebFetchPluginEntry(cfg)
   ) {
+    return true;
+  }
+  if (collectConfiguredMediaProviderIds(cfg).length > 0) {
     return true;
   }
   return false;
@@ -516,6 +587,8 @@ export function resolvePluginAutoEnableCandidateReason(
       return `${candidate.pluginId} tool configured`;
     case "acp-runtime-configured":
       return "ACP runtime configured";
+    case "media-provider-configured":
+      return `${candidate.providerId} media provider configured`;
   }
 }
 
@@ -549,6 +622,19 @@ function resolveConfiguredPlugins(
         providerId,
       });
     }
+  }
+  const configuredMediaProviderIds = collectConfiguredMediaProviderIds(cfg);
+  const mediaProviderPluginIds = resolveMediaUnderstandingProviderPluginIds(registry);
+  for (const providerId of configuredMediaProviderIds) {
+    const pluginId = mediaProviderPluginIds[providerId];
+    if (!pluginId) {
+      continue;
+    }
+    changes.push({
+      pluginId,
+      kind: "media-provider-configured",
+      providerId,
+    });
   }
   const webFetchProvider =
     typeof cfg.tools?.web?.fetch?.provider === "string" ? cfg.tools.web.fetch.provider : undefined;
