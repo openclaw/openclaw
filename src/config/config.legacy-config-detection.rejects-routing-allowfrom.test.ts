@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./config.js";
-import { migrateLegacyConfig, validateConfigObject } from "./config.js";
+import { migrateLegacyConfig } from "./legacy-migrate.js";
+import type { OpenClawConfig } from "./types.js";
+import { validateConfigObject } from "./validation.js";
 
 function getChannelConfig(config: unknown, provider: string) {
   const channels = (config as { channels?: Record<string, Record<string, unknown>> } | undefined)
@@ -241,6 +242,17 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.message).toContain('"telegram"');
     }
   });
+  it("rejects channels.telegram.groupMentionsOnly", async () => {
+    const res = validateConfigObject({
+      channels: { telegram: { groupMentionsOnly: true } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly")).toBe(
+        true,
+      );
+    }
+  });
   it("rejects gateway.token", async () => {
     const res = validateConfigObject({
       gateway: { token: "legacy-token" },
@@ -346,6 +358,7 @@ describe("legacy config detection", () => {
         expect(res.issues[0]?.path, provider).toBe(expectedIssuePath);
       }
     },
+    180_000,
   );
 
   it.each(["telegram", "whatsapp", "signal"] as const)(

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { resolveOAuthPath } from "../../config/paths.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import {
@@ -125,6 +126,22 @@ function writeCachedAuthProfileStore(
   });
 }
 
+function normalizeSecretBackedField(params: {
+  entry: Record<string, unknown>;
+  valueField: "key" | "token";
+  refField: "keyRef" | "tokenRef";
+}): void {
+  const value = params.entry[params.valueField];
+  if (value == null || typeof value === "string") {
+    return;
+  }
+  const ref = coerceSecretRef(value);
+  if (ref && !coerceSecretRef(params.entry[params.refField])) {
+    params.entry[params.refField] = ref;
+  }
+  delete params.entry[params.valueField];
+}
+
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   updater: (store: AuthProfileStore) => boolean;
@@ -168,6 +185,15 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   if (!("key" in entry) && typeof entry["apiKey"] === "string") {
     entry["key"] = entry["apiKey"];
   }
+  // Ensure `key` is a string.  Users sometimes write a SecretRef object into
+  // the `key` field instead of `keyRef`.  When that happens every downstream
+  // consumer that calls `cred.key?.trim()` throws a TypeError because the
+  // value is truthy (an object) but has no `.trim()` method.  Migrate the
+  // misplaced ref to `keyRef` so the secret-resolution pipeline can pick it
+  // up, and clear the invalid `key` so callers never see a non-string value.
+  normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
+  // Same treatment for `token` on TokenCredential entries.
+  normalizeSecretBackedField({ entry, valueField: "token", refField: "tokenRef" });
   return entry as Partial<AuthProfileCredential>;
 }
 
@@ -566,6 +592,7 @@ export function ensureAuthProfileStore(
 
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
   const authPath = resolveAuthStorePath(agentDir);
+  const runtimeKey = resolveRuntimeStoreKey(agentDir);
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).map(([profileId, credential]) => {
       if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
@@ -590,4 +617,7 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
   } satisfies AuthProfileStore;
   saveJsonFile(authPath, payload);
   writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), payload);
+  if (runtimeAuthStoreSnapshots.has(runtimeKey)) {
+    runtimeAuthStoreSnapshots.set(runtimeKey, cloneAuthProfileStore(payload));
+  }
 }

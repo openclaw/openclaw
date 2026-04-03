@@ -173,6 +173,27 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
+  <Accordion title="Why are there two exec approval configs for chat approvals?">
+    They control different layers:
+
+    - `approvals.exec`: forwards approval prompts to chat destinations
+    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client
+
+    The host exec policy is still the real approval gate. Chat config only controls where approval
+    prompts appear and how people can answer them.
+
+    In most setups you do **not** need both:
+
+    - If the chat already supports commands and replies, same-chat `/approve` works through the shared path.
+    - If a supported native channel can infer approvers safely, OpenClaw now auto-enables DM-first native approvals when `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
+    - Use `approvals.exec` only when prompts must also be forwarded to other chats or explicit ops rooms.
+    - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you explicitly want approval prompts posted back into the originating room/topic.
+
+    Short version: forwarding is for routing, native client config is for richer channel-specific UX.
+    See [Exec Approvals](/tools/exec-approvals).
+
+  </Accordion>
+
   <Accordion title="What runtime do I need?">
     Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
   </Accordion>
@@ -280,17 +301,20 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     - `latest` = stable
     - `beta` = early build for testing
 
-    We ship builds to **beta**, test them, and once a build is solid we **promote
-    that same version to `latest`**. That's why beta and stable can point at the
-    **same version**.
+    Usually, a stable release lands on **beta** first, then an explicit
+    promotion step moves that same version to `latest`. Maintainers can also
+    publish straight to `latest` when needed. That's why beta and stable can
+    point at the **same version** after promotion.
 
     See what changed:
     [https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
 
+    For install one-liners and the difference between beta and dev, see the accordion below.
+
   </Accordion>
 
   <Accordion title="How do I install the beta version and what is the difference between beta and dev?">
-    **Beta** is the npm dist-tag `beta` (may match `latest`).
+    **Beta** is the npm dist-tag `beta` (may match `latest` after promotion).
     **Dev** is the moving head of `main` (git); when published, it uses the npm dist-tag `dev`.
 
     One-liners (macOS/Linux):
@@ -585,11 +609,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
-  <Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
-    That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
-    use a **Claude subscription** (setup-token), wait for the window to
-    reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthropic Console
-    for usage/billing and raise limits as needed.
+<a id="why-am-i-seeing-http-429-ratelimiterror-from-anthropic"></a>
+<Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
+That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
+use a **Claude subscription** (setup-token), wait for the window to
+reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthropic Console
+for usage/billing and raise limits as needed.
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
@@ -633,7 +658,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Is a local model OK for casual chats?">
-    Usually no. OpenClaw needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.5 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
+    Usually no. OpenClaw needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** model build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
   </Accordion>
 
   <Accordion title="How do I keep hosted model traffic in a specific region?">
@@ -949,7 +974,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     Token tip: long tasks and sub-agents both consume tokens. If cost is a concern, set a
     cheaper model for sub-agents via `agents.defaults.subagents.model`.
 
-    Docs: [Sub-agents](/tools/subagents).
+    Docs: [Sub-agents](/tools/subagents), [Background Tasks](/automation/tasks).
 
   </Accordion>
 
@@ -991,7 +1016,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     openclaw cron runs --id <jobId> --limit 50
     ```
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat).
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation).
 
   </Accordion>
 
@@ -1016,7 +1041,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     - **Heartbeat** for "main session" periodic checks.
     - **Isolated jobs** for autonomous agents that post summaries or deliver to chats.
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat),
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation),
     [Heartbeat](/gateway/heartbeat).
 
   </Accordion>
@@ -1306,7 +1331,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
-  <Accordion title="I'm in remote mode - where is the session store?">
+  <Accordion title="Remote mode: where is the session store?">
     Session state is owned by the **gateway host**. If you're in remote mode, the session store you care about is on the remote machine, not your local laptop. See [Session management](/concepts/session).
   </Accordion>
 </AccordionGroup>
@@ -1780,9 +1805,10 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Do sessions reset automatically if I never send /new?">
-    Yes. Sessions expire after `session.idleMinutes` (default **60**). The **next**
-    message starts a fresh session id for that chat key. This does not delete
-    transcripts - it just starts a new session.
+    Sessions can expire after `session.idleMinutes`, but this is **disabled by default** (default **0**).
+    Set it to a positive value to enable idle expiry. When enabled, the **next**
+    message after the idle period starts a fresh session id for that chat key.
+    This does not delete transcripts - it just starts a new session.
 
     ```json5
     {
@@ -1885,7 +1911,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Why am I getting heartbeat messages every 30 minutes?">
-    Heartbeats run every **30m** by default. Tune or disable them:
+    Heartbeats run every **30m** by default (**1h** when using OAuth auth). Tune or disable them:
 
     ```json5
     {
@@ -2085,13 +2111,15 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
     ```
     /model sonnet
-    /model haiku
     /model opus
     /model gpt
     /model gpt-mini
     /model gemini
     /model gemini-flash
+    /model gemini-flash-lite
     ```
+
+    These are the built-in aliases. Custom aliases can be added via `agents.defaults.models`.
 
     You can list available models with `/model`, `/model list`, or `/model status`.
 
@@ -2127,8 +2155,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="Can I use GPT 5.2 for daily tasks and Codex 5.3 for coding?">
     Yes. Set one as default and switch as needed:
 
-    - **Quick switch (per session):** `/model gpt-5.2` for daily tasks, `/model openai-codex/gpt-5.4` for coding with Codex OAuth.
-    - **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.2`, then switch to `openai-codex/gpt-5.4` when coding (or the other way around).
+    - **Quick switch (per session):** `/model gpt-5.4` for daily tasks, `/model openai-codex/gpt-5.4` for coding with Codex OAuth.
+    - **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.4`, then switch to `openai-codex/gpt-5.4` when coding (or the other way around).
     - **Sub-agents:** route coding tasks to sub-agents with a different default model.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
@@ -2185,7 +2213,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
           model: { primary: "minimax/MiniMax-M2.7" },
           models: {
             "minimax/MiniMax-M2.7": { alias: "minimax" },
-            "openai/gpt-5.2": { alias: "gpt" },
+            "openai/gpt-5.4": { alias: "gpt" },
           },
         },
       },
@@ -2778,6 +2806,8 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     - The target channel supports outbound media and isn't blocked by allowlists.
     - The file is within the provider's size limits (images are resized to max 2048px).
+    - `tools.fs.workspaceOnly=true` keeps local-path sends limited to workspace, temp/media-store, and sandbox-validated files.
+    - `tools.fs.workspaceOnly=false` lets `MEDIA:` send host-local files the agent can already read, but only for media plus safe document types (images, audio, video, PDF, and Office docs). Plain text and secret-like files are still blocked.
 
     See [Images](/nodes/images).
 
@@ -2952,23 +2982,18 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     ```json5
     {
-      agents: {
-        defaults: {
-          tools: {
-            message: {
-              crossContext: {
-                allowAcrossProviders: true,
-                marker: { enabled: true, prefix: "[from {channel}] " },
-              },
-            },
+      tools: {
+        message: {
+          crossContext: {
+            allowAcrossProviders: true,
+            marker: { enabled: true, prefix: "[from {channel}] " },
           },
         },
       },
     }
     ```
 
-    Restart the gateway after editing config. If you only want this for a single
-    agent, set it under `agents.list[].tools.message` instead.
+    Restart the gateway after editing config.
 
   </Accordion>
 

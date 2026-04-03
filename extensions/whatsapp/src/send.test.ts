@@ -2,21 +2,28 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { redactIdentifier } from "../../../src/logging/redact-identifier.js";
 
+const hoisted = vi.hoisted(() => ({
+  loadOutboundMediaFromUrl: vi.fn(),
+}));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
 let setActiveWebListener: typeof import("./active-listener.js").setActiveWebListener;
-let resetLogger: typeof import("../../../src/logging.js").resetLogger;
-let setLoggerOverride: typeof import("../../../src/logging.js").setLoggerOverride;
+let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
+let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
-vi.mock("./media.js", () => ({
-  loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
-}));
+vi.mock("./runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-api.js")>();
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: hoisted.loadOutboundMediaFromUrl,
+  };
+});
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
@@ -25,14 +32,33 @@ describe("web outbound", () => {
   const sendReaction = vi.fn(async () => {});
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
     ({ setActiveWebListener } = await import("./active-listener.js"));
-    ({ resetLogger, setLoggerOverride } = await import("../../../src/logging.js"));
+    ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.loadOutboundMediaFromUrl.mockReset().mockImplementation(
+      async (
+        mediaUrl: string,
+        options?: {
+          maxBytes?: number;
+          mediaAccess?: {
+            localRoots?: readonly string[];
+            readFile?: (filePath: string) => Promise<Buffer>;
+          };
+          mediaLocalRoots?: readonly string[];
+          mediaReadFile?: (filePath: string) => Promise<Buffer>;
+        },
+      ) =>
+        await loadWebMediaMock(mediaUrl, {
+          maxBytes: options?.maxBytes,
+          localRoots: options?.mediaAccess?.localRoots ?? options?.mediaLocalRoots,
+          readFile: options?.mediaAccess?.readFile ?? options?.mediaReadFile,
+          hostReadCapability: Boolean(options?.mediaAccess?.readFile ?? options?.mediaReadFile),
+        }),
+    );
     setActiveWebListener({
       sendComposingTo,
       sendMessage,
@@ -214,10 +240,13 @@ describe("web outbound", () => {
       mediaLocalRoots: ["/tmp/workspace"],
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", {
-      maxBytes: 100 * 1024 * 1024,
-      localRoots: ["/tmp/workspace"],
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/tmp/pic.jpg",
+      expect.objectContaining({
+        maxBytes: 100 * 1024 * 1024,
+        localRoots: ["/tmp/workspace"],
+      }),
+    );
   });
 
   it("sends polls via active listener", async () => {

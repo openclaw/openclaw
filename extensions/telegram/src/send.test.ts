@@ -6,7 +6,12 @@ import {
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
-import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
+import {
+  clearSentMessageCache,
+  recordSentMessage,
+  resetSentMessageCacheForTest,
+  wasSentByBot,
+} from "./sent-message-cache.js";
 
 installTelegramSendTestHooks();
 
@@ -17,6 +22,7 @@ const {
   loadConfig,
   loadWebMedia,
   maybePersistResolvedTelegramTarget,
+  resolveStorePath,
 } = getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
@@ -121,6 +127,27 @@ describe("sent-message-cache", () => {
 
     clearSentMessageCache();
     expect(wasSentByBot(123, 1)).toBe(false);
+  });
+
+  it("keeps sent-message ownership across restart", async () => {
+    const persistedStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-restart.json`;
+    resolveStorePath.mockReturnValue(persistedStorePath);
+
+    recordSentMessage(123, 1);
+    expect(wasSentByBot(123, 1)).toBe(true);
+
+    resetSentMessageCacheForTest();
+
+    const restartedCache = await importFreshModule<typeof import("./sent-message-cache.js")>(
+      import.meta.url,
+      "./sent-message-cache.js?scope=restart",
+    );
+
+    try {
+      expect(restartedCache.wasSentByBot(123, 1)).toBe(true);
+    } finally {
+      restartedCache.clearSentMessageCache();
+    }
   });
 
   it("shares sent-message state across distinct module instances", async () => {
@@ -937,6 +964,40 @@ describe("sendMessageTelegram", () => {
     await expect(promise).resolves.toEqual({ messageId: "1", chatId });
     expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(500);
     setTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("retries wrapped pre-connect HttpError sends", async () => {
+    vi.useFakeTimers();
+    const chatId = "123";
+    const root = Object.assign(new Error("connect ECONNREFUSED api.telegram.org"), {
+      code: "ECONNREFUSED",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
+    const err = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+      name: "HttpError",
+      error: fetchError,
+    });
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(err)
+      .mockResolvedValueOnce({
+        message_id: 1,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const promise = sendMessageTelegram(chatId, "hi", {
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual({ messageId: "1", chatId });
+    expect(sendMessage).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
 
@@ -1860,6 +1921,57 @@ describe("sendStickerTelegram", () => {
         api,
       }),
     ).rejects.toThrow(/returned no message_id/i);
+  });
+
+  it("does not retry generic grammY failed envelopes for sticker sends", async () => {
+    const chatId = "123";
+    const sendSticker = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Network request for 'sendSticker' failed!"));
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+
+    await expect(
+      sendStickerTelegram(chatId, "fileId123", {
+        token: "tok",
+        api,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).rejects.toThrow(/Network request for 'sendSticker' failed!/i);
+    expect(sendSticker).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries rate-limited sticker sends and honors retry_after", async () => {
+    vi.useFakeTimers();
+    const chatId = "123";
+    const sendSticker = vi
+      .fn()
+      .mockRejectedValueOnce({
+        message: "429 Too Many Requests",
+        response: { parameters: { retry_after: 1 } },
+      })
+      .mockResolvedValueOnce({
+        message_id: 109,
+        chat: { id: chatId },
+      });
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+
+    const promise = sendStickerTelegram(chatId, "fileId123", {
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual({ messageId: "109", chatId });
+    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(1000);
+    expect(sendSticker).toHaveBeenCalledTimes(2);
+    setTimeoutSpy.mockRestore();
+    vi.useRealTimers();
   });
 });
 

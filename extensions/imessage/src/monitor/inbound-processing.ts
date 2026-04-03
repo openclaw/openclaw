@@ -11,6 +11,7 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  resolveChannelContextVisibilityMode,
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/config-runtime";
@@ -24,6 +25,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
+  evaluateSupplementalContextVisibility,
 } from "openclaw/plugin-sdk/security-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
@@ -62,6 +64,50 @@ function describeReplyContext(message: IMessagePayload): IMessageReplyContext | 
   const id = normalizeReplyField(message.reply_to_id);
   const sender = normalizeReplyField(message.reply_to_sender);
   return { body, id, sender };
+}
+
+function resolveInboundEchoMessageIds(message: IMessagePayload): string[] {
+  const values = [
+    message.id != null ? String(message.id) : undefined,
+    normalizeReplyField(message.guid),
+  ];
+  const ids: string[] = [];
+  for (const value of values) {
+    if (!value || ids.includes(value)) {
+      continue;
+    }
+    ids.push(value);
+  }
+  return ids;
+}
+
+function hasIMessageEchoMatch(params: {
+  echoCache: {
+    has: (
+      scope: string,
+      lookup: { text?: string; messageId?: string },
+      skipIdShortCircuit?: boolean,
+    ) => boolean;
+  };
+  scope: string;
+  text?: string;
+  messageIds: string[];
+  skipIdShortCircuit?: boolean;
+}): boolean {
+  for (const messageId of params.messageIds) {
+    if (params.echoCache.has(params.scope, { messageId })) {
+      return true;
+    }
+  }
+  const fallbackMessageId = params.messageIds[0];
+  if (!params.text && !fallbackMessageId) {
+    return false;
+  }
+  return params.echoCache.has(
+    params.scope,
+    { text: params.text, messageId: fallbackMessageId },
+    params.skipIdShortCircuit,
+  );
 }
 
 export type IMessageInboundDispatchDecision = {
@@ -104,7 +150,13 @@ export function resolveIMessageInboundDecision(params: {
   storeAllowFrom: string[];
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
-  echoCache?: { has: (scope: string, lookup: { text?: string; messageId?: string }) => boolean };
+  echoCache?: {
+    has: (
+      scope: string,
+      lookup: { text?: string; messageId?: string },
+      skipIdShortCircuit?: boolean,
+    ) => boolean;
+  };
   selfChatCache?: SelfChatCache;
   logVerbose?: (msg: string) => void;
 }): IMessageInboundDecision {
@@ -118,6 +170,8 @@ export function resolveIMessageInboundDecision(params: {
   const chatGuid = params.message.chat_guid ?? undefined;
   const chatIdentifier = params.message.chat_identifier ?? undefined;
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
+  const messageText = params.messageText.trim();
+  const bodyText = params.bodyText.trim();
 
   const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
   const groupListPolicy = groupIdCandidate
@@ -145,12 +199,63 @@ export function resolveIMessageInboundDecision(params: {
     isGroup,
     chatId,
     sender,
-    text: params.bodyText,
+    text: bodyText,
     createdAt,
   };
+  // Self-chat detection: in self-chat, sender == chat_identifier (both are the
+  // user's own handle). When is_from_me=true in self-chat, the message could be
+  // either: (a) a real user message typed by the user, or (b) an agent reply
+  // echo reflected back by iMessage. We must distinguish them.
+  const isSelfChat =
+    !isGroup &&
+    chatIdentifier != null &&
+    normalizeIMessageHandle(sender) === normalizeIMessageHandle(chatIdentifier);
+  // Track whether we already processed the is_from_me=true self-chat path.
+  // When true, the selfChatCache.has() check below must be skipped — we just
+  // called remember() and would immediately match our own entry.
+  let skipSelfChatHasCheck = false;
+  const inboundMessageIds = resolveInboundEchoMessageIds(params.message);
+  const inboundMessageId = inboundMessageIds[0];
+  const hasInboundGuid = Boolean(normalizeReplyField(params.message.guid));
+
   if (params.message.is_from_me) {
+    // Always cache in selfChatCache so the upcoming is_from_me=false reflection
+    // (which arrives 2-3s later) is correctly identified and dropped.
     params.selfChatCache?.remember(selfChatLookup);
-    return { kind: "drop", reason: "from me" };
+
+    if (isSelfChat) {
+      // In self-chat, is_from_me=true could be a real user message OR an agent
+      // reply echo. Use the echo cache with skipIdShortCircuit=true to check
+      // whether this text matches a recently-sent agent reply.
+      const echoScope = buildIMessageEchoScope({
+        accountId: params.accountId,
+        isGroup,
+        chatId,
+        sender,
+      });
+      if (
+        params.echoCache &&
+        (bodyText || inboundMessageId) &&
+        hasIMessageEchoMatch({
+          echoCache: params.echoCache,
+          scope: echoScope,
+          text: bodyText || undefined,
+          messageIds: inboundMessageIds,
+          skipIdShortCircuit: !hasInboundGuid,
+        })
+      ) {
+        return { kind: "drop", reason: "agent echo in self-chat" };
+      }
+      // Echo cache missed → this is a real user message in self-chat. Process it.
+      // Skip the selfChatCache.has() check below — we just remember()d ourselves
+      // and would immediately match our own entry.
+      skipSelfChatHasCheck = true;
+      // Fall through to rest of decision logic (access control, etc.)
+    } else {
+      // Normal DM or group: is_from_me=true means this is an outbound message
+      // notification that we sent. Drop it.
+      return { kind: "drop", reason: "from me" };
+    }
   }
   if (isGroup && !chatId) {
     return { kind: "drop", reason: "group without chat_id" };
@@ -222,18 +327,17 @@ export function resolveIMessageInboundDecision(params: {
     chatId,
   });
   const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
-  const messageText = params.messageText.trim();
-  const bodyText = params.bodyText.trim();
   if (!bodyText) {
     return { kind: "drop", reason: "empty body" };
   }
 
-  if (
-    params.selfChatCache?.has({
-      ...selfChatLookup,
-      text: bodyText,
-    })
-  ) {
+  const selfChatHit = skipSelfChatHasCheck
+    ? false
+    : params.selfChatCache?.has({
+        ...selfChatLookup,
+        text: bodyText,
+      });
+  if (selfChatHit) {
     const preview = sanitizeTerminalText(truncateUtf16Safe(bodyText, 50));
     params.logVerbose?.(`imessage: dropping self-chat reflected duplicate: "${preview}"`);
     return { kind: "drop", reason: "self-chat echo" };
@@ -241,7 +345,6 @@ export function resolveIMessageInboundDecision(params: {
 
   // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
-  const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
   if (params.echoCache && (messageText || inboundMessageId)) {
     const echoScope = buildIMessageEchoScope({
       accountId: params.accountId,
@@ -250,13 +353,15 @@ export function resolveIMessageInboundDecision(params: {
       sender,
     });
     if (
-      params.echoCache.has(echoScope, {
-        text: messageText || undefined,
-        messageId: inboundMessageId,
+      hasIMessageEchoMatch({
+        echoCache: params.echoCache,
+        scope: echoScope,
+        text: bodyText || undefined,
+        messageIds: inboundMessageIds,
       })
     ) {
       params.logVerbose?.(
-        describeIMessageEchoDropLog({ messageText, messageId: inboundMessageId }),
+        describeIMessageEchoDropLog({ messageText: bodyText, messageId: inboundMessageId }),
       );
       return { kind: "drop", reason: "echo" };
     }
@@ -274,6 +379,37 @@ export function resolveIMessageInboundDecision(params: {
   }
 
   const replyContext = describeReplyContext(params.message);
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg: params.cfg,
+    channel: "imessage",
+    accountId: params.accountId,
+  });
+  const replySenderAllowed =
+    !isGroup || effectiveGroupAllowFrom.length === 0
+      ? true
+      : replyContext?.sender
+        ? isAllowedIMessageSender({
+            allowFrom: effectiveGroupAllowFrom,
+            sender: replyContext.sender,
+            chatId,
+            chatGuid,
+            chatIdentifier,
+          })
+        : false;
+  const filteredReplyContext =
+    !replyContext ||
+    evaluateSupplementalContextVisibility({
+      mode: contextVisibilityMode,
+      kind: "quote",
+      senderAllowed: replySenderAllowed,
+    }).include
+      ? replyContext
+      : null;
+  if (replyContext && !filteredReplyContext && isGroup) {
+    params.logVerbose?.(
+      `imessage: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
+    );
+  }
   const historyKey = isGroup
     ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
     : undefined;
@@ -366,7 +502,7 @@ export function resolveIMessageInboundDecision(params: {
     route,
     bodyText,
     createdAt,
-    replyContext,
+    replyContext: filteredReplyContext,
     effectiveWasMentioned,
     commandAuthorized,
     effectiveDmAllowFrom,

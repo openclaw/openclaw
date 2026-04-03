@@ -2,27 +2,29 @@ import { filterToolsByPolicy } from "./pi-tools.policy.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
 import {
+  analyzeAllowlistByToolType,
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
   normalizeToolName,
-  stripPluginOnlyAllowlist,
   type ToolPolicyLike,
 } from "./tool-policy.js";
 
 const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
+const toolPolicyWarningOrder: string[] = [];
 
 function rememberToolPolicyWarning(warning: string): boolean {
   if (seenToolPolicyWarnings.has(warning)) {
     return false;
   }
   if (seenToolPolicyWarnings.size >= MAX_TOOL_POLICY_WARNING_CACHE) {
-    const oldest = seenToolPolicyWarnings.values().next().value;
+    const oldest = toolPolicyWarningOrder.shift();
     if (oldest) {
       seenToolPolicyWarnings.delete(oldest);
     }
   }
   seenToolPolicyWarnings.add(warning);
+  toolPolicyWarningOrder.push(warning);
   return true;
 }
 
@@ -114,7 +116,7 @@ export function applyToolPolicyPipeline(params: {
 
     let policy: ToolPolicyLike | undefined = step.policy;
     if (step.stripPluginOnlyAllowlist) {
-      const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
+      const resolved = analyzeAllowlistByToolType(policy, pluginGroups, coreToolNames);
       if (resolved.unknownAllowlist.length > 0) {
         const entries = resolved.unknownAllowlist.join(", ");
         const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
@@ -122,14 +124,14 @@ export function applyToolPolicyPipeline(params: {
         );
         const otherEntries = resolved.unknownAllowlist.filter((entry) => !isKnownCoreToolId(entry));
         if (
-          !shouldSuppressUnavailableCoreToolWarning({
-            suppressUnavailableCoreToolWarning: step.suppressUnavailableCoreToolWarning === true,
+          shouldWarnAboutUnknownAllowlist({
+            suppressUnavailableCoreToolWarning: step.suppressUnavailableCoreToolWarning ?? false,
             hasGatedCoreEntries: gatedCoreEntries.length > 0,
             hasOtherEntries: otherEntries.length > 0,
           })
         ) {
           const suffix = describeUnknownAllowlistSuffix({
-            strippedAllowlist: resolved.strippedAllowlist,
+            pluginOnlyAllowlist: resolved.pluginOnlyAllowlist,
             hasGatedCoreEntries: gatedCoreEntries.length > 0,
             hasOtherEntries: otherEntries.length > 0,
           });
@@ -148,7 +150,7 @@ export function applyToolPolicyPipeline(params: {
   return filtered;
 }
 
-function shouldSuppressUnavailableCoreToolWarning(params: {
+function shouldWarnAboutUnknownAllowlist(params: {
   suppressUnavailableCoreToolWarning: boolean;
   hasGatedCoreEntries: boolean;
   hasOtherEntries: boolean;
@@ -158,18 +160,18 @@ function shouldSuppressUnavailableCoreToolWarning(params: {
     !params.hasGatedCoreEntries ||
     params.hasOtherEntries
   ) {
-    return false;
+    return true;
   }
-  return true;
+  return false;
 }
 
 function describeUnknownAllowlistSuffix(params: {
-  strippedAllowlist: boolean;
+  pluginOnlyAllowlist: boolean;
   hasGatedCoreEntries: boolean;
   hasOtherEntries: boolean;
 }): string {
-  const preface = params.strippedAllowlist
-    ? "Ignoring allowlist so core tools remain available."
+  const preface = params.pluginOnlyAllowlist
+    ? "Allowlist contains only plugin entries; core tools will not be available."
     : "";
   const detail =
     params.hasGatedCoreEntries && params.hasOtherEntries
@@ -182,4 +184,5 @@ function describeUnknownAllowlistSuffix(params: {
 
 export function resetToolPolicyWarningCacheForTest(): void {
   seenToolPolicyWarnings.clear();
+  toolPolicyWarningOrder.length = 0;
 }

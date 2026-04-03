@@ -1,5 +1,5 @@
 // Private helper surface for the bundled feishu plugin.
-// Keep this list additive and scoped to symbols used under extensions/feishu.
+// Keep this list additive and scoped to the bundled Feishu surface.
 
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
 export {
@@ -41,12 +41,19 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixContext } from "../channels/reply-prefix.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig as ClawdbotConfig, OpenClawConfig } from "../config/config.js";
+export { resolveChannelContextVisibilityMode } from "../config/context-visibility.js";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
+export {
+  evaluateSupplementalContextVisibility,
+  filterSupplementalContextItems,
+  shouldIncludeSupplementalContext,
+  type ContextVisibilityKind,
+} from "../security/context-visibility.js";
 export type { DmPolicy, GroupToolPolicyConfig } from "../config/types.js";
 export type { SecretInput } from "./secret-input.js";
 export {

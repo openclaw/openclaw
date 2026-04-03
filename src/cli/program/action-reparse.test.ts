@@ -1,8 +1,9 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { reparseProgramFromActionArgs } from "./action-reparse.js";
 
-const buildParseArgvMock = vi.fn();
-const resolveActionArgsMock = vi.fn();
+const buildParseArgvMock = vi.hoisted(() => vi.fn());
+const resolveActionArgsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../argv.js", () => ({
   buildParseArgv: buildParseArgvMock,
@@ -11,8 +12,6 @@ vi.mock("../argv.js", () => ({
 vi.mock("./helpers.js", () => ({
   resolveActionArgs: resolveActionArgsMock,
 }));
-
-const { reparseProgramFromActionArgs } = await import("./action-reparse.js");
 
 describe("reparseProgramFromActionArgs", () => {
   beforeEach(() => {

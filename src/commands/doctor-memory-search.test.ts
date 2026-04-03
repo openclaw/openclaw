@@ -1,13 +1,19 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "../plugin-sdk/memory-core-host-engine-qmd.js";
 
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
 const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
+const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default/workspace"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
+const checkQmdBinaryAvailability = vi.hoisted(() =>
+  vi.fn<CheckQmdBinaryAvailability>(async () => ({ available: true })),
+);
 
 vi.mock("../terminal/note.js", () => ({
   note,
@@ -16,6 +22,7 @@ vi.mock("../terminal/note.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
   resolveAgentDir,
+  resolveAgentWorkspaceDir,
 }));
 
 vi.mock("../agents/memory-search.js", () => ({
@@ -28,6 +35,10 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../plugins/memory-runtime.js", () => ({
   resolveActiveMemoryBackendConfig,
+}));
+
+vi.mock("../plugin-sdk/memory-core-host-engine-qmd.js", () => ({
+  checkQmdBinaryAvailability,
 }));
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
@@ -53,11 +64,14 @@ describe("noteMemorySearchHealth", () => {
     note.mockClear();
     resolveDefaultAgentId.mockClear();
     resolveAgentDir.mockClear();
+    resolveAgentWorkspaceDir.mockClear();
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
     resolveActiveMemoryBackendConfig.mockReset();
     resolveActiveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
+    checkQmdBinaryAvailability.mockReset();
+    checkQmdBinaryAvailability.mockResolvedValue({ available: true });
   });
 
   it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
@@ -119,6 +133,7 @@ describe("noteMemorySearchHealth", () => {
     resolveActiveMemoryBackendConfig.mockReturnValue({
       backend: "qmd",
       citations: "auto",
+      qmd: { command: "qmd" },
     });
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
@@ -129,6 +144,36 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(cfg, {});
 
     expect(note).not.toHaveBeenCalled();
+    expect(checkQmdBinaryAvailability).toHaveBeenCalledWith({
+      command: "qmd",
+      env: process.env,
+      cwd: "/tmp/agent-default/workspace",
+    });
+  });
+
+  it("warns when QMD backend is active but the qmd binary is unavailable", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue({
+      backend: "qmd",
+      citations: "auto",
+      qmd: { command: "qmd" },
+    });
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      error: "spawn qmd ENOENT",
+    });
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("QMD memory backend is configured");
+    expect(message).toContain("spawn qmd ENOENT");
+    expect(message).toContain("npm install -g @tobilu/qmd");
   });
 
   it("does not warn when remote apiKey is configured for explicit provider", async () => {

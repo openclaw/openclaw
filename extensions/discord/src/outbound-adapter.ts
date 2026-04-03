@@ -26,6 +26,33 @@ import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 
+function hasApprovalChannelData(payload: { channelData?: unknown }): boolean {
+  const channelData = payload.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return false;
+  }
+  return Boolean((channelData as { execApproval?: unknown }).execApproval);
+}
+
+function neutralizeDiscordApprovalMentions(value: string): string {
+  return value
+    .replace(/@everyone/gi, "@\u200beveryone")
+    .replace(/@here/gi, "@\u200bhere")
+    .replace(/<@/g, "<@\u200b")
+    .replace(/<#/g, "<#\u200b");
+}
+
+function normalizeDiscordApprovalPayload<T extends { text?: string; channelData?: unknown }>(
+  payload: T,
+): T {
+  return hasApprovalChannelData(payload) && payload.text
+    ? {
+        ...payload,
+        text: neutralizeDiscordApprovalMentions(payload.text),
+      }
+    : payload;
+}
+
 function resolveDiscordOutboundTarget(params: {
   to: string;
   threadId?: string | number | null;
@@ -96,12 +123,13 @@ export const discordOutbound: ChannelOutboundAdapter = {
   chunker: null,
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
   pollMaxOptions: 10,
+  normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
   sendPayload: async (ctx) => {
-    const payload = {
+    const payload = normalizeDiscordApprovalPayload({
       ...ctx.payload,
       text: ctx.payload.text ?? "",
-    };
+    });
     const discordData = payload.channelData?.discord as
       | { components?: DiscordComponentMessageSpec }
       | undefined;
@@ -144,7 +172,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
         if (isFirst) {
           return await sendDiscordComponentMessage(target, componentSpec, {
             mediaUrl,
+            mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
             replyTo: ctx.replyToId ?? undefined,
             accountId: ctx.accountId ?? undefined,
             silent: ctx.silent ?? undefined,
@@ -154,7 +184,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
         return await send(target, text, {
           verbose: false,
           mediaUrl,
+          mediaAccess: ctx.mediaAccess,
           mediaLocalRoots: ctx.mediaLocalRoots,
+          mediaReadFile: ctx.mediaReadFile,
           replyTo: ctx.replyToId ?? undefined,
           accountId: ctx.accountId ?? undefined,
           silent: ctx.silent ?? undefined,
@@ -196,6 +228,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       text,
       mediaUrl,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       deps,
       replyToId,
@@ -208,6 +241,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         verbose: false,
         mediaUrl,
         mediaLocalRoots,
+        mediaReadFile,
         replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,

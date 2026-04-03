@@ -28,6 +28,16 @@ export const AgentSummarySchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    workspace: Type.Optional(NonEmptyString),
+    model: Type.Optional(
+      Type.Object(
+        {
+          primary: Type.Optional(NonEmptyString),
+          fallbacks: Type.Optional(Type.Array(NonEmptyString)),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -194,6 +204,7 @@ export const SkillsInstallParamsSchema = Type.Union([
     {
       name: NonEmptyString,
       installId: NonEmptyString,
+      dangerouslyForceUnsafeInstall: Type.Optional(Type.Boolean()),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
     },
     { additionalProperties: false },

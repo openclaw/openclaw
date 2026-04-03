@@ -17,6 +17,7 @@ let statusAllModulePromise: Promise<typeof import("./status-all.js")> | undefine
 let statusCommandTextRuntimePromise:
   | Promise<typeof import("./status.command.text-runtime.js")>
   | undefined;
+let statusNodeModeModulePromise: Promise<typeof import("./status.node-mode.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
@@ -51,6 +52,11 @@ function loadStatusAllModule() {
 function loadStatusCommandTextRuntime() {
   statusCommandTextRuntimePromise ??= import("./status.command.text-runtime.js");
   return statusCommandTextRuntimePromise;
+}
+
+function loadStatusNodeModeModule() {
+  statusNodeModeModulePromise ??= import("./status.node-mode.js");
+  return statusNodeModeModulePromise;
 }
 
 function resolvePairingRecoveryContext(params: {
@@ -302,7 +308,21 @@ export async function statusCommand(
         }).httpUrl
       : "disabled";
 
+  const [daemon, nodeDaemon] = await Promise.all([
+    getDaemonStatusSummary(),
+    getNodeDaemonStatusSummary(),
+  ]);
+  const nodeOnlyGateway = await loadStatusNodeModeModule().then(({ resolveNodeOnlyGatewayInfo }) =>
+    resolveNodeOnlyGatewayInfo({
+      daemon,
+      node: nodeDaemon,
+    }),
+  );
+
   const gatewayValue = (() => {
+    if (nodeOnlyGateway) {
+      return nodeOnlyGateway.gatewayValue;
+    }
     const target = remoteUrlMissing
       ? `fallback ${gatewayConnection.url}`
       : `${gatewayConnection.url}${gatewayConnection.urlSource ? ` (${gatewayConnection.urlSource})` : ""}`;
@@ -344,11 +364,6 @@ export async function statusCommand(
     const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
     return `${agentStatus.agents.length} · ${pending} · sessions ${agentStatus.totalSessions}${defSuffix}`;
   })();
-
-  const [daemon, nodeDaemon] = await Promise.all([
-    getDaemonStatusSummary(),
-    getNodeDaemonStatusSummary(),
-  ]);
   const daemonValue = (() => {
     if (daemon.installed === false) {
       return `${daemon.label} not installed`;
@@ -370,6 +385,25 @@ export async function statusCommand(
     : "";
   const eventsValue =
     summary.queuedSystemEvents.length > 0 ? `${summary.queuedSystemEvents.length} queued` : "none";
+  const tasksValue =
+    summary.tasks.total > 0
+      ? [
+          `${summary.tasks.active} active`,
+          `${summary.tasks.byStatus.queued} queued`,
+          `${summary.tasks.byStatus.running} running`,
+          summary.tasks.failures > 0
+            ? warn(`${summary.tasks.failures} issue${summary.tasks.failures === 1 ? "" : "s"}`)
+            : muted("no issues"),
+          summary.taskAudit.errors > 0
+            ? warn(
+                `audit ${summary.taskAudit.errors} error${summary.taskAudit.errors === 1 ? "" : "s"} · ${summary.taskAudit.warnings} warn`,
+              )
+            : summary.taskAudit.warnings > 0
+              ? muted(`audit ${summary.taskAudit.warnings} warn`)
+              : muted("audit clean"),
+          `${summary.tasks.total} tracked`,
+        ].join(" · ")
+      : muted("none");
 
   const probesValue = health ? ok("enabled") : muted("skipped (use --deep)");
 
@@ -487,6 +521,7 @@ export async function statusCommand(
     { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
+    { Item: "Tasks", Value: tasksValue },
     { Item: "Heartbeat", Value: heartbeatValue },
     ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
     {
@@ -508,6 +543,12 @@ export async function statusCommand(
       rows: overviewRows,
     }).trimEnd(),
   );
+  if (summary.taskAudit.errors > 0) {
+    runtime.log("");
+    runtime.log(
+      theme.muted(`Task maintenance: ${formatCliCommand("openclaw tasks maintenance --apply")}`),
+    );
+  }
 
   if (pluginCompatibility.length > 0) {
     runtime.log("");
@@ -743,7 +784,9 @@ export async function statusCommand(
   runtime.log("Next steps:");
   runtime.log(`  Need to share?      ${formatCliCommand("openclaw status --all")}`);
   runtime.log(`  Need to debug live? ${formatCliCommand("openclaw logs --follow")}`);
-  if (gatewayReachable) {
+  if (nodeOnlyGateway) {
+    runtime.log(`  Need node service?  ${formatCliCommand("openclaw node status")}`);
+  } else if (gatewayReachable) {
     runtime.log(`  Need to test channels? ${formatCliCommand("openclaw status --deep")}`);
   } else {
     runtime.log(`  Fix reachability first: ${formatCliCommand("openclaw gateway probe")}`);

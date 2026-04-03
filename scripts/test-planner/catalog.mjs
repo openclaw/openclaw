@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { channelTestPrefixes } from "../../vitest.channel-paths.mjs";
 import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
+import {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+} from "../lib/bundled-plugin-paths.mjs";
 import { dedupeFilesPreserveOrder, loadTestRunnerBehavior } from "../test-runner-manifest.mjs";
 
 const baseConfigPrefixes = ["src/agents/", "src/auto-reply/", "src/commands/", "test/", "ui/"];
@@ -55,7 +59,7 @@ export function loadTestCatalog() {
   const allKnownTestFiles = [
     ...new Set([
       ...walkTestFiles("src"),
-      ...walkTestFiles("extensions"),
+      ...walkTestFiles(BUNDLED_PLUGIN_ROOT_DIR),
       ...walkTestFiles("packages"),
       ...walkTestFiles("test"),
       ...walkTestFiles(path.join("ui", "src", "ui")),
@@ -78,11 +82,23 @@ export function loadTestCatalog() {
     const reasons = [];
     const isolated =
       options.unitMemoryIsolatedFiles?.includes(normalizedFile) ||
+      options.extensionMemoryIsolatedFiles?.includes(normalizedFile) ||
+      options.extensionTimedIsolatedFiles?.includes(normalizedFile) ||
+      options.channelTimedIsolatedFiles?.includes(normalizedFile) ||
       unitForkIsolatedFileSet.has(normalizedFile) ||
       extensionForkIsolatedFileSet.has(normalizedFile) ||
       channelIsolatedFileSet.has(normalizedFile);
     if (options.unitMemoryIsolatedFiles?.includes(normalizedFile)) {
       reasons.push("unit-memory-isolated");
+    }
+    if (options.extensionMemoryIsolatedFiles?.includes(normalizedFile)) {
+      reasons.push("extensions-memory-heavy");
+    }
+    if (options.extensionTimedIsolatedFiles?.includes(normalizedFile)) {
+      reasons.push("extensions-timed-heavy");
+    }
+    if (options.channelTimedIsolatedFiles?.includes(normalizedFile)) {
+      reasons.push("channels-timed-heavy");
     }
     if (unitForkIsolatedFileSet.has(normalizedFile)) {
       reasons.push("unit-isolated-manifest");
@@ -105,7 +121,7 @@ export function loadTestCatalog() {
       surface = "e2e";
     } else if (channelTestPrefixes.some((prefix) => normalizedFile.startsWith(prefix))) {
       surface = "channels";
-    } else if (normalizedFile.startsWith("extensions/")) {
+    } else if (normalizedFile.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
       surface = "extensions";
     } else if (normalizedFile.startsWith("src/gateway/")) {
       surface = "gateway";

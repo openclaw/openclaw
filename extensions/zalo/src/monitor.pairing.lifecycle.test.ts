@@ -1,22 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withServer } from "../../../test/helpers/http-test-server.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
   postWebhookReplay,
-  resetLifecycleTestState,
-  setLifecycleRuntimeCore,
-  sendMessageMock,
   settleAsyncWork,
+} from "../test-support/lifecycle-test-support.js";
+import {
+  resetLifecycleTestState,
+  sendMessageMock,
+  setLifecycleRuntimeCore,
   startWebhookLifecycleMonitor,
-} from "../../../test/helpers/extensions/zalo-lifecycle.js";
-import { withServer } from "../../../test/helpers/http-test-server.js";
+} from "../test-support/monitor-mocks-test-support.js";
 
 describe("Zalo pairing lifecycle", () => {
   const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
   const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
 
-  beforeEach(() => {
-    resetLifecycleTestState();
+  beforeEach(async () => {
+    await resetLifecycleTestState();
     setLifecycleRuntimeCore({
       pairing: {
         readAllowFromStore: readAllowFromStoreMock,
@@ -29,8 +31,8 @@ describe("Zalo pairing lifecycle", () => {
     });
   });
 
-  afterEach(() => {
-    resetLifecycleTestState();
+  afterEach(async () => {
+    await resetLifecycleTestState();
   });
 
   function createPairingMonitorSetup() {

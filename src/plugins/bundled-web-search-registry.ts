@@ -14,7 +14,8 @@ export function hasBundledWebSearchCredential(params: {
   searchConfig?: Record<string, unknown>;
 }): boolean {
   const searchConfig =
-    params.searchConfig ?? (params.config.tools?.web?.search as Record<string, unknown> | undefined);
+    params.searchConfig ??
+    (params.config.tools?.web?.search as Record<string, unknown> | undefined);
   return resolveBundledPluginWebSearchProviders({
     config: params.config,
     env: params.env,

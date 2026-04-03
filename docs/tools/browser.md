@@ -42,6 +42,9 @@ openclaw browser --browser-profile openclaw snapshot
 If you get “Browser disabled”, enable it in config (see below) and restart the
 Gateway.
 
+If `openclaw browser` is missing entirely, or the agent says the browser tool
+is unavailable, jump to [Missing browser command or tool](/tools/browser#missing-browser-command-or-tool).
+
 ## Plugin control
 
 The default `browser` tool is now a bundled plugin that ships enabled by
@@ -73,12 +76,51 @@ replacement plugin to reuse.
 
 The bundled browser plugin also owns the browser runtime implementation now.
 Core keeps only shared Plugin SDK helpers plus compatibility re-exports for
-older internal import paths. In practice, removing or replacing
-`extensions/browser` removes the browser feature set instead of leaving a
-second core-owned runtime behind.
+older internal import paths. In practice, removing or replacing the browser
+plugin package removes the browser feature set instead of leaving a second
+core-owned runtime behind.
 
 Browser config changes still require a Gateway restart so the bundled plugin
 can re-register its browser service with the new settings.
+
+## Missing browser command or tool
+
+If `openclaw browser` suddenly becomes an unknown command after an upgrade, or
+the agent reports that the browser tool is missing, the most common cause is a
+restrictive `plugins.allow` list that does not include `browser`.
+
+Example broken config:
+
+```json5
+{
+  plugins: {
+    allow: ["telegram"],
+  },
+}
+```
+
+Fix it by adding `browser` to the plugin allowlist:
+
+```json5
+{
+  plugins: {
+    allow: ["telegram", "browser"],
+  },
+}
+```
+
+Important notes:
+
+- `browser.enabled=true` is not enough by itself when `plugins.allow` is set.
+- `plugins.entries.browser.enabled=true` is also not enough by itself when `plugins.allow` is set.
+- `tools.alsoAllow: ["browser"]` does **not** load the bundled browser plugin. It only adjusts tool policy after the plugin is already loaded.
+- If you do not need a restrictive plugin allowlist, removing `plugins.allow` also restores the default bundled browser behavior.
+
+Typical symptoms:
+
+- `openclaw browser` is an unknown command.
+- `browser.request` is missing.
+- The agent reports the browser tool as unavailable or missing.
 
 ## Profiles: `openclaw` vs `user`
 
@@ -774,3 +816,9 @@ How it maps:
   - If a browser-capable node is connected, the tool may auto-route to it unless you pin `target="host"` or `target="node"`.
 
 This keeps the agent deterministic and avoids brittle selectors.
+
+## Related
+
+- [Tools Overview](/tools) — all available agent tools
+- [Sandboxing](/gateway/sandboxing) — browser control in sandboxed environments
+- [Security](/gateway/security) — browser control risks and hardening

@@ -11,8 +11,12 @@ import {
   resolvePollMaxSelections,
   type OpenClawConfig,
   type TelegramActionConfig,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/telegram-core";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
+import {
+  fitsTelegramCallbackData,
+  TELEGRAM_CALLBACK_DATA_MAX_BYTES,
+} from "./approval-callback-data.js";
 import type { TelegramButtonStyle, TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
@@ -131,9 +135,9 @@ export function readTelegramButtons(
       if (!text || !callbackData) {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`);
       }
-      if (callbackData.length > 64) {
+      if (!fitsTelegramCallbackData(callbackData)) {
         throw new Error(
-          `buttons[${rowIndex}][${buttonIndex}] callback_data too long (max 64 chars)`,
+          `buttons[${rowIndex}][${buttonIndex}] callback_data too long (max ${TELEGRAM_CALLBACK_DATA_MAX_BYTES} bytes)`,
         );
       }
       const styleRaw = rawButton.style;
@@ -214,6 +218,7 @@ export async function handleTelegramAction(
   cfg: OpenClawConfig,
   options?: {
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
 ): Promise<AgentToolResult<unknown>> {
   const { action, accountId } = {
@@ -365,6 +370,7 @@ export async function handleTelegramAction(
       accountId: accountId ?? undefined,
       mediaUrl: mediaUrl || undefined,
       mediaLocalRoots: options?.mediaLocalRoots,
+      mediaReadFile: options?.mediaReadFile,
       buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,

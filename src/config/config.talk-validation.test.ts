@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache, loadConfig } from "./config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "./config.js";
 import { withTempHomeConfig } from "./test-helpers.js";
 
 describe("talk config validation fail-closed behavior", () => {
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
     clearConfigCache();
     vi.restoreAllMocks();
   });

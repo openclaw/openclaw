@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { stopOpenClawChromeMock } = vi.hoisted(() => ({
   stopOpenClawChromeMock: vi.fn(async () => {}),
@@ -21,10 +21,12 @@ vi.mock("./server-context.js", () => ({
 let ensureExtensionRelayForProfiles: typeof import("./server-lifecycle.js").ensureExtensionRelayForProfiles;
 let stopKnownBrowserProfiles: typeof import("./server-lifecycle.js").stopKnownBrowserProfiles;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } =
     await import("./server-lifecycle.js"));
+});
+
+beforeEach(() => {
   createBrowserRouteContextMock.mockClear();
   listKnownProfileNamesMock.mockClear();
   stopOpenClawChromeMock.mockClear();

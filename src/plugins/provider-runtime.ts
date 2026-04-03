@@ -20,19 +20,27 @@ import type {
   ProviderCreateStreamFnContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderNormalizeToolSchemasContext,
   ProviderNormalizeConfigContext,
   ProviderNormalizeModelIdContext,
+  ProviderReasoningOutputMode,
+  ProviderReasoningOutputModeContext,
+  ProviderReplayPolicy,
+  ProviderReplayPolicyContext,
+  ProviderNormalizeResolvedModelContext,
   ProviderNormalizeTransportContext,
   ProviderModernModelPolicyContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
   ProviderPrepareRuntimeAuthContext,
   ProviderResolveConfigApiKeyContext,
+  ProviderSanitizeReplayHistoryContext,
   ProviderResolveUsageAuthContext,
   ProviderPlugin,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
+  ProviderValidateReplayTurnsContext,
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
@@ -224,6 +232,114 @@ export function normalizeProviderResolvedModelWithPlugin(params: {
   );
 }
 
+function resolveProviderCompatHookPlugins(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ProviderPlugin[] {
+  const candidates = resolveProviderPluginsForHooks(params);
+  const owner = resolveProviderRuntimePlugin(params);
+  if (!owner) {
+    return candidates;
+  }
+
+  const ordered = [owner, ...candidates];
+  const seen = new Set<string>();
+  return ordered.filter((candidate) => {
+    const key = `${candidate.pluginId ?? ""}:${candidate.id}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function applyCompatPatchToModel(
+  model: ProviderRuntimeModel,
+  patch: Record<string, unknown>,
+): ProviderRuntimeModel {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as Record<string, unknown>)
+      : undefined;
+  if (Object.entries(patch).every(([key, value]) => compat?.[key] === value)) {
+    return model;
+  }
+  return {
+    ...model,
+    compat: {
+      ...compat,
+      ...patch,
+    },
+  };
+}
+
+export function applyProviderResolvedModelCompatWithPlugins(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderNormalizeResolvedModelContext;
+}): ProviderRuntimeModel | undefined {
+  let nextModel = params.context.model;
+  let changed = false;
+
+  for (const plugin of resolveProviderCompatHookPlugins(params)) {
+    const patch = plugin.contributeResolvedModelCompat?.({
+      ...params.context,
+      model: nextModel,
+    });
+    if (!patch || typeof patch !== "object") {
+      continue;
+    }
+    const patchedModel = applyCompatPatchToModel(nextModel, patch as Record<string, unknown>);
+    if (patchedModel === nextModel) {
+      continue;
+    }
+    nextModel = patchedModel;
+    changed = true;
+  }
+
+  return changed ? nextModel : undefined;
+}
+
+export function applyProviderResolvedTransportWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderNormalizeResolvedModelContext;
+}): ProviderRuntimeModel | undefined {
+  const normalized = normalizeProviderTransportWithPlugin({
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    context: {
+      provider: params.context.provider,
+      api: params.context.model.api,
+      baseUrl: params.context.model.baseUrl,
+    },
+  });
+  if (!normalized) {
+    return undefined;
+  }
+
+  const nextApi = normalized.api ?? params.context.model.api;
+  const nextBaseUrl = normalized.baseUrl ?? params.context.model.baseUrl;
+  if (nextApi === params.context.model.api && nextBaseUrl === params.context.model.baseUrl) {
+    return undefined;
+  }
+
+  return {
+    ...params.context.model,
+    api: nextApi as ProviderRuntimeModel["api"],
+    baseUrl: nextBaseUrl,
+  };
+}
+
 function resolveProviderHookPlugin(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -260,9 +376,12 @@ export function normalizeProviderTransportWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeTransportContext;
 }): { api?: string | null; baseUrl?: string } | undefined {
+  const hasTransportChange = (normalized: { api?: string | null; baseUrl?: string }) =>
+    (normalized.api ?? params.context.api) !== params.context.api ||
+    (normalized.baseUrl ?? params.context.baseUrl) !== params.context.baseUrl;
   const matchedPlugin = resolveProviderHookPlugin(params);
   const normalizedMatched = matchedPlugin?.normalizeTransport?.(params.context);
-  if (normalizedMatched) {
+  if (normalizedMatched && hasTransportChange(normalizedMatched)) {
     return normalizedMatched;
   }
 
@@ -271,7 +390,7 @@ export function normalizeProviderTransportWithPlugin(params: {
       continue;
     }
     const normalized = candidate.normalizeTransport(params.context);
-    if (normalized) {
+    if (normalized && hasTransportChange(normalized)) {
       return normalized;
     }
   }
@@ -321,6 +440,57 @@ export function resolveProviderCapabilitiesWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   return resolveProviderRuntimePlugin(params)?.capabilities;
+}
+
+export function resolveProviderReplayPolicyWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderReplayPolicyContext;
+}): ProviderReplayPolicy | undefined {
+  return resolveProviderHookPlugin(params)?.buildReplayPolicy?.(params.context) ?? undefined;
+}
+
+export async function sanitizeProviderReplayHistoryWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderSanitizeReplayHistoryContext;
+}) {
+  return await resolveProviderHookPlugin(params)?.sanitizeReplayHistory?.(params.context);
+}
+
+export async function validateProviderReplayTurnsWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderValidateReplayTurnsContext;
+}) {
+  return await resolveProviderHookPlugin(params)?.validateReplayTurns?.(params.context);
+}
+
+export function normalizeProviderToolSchemasWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderNormalizeToolSchemasContext;
+}) {
+  return resolveProviderHookPlugin(params)?.normalizeToolSchemas?.(params.context) ?? undefined;
+}
+
+export function resolveProviderReasoningOutputModeWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderReasoningOutputModeContext;
+}): ProviderReasoningOutputMode | undefined {
+  const mode = resolveProviderHookPlugin(params)?.resolveReasoningOutputMode?.(params.context);
+  return mode === "native" || mode === "tagged" ? mode : undefined;
 }
 
 export function prepareProviderExtraParams(params: {

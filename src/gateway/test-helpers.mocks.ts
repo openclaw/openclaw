@@ -4,8 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Mock, vi } from "vitest";
-import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/test-api.ts";
-import { buildOpenAISpeechProvider } from "../../extensions/openai/test-api.ts";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
@@ -16,8 +14,21 @@ import type { HooksConfig } from "../config/types.hooks.js";
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
+
+const { buildElevenLabsSpeechProvider } = loadBundledPluginTestApiSync<{
+  buildElevenLabsSpeechProvider: () => SpeechProviderPlugin;
+}>("elevenlabs");
+const { buildOpenAISpeechProvider } = loadBundledPluginTestApiSync<{
+  buildOpenAISpeechProvider: () => SpeechProviderPlugin;
+}>("openai");
+
+function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
+  return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
+}
 
 type StubChannelOptions = {
   id: ChannelPlugin["id"];
@@ -163,6 +174,7 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   ],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
+  webFetchProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
@@ -355,14 +367,63 @@ vi.mock("../agents/pi-model-discovery.js", async () => {
     "../agents/pi-model-discovery.js",
   );
 
-  class MockModelRegistry extends actual.ModelRegistry {
-    override getAll(): ReturnType<typeof actual.ModelRegistry.prototype.getAll> {
+  const createActualRegistry = (...args: Parameters<typeof actual.discoverModels>) => {
+    const modelsFile = path.join(args[1], "models.json");
+    const Registry = actual.ModelRegistry as unknown as {
+      create?: (
+        authStorage: unknown,
+        modelsFile: string,
+      ) => {
+        getAll: () => Array<{ provider?: string; id?: string }>;
+        getAvailable: () => Array<{ provider?: string; id?: string }>;
+        find: (provider: string, modelId: string) => unknown;
+      };
+      new (
+        authStorage: unknown,
+        modelsFile: string,
+      ): {
+        getAll: () => Array<{ provider?: string; id?: string }>;
+        getAvailable: () => Array<{ provider?: string; id?: string }>;
+        find: (provider: string, modelId: string) => unknown;
+      };
+    };
+    if (typeof Registry.create === "function") {
+      return Registry.create(args[0], modelsFile);
+    }
+    return new Registry(args[0], modelsFile);
+  };
+
+  class MockModelRegistry {
+    private readonly actualRegistry?: ReturnType<typeof createActualRegistry>;
+
+    constructor(authStorage: unknown, modelsFile: string) {
       if (!piSdkMock.enabled) {
-        return super.getAll();
+        this.actualRegistry = createActualRegistry(authStorage as never, path.dirname(modelsFile));
+      }
+    }
+
+    getAll() {
+      if (!piSdkMock.enabled) {
+        return this.actualRegistry?.getAll() ?? [];
       }
       piSdkMock.discoverCalls += 1;
-      // Cast to expected type for testing purposes
-      return piSdkMock.models as ReturnType<typeof actual.ModelRegistry.prototype.getAll>;
+      return piSdkMock.models as Array<{ provider?: string; id?: string }>;
+    }
+
+    getAvailable() {
+      if (!piSdkMock.enabled) {
+        return this.actualRegistry?.getAvailable() ?? [];
+      }
+      return piSdkMock.models as Array<{ provider?: string; id?: string }>;
+    }
+
+    find(provider: string, modelId: string) {
+      if (!piSdkMock.enabled) {
+        return this.actualRegistry?.find(provider, modelId);
+      }
+      return (piSdkMock.models as Array<{ provider?: string; id?: string }>).find(
+        (model) => model.provider === provider && model.id === modelId,
+      );
     }
   }
 
@@ -692,7 +753,7 @@ vi.mock("../commands/health.js", () => ({
 vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
-vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
+vi.mock(buildBundledPluginModuleId("whatsapp", "runtime-api.js"), () => ({
   sendMessageWhatsApp: (...args: unknown[]) =>
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
   sendPollWhatsApp: (...args: unknown[]) =>

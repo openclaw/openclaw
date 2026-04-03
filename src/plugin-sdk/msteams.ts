@@ -1,5 +1,5 @@
 // Private helper surface for the bundled msteams plugin.
-// Keep this list additive and scoped to symbols used under extensions/msteams.
+// Keep this list additive and scoped to the bundled Teams surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
@@ -56,6 +56,7 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export { resolveChannelContextVisibilityMode } from "../config/context-visibility.js";
 export { resolveToolsBySender } from "../config/group-policy.js";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -97,11 +98,15 @@ export {
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
 } from "./group-access.js";
+export {
+  filterSupplementalContextItems,
+  shouldIncludeSupplementalContext,
+} from "../security/context-visibility.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { sleep } from "../utils.js";
 export { loadWebMedia } from "./web-media.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { keepHttpServerTaskAlive } from "./channel-lifecycle.js";
+export { keepHttpServerTaskAlive } from "./channel-lifecycle.core.js";
 export { withFileLock } from "./file-lock.js";
 export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";

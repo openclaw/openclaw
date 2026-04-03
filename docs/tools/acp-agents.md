@@ -13,7 +13,7 @@ title: "ACP Agents"
 
 [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let OpenClaw run external coding harnesses (for example Pi, Claude Code, Codex, Cursor, Copilot, OpenClaw ACP, OpenCode, Gemini CLI, and other supported ACPX harnesses) through an ACP backend plugin.
 
-If you ask OpenClaw in plain language to "run this in Codex" or "start Claude Code in a thread", OpenClaw should route that request to the ACP runtime (not the native sub-agent runtime).
+If you ask OpenClaw in plain language to "run this in Codex" or "start Claude Code in a thread", OpenClaw should route that request to the ACP runtime (not the native sub-agent runtime). Each ACP session spawn is tracked as a [background task](/automation/tasks).
 
 If you want Codex or Claude Code to connect as an external MCP client directly
 to existing OpenClaw channel conversations, use [`openclaw mcp serve`](/cli/mcp)
@@ -624,7 +624,7 @@ openclaw config set plugins.entries.acpx.enabled true
 Local workspace install during development:
 
 ```bash
-openclaw plugins install ./extensions/acpx
+openclaw plugins install ./path/to/local/acpx-plugin
 ```
 
 Then verify backend health:
@@ -637,7 +637,7 @@ Then verify backend health:
 
 By default, the bundled acpx backend plugin (`acpx`) uses the plugin-local pinned binary:
 
-1. Command defaults to `extensions/acpx/node_modules/.bin/acpx`.
+1. Command defaults to the plugin-local `node_modules/.bin/acpx` inside the ACPX plugin package.
 2. Expected version defaults to the extension pin.
 3. Startup registers ACP backend immediately as not-ready.
 4. A background ensure job verifies `acpx --version`.
@@ -672,9 +672,49 @@ Notes:
 
 See [Plugins](/tools/plugin).
 
+### Automatic dependency install
+
+When you install OpenClaw globally with `npm install -g openclaw`, the acpx
+runtime dependencies (platform-specific binaries) are installed automatically
+via a postinstall hook. If the automatic install fails, the gateway still starts
+normally and reports the missing dependency through `openclaw acp doctor`.
+
+### Plugin tools MCP bridge
+
+By default, ACPX sessions do **not** expose OpenClaw plugin-registered tools to
+the ACP harness.
+
+If you want ACP agents such as Codex or Claude Code to call installed
+OpenClaw plugin tools such as memory recall/store, enable the dedicated bridge:
+
+```bash
+openclaw config set plugins.entries.acpx.config.pluginToolsMcpBridge true
+```
+
+What this does:
+
+- Injects a built-in MCP server named `openclaw-plugin-tools` into ACPX session
+  bootstrap.
+- Exposes plugin tools already registered by installed and enabled OpenClaw
+  plugins.
+- Keeps the feature explicit and default-off.
+
+Security and trust notes:
+
+- This expands the ACP harness tool surface.
+- ACP agents get access only to plugin tools already active in the gateway.
+- Treat this as the same trust boundary as letting those plugins execute in
+  OpenClaw itself.
+- Review installed plugins before enabling it.
+
+Custom `mcpServers` still work as before. The built-in plugin-tools bridge is an
+additional opt-in convenience, not a replacement for generic MCP server config.
+
 ## Permission configuration
 
 ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:
+
+These ACPX harness permissions are separate from OpenClaw exec approvals and separate from CLI-backend vendor bypass flags such as Claude CLI `--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level break-glass switch for ACP sessions.
 
 ### `permissionMode`
 
