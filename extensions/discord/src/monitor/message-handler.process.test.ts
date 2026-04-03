@@ -310,7 +310,7 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual(["c1", "m1", "👀", { rest: {} }]);
+    expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual(["c1", "m1", "👀", { rest: {}, cfg: expect.objectContaining({ messages: { ackReaction: "👀" } }) }]);
   });
 
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
@@ -332,7 +332,7 @@ describe("processDiscordMessage ack reactions", () => {
       "fallback-channel",
       "m1",
       "👀",
-      { rest: {} },
+      { rest: {}, cfg: expect.objectContaining({ messages: { ackReaction: "👀" } }) },
     ]);
   });
 
@@ -488,7 +488,7 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith("c1", "m1", "👀", { rest: {} });
+    expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith("c1", "m1", "👀", expect.objectContaining({ rest: {}, cfg: expect.objectContaining({ messages: expect.objectContaining({ ackReaction: "👀", removeAckAfterReply: true }) }) }));
   });
 
   it("removes the plain ack reaction when status reactions are disabled and removeAckAfterReply is enabled", async () => {
