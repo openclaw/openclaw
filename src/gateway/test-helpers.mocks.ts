@@ -19,12 +19,29 @@ import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
 
-const { buildElevenLabsSpeechProvider } = loadBundledPluginTestApiSync<{
-  buildElevenLabsSpeechProvider: () => SpeechProviderPlugin;
-}>("elevenlabs");
-const { buildOpenAISpeechProvider } = loadBundledPluginTestApiSync<{
-  buildOpenAISpeechProvider: () => SpeechProviderPlugin;
-}>("openai");
+type BuildSpeechProvider = () => SpeechProviderPlugin;
+
+let buildElevenLabsSpeechProviderCache: BuildSpeechProvider | undefined;
+let buildOpenAISpeechProviderCache: BuildSpeechProvider | undefined;
+
+function getBuildElevenLabsSpeechProvider(): BuildSpeechProvider {
+  if (!buildElevenLabsSpeechProviderCache) {
+    ({ buildElevenLabsSpeechProvider: buildElevenLabsSpeechProviderCache } =
+      loadBundledPluginTestApiSync<{
+        buildElevenLabsSpeechProvider: BuildSpeechProvider;
+      }>("elevenlabs"));
+  }
+  return buildElevenLabsSpeechProviderCache;
+}
+
+function getBuildOpenAISpeechProvider(): BuildSpeechProvider {
+  if (!buildOpenAISpeechProviderCache) {
+    ({ buildOpenAISpeechProvider: buildOpenAISpeechProviderCache } = loadBundledPluginTestApiSync<{
+      buildOpenAISpeechProvider: BuildSpeechProvider;
+    }>("openai"));
+  }
+  return buildOpenAISpeechProviderCache;
+}
 
 function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
   return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
@@ -164,12 +181,12 @@ const createStubPluginRegistry = (): PluginRegistry => ({
     {
       pluginId: "openai",
       source: "test",
-      provider: buildOpenAISpeechProvider(),
+      provider: getBuildOpenAISpeechProvider()(),
     },
     {
       pluginId: "elevenlabs",
       source: "test",
-      provider: buildElevenLabsSpeechProvider(),
+      provider: getBuildElevenLabsSpeechProvider()(),
     },
   ],
   mediaUnderstandingProviders: [],
