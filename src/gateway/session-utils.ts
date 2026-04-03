@@ -1091,15 +1091,15 @@ export function resolveSessionModelRef(
   const isFromFallback =
     entry && "modelIsFromFallback" in entry && entry.modelIsFromFallback === true;
 
-  const persisted = isFromFallback
-    ? null
-    : resolvePersistedSelectedModelRef({
-        defaultProvider: resolved.provider || DEFAULT_PROVIDER,
-        runtimeProvider: entry?.modelProvider,
-        runtimeModel: entry?.model,
-        overrideProvider: normalizedOverride.providerOverride,
-        overrideModel: normalizedOverride.modelOverride,
-      });
+  const persisted = resolvePersistedSelectedModelRef({
+    defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+    // Skip session-stored runtime model when it came from the fallback chain,
+    // but still honour explicit model overrides set via sessions.patch.
+    runtimeProvider: isFromFallback ? undefined : entry?.modelProvider,
+    runtimeModel: isFromFallback ? undefined : entry?.model,
+    overrideProvider: normalizedOverride.providerOverride,
+    overrideModel: normalizedOverride.modelOverride,
+  });
   if (persisted) {
     return persisted;
   }

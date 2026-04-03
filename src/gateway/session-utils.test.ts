@@ -931,6 +931,26 @@ describe("resolveSessionModelRef", () => {
 
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
   });
+
+  test("honours model override even when modelIsFromFallback is true", () => {
+    // When a fallback model is stored but an explicit override was set via
+    // sessions.patch, the override should still be used.
+    const cfg = createModelDefaultsConfig({
+      primary: "openai-codex/gpt-5.3-codex",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "override-fallback-session",
+      updatedAt: Date.now(),
+      modelProvider: "xai",
+      model: "grok-4-1-fast-reasoning",
+      modelIsFromFallback: true,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+    });
+
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+  });
 });
 
 describe("listSessionsFromStore selected model display", () => {
