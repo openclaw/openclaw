@@ -136,6 +136,62 @@ describe("update global helpers", () => {
     await expect(detectGlobalInstallManagerByPresence(runCommand, 1000)).resolves.toBe("bun");
   });
 
+  it("prefers the owning npm prefix when PATH npm points at a different global root", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-npm-prefix-"));
+    const brewPrefix = path.join(base, "opt", "homebrew");
+    const brewBin = path.join(brewPrefix, "bin");
+    const brewRoot = path.join(brewPrefix, "lib", "node_modules");
+    const pkgRoot = path.join(brewRoot, "openclaw");
+    const pathNpmRoot = path.join(base, "nvm", "lib", "node_modules");
+    const brewNpm = path.join(
+      brewBin,
+      process.platform === "win32" ? "npm.cmd" : "npm",
+    );
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.mkdir(brewBin, { recursive: true });
+    await fs.writeFile(brewNpm, "", "utf8");
+
+    const runCommand: CommandRunner = async (argv) => {
+      if (argv[0] === "npm") {
+        return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
+      }
+      if (argv[0] === brewNpm) {
+        return { stdout: `${brewRoot}\n`, stderr: "", code: 0 };
+      }
+      if (argv[0] === "pnpm") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
+    };
+
+    await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
+      "npm",
+    );
+    await expect(resolveGlobalRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(brewRoot);
+    await expect(resolveGlobalPackageRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(
+      pkgRoot,
+    );
+    expect(globalInstallArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
+      brewNpm,
+      "i",
+      "-g",
+      "openclaw@latest",
+      "--no-fund",
+      "--no-audit",
+      "--loglevel=error",
+    ]);
+    expect(globalInstallFallbackArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
+      brewNpm,
+      "i",
+      "-g",
+      "openclaw@latest",
+      "--omit=optional",
+      "--no-fund",
+      "--no-audit",
+      "--loglevel=error",
+    ]);
+  });
+
   it("builds install argv and npm fallback argv", () => {
     expect(globalInstallArgs("npm", "openclaw@latest")).toEqual([
       "npm",

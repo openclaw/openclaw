@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -180,15 +181,50 @@ function resolveBunGlobalRoot(): string {
   return path.join(bunInstall, "install", "global", "node_modules");
 }
 
+function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
+  const trimmed = pkgRoot?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = path.resolve(trimmed);
+  const nodeModulesDir = path.dirname(normalized);
+  if (path.basename(nodeModulesDir) !== "node_modules") {
+    return null;
+  }
+  const libDir = path.dirname(nodeModulesDir);
+  if (path.basename(libDir) !== "lib") {
+    return null;
+  }
+  return path.dirname(libDir);
+}
+
+function resolvePreferredGlobalManagerCommand(
+  manager: GlobalInstallManager,
+  pkgRoot?: string | null,
+): string {
+  if (manager !== "npm") {
+    return manager;
+  }
+  const prefix = inferNpmPrefixFromPackageRoot(pkgRoot);
+  if (!prefix) {
+    return manager;
+  }
+  const candidate =
+    process.platform === "win32" ? path.join(prefix, "npm.cmd") : path.join(prefix, "bin", "npm");
+  return fsSync.existsSync(candidate) ? candidate : manager;
+}
+
 export async function resolveGlobalRoot(
   manager: GlobalInstallManager,
   runCommand: CommandRunner,
   timeoutMs: number,
+  pkgRoot?: string | null,
 ): Promise<string | null> {
   if (manager === "bun") {
     return resolveBunGlobalRoot();
   }
-  const argv = manager === "pnpm" ? ["pnpm", "root", "-g"] : ["npm", "root", "-g"];
+  const command = resolvePreferredGlobalManagerCommand(manager, pkgRoot);
+  const argv = [command, "root", "-g"];
   const res = await runCommand(argv, { timeoutMs }).catch(() => null);
   if (!res || res.code !== 0) {
     return null;
@@ -201,8 +237,9 @@ export async function resolveGlobalPackageRoot(
   manager: GlobalInstallManager,
   runCommand: CommandRunner,
   timeoutMs: number,
+  pkgRoot?: string | null,
 ): Promise<string | null> {
-  const root = await resolveGlobalRoot(manager, runCommand, timeoutMs);
+  const root = await resolveGlobalRoot(manager, runCommand, timeoutMs, pkgRoot);
   if (!root) {
     return null;
   }
@@ -253,6 +290,10 @@ export async function detectGlobalInstallManagerForRoot(
     }
   }
 
+  if (inferNpmPrefixFromPackageRoot(pkgRoot)) {
+    return "npm";
+  }
+
   return null;
 }
 
@@ -281,24 +322,31 @@ export async function detectGlobalInstallManagerByPresence(
   return null;
 }
 
-export function globalInstallArgs(manager: GlobalInstallManager, spec: string): string[] {
+export function globalInstallArgs(
+  manager: GlobalInstallManager,
+  spec: string,
+  pkgRoot?: string | null,
+): string[] {
+  const command = resolvePreferredGlobalManagerCommand(manager, pkgRoot);
   if (manager === "pnpm") {
-    return ["pnpm", "add", "-g", spec];
+    return [command, "add", "-g", spec];
   }
   if (manager === "bun") {
-    return ["bun", "add", "-g", spec];
+    return [command, "add", "-g", spec];
   }
-  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
+  return [command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
 }
 
 export function globalInstallFallbackArgs(
   manager: GlobalInstallManager,
   spec: string,
+  pkgRoot?: string | null,
 ): string[] | null {
   if (manager !== "npm") {
     return null;
   }
-  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
+  const command = resolvePreferredGlobalManagerCommand(manager, pkgRoot);
+  return [command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
 }
 
 export async function cleanupGlobalRenameDirs(params: {
