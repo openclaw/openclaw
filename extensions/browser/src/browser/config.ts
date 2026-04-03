@@ -370,6 +370,14 @@ export function effectiveHeadless(
   return profile.headless !== undefined ? profile.headless : resolved.headless;
 }
 
+/** Returns the effective executablePath for a profile, applying per-profile override over the global setting. */
+export function effectiveExecutablePath(
+  profile: ResolvedBrowserProfile,
+  resolved: ResolvedBrowserConfig,
+): string | undefined {
+  return profile.executablePath ?? resolved.executablePath;
+}
+
 export function shouldStartLocalBrowserServer(_resolved: ResolvedBrowserConfig) {
   return true;
 }

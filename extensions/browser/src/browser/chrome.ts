@@ -35,7 +35,12 @@ import {
   ensureProfileCleanExit,
   isProfileDecorated,
 } from "./chrome.profile-decoration.js";
-import { effectiveHeadless, type ResolvedBrowserConfig, type ResolvedBrowserProfile } from "./config.js";
+import {
+  effectiveExecutablePath,
+  effectiveHeadless,
+  type ResolvedBrowserConfig,
+  type ResolvedBrowserProfile,
+} from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -73,7 +78,16 @@ export type RunningChrome = {
   proc: ChildProcess;
 };
 
-function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
+function resolveBrowserExecutable(
+  resolved: ResolvedBrowserConfig,
+  executablePathOverride?: string,
+): BrowserExecutable | null {
+  if (executablePathOverride) {
+    return resolveBrowserExecutableForPlatform(
+      { ...resolved, executablePath: executablePathOverride },
+      process.platform,
+    );
+  }
   return resolveBrowserExecutableForPlatform(resolved, process.platform);
 }
 
@@ -302,7 +316,7 @@ export async function launchOpenClawChrome(
   }
   await ensurePortAvailable(profile.cdpPort);
 
-  const exe = resolveBrowserExecutable(resolved);
+  const exe = resolveBrowserExecutable(resolved, effectiveExecutablePath(profile, resolved));
   if (!exe) {
     throw new Error(
       "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
