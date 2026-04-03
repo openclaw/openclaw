@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardAdapter,
+  createPluginSetupWizardStatus,
   createTestWizardPrompter,
   promptSetupWizardAllowFrom,
   runSetupWizardConfigure,
@@ -38,6 +39,7 @@ vi.mock("./monitor.js", async () => {
 });
 
 const ircConfigureAdapter = createPluginSetupWizardAdapter(ircPlugin);
+const ircStatus = createPluginSetupWizardStatus(ircPlugin);
 
 function buildAccount(): ResolvedIrcAccount {
   return {
@@ -108,6 +110,32 @@ describe("irc setup", () => {
         },
       },
     });
+  });
+
+  it("setup status honors the selected named account", async () => {
+    const status = await ircStatus({
+      cfg: {
+        channels: {
+          irc: {
+            accounts: {
+              ops: {
+                host: "irc.example.com",
+                nick: "ops-bot",
+              },
+              work: {
+                host: "irc.example.com",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+      accountOverrides: {
+        irc: "work",
+      },
+    });
+
+    expect(status.configured).toBe(false);
+    expect(status.statusLines).toEqual(["IRC: needs host + nick"]);
   });
 
   it("stores nickserv and account config patches on the scoped account", () => {

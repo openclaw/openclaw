@@ -178,10 +178,13 @@ export const ircSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 0,
     includeStatusLine: true,
-    resolveConfigured: ({ cfg }) =>
-      listIrcAccountIds(cfg as CoreConfig).some(
-        (accountId) => resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).configured,
-      ),
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).configured
+        : listIrcAccountIds(cfg as CoreConfig).some(
+            (resolvedAccountId) =>
+              resolveIrcAccount({ cfg: cfg as CoreConfig, accountId: resolvedAccountId }).configured,
+          ),
   }),
   introNote: {
     title: "IRC setup",
