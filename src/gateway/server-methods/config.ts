@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -225,8 +226,8 @@ function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig):
   const nextAuth = next.gateway?.auth;
   return (
     prevAuth?.mode !== nextAuth?.mode ||
-    prevAuth?.token !== nextAuth?.token ||
-    prevAuth?.password !== nextAuth?.password
+    !isDeepStrictEqual(prevAuth?.token, nextAuth?.token) ||
+    !isDeepStrictEqual(prevAuth?.password, nextAuth?.password)
   );
 }
 
