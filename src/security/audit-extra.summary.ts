@@ -174,6 +174,24 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
   return cfg.browser?.enabled !== false;
 }
 
+function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  // web_research is provided by the You.com plugin; check plugin enable state
+  const normalizedPlugins = cfg.plugins?.entries;
+  const youPlugin = normalizedPlugins?.you;
+  if (!youPlugin || youPlugin.enabled === false) {
+    return false;
+  }
+  // web_research requires an API key to be internet-capable.
+  const pluginConfig = youPlugin.config as { webSearch?: { apiKey?: unknown } } | undefined;
+  const configValue = pluginConfig?.webSearch?.apiKey;
+  if (typeof configValue === "object" && configValue !== null) {
+    // SecretRef — treat as configured
+    return true;
+  }
+  const raw = (typeof configValue === "string" ? configValue : "") || env.YDC_API_KEY;
+  return typeof raw === "string" && raw.trim().length > 0;
+}
+
 export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
@@ -254,6 +272,14 @@ export function collectSmallModelRiskFindings(params: {
     if (isWebFetchEnabled(params.cfg) && isToolAllowedByPolicies("web_fetch", policies)) {
       exposed.push("web_fetch");
     }
+    if (isWebResearchEnabled(params.cfg, params.env)) {
+      if (isToolAllowedByPolicies("web_research", policies)) {
+        exposed.push("web_research");
+      }
+      if (isToolAllowedByPolicies("web_contents", policies)) {
+        exposed.push("web_contents");
+      }
+    }
     if (isBrowserEnabled(params.cfg) && isToolAllowedByPolicies("browser", policies)) {
       exposed.push("browser");
     }
@@ -290,7 +316,7 @@ export function collectSmallModelRiskFindings(params: {
       `\n` +
       "Small models are not recommended for untrusted inputs.",
     remediation:
-      'If you must use small models, enable sandboxing for all sessions (agents.defaults.sandbox.mode="all") and disable web_search/web_fetch/browser (tools.deny=["group:web","browser"]).',
+      'If you must use small models, enable sandboxing for all sessions (agents.defaults.sandbox.mode="all") and disable web_search/web_fetch/web_research/web_contents/browser (tools.deny=["group:web","browser"]).',
   });
 
   return findings;

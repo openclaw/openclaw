@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/you-plugin",
+  "version": "2026.3.22",
+  "private": true,
+  "description": "OpenClaw You.com plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

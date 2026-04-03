@@ -1,0 +1,30 @@
+{
+  "id": "you",
+  "skills": ["./skills"],
+  "providerAuthEnvVars": {
+    "you": ["YDC_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "You.com API Key",
+      "help": "You.com API key for web search and research (optional for search; required for research/contents).",
+      "sensitive": true,
+      "placeholder": "ydc-..."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          }
+        }
+      }
+    }
+  }
+}

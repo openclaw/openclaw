@@ -446,6 +446,17 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInConfigure: true,
     includeInAudit: true,
   },
+  {
+    id: "plugins.entries.you.config.webSearch.apiKey",
+    targetType: "plugins.entries.you.config.webSearch.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "plugins.entries.you.config.webSearch.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
 ];
 
 let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;

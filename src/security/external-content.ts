@@ -90,6 +90,7 @@ export type ExternalContentSource =
   | "channel_metadata"
   | "web_search"
   | "web_fetch"
+  | "web_research"
   | "unknown";
 
 // Hook-origin async runs need immutable ingress provenance because routed
@@ -104,6 +105,7 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   channel_metadata: "Channel metadata",
   web_search: "Web Search",
   web_fetch: "Web Fetch",
+  web_research: "Web Research",
   unknown: "External",
 };
 
@@ -356,9 +358,9 @@ export function getHookType(sessionKey: string): ExternalContentSource {
  */
 export function wrapWebContent(
   content: string,
-  source: "web_search" | "web_fetch" = "web_search",
+  source: "web_search" | "web_fetch" | "web_research" = "web_search",
 ): string {
-  const includeWarning = source === "web_fetch";
+  const includeWarning = source === "web_fetch" || source === "web_research";
   // Marker sanitization happens in wrapExternalContent
   return wrapExternalContent(content, { source, includeWarning });
 }
