@@ -860,6 +860,92 @@ function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: str
   }
 }
 
+function transcriptHasAssistantMessage(transcriptPath: string): boolean {
+  try {
+    const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      const parsed = JSON.parse(line) as { message?: { role?: unknown } };
+      if (parsed?.message?.role === "assistant") {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function appendUserTranscriptMessage(params: {
+  message: string;
+  savedImages: SavedMedia[];
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+  createIfMissing?: boolean;
+  idempotencyKey?: string;
+  now: number;
+}): TranscriptAppendResult {
+  const transcriptPath = resolveTranscriptPath({
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.sessionFile,
+    agentId: params.agentId,
+  });
+  if (!transcriptPath) {
+    return { ok: false, error: "transcript path not resolved" };
+  }
+
+  if (!fs.existsSync(transcriptPath)) {
+    if (!params.createIfMissing) {
+      return { ok: false, error: "transcript file not found" };
+    }
+    const ensured = ensureTranscriptFile({
+      transcriptPath,
+      sessionId: params.sessionId,
+    });
+    if (!ensured.ok) {
+      return { ok: false, error: ensured.error ?? "failed to create transcript file" };
+    }
+  }
+
+  if (params.idempotencyKey && transcriptHasIdempotencyKey(transcriptPath, params.idempotencyKey)) {
+    return { ok: true };
+  }
+
+  const messageBody: Parameters<SessionManager["appendMessage"]>[0] & Record<string, unknown> = {
+    ...buildChatSendTranscriptMessage({
+      message: params.message,
+      savedImages: params.savedImages,
+      timestamp: params.now,
+    }),
+    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+  };
+
+  try {
+    const hadAssistantMessage = transcriptHasAssistantMessage(transcriptPath);
+    const sessionManager = SessionManager.open(transcriptPath);
+    const messageId = sessionManager.appendMessage(messageBody);
+    if (!hadAssistantMessage) {
+      // Pi defers file flushes until an assistant turn exists. Force a rewrite for
+      // first-turn gateway sends so session watchers and history readers can see
+      // the accepted user message immediately.
+      (sessionManager as unknown as { _rewriteFile: () => void })._rewriteFile();
+    }
+    emitSessionTranscriptUpdate({
+      sessionFile: transcriptPath,
+      message: messageBody,
+      messageId,
+    });
+    return { ok: true, messageId, message: messageBody };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
@@ -1670,15 +1756,22 @@ export const chatHandlers: GatewayRequestHandlers = {
             return;
           }
           const persistedImages = await persistedImagesPromise;
-          emitSessionTranscriptUpdate({
-            sessionFile: transcriptPath,
-            sessionKey,
-            message: buildChatSendTranscriptMessage({
-              message: parsedMessage,
-              savedImages: persistedImages,
-              timestamp: now,
-            }),
+          const appended = appendUserTranscriptMessage({
+            message: parsedMessage,
+            savedImages: persistedImages,
+            sessionId: resolvedSessionId,
+            storePath: latestStorePath,
+            sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+            agentId,
+            createIfMissing: true,
+            idempotencyKey: clientRunId,
+            now,
           });
+          if (!appended.ok) {
+            throw new Error(
+              `failed to append user transcript: ${appended.error ?? "unknown error"}`,
+            );
+          }
         })();
         await userTranscriptUpdatePromise;
       };

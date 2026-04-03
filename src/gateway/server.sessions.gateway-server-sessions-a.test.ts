@@ -12,7 +12,7 @@ import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { performGatewaySessionReset } from "./session-reset-service.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { readSessionMessages, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   connectOk,
   embeddedRunMock,
@@ -197,6 +197,28 @@ async function createSessionStoreDir() {
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
   return { dir, storePath };
+}
+
+async function waitForTranscriptMessage(
+  sessionId: string,
+  storePath: string,
+  matchText: string,
+): Promise<unknown[]> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const messages = readSessionMessages(sessionId, storePath);
+    const matched = messages.some((message) => {
+      if (!message || typeof message !== "object") {
+        return false;
+      }
+      const entry = message as { role?: unknown; content?: unknown };
+      return entry.role === "user" && entry.content === matchText;
+    });
+    if (matched) {
+      return messages;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return readSessionMessages(sessionId, storePath);
 }
 
 async function writeSingleLineSession(dir: string, sessionId: string, content: string) {
@@ -492,7 +514,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.create can start the first agent turn from an initial task", async () => {
-    await createSessionStoreDir();
+    const { storePath } = await createSessionStoreDir();
     const { ws } = await openClient();
 
     const created = await rpcReq<{
@@ -515,6 +537,61 @@ describe("gateway server sessions", () => {
     expect(created.payload?.runStarted).toBe(true);
     expect(created.payload?.runId).toBeTruthy();
     expect(created.payload?.messageSeq).toBe(1);
+    expect(created.payload?.sessionId).toBeTruthy();
+
+    const messages = await waitForTranscriptMessage(
+      created.payload?.sessionId ?? "",
+      storePath,
+      "hello from create",
+    );
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: "hello from create",
+        }),
+      ]),
+    );
+
+    ws.close();
+  });
+
+  test("sessions.create persists an initial message containing a URL", async () => {
+    const { storePath } = await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const created = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      runStarted?: boolean;
+      runId?: string;
+      messageSeq?: number;
+    }>(ws, "sessions.create", {
+      agentId: "ops",
+      key: "url-case",
+      message: "visit https://example.com",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toBe("agent:ops:url-case");
+    expect(created.payload?.runStarted).toBe(true);
+    expect(created.payload?.runId).toBeTruthy();
+    expect(created.payload?.messageSeq).toBe(1);
+    expect(created.payload?.sessionId).toBeTruthy();
+
+    const messages = await waitForTranscriptMessage(
+      created.payload?.sessionId ?? "",
+      storePath,
+      "visit https://example.com",
+    );
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: "visit https://example.com",
+        }),
+      ]),
+    );
 
     ws.close();
   });
