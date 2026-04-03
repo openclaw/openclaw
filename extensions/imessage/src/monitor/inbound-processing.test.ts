@@ -111,6 +111,59 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     );
   });
 
+  describe("destination_caller_id disambiguation (#60014)", () => {
+    it("drops outbound DM when destination_caller_id differs from sender", () => {
+      const decision = resolveDecision({
+        message: {
+          id: 100,
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
+          destination_caller_id: "bot@icloud.com",
+          is_from_me: true,
+          text: "hello",
+        },
+      });
+      expect(decision).toEqual({ kind: "drop", reason: "from me" });
+    });
+
+    it("preserves self-chat when destination_caller_id matches sender", () => {
+      const selfChatCache = createSelfChatCache();
+      const echoHas = vi.fn(() => true);
+      const decision = resolveDecision({
+        message: {
+          id: 101,
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
+          destination_caller_id: "+15555550123",
+          is_from_me: true,
+          text: "echo test",
+        },
+        selfChatCache,
+        echoCache: { has: echoHas },
+      });
+      // Self-chat path: echo cache match → drop as agent echo
+      expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+    });
+
+    it("falls back to sender===chatIdentifier when destination_caller_id is absent", () => {
+      const selfChatCache = createSelfChatCache();
+      const echoHas = vi.fn(() => true);
+      const decision = resolveDecision({
+        message: {
+          id: 102,
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
+          is_from_me: true,
+          text: "no dest field",
+        },
+        selfChatCache,
+        echoCache: { has: echoHas },
+      });
+      // Without destination_caller_id, self-chat heuristic applies
+      expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+    });
+  });
+
   it("drops reflected self-chat duplicates after seeing the from-me copy", () => {
     const selfChatCache = createSelfChatCache();
     const createdAt = "2026-03-02T20:58:10.649Z";
