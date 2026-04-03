@@ -314,6 +314,46 @@ describe("subagent-announce-queue", () => {
     expect(overflowSummary).not.toContain("hidden fallback prompt");
   });
 
+  it("does not summarize dropped user-visible announce items from execution.agentPrompt when display text is missing", async () => {
+    const send = vi.fn(async () => {});
+
+    enqueueAnnounce({
+      key: "announce:test:user-visible-drop-fallback",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "hidden execution fallback" },
+        display: { visibility: "user-visible" },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+      send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:user-visible-drop-fallback",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "second internal" },
+        display: {
+          visibility: "user-visible",
+          text: "second visible",
+          summaryLine: "second visible",
+        },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+      send,
+    });
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+    const overflowSent = send.mock.calls[0]?.[0]!;
+    const overflowSummary = overflowSent.display.text ?? "";
+    expect(overflowSummary).toContain("[Queue overflow]");
+    expect(overflowSummary).toContain("[summary unavailable]");
+    expect(overflowSummary).not.toContain("hidden execution fallback");
+  });
+
   it("uses debounce floor for retries when debounce exceeds backoff", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));

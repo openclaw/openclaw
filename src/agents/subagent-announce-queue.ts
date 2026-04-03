@@ -263,9 +263,7 @@ export function enqueueAnnounce(params: {
       if (display.visibility === "summary-only") {
         return display.summaryLine?.trim() || "[summary unavailable]";
       }
-      return (
-        display.summaryLine?.trim() || display.text?.trim() || item.execution.agentPrompt.trim()
-      );
+      return display.summaryLine?.trim() || display.text?.trim() || "[summary unavailable]";
     },
   });
   if (!shouldEnqueue) {
