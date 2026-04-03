@@ -43,7 +43,7 @@ describe("pairing setup code", () => {
       ...config,
       gateway: {
         bind: "custom",
-        customBindHost: "gateway.local",
+        customBindHost: "127.0.0.1",
         auth,
       },
     };
@@ -55,6 +55,23 @@ describe("pairing setup code", () => {
       stdout: '{"Self":{"DNSName":"mb-server.tailnet.ts.net."}}',
       stderr: "",
     }));
+  }
+
+  function createIpv4NetworkInterfaces(
+    address: string,
+  ): ReturnType<NonNullable<NonNullable<ResolveSetupOptions>["networkInterfaces"]>> {
+    return {
+      en0: [
+        {
+          address,
+          family: "IPv4",
+          internal: false,
+          netmask: "255.255.255.0",
+          mac: "00:00:00:00:00:00",
+          cidr: `${address}/24`,
+        },
+      ],
+    };
   }
 
   function expectResolvedSetupOk(
@@ -279,7 +296,7 @@ describe("pairing setup code", () => {
       {
         gateway: {
           bind: "custom",
-          customBindHost: "gateway.local",
+          customBindHost: "127.0.0.1",
           auth: { token },
         },
         ...defaultEnvSecretProviderConfig,
@@ -351,14 +368,14 @@ describe("pairing setup code", () => {
       config: {
         gateway: {
           bind: "custom",
-          customBindHost: "gateway.local",
+          customBindHost: "127.0.0.1",
           port: 19001,
           auth: { mode: "token", token: "tok_123" },
         },
       } satisfies ResolveSetupConfig,
       expected: {
         authLabel: "token",
-        url: "ws://gateway.local:19001",
+        url: "ws://127.0.0.1:19001",
         urlSource: "gateway.bind=custom",
       },
     },
@@ -367,7 +384,7 @@ describe("pairing setup code", () => {
       config: {
         gateway: {
           bind: "custom",
-          customBindHost: "gateway.local",
+          customBindHost: "127.0.0.1",
           auth: { mode: "token", token: "old" },
         },
       } satisfies ResolveSetupConfig,
@@ -378,7 +395,7 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupOptions,
       expected: {
         authLabel: "token",
-        url: "ws://gateway.local:18789",
+        url: "ws://127.0.0.1:18789",
         urlSource: "gateway.bind=custom",
       },
     },
@@ -387,6 +404,52 @@ describe("pairing setup code", () => {
       config,
       options,
       expected,
+    });
+  });
+
+  it.each([
+    {
+      name: "rejects custom bind remote ws setup urls for mobile pairing",
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      expectedError: "Mobile pairing requires a secure remote gateway URL",
+    },
+    {
+      name: "rejects tailnet bind remote ws setup urls for mobile pairing",
+      config: {
+        gateway: {
+          bind: "tailnet",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () => createIpv4NetworkInterfaces("100.64.0.9"),
+      } satisfies ResolveSetupOptions,
+      expectedError: "prefer gateway.tailscale.mode=serve",
+    },
+    {
+      name: "rejects lan bind remote ws setup urls for mobile pairing",
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "password", password: "secret" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () => createIpv4NetworkInterfaces("192.168.1.20"),
+      } satisfies ResolveSetupOptions,
+      expectedError: "ws:// is only valid for localhost",
+    },
+  ] as const)("$name", async ({ config, options, expectedError }) => {
+    await expectResolvedSetupFailureCase({
+      config,
+      options,
+      expectedError,
     });
   });
 

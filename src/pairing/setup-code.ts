@@ -7,6 +7,7 @@ import {
   resolveSecretInputRef,
 } from "../config/types.secrets.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
+import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import {
@@ -61,6 +62,34 @@ type ResolveUrlResult = {
   source?: string;
   error?: string;
 };
+
+function describeSecureMobilePairingFix(source?: string): string {
+  const sourceNote = source ? ` Resolved source: ${source}.` : "";
+  return (
+    "Mobile pairing requires a secure remote gateway URL (wss://) or Tailscale Serve/Funnel." +
+    sourceNote +
+    " Fix: prefer gateway.tailscale.mode=serve, or set gateway.remote.url / " +
+    "plugins.entries.device-pair.config.publicUrl to a wss:// URL. ws:// is only valid for localhost."
+  );
+}
+
+function validateMobilePairingUrl(url: string, source?: string): string | null {
+  if (isSecureWebSocketUrl(url)) {
+    return null;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "Resolved mobile pairing URL is invalid.";
+  }
+  const protocol =
+    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  if (protocol !== "ws:" || isLoopbackHost(parsed.hostname)) {
+    return null;
+  }
+  return describeSecureMobilePairingFix(source);
+}
 
 type ResolveAuthLabelResult = {
   label?: "token" | "password";
@@ -372,6 +401,10 @@ export async function resolvePairingSetupFromConfig(
 
   if (!urlResult.url) {
     return { ok: false, error: urlResult.error ?? "Gateway URL unavailable." };
+  }
+  const mobilePairingUrlError = validateMobilePairingUrl(urlResult.url, urlResult.source);
+  if (mobilePairingUrlError) {
+    return { ok: false, error: mobilePairingUrlError };
   }
 
   if (!authLabel.label) {

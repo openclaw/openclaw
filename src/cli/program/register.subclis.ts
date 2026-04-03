@@ -201,7 +201,7 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "qr",
-    description: "Generate iOS pairing QR/setup code",
+    description: "Generate mobile pairing QR/setup code",
     hasSubcommands: false,
     register: async (program) => {
       const mod = await import("../qr-cli.js");

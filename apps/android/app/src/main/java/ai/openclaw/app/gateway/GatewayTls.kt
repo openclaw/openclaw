@@ -3,7 +3,11 @@ package ai.openclaw.app.gateway
 import android.annotation.SuppressLint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.EOFException
+import java.net.ConnectException
 import java.net.InetSocketAddress
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.CertificateException
@@ -12,6 +16,7 @@ import java.util.Locale
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLException
 import javax.net.ssl.SSLParameters
 import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.SNIHostName
@@ -30,6 +35,16 @@ data class GatewayTlsConfig(
   val sslSocketFactory: SSLSocketFactory,
   val trustManager: X509TrustManager,
   val hostnameVerifier: HostnameVerifier,
+)
+
+enum class GatewayTlsProbeFailure {
+  TLS_UNAVAILABLE,
+  ENDPOINT_UNREACHABLE,
+}
+
+data class GatewayTlsProbeResult(
+  val fingerprintSha256: String? = null,
+  val failure: GatewayTlsProbeFailure? = null,
 )
 
 fun buildGatewayTlsConfig(
@@ -85,10 +100,10 @@ suspend fun probeGatewayTlsFingerprint(
   host: String,
   port: Int,
   timeoutMs: Int = 3_000,
-): String? {
+): GatewayTlsProbeResult {
   val trimmedHost = host.trim()
-  if (trimmedHost.isEmpty()) return null
-  if (port !in 1..65535) return null
+  if (trimmedHost.isEmpty()) return GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
+  if (port !in 1..65535) return GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
 
   return withContext(Dispatchers.IO) {
     val trustAll =
@@ -121,10 +136,21 @@ suspend fun probeGatewayTlsFingerprint(
       }
 
       socket.startHandshake()
-      val cert = socket.session.peerCertificates.firstOrNull() as? X509Certificate ?: return@withContext null
-      sha256Hex(cert.encoded)
-    } catch (_: Throwable) {
-      null
+      val cert =
+        socket.session.peerCertificates.firstOrNull() as? X509Certificate
+          ?: return@withContext GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE)
+      GatewayTlsProbeResult(fingerprintSha256 = sha256Hex(cert.encoded))
+    } catch (err: Throwable) {
+      val failure =
+        when (err) {
+          is SSLException,
+          is EOFException -> GatewayTlsProbeFailure.TLS_UNAVAILABLE
+          is ConnectException,
+          is SocketTimeoutException,
+          is UnknownHostException -> GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
+          else -> GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
+        }
+      GatewayTlsProbeResult(failure = failure)
     } finally {
       try {
         socket.close()
