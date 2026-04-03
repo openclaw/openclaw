@@ -9,7 +9,11 @@ import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-optio
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
-import { normalizeProviderId } from "./model-selection.js";
+import {
+  findConfiguredAgentModelEntry,
+  normalizeProviderId,
+  resolveRoutedModelRef,
+} from "./model-selection.js";
 
 export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
 
@@ -387,8 +391,22 @@ export function resolveContextTokensForModel(params: {
   });
   const explicitProvider = params.provider?.trim();
   if (ref) {
+    const configuredEntry = findConfiguredAgentModelEntry({
+      cfg: params.cfg,
+      provider: ref.provider,
+      model: ref.model,
+    })?.entry;
+    if (typeof configuredEntry?.contextTokens === "number" && configuredEntry.contextTokens > 0) {
+      return configuredEntry.contextTokens;
+    }
+    const routedRef = resolveRoutedModelRef({
+      cfg: params.cfg,
+      provider: ref.provider,
+      model: ref.model,
+      defaultProvider: explicitProvider || ref.provider,
+    });
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
-    if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
+    if (modelParams?.context1m === true && isAnthropic1MModel(routedRef.provider, routedRef.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
     // Only do the config direct scan when the caller explicitly passed a

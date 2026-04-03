@@ -10,6 +10,10 @@ import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentModelEntryConfig = {
   alias?: string;
+  /** Route this selectable model ref to another provider/model at execution time. */
+  routeTo?: string;
+  /** Local context budget override used for compaction/status even when routeTo points upstream elsewhere. */
+  contextTokens?: number;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
   params?: Record<string, unknown>;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */

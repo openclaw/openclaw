@@ -1,4 +1,4 @@
-import { describe, it } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   buildForwardCompatTemplate,
   expectResolvedForwardCompatFallbackWithRegistryResult,
@@ -156,3 +156,39 @@ describe("resolveModel forward-compat tail", () => {
 
   it("builds a zai forward-compat fallback for glm-5", runZaiForwardCompatFallback);
 });
+
+
+it("routes derived model refs to their configured upstream model", () => {
+  const result = resolveModelWithRegistry({
+    provider: "anthropic",
+    modelId: "claude-opus-4-6-500k",
+    agentDir: "/tmp/agent",
+    cfg: {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-6-500k": {
+              routeTo: "anthropic/claude-opus-4-6",
+              contextTokens: 500_000,
+            },
+          },
+        },
+      },
+    } as never,
+    modelRegistry: createRegistry([
+      {
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+        model: {
+          ...ANTHROPIC_OPUS_TEMPLATE,
+          id: "claude-opus-4-6",
+          name: "Claude Opus 4.6",
+        },
+      },
+    ]),
+    runtimeHooks: createRuntimeHooks(),
+  });
+  expect(result?.id).toBe("claude-opus-4-6");
+  expect(result?.provider).toBe("anthropic");
+});
+

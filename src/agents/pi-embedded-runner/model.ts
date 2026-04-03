@@ -16,7 +16,11 @@ import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+  resolveRoutedModelRef,
+} from "../model-selection.js";
 import {
   buildSuppressedBuiltInModelError,
   shouldSuppressBuiltInModel,
@@ -612,7 +616,17 @@ export function resolveModelWithRegistry(params: {
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> | undefined {
-  const explicitModel = resolveExplicitModelWithRegistry(params);
+  const routed = resolveRoutedModelRef({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.modelId,
+    defaultProvider: params.provider,
+  });
+  const effectiveParams =
+    routed.provider === params.provider && routed.model === params.modelId
+      ? params
+      : { ...params, provider: routed.provider, modelId: routed.model };
+  const explicitModel = resolveExplicitModelWithRegistry(effectiveParams);
   if (explicitModel?.kind === "suppressed") {
     return undefined;
   }
@@ -620,12 +634,12 @@ export function resolveModelWithRegistry(params: {
     return explicitModel.model;
   }
 
-  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(params);
+  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(effectiveParams);
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }
 
-  return resolveConfiguredFallbackModel(params);
+  return resolveConfiguredFallbackModel(effectiveParams);
 }
 
 export function resolveModel(

@@ -1,5 +1,6 @@
 import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -68,6 +69,69 @@ export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
 };
+
+export type AgentModelEntryResolved = {
+  key: string;
+  entry: AgentModelEntryConfig;
+};
+
+export function findConfiguredAgentModelEntry(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  model: string;
+}): AgentModelEntryResolved | undefined {
+  const rawModels = params.cfg?.agents?.defaults?.models;
+  if (!rawModels) {
+    return undefined;
+  }
+  const targetKey = modelKey(params.provider, params.model);
+  for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
+    const parsed = parseModelRef(String(keyRaw ?? ""), params.provider);
+    if (!parsed) {
+      continue;
+    }
+    if (modelKey(parsed.provider, parsed.model) !== targetKey) {
+      continue;
+    }
+    return { key: keyRaw, entry: (entryRaw ?? {}) as AgentModelEntryConfig };
+  }
+  return undefined;
+}
+
+export function resolveRoutedModelRef(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  model: string;
+  defaultProvider?: string;
+  maxHops?: number;
+}): ModelRef {
+  const defaultProvider = params.defaultProvider ?? params.provider;
+  const maxHops = Math.max(1, params.maxHops ?? 4);
+  let current: ModelRef = { provider: params.provider, model: params.model };
+  const seen = new Set<string>();
+  for (let i = 0; i < maxHops; i += 1) {
+    const key = modelKey(current.provider, current.model);
+    if (seen.has(key)) {
+      break;
+    }
+    seen.add(key);
+    const configured = findConfiguredAgentModelEntry({
+      cfg: params.cfg,
+      provider: current.provider,
+      model: current.model,
+    });
+    const routeTo = configured?.entry?.routeTo?.trim();
+    if (!routeTo) {
+      break;
+    }
+    const parsed = parseModelRef(routeTo, defaultProvider);
+    if (!parsed) {
+      break;
+    }
+    current = parsed;
+  }
+  return current;
+}
 
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();

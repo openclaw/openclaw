@@ -16,6 +16,7 @@ import {
   resolveSubagentConfiguredModelSelection,
   resolveThinkingDefault,
   resolveModelRefFromString,
+  resolveRoutedModelRef,
 } from "./model-selection.js";
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
@@ -983,5 +984,40 @@ describe("resolveSubagentConfiguredModelSelection", () => {
     expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
       "google/gemini-2.5-pro",
     );
+  });
+});
+
+
+describe("resolveRoutedModelRef", () => {
+  it("returns the original ref when no routeTo is configured", () => {
+    expect(
+      resolveRoutedModelRef({
+        cfg: { agents: { defaults: { models: { "anthropic/claude-opus-4-6": {} } } } } as OpenClawConfig,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      }),
+    ).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+  });
+
+  it("follows routeTo for derived model refs", () => {
+    expect(
+      resolveRoutedModelRef({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-opus-4-6": {},
+                "anthropic/claude-opus-4-6-500k": {
+                  routeTo: "anthropic/claude-opus-4-6",
+                  contextTokens: 500_000,
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        provider: "anthropic",
+        model: "claude-opus-4-6-500k",
+      }),
+    ).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
   });
 });

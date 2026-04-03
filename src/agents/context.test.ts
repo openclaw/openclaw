@@ -192,4 +192,27 @@ describe("resolveContextTokensForModel", () => {
 
     expect(result).toBe(200_000);
   });
+
+  it("prefers per-model contextTokens on derived model refs", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": { params: { context1m: true } },
+              "anthropic/claude-opus-4-6-500k": {
+                routeTo: "anthropic/claude-opus-4-6",
+                contextTokens: 500_000,
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      provider: "anthropic",
+      model: "claude-opus-4-6-500k",
+    });
+    expect(result).toBe(500_000);
+  });
 });
+
