@@ -7,10 +7,13 @@ const acquireSessionWriteLockMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => ({ release: acquireSessionWriteLockReleaseMock })),
 );
 
-vi.mock("../session-write-lock.js", () => ({
-  acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
-  resolveSessionLockMaxHoldFromTimeout: () => 1,
-}));
+vi.mock("../session-write-lock.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../session-write-lock.js")>();
+  return {
+    ...original,
+    acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
+  };
+});
 
 let rewriteTranscriptEntriesInSessionFile: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionFile;
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
@@ -19,10 +22,13 @@ let installSessionToolResultGuard: typeof import("../session-tool-result-guard.j
 
 async function loadFreshTranscriptRewriteModuleForTest() {
   vi.resetModules();
-  vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
-    resolveSessionLockMaxHoldFromTimeout: () => 1,
-  }));
+  vi.doMock("../session-write-lock.js", async (importOriginal) => {
+    const original = await importOriginal<typeof import("../session-write-lock.js")>();
+    return {
+      ...original,
+      acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
+    };
+  });
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
   ({ rewriteTranscriptEntriesInSessionFile, rewriteTranscriptEntriesInSessionManager } =

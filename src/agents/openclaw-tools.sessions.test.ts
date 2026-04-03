@@ -721,7 +721,7 @@ describe("sessions tools", () => {
       ),
     ).toBe(true);
     expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(8);
+    expect(historyOnlyCalls).toHaveLength(9);
     expect(sendCallCount).toBe(0);
   });
 

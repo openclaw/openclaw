@@ -10,6 +10,7 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
@@ -225,5 +226,5 @@ export function isRoutableChannel(
   if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
     return false;
   }
-  return normalizeChannelId(channel) !== null;
+  return normalizeChatChannelId(channel) !== null || normalizeChannelId(channel) !== null;
 }
