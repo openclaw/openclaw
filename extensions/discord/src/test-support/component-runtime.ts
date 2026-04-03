@@ -104,6 +104,17 @@ vi.mock("../monitor/agent-components.deps.runtime.js", () => {
   };
 });
 
+vi.mock("../interactive-dispatch.js", async () => {
+  const actual = await vi.importActual<typeof import("../interactive-dispatch.js")>(
+    "../interactive-dispatch.js",
+  );
+  return {
+    ...actual,
+    dispatchDiscordPluginInteractiveHandler: (...args: unknown[]) =>
+      dispatchPluginInteractiveHandlerMock(...args),
+  };
+});
+
 export function resetDiscordComponentRuntimeMocks() {
   dispatchPluginInteractiveHandlerMock.mockReset().mockResolvedValue({
     matched: false,

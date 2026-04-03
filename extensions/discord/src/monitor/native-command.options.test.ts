@@ -153,7 +153,7 @@ describe("createDiscordNativeCommand option wiring", () => {
   });
 
   it("keeps static choices for non-acp string action arguments", () => {
-    const command = createNativeCommand("voice");
+    const command = createNativeCommand("config");
     const action = requireOption(command, "action");
     const choices = readChoices(action);
 
