@@ -1,6 +1,6 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { loadOutboundMediaFromUrl, type OpenClawConfig } from "openclaw/plugin-sdk/msteams";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
