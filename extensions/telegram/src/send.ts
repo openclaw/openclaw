@@ -6,22 +6,14 @@ import type {
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import * as grammy from "grammy";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
-import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
-import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
-import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
@@ -37,6 +29,18 @@ import {
 } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 import { makeProxyFetch } from "./proxy.js";
+import {
+  buildOutboundMediaLoadOptions,
+  getImageMetadata,
+  isGifMedia,
+  kindFromMime,
+  loadConfig,
+  loadWebMedia,
+  normalizePollInput,
+  type PollInput,
+  type MediaKind,
+  resolveMarkdownTableMode,
+} from "./send.runtime.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import {

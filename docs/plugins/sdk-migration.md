@@ -155,7 +155,7 @@ bundled plugin workspace, keep provider-owned helpers in that plugin's own
   | `plugin-sdk/channel-config-schema` | Config schema builders | Channel config schema types |
   | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
   | `plugin-sdk/channel-lifecycle` | Account status tracking | `createAccountStatusSink` |
-  | `plugin-sdk/channel-runtime` | Runtime wiring helpers | Channel runtime utilities |
+  | `plugin-sdk/channel-runtime` | Deprecated compatibility shim | Legacy channel runtime utilities only |
   | `plugin-sdk/channel-send-result` | Send result types | Reply result types |
   | `plugin-sdk/runtime-store` | Persistent plugin storage | `createPluginRuntimeStore` |
   | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers |

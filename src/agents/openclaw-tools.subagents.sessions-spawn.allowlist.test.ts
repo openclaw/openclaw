@@ -30,6 +30,23 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     });
   }
 
+  function setDefaultAllowAgents(allowAgents: string[]) {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents,
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    });
+  }
+
   function mockAcceptedSpawn(acceptedAt: number) {
     let childSessionKey: string | undefined;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -187,6 +204,19 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       callId: "call7",
       acceptedAt: 5000,
     });
+  });
+
+  it("sessions_spawn falls back to default allowlist when agent config omits allowAgents", async () => {
+    setDefaultAllowAgents(["beta"]);
+    const getChildSessionKey = mockAcceptedSpawn(5050);
+
+    const result = await executeSpawn("call7b", "beta");
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:beta:subagent:")).toBe(true);
   });
 
   it("sessions_spawn allows any agent when allowlist is *", async () => {

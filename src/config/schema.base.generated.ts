@@ -3068,6 +3068,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               subagents: {
                 type: "object",
                 properties: {
+                  allowAgents: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
                   maxConcurrent: {
                     type: "integer",
                     exclusiveMinimum: 0,
@@ -21608,7 +21614,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "models.providers.*.request": {
       label: "Model Provider Request Overrides",
-      help: "Optional request overrides for model-provider requests. Today this path supports header and auth overrides only; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
+      help: "Optional request overrides for model-provider requests. Use this only for header and auth overrides today; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
       tags: ["models"],
     },
     "models.providers.*.request.headers": {

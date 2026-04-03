@@ -28,7 +28,7 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
-import { discordApprovalCapability } from "./approval-native.js";
+import { getDiscordApprovalCapability } from "./approval-native.js";
 import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
@@ -339,7 +339,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           hint: "<channelId|user:ID|channel:ID>",
         },
       },
-      approvalCapability: discordApprovalCapability,
+      approvalCapability: getDiscordApprovalCapability(),
       directory: createChannelDirectoryAdapter({
         listPeers: async (params) => listDiscordDirectoryPeersFromConfig(params),
         listGroups: async (params) => listDiscordDirectoryGroupsFromConfig(params),

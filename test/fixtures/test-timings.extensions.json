@@ -1047,9 +1047,13 @@
       "durationMs": 2.155517578125,
       "testCount": 5
     },
-    "extensions/telegram/src/fetch.network-policy.test.ts": {
-      "durationMs": 3260,
-      "testCount": 5
+    "extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts": {
+      "durationMs": 2720,
+      "testCount": 27
+    },
+    "extensions/telegram/src/fetch.test.ts": {
+      "durationMs": 269,
+      "testCount": 23
     }
   }
 }
