@@ -1098,6 +1098,36 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
+  it("keeps auto-enabled bundled channels behind restrictive allowlists", () => {
+    setupBundledTelegramPlugin();
+    const rawConfig = {
+      channels: {
+        telegram: {
+          botToken: "x",
+        },
+      },
+      plugins: {
+        allow: ["browser"],
+      },
+    } satisfies PluginLoadConfig;
+    const autoEnabled = applyPluginAutoEnable({
+      config: rawConfig,
+      env: {},
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: cachedBundledTelegramDir,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    });
+
+    const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+    expect(telegram?.status).toBe("disabled");
+    expect(telegram?.error).toBe("not in allowlist");
+  });
+
   it("preserves all auto-enable reasons in activation metadata", () => {
     setupBundledTelegramPlugin();
     const rawConfig = {

@@ -287,8 +287,7 @@ export function resolvePluginActivationState(params: {
   });
   const explicitlyConfiguredBundledChannel =
     params.origin === "bundled" &&
-    explicitSelection.reason === "channel enabled in config" &&
-    explicitSelection.explicitlyEnabled;
+    isBundledChannelEnabledByChannelConfig(params.sourceRootConfig ?? params.rootConfig, params.id);
 
   if (!params.config.enabled) {
     return {
@@ -451,6 +450,8 @@ export function resolveEffectiveEnableState(params: {
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
+  sourceConfig?: NormalizedPluginsConfig;
+  sourceRootConfig?: OpenClawConfig;
 }): { enabled: boolean; reason?: string } {
   const state = resolveEffectivePluginActivationState(params);
   return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };

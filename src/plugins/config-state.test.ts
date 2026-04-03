@@ -351,6 +351,36 @@ describe("resolveEffectivePluginActivationState", () => {
     });
   });
 
+  it("keeps denylist authoritative over explicit bundled channel activation", () => {
+    const rawConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        deny: ["telegram"],
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "telegram",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
+        sourceRootConfig: rawConfig,
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: true,
+      source: "disabled",
+      reason: "blocked by denylist",
+    });
+  });
+
   it("does not let auto-enable reasons bypass the allowlist", () => {
     const rawConfig = {
       plugins: {
