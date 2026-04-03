@@ -645,6 +645,33 @@ describe("config strict validation", () => {
     });
   });
 
+  it("accepts legacy x_search auth via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: "test-key",
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "tools.web.x_search.apiKey")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
+        apiKey: "test-key",
+      });
+      expect(
+        (snap.sourceConfig.tools?.web?.x_search as Record<string, unknown> | undefined)?.apiKey,
+      ).toBeUndefined();
+    });
+  });
+
   it("accepts legacy channel streaming aliases via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
@@ -691,6 +718,32 @@ describe("config strict validation", () => {
         streaming: "partial",
         nativeStreaming: true,
       });
+    });
+  });
+
+  it("accepts telegram groupMentionsOnly via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        channels: {
+          telegram: {
+            groupMentionsOnly: true,
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(
+        snap.legacyIssues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly"),
+      ).toBe(true);
+      expect(snap.sourceConfig.channels?.telegram?.groups?.["*"]).toMatchObject({
+        requireMention: true,
+      });
+      expect(
+        (snap.sourceConfig.channels?.telegram as Record<string, unknown> | undefined)
+          ?.groupMentionsOnly,
+      ).toBeUndefined();
     });
   });
 

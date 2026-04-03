@@ -1360,6 +1360,76 @@ describe("doctor config flow", () => {
     }
   });
 
+  it("warns clearly about legacy telegram groupMentionsOnly config and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          channels: {
+            telegram: {
+              groupMentionsOnly: true,
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            String(message).includes("channels.telegram.groupMentionsOnly:") &&
+            String(message).includes("channels.telegram.groups"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("warns clearly about legacy x_search auth config and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          tools: {
+            web: {
+              x_search: {
+                apiKey: "test-key",
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            String(message).includes("tools.web.x_search.apiKey:") &&
+            String(message).includes("plugins.entries.xai.config.webSearch.apiKey"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("warns clearly about legacy talk config and points to doctor --fix", async () => {
     const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     try {
