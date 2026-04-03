@@ -33,7 +33,6 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { getDiscordApprovalCapability } from "./approval-native.js";
-import { discordMessageActions as discordMessageActionsImpl } from "./channel-actions.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -74,6 +73,7 @@ import { parseDiscordTarget } from "./targets.js";
 type DiscordSendFn = typeof sendMessageDiscord;
 type DiscordUiModule = typeof import("./ui.js");
 type DiscordCarbonModule = typeof import("@buape/carbon");
+type DiscordChannelActionsModule = typeof import("./channel-actions.js");
 type DiscordTextDisplay = InstanceType<DiscordCarbonModule["TextDisplay"]>;
 type DiscordSeparator = InstanceType<DiscordCarbonModule["Separator"]>;
 
@@ -84,6 +84,7 @@ let discordProbeRuntimePromise: Promise<typeof import("./probe.runtime.js")> | u
 let discordAuditModulePromise: Promise<typeof import("./audit.js")> | undefined;
 let discordUiModuleCache: DiscordUiModule | null = null;
 let discordCarbonModuleCache: DiscordCarbonModule | null = null;
+let discordChannelActionsModuleCache: DiscordChannelActionsModule | null = null;
 
 const require = createRequire(import.meta.url);
 
@@ -110,6 +111,12 @@ function loadDiscordCarbonModule() {
 function loadDiscordUiModule() {
   discordUiModuleCache ??= require("./ui.js") as DiscordUiModule;
   return discordUiModuleCache;
+}
+
+function loadDiscordChannelActionsModule() {
+  discordChannelActionsModuleCache ??=
+    require("./channel-actions.js") as DiscordChannelActionsModule;
+  return discordChannelActionsModuleCache;
 }
 
 const meta = getChatChannelMeta("discord");
@@ -145,13 +152,13 @@ const discordMessageActions = {
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0],
   ): ChannelMessageToolDiscovery | null =>
     resolveRuntimeDiscordMessageActions()?.describeMessageTool?.(ctx) ??
-    discordMessageActionsImpl.describeMessageTool?.(ctx) ??
+    loadDiscordChannelActionsModule().discordMessageActions.describeMessageTool?.(ctx) ??
     null,
   extractToolSend: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["extractToolSend"]>>[0],
   ) =>
     resolveRuntimeDiscordMessageActions()?.extractToolSend?.(ctx) ??
-    discordMessageActionsImpl.extractToolSend?.(ctx) ??
+    loadDiscordChannelActionsModule().discordMessageActions.extractToolSend?.(ctx) ??
     null,
   handleAction: async (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["handleAction"]>>[0],
@@ -160,10 +167,11 @@ const discordMessageActions = {
     if (runtimeHandleAction) {
       return await runtimeHandleAction(ctx);
     }
-    if (!discordMessageActionsImpl.handleAction) {
+    const { discordMessageActions } = loadDiscordChannelActionsModule();
+    if (!discordMessageActions.handleAction) {
       throw new Error("Discord message actions not available");
     }
-    return await discordMessageActionsImpl.handleAction(ctx);
+    return await discordMessageActions.handleAction(ctx);
   },
 };
 
