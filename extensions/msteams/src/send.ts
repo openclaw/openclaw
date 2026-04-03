@@ -20,6 +20,7 @@ import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js"
 import { buildMSTeamsPollCard } from "./polls.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
+import { AI_GENERATED_ENTITY } from "./ai-entity.js";
 
 export type SendMSTeamsMessageParams = {
   /** Full config (for credentials) */
@@ -161,6 +162,8 @@ export async function sendMessageMSTeams(
         description: messageText || undefined,
       });
 
+      activity.entities = [AI_GENERATED_ENTITY];
+
       log.debug?.("sending file consent card", { uploadId, fileName, size: media.buffer.length });
 
       const messageId = await sendProactiveActivity({
@@ -241,6 +244,7 @@ export async function sendMessageMSTeams(
           type: "message",
           text: messageText || undefined,
           attachments: [fileCardAttachment],
+          entities: [AI_GENERATED_ENTITY],
         };
         const messageId = await sendProactiveActivityRaw({
           adapter,
@@ -259,6 +263,10 @@ export async function sendMessageMSTeams(
       }
 
       // Fallback: no SharePoint site configured, use OneDrive with markdown link
+      if (!tokenProvider) {
+        throw new Error("OneDrive upload requires an authenticated tokenProvider");
+      }
+
       log.debug?.("uploading to OneDrive (no SharePoint site configured)", {
         fileName,
         conversationType,
@@ -281,6 +289,7 @@ export async function sendMessageMSTeams(
       const activity = {
         type: "message",
         text: messageText ? `${messageText}\n\n${fileLink}` : fileLink,
+        entities: [AI_GENERATED_ENTITY],
       };
       const messageId = await sendProactiveActivityRaw({
         adapter,
@@ -452,6 +461,7 @@ export async function sendPollMSTeams(
         content: pollCard.card,
       },
     ],
+    entities: [AI_GENERATED_ENTITY],
   };
 
   // Send poll via proactive conversation (Adaptive Cards require direct activity send)
@@ -498,6 +508,7 @@ export async function sendAdaptiveCardMSTeams(
         content: card,
       },
     ],
+    entities: [AI_GENERATED_ENTITY],
   };
 
   // Send card via proactive conversation
