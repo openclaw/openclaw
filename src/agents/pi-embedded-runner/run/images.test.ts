@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as webMedia from "../../../media/web-media.js";
+import * as store from "../../../media/store.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
@@ -269,6 +270,7 @@ describe("loadImageFromRef", () => {
     }
   });
   it("should bypass loadWebMedia and use fs.readFile for media-uri refs", async () => {
+    const resolveSpy = vi.spyOn(store, "resolveMediaBufferPath").mockResolvedValue("/mock/absolute/path/test.jpg");
     const fsSpy = vi.spyOn(fs, "readFile").mockResolvedValue(Buffer.from("mock data"));
     const loadWebMediaSpy = vi.spyOn(webMedia, "loadWebMedia");
 
@@ -279,15 +281,17 @@ describe("loadImageFromRef", () => {
         resolved: "media://inbound/test.jpg",
       },
       "mock-workspace",
-      {},
+      {}
     );
 
-    expect(fsSpy).toHaveBeenCalled();
+    expect(resolveSpy).toHaveBeenCalledWith("test.jpg", "inbound");
+    expect(fsSpy).toHaveBeenCalledWith("/mock/absolute/path/test.jpg");
     expect(loadWebMediaSpy).not.toHaveBeenCalled();
     expect(result).toMatchObject({ type: "image", mimeType: "image/jpeg" });
 
     fsSpy.mockRestore();
     loadWebMediaSpy.mockRestore();
+    resolveSpy.mockRestore();
   });
 });
 
