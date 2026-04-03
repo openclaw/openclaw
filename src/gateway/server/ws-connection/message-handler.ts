@@ -987,29 +987,6 @@ export function attachGatewayWsMessageHandler(params: {
         const deviceToken = device
           ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
           : null;
-        if (
-          authMethod === "bootstrap-token" &&
-          bootstrapProfile &&
-          bootstrapTokenCandidate &&
-          device
-        ) {
-          const redemption = await redeemDeviceBootstrapTokenProfile({
-            token: bootstrapTokenCandidate,
-            role,
-            scopes,
-          });
-          if (redemption.fullyRedeemed) {
-            const revoked = await revokeDeviceBootstrapToken({
-              token: bootstrapTokenCandidate,
-            });
-            if (!revoked.removed) {
-              logGateway.warn(
-                `bootstrap token revoke skipped after profile redemption device=${device.id}`,
-              );
-            }
-          }
-        }
-
         if (role === "node") {
           const reconciliation = await reconcileNodePairingOnConnect({
             cfg: loadConfig(),
@@ -1181,6 +1158,34 @@ export function attachGatewayWsMessageHandler(params: {
           stateVersion: snapshot.stateVersion.presence,
         });
 
+        if (
+          authMethod === "bootstrap-token" &&
+          bootstrapProfile &&
+          bootstrapTokenCandidate &&
+          device
+        ) {
+          try {
+            const redemption = await redeemDeviceBootstrapTokenProfile({
+              token: bootstrapTokenCandidate,
+              role,
+              scopes,
+            });
+            if (redemption.fullyRedeemed) {
+              const revoked = await revokeDeviceBootstrapToken({
+                token: bootstrapTokenCandidate,
+              });
+              if (!revoked.removed) {
+                logGateway.warn(
+                  `bootstrap token revoke skipped after profile redemption device=${device.id}`,
+                );
+              }
+            }
+          } catch (err) {
+            logGateway.warn(
+              `bootstrap token redemption bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
+            );
+          }
+        }
         send({ type: "res", id: frame.id, ok: true, payload: helloOk });
         void refreshGatewayHealthSnapshot({ probe: true }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),

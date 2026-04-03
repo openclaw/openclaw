@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   approvePendingPairingIfNeeded,
@@ -22,6 +22,7 @@ import {
   TEST_OPERATOR_CLIENT,
   testState,
   TRUSTED_PROXY_CONTROL_UI_HEADERS,
+  waitForWsClose,
   withGatewayServer,
   writeTrustedProxyControlUiConfig,
 } from "./server.auth.shared.js";
@@ -914,6 +915,64 @@ export function registerControlUiAndPairingSuite(): void {
       );
       wsReplay.close();
     } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
+  test("does not consume bootstrap token when node reconcile fails before hello-ok", async () => {
+    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const reconcileModule = await import("./node-connect-reconcile.js");
+    const reconcileSpy = vi
+      .spyOn(reconcileModule, "reconcileNodePairingOnConnect")
+      .mockRejectedValueOnce(new Error("boom"));
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    ws.close();
+
+    const { identityPath, client } = await createOperatorIdentityFixture(
+      "openclaw-bootstrap-reconcile-fail-",
+    );
+    const nodeClient = {
+      ...client,
+      id: "openclaw-android",
+      mode: "node",
+    };
+
+    try {
+      const issued = await issueDeviceBootstrapToken({
+        profile: {
+          roles: ["node"],
+          scopes: [],
+        },
+      });
+
+      const wsFail = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      await expect(
+        connectReq(wsFail, {
+          skipDefaultAuth: true,
+          bootstrapToken: issued.token,
+          role: "node",
+          scopes: [],
+          client: nodeClient,
+          deviceIdentityPath: identityPath,
+          timeoutMs: 500,
+        }),
+      ).rejects.toThrow();
+      await expect(waitForWsClose(wsFail, 1_000)).resolves.toBe(true);
+
+      const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const retry = await connectReq(wsRetry, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client: nodeClient,
+        deviceIdentityPath: identityPath,
+      });
+      expect(retry.ok).toBe(true);
+      wsRetry.close();
+    } finally {
+      reconcileSpy.mockRestore();
       await server.close();
       restoreGatewayToken(prevToken);
     }
