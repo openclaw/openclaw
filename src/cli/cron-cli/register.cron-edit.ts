@@ -61,6 +61,16 @@ async function findCronJobById(params: {
   return undefined;
 }
 
+function isIsolatedLikeSessionTarget(target: string | undefined): boolean {
+  if (typeof target !== "string") {
+    return false;
+  }
+  if (target === "isolated" || target === "current") {
+    return true;
+  }
+  return target.toLowerCase().startsWith("session:") && target.slice(8).trim().length > 0;
+}
+
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
     cron
@@ -258,7 +268,10 @@ export function registerCronEditCommand(cron: Command) {
               : hasExplicitAgentTurnPayloadPatch
                 ? "agentTurn"
                 : existingPayloadKind;
-            if (effectiveSessionTarget !== "isolated" || effectivePayloadKind !== "agentTurn") {
+            if (
+              !isIsolatedLikeSessionTarget(effectiveSessionTarget) ||
+              effectivePayloadKind !== "agentTurn"
+            ) {
               throw new Error("--thread-id is only supported for non-main agentTurn jobs");
             }
           }

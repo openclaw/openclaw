@@ -152,7 +152,7 @@ function mockCronEditJobLookup(schedule: unknown): void {
 function mockCronEditPagedJobLookup(params: {
   schedule?: unknown;
   delivery?: { channel?: string; to?: string; mode?: string };
-  sessionTarget?: "main" | "isolated";
+  sessionTarget?: string;
   payload?: { kind?: "systemEvent" | "agentTurn"; text?: string; message?: string };
 }): void {
   callGatewayFromCli.mockImplementation(
@@ -692,6 +692,34 @@ describe("cron cli", () => {
     await expect(
       program.parseAsync(["cron", "edit", "job-1", "--thread-id", "48"], { from: "user" }),
     ).rejects.toThrow("__exit__:1");
+  });
+
+  it("allows --thread-id for existing current agentTurn jobs", async () => {
+    resetGatewayMock();
+    mockCronEditPagedJobLookup({
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      sessionTarget: "current",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { channel: "telegram", to: "-1001234567890" },
+    });
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--thread-id", "48"], { from: "user" });
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.delivery?.to).toBe("-1001234567890:topic:48");
+  });
+
+  it("allows --thread-id for existing session:<id> agentTurn jobs", async () => {
+    resetGatewayMock();
+    mockCronEditPagedJobLookup({
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      sessionTarget: "session:project-alpha-monitor",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { channel: "telegram", to: "-1001234567890" },
+    });
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--thread-id", "48"], { from: "user" });
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.delivery?.to).toBe("-1001234567890:topic:48");
   });
 
   it("rejects --thread-id with --no-deliver on cron edit", async () => {
