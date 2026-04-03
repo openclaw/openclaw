@@ -22,18 +22,20 @@ export async function transcribeOpenAiCompatibleAudio(
   params: OpenAiCompatibleAudioParams,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const { baseUrl, allowPrivateNetwork, headers } = resolveProviderHttpRequestConfig({
-    baseUrl: params.baseUrl,
-    defaultBaseUrl: params.defaultBaseUrl,
-    headers: params.headers,
-    defaultHeaders: {
-      authorization: `Bearer ${params.apiKey}`,
-    },
-    provider: params.provider,
-    api: "openai-audio-transcriptions",
-    capability: "audio",
-    transport: "media-understanding",
-  });
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+    resolveProviderHttpRequestConfig({
+      baseUrl: params.baseUrl,
+      defaultBaseUrl: params.defaultBaseUrl,
+      headers: params.headers,
+      request: params.request,
+      defaultHeaders: {
+        authorization: `Bearer ${params.apiKey}`,
+      },
+      provider: params.provider,
+      api: "openai-audio-transcriptions",
+      capability: "audio",
+      transport: "media-understanding",
+    });
   const url = `${baseUrl}/audio/transcriptions`;
 
   const model = resolveModel(params.model, params.defaultModel);
@@ -59,6 +61,7 @@ export async function transcribeOpenAiCompatibleAudio(
     timeoutMs: params.timeoutMs,
     fetchFn,
     allowPrivateNetwork,
+    dispatcherPolicy,
   });
 
   try {

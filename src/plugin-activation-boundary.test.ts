@@ -45,12 +45,6 @@ describe("plugin activation boundary", () => {
       }>
     | undefined;
   let browserAmbientImportsPromise: Promise<void> | undefined;
-  let discordMaintenancePromise:
-    | Promise<{
-        unbindThreadBindingsBySessionKey: typeof import("./plugin-sdk/discord-thread-bindings.js").unbindThreadBindingsBySessionKey;
-      }>
-    | undefined;
-
   function importAmbientModules() {
     ambientImportsPromise ??= Promise.all([
       import("./agents/cli-session.js"),
@@ -110,15 +104,6 @@ describe("plugin activation boundary", () => {
     return browserAmbientImportsPromise;
   }
 
-  function importDiscordMaintenance() {
-    discordMaintenancePromise ??= import("./plugin-sdk/discord-thread-bindings.js").then(
-      (module) => ({
-        unbindThreadBindingsBySessionKey: module.unbindThreadBindingsBySessionKey,
-      }),
-    );
-    return discordMaintenancePromise;
-  }
-
   it("does not load bundled provider plugins on ambient command imports", async () => {
     await importAmbientModules();
 
@@ -129,7 +114,14 @@ describe("plugin activation boundary", () => {
     const { isChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
 
     expect(isChannelConfigured({}, "whatsapp", {})).toBe(false);
-    expect(resolveEnvApiKey("anthropic-vertex", {})).toBeNull();
+    expect(
+      resolveEnvApiKey("anthropic-vertex", {
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+      }),
+    ).toEqual({
+      apiKey: "gcp-vertex-credentials",
+      source: "gcloud adc",
+    });
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
@@ -182,17 +174,16 @@ describe("plugin activation boundary", () => {
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
-  it("keeps discord cleanup helpers cold when discord is disabled", async () => {
-    const discord = await importDiscordMaintenance();
+  it("keeps generic session-binding cleanup helpers cold when plugins are disabled", async () => {
+    const { getSessionBindingService } =
+      await import("./infra/outbound/session-binding-service.js");
 
-    expect(
-      discord.unbindThreadBindingsBySessionKey({
+    await expect(
+      getSessionBindingService().unbind({
         targetSessionKey: "agent:main:test",
-        targetKind: "acp",
         reason: "session-reset",
-        sendFarewell: true,
       }),
-    ).toEqual([]);
+    ).resolves.toEqual([]);
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 

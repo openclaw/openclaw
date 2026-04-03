@@ -1,9 +1,9 @@
 import { expect, it, vi } from "vitest";
+import type { ResolvedSlackAccount } from "../../../extensions/slack/api.js";
 import type { MsgContext } from "../../../src/auto-reply/templating.js";
 import { inboundCtxCapture } from "../../../src/channels/plugins/contracts/inbound-testkit.js";
-import { expectChannelInboundContextContract } from "../../../src/channels/plugins/contracts/suites.js";
+import { expectChannelInboundContextContract } from "../../../src/channels/plugins/contracts/test-helpers.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { ResolvedSlackAccount } from "../../../src/plugin-sdk/slack.js";
 import {
   loadBundledPluginTestApiSync,
   resolveRelativeBundledPluginPublicModuleId,

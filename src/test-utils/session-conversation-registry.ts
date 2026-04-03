@@ -1,24 +1,40 @@
-import { loadBundledPluginPublicSurfaceSync } from "./bundled-plugin-public-surface.js";
 import { createTestRegistry } from "./channel-plugins.js";
 
-type SessionConversationSurface = {
-  resolveSessionConversation?: (params: { kind: "group" | "channel"; rawId: string }) => {
-    id: string;
-    threadId?: string | null;
-    baseConversationId?: string | null;
-    parentConversationCandidates?: string[];
-  } | null;
-};
-
-function loadSessionConversationSurface(pluginId: string) {
-  return loadBundledPluginPublicSurfaceSync<SessionConversationSurface>({
-    pluginId,
-    artifactBasename: "session-key-api.js",
-  }).resolveSessionConversation;
+function resolveTelegramSessionConversation(params: { kind: "group" | "channel"; rawId: string }) {
+  if (params.kind !== "group") {
+    return null;
+  }
+  const match = params.rawId.match(/^(?<chatId>.+):topic:(?<topicId>[^:]+)$/u);
+  if (!match?.groups?.chatId || !match.groups.topicId) {
+    return null;
+  }
+  const chatId = match.groups.chatId;
+  return {
+    id: chatId,
+    threadId: match.groups.topicId,
+    baseConversationId: chatId,
+    parentConversationCandidates: [chatId],
+  };
 }
 
-const resolveTelegramSessionConversation = loadSessionConversationSurface("telegram");
-const resolveFeishuSessionConversation = loadSessionConversationSurface("feishu");
+function resolveFeishuSessionConversation(params: { kind: "group" | "channel"; rawId: string }) {
+  if (params.kind !== "group") {
+    return null;
+  }
+  const senderMatch = params.rawId.match(
+    /^(?<chatId>[^:]+):topic:(?<topicId>[^:]+):sender:(?<senderId>[^:]+)$/u,
+  );
+  if (!senderMatch?.groups?.chatId || !senderMatch.groups.topicId || !senderMatch.groups.senderId) {
+    return null;
+  }
+  const chatId = senderMatch.groups.chatId;
+  const topicId = senderMatch.groups.topicId;
+  return {
+    id: params.rawId,
+    baseConversationId: chatId,
+    parentConversationCandidates: [`${chatId}:topic:${topicId}`, chatId],
+  };
+}
 
 export function createSessionConversationTestRegistry() {
   return createTestRegistry([

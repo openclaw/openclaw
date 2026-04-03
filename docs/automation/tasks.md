@@ -9,7 +9,7 @@ title: "Background Tasks"
 
 # Background Tasks
 
-> **Cron vs Heartbeat vs Tasks?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for choosing the right scheduling mechanism. This page covers **tracking** background work, not scheduling it.
+> **Looking for scheduling?** See [Automation & Tasks](/automation) for choosing the right mechanism. This page covers **tracking** background work, not scheduling it.
 
 Background tasks track work that runs **outside your main conversation session**:
 ACP runs, subagent spawns, isolated cron job executions, and CLI-initiated operations.
@@ -59,7 +59,7 @@ openclaw tasks audit
 | ACP background runs    | `acp`        | Spawning a child ACP session                           | `done_only`           |
 | Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`               | `done_only`           |
 | Cron jobs (all types)  | `cron`       | Every cron execution (main-session and isolated)       | `silent`              |
-| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `done_only`           |
+| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `silent`              |
 
 Main-session cron tasks use `silent` notify policy by default — they create records for tracking but do not generate notifications. Isolated cron tasks also default to `silent` but are more visible because they run in their own session.
 
@@ -224,11 +224,11 @@ A sweeper runs every **60 seconds** and handles three things:
 
 ## How tasks relate to other systems
 
-### Tasks and older flow references
+### Tasks and Task Flow
 
-Some older OpenClaw release notes and docs referred to task management as `ClawFlow` and documented an `openclaw flows` command surface.
+[Task Flow](/automation/taskflow) is the flow orchestration layer above background tasks. A single flow may coordinate multiple tasks over its lifetime using managed or mirrored sync modes. Use `openclaw tasks` to inspect individual task records and `openclaw tasks flow` to inspect the orchestrating flow.
 
-In the current codebase, the supported operator surface is `openclaw tasks`. See [ClawFlow](/automation/clawflow) and [CLI: flows](/cli/flows) for compatibility notes that map those older references to the current task commands.
+See [Task Flow](/automation/taskflow) for details.
 
 ### Tasks and cron
 
@@ -252,10 +252,8 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 
 ## Related
 
-- [Automation Overview](/automation) — all automation mechanisms at a glance
-- [ClawFlow](/automation/clawflow) — compatibility note for older docs and release notes
-- [Cron Jobs](/automation/cron-jobs) — scheduling background work
-- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism
+- [Automation & Tasks](/automation) — all automation mechanisms at a glance
+- [Task Flow](/automation/taskflow) — flow orchestration above tasks
+- [Scheduled Tasks](/automation/cron-jobs) — scheduling background work
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
-- [CLI: flows](/cli/flows) — compatibility note for the mistaken command name
 - [CLI: Tasks](/cli/index#tasks) — CLI command reference

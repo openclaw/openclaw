@@ -1,11 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-targets.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveOutboundTarget,
@@ -16,61 +12,23 @@ import {
   installResolveOutboundTargetPluginRegistryHooks,
   runResolveOutboundTargetCoreTests,
 } from "./targets.shared-test.js";
-import { telegramMessagingForTest } from "./targets.test-helpers.js";
+import {
+  createNoopOutboundChannelPlugin,
+  createTargetsTestRegistry,
+  createTelegramTestPlugin,
+  createWhatsAppTestPlugin,
+} from "./targets.test-helpers.js";
 
 runResolveOutboundTargetCoreTests();
 
-const whatsappMessaging = {
-  inferTargetChatType: ({ to }: { to: string }) => {
-    const normalized = normalizeWhatsAppTarget(to);
-    if (!normalized) {
-      return undefined;
-    }
-    return isWhatsAppGroupJid(normalized) ? ("group" as const) : ("direct" as const);
-  },
-};
-
-const noopOutbound = (channel: "discord" | "imessage" | "slack"): ChannelOutboundAdapter => ({
-  deliveryMode: "direct",
-  sendText: async () => ({ channel, messageId: `${channel}-msg` }),
-});
-
 beforeEach(() => {
   setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "discord",
-        plugin: createOutboundTestPlugin({ id: "discord", outbound: noopOutbound("discord") }),
-        source: "test",
-      },
-      {
-        pluginId: "imessage",
-        plugin: createOutboundTestPlugin({ id: "imessage", outbound: noopOutbound("imessage") }),
-        source: "test",
-      },
-      {
-        pluginId: "slack",
-        plugin: createOutboundTestPlugin({ id: "slack", outbound: noopOutbound("slack") }),
-        source: "test",
-      },
-      {
-        pluginId: "telegram",
-        plugin: createOutboundTestPlugin({
-          id: "telegram",
-          outbound: telegramOutbound,
-          messaging: telegramMessagingForTest,
-        }),
-        source: "test",
-      },
-      {
-        pluginId: "whatsapp",
-        plugin: createOutboundTestPlugin({
-          id: "whatsapp",
-          outbound: whatsappOutbound,
-          messaging: whatsappMessaging,
-        }),
-        source: "test",
-      },
+    createTargetsTestRegistry([
+      createNoopOutboundChannelPlugin("discord"),
+      createNoopOutboundChannelPlugin("imessage"),
+      createNoopOutboundChannelPlugin("slack"),
+      createTelegramTestPlugin(),
+      createWhatsAppTestPlugin(),
     ]),
   );
 });
@@ -128,7 +86,7 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
   });
 
   it("falls back to the active registry when the cached channel map is stale", () => {
-    const registry = createTestRegistry([]);
+    const registry = createTargetsTestRegistry([]);
     setActivePluginRegistry(registry, "stale-registry-test");
 
     // Warm the cached channel map before mutating the registry in place.
@@ -138,11 +96,7 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
 
     registry.channels.push({
       pluginId: "telegram",
-      plugin: createOutboundTestPlugin({
-        id: "telegram",
-        outbound: telegramOutbound,
-        messaging: telegramMessagingForTest,
-      }),
+      plugin: createTelegramTestPlugin(),
       source: "test",
     });
 
@@ -373,7 +327,7 @@ describe("resolveSessionDeliveryTarget", () => {
   });
 
   it("keeps raw :topic: targets when the telegram plugin registry is unavailable", () => {
-    setActivePluginRegistry(createTestRegistry([]));
+    setActivePluginRegistry(createTargetsTestRegistry([]));
 
     const resolved = resolveSessionDeliveryTarget({
       entry: {

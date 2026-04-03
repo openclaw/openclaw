@@ -1,5 +1,6 @@
 // Public stream-wrapper helpers for provider plugins.
 
+export { createAnthropicToolPayloadCompatibilityWrapper } from "../agents/pi-embedded-runner/anthropic-family-tool-payload-compat.js";
 export {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
@@ -8,6 +9,7 @@ export {
   createGoogleThinkingPayloadWrapper,
   sanitizeGoogleThinkingPayload,
 } from "../agents/pi-embedded-runner/google-stream-wrappers.js";
+export { createMinimaxFastModeWrapper } from "../agents/pi-embedded-runner/minimax-stream-wrappers.js";
 export {
   createKilocodeWrapper,
   createOpenRouterSystemCacheWrapper,
@@ -20,7 +22,16 @@ export {
 } from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
 export {
   createOpenAIAttributionHeadersWrapper,
+  createCodexNativeWebSearchWrapper,
   createOpenAIDefaultTransportWrapper,
+  createOpenAIFastModeWrapper,
+  createOpenAIReasoningCompatibilityWrapper,
+  createOpenAIResponsesContextManagementWrapper,
+  createOpenAIServiceTierWrapper,
+  createOpenAITextVerbosityWrapper,
+  resolveOpenAIFastMode,
+  resolveOpenAIServiceTier,
+  resolveOpenAITextVerbosity,
 } from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
 export { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
 export {

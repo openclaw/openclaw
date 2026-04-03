@@ -88,6 +88,7 @@ enum HostEnvSecurityPolicy {
         "PHP_INI_SCAN_DIR",
         "DENO_DIR",
         "BUN_CONFIG_REGISTRY",
+        "YARN_RC_FILENAME",
         "HTTP_PROXY",
         "HTTPS_PROXY",
         "ALL_PROXY",
@@ -109,6 +110,7 @@ enum HostEnvSecurityPolicy {
         "PIP_TRUSTED_HOST",
         "UV_INDEX",
         "UV_INDEX_URL",
+        "UV_PYTHON",
         "UV_EXTRA_INDEX_URL",
         "UV_DEFAULT_INDEX",
         "DOCKER_HOST",
@@ -146,7 +148,8 @@ enum HostEnvSecurityPolicy {
 
     static let blockedOverridePrefixes: [String] = [
         "GIT_CONFIG_",
-        "NPM_CONFIG_"
+        "NPM_CONFIG_",
+        "CARGO_REGISTRIES_"
     ]
 
     static let blockedPrefixes: [String] = [

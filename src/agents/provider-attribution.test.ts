@@ -4,7 +4,9 @@ import {
   resolveProviderAttributionHeaders,
   resolveProviderAttributionIdentity,
   resolveProviderAttributionPolicy,
+  resolveProviderEndpoint,
   resolveProviderRequestAttributionHeaders,
+  resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
 } from "./provider-attribution.js";
 
@@ -220,7 +222,7 @@ describe("provider attribution", () => {
     });
   });
 
-  it("keeps documented OpenRouter attribution centralized while leaving host-gating deferred", () => {
+  it("gates documented OpenRouter attribution to known OpenRouter endpoints", () => {
     expect(
       resolveProviderRequestPolicy({
         provider: "openrouter",
@@ -242,11 +244,7 @@ describe("provider attribution", () => {
         transport: "stream",
         capability: "llm",
       }),
-    ).toEqual({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
-    });
+    ).toBeUndefined();
   });
 
   it("models other provider families without enabling hidden attribution", () => {
@@ -273,6 +271,135 @@ describe("provider attribution", () => {
       knownProviderFamily: "github-copilot",
       attributionProvider: undefined,
       allowsHiddenAttribution: false,
+    });
+  });
+
+  it("classifies native Anthropic endpoints separately from custom hosts", () => {
+    expect(resolveProviderEndpoint("https://api.anthropic.com/v1")).toMatchObject({
+      endpointClass: "anthropic-public",
+      hostname: "api.anthropic.com",
+    });
+
+    expect(resolveProviderEndpoint("https://proxy.example.com/anthropic")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "proxy.example.com",
+    });
+  });
+
+  it("classifies Google Gemini and Vertex endpoints separately from custom hosts", () => {
+    expect(resolveProviderEndpoint("https://generativelanguage.googleapis.com")).toMatchObject({
+      endpointClass: "google-generative-ai",
+      hostname: "generativelanguage.googleapis.com",
+    });
+
+    expect(
+      resolveProviderEndpoint("https://europe-west4-aiplatform.googleapis.com/v1/projects/test"),
+    ).toMatchObject({
+      endpointClass: "google-vertex",
+      hostname: "europe-west4-aiplatform.googleapis.com",
+      googleVertexRegion: "europe-west4",
+    });
+
+    expect(resolveProviderEndpoint("https://aiplatform.googleapis.com")).toMatchObject({
+      endpointClass: "google-vertex",
+      hostname: "aiplatform.googleapis.com",
+      googleVertexRegion: "global",
+    });
+
+    expect(resolveProviderEndpoint("https://proxy.example.com/google")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "proxy.example.com",
+    });
+  });
+
+  it("classifies native Moonshot and ModelStudio endpoints separately from custom hosts", () => {
+    expect(resolveProviderEndpoint("https://api.moonshot.ai/v1")).toMatchObject({
+      endpointClass: "moonshot-native",
+      hostname: "api.moonshot.ai",
+    });
+
+    expect(resolveProviderEndpoint("https://api.moonshot.cn/v1")).toMatchObject({
+      endpointClass: "moonshot-native",
+      hostname: "api.moonshot.cn",
+    });
+
+    expect(
+      resolveProviderEndpoint("https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+    ).toMatchObject({
+      endpointClass: "modelstudio-native",
+      hostname: "dashscope-intl.aliyuncs.com",
+    });
+
+    expect(resolveProviderEndpoint("https://proxy.example.com/v1")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "proxy.example.com",
+    });
+  });
+
+  it("classifies native GitHub Copilot endpoints separately from custom hosts", () => {
+    expect(resolveProviderEndpoint("https://api.individual.githubcopilot.com")).toMatchObject({
+      endpointClass: "github-copilot-native",
+      hostname: "api.individual.githubcopilot.com",
+    });
+
+    expect(resolveProviderEndpoint("https://api.enterprise.githubcopilot.com")).toMatchObject({
+      endpointClass: "github-copilot-native",
+      hostname: "api.enterprise.githubcopilot.com",
+    });
+
+    expect(resolveProviderEndpoint("https://api.githubcopilot.example.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "api.githubcopilot.example.com",
+    });
+  });
+
+  it("does not classify malformed or embedded Google host strings as native endpoints", () => {
+    expect(resolveProviderEndpoint("proxy/generativelanguage.googleapis.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "proxy",
+    });
+
+    expect(resolveProviderEndpoint("https://xgenerativelanguage.googleapis.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "xgenerativelanguage.googleapis.com",
+    });
+
+    expect(resolveProviderEndpoint("proxy/aiplatform.googleapis.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "proxy",
+    });
+
+    expect(resolveProviderEndpoint("https://xaiplatform.googleapis.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "xaiplatform.googleapis.com",
+    });
+  });
+
+  it("does not trust schemeless or embedded trusted-provider substrings", () => {
+    expect(resolveProviderEndpoint("api.anthropic.com.attacker.example")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "api.anthropic.com.attacker.example",
+    });
+
+    expect(resolveProviderEndpoint("api.openai.com.attacker.example")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "api.openai.com.attacker.example",
+    });
+
+    expect(resolveProviderEndpoint("attacker.example/?target=api.openai.com")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "attacker.example",
+    });
+
+    expect(resolveProviderEndpoint("openrouter.ai.attacker.example")).toMatchObject({
+      endpointClass: "custom",
+      hostname: "openrouter.ai.attacker.example",
+    });
+  });
+
+  it("ignores non-http schemes when normalizing native comparable base URLs", () => {
+    expect(resolveProviderEndpoint("javascript:alert(1)")).toMatchObject({
+      endpointClass: "invalid",
     });
   });
 
@@ -314,6 +441,108 @@ describe("provider attribution", () => {
     ).toMatchObject({
       attributionProvider: undefined,
       allowsHiddenAttribution: false,
+    });
+  });
+
+  it("resolves centralized request capabilities for native and proxied routes", () => {
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "openai-public",
+      allowsOpenAIServiceTier: true,
+      allowsResponsesStore: true,
+      supportsResponsesStoreField: true,
+      shouldStripResponsesPromptCache: false,
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "anthropic",
+        api: "anthropic-messages",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "default",
+      allowsAnthropicServiceTier: true,
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "custom",
+      allowsOpenAIServiceTier: false,
+      allowsResponsesStore: false,
+      supportsResponsesStoreField: true,
+      shouldStripResponsesPromptCache: true,
+    });
+  });
+
+  it("resolves shared compat families and native streaming-usage gates", () => {
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "moonshot",
+        api: "openai-completions",
+        baseUrl: "https://api.moonshot.ai/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "moonshot-native",
+      supportsNativeStreamingUsageCompat: true,
+      compatibilityFamily: "moonshot",
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "modelstudio",
+        api: "openai-completions",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "modelstudio-native",
+      supportsNativeStreamingUsageCompat: true,
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "ollama",
+        modelId: "kimi-k2.5:cloud",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      compatibilityFamily: "moonshot",
+    });
+  });
+
+  it("treats native GitHub Copilot base URLs as known native endpoints", () => {
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "github-copilot",
+        api: "openai-responses",
+        baseUrl: "https://api.individual.githubcopilot.com",
+        capability: "llm",
+        transport: "http",
+      }),
+    ).toMatchObject({
+      endpointClass: "github-copilot-native",
+      knownProviderFamily: "github-copilot",
+      isKnownNativeEndpoint: true,
     });
   });
 });

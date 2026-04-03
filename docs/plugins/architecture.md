@@ -196,6 +196,12 @@ We do not publish separate `plugin-sdk/*-action-runtime` subpaths, and bundled
 plugins should import their own local runtime code directly from their
 extension-owned modules.
 
+The same boundary applies to provider-named SDK seams in general: core should
+not import channel-specific convenience barrels for Slack, Discord, Signal,
+WhatsApp, or similar extensions. If core needs a behavior, either consume the
+bundled plugin's own `api.ts` / `runtime-api.ts` barrel or promote the need
+into a narrow generic capability in the shared SDK.
+
 For polls specifically, there are two execution paths:
 
 - `outbound.sendPoll` is the shared baseline for channels that fit the common
@@ -998,8 +1004,10 @@ authoring plugins:
   contract on the plugin. Core then reads approval auth, delivery, render, and
   native-routing behavior through that one capability instead of mixing
   approval behavior into unrelated plugin fields.
-- `openclaw/plugin-sdk/channel-runtime` remains only as a compatibility shim.
-  New code should import the narrower primitives instead.
+- `openclaw/plugin-sdk/channel-runtime` is deprecated and remains only as a
+  compatibility shim for older plugins. New code should import the narrower
+  generic primitives instead, and repo code should not add new imports of the
+  shim.
 - Bundled extension internals remain private. External plugins should use only
   `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
   public entry points under a plugin package root such as `index.js`, `api.js`,

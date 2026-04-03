@@ -38,6 +38,7 @@ export type ResolveWindowsSpawnProgramParams = {
   env?: NodeJS.ProcessEnv;
   execPath?: string;
   packageName?: string;
+  /** Trusted compatibility escape hatch for callers that intentionally accept shell-mediated wrapper execution. */
   allowShellFallback?: boolean;
 };
 export type ResolveWindowsSpawnProgramCandidateParams = Omit<
@@ -344,7 +345,7 @@ export function applyWindowsSpawnProgramPolicy(params: {
       windowsHide: params.candidate.windowsHide,
     };
   }
-  if (params.allowShellFallback !== false) {
+  if (params.allowShellFallback === true) {
     return {
       command: params.candidate.command,
       leadingArgv: [],
