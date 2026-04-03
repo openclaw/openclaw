@@ -1,6 +1,6 @@
 import { describe } from "vitest";
+import { installChannelActionsContractSuite } from "../../../../test/helpers/channels/registry-contract-suites.js";
 import { getActionContractRegistry } from "./registry-actions.js";
-import { installChannelActionsContractSuite } from "./suites.js";
 
 for (const entry of getActionContractRegistry()) {
   describe(`${entry.id} actions contract`, () => {
