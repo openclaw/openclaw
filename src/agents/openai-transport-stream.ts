@@ -1339,11 +1339,14 @@ function detectCompat(model: OpenAIModeModel) {
   });
   const endpointClass = capabilities.endpointClass;
   const isDefaultRoute = endpointClass === "default";
+  const isMistral =
+    capabilities.knownProviderFamily === "mistral" || endpointClass === "mistral-public";
   const isZai = endpointClass === "zai-native" || (isDefaultRoute && provider === "zai");
   const isNonStandard =
     endpointClass === "cerebras-native" ||
     endpointClass === "chutes-native" ||
     endpointClass === "deepseek-native" ||
+    isMistral ||
     endpointClass === "opencode-native" ||
     endpointClass === "xai-native" ||
     isZai ||
@@ -1354,7 +1357,7 @@ function detectCompat(model: OpenAIModeModel) {
         provider === "opencode" ||
         provider === "xai"));
   const useMaxTokens =
-    endpointClass === "chutes-native" || (isDefaultRoute && provider === "chutes");
+    endpointClass === "chutes-native" || (isDefaultRoute && provider === "chutes") || isMistral;
   const isGrok = endpointClass === "xai-native" || (isDefaultRoute && provider === "xai");
   const isGroq = endpointClass === "groq-native" || (isDefaultRoute && provider === "groq");
   const reasoningEffortMap: Record<string, string> =
@@ -1370,7 +1373,7 @@ function detectCompat(model: OpenAIModeModel) {
   return {
     supportsStore: !isNonStandard,
     supportsDeveloperRole: !isNonStandard,
-    supportsReasoningEffort: !isGrok && !isZai,
+    supportsReasoningEffort: !isGrok && !isMistral && !isZai,
     reasoningEffortMap,
     supportsUsageInStreaming: true,
     maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
@@ -1407,12 +1410,17 @@ function getCompat(model: OpenAIModeModel): {
 } {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
+  const supportsStore =
+    typeof compat.supportsStore === "boolean" ? compat.supportsStore : detected.supportsStore;
+  const supportsReasoningEffort =
+    typeof compat.supportsReasoningEffort === "boolean"
+      ? compat.supportsReasoningEffort
+      : detected.supportsReasoningEffort;
   return {
-    supportsStore: (compat.supportsStore as boolean | undefined) ?? detected.supportsStore,
+    supportsStore,
     supportsDeveloperRole:
       (compat.supportsDeveloperRole as boolean | undefined) ?? detected.supportsDeveloperRole,
-    supportsReasoningEffort:
-      (compat.supportsReasoningEffort as boolean | undefined) ?? detected.supportsReasoningEffort,
+    supportsReasoningEffort,
     reasoningEffortMap:
       (compat.reasoningEffortMap as Record<string, string> | undefined) ??
       detected.reasoningEffortMap,

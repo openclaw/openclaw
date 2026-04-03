@@ -313,6 +313,7 @@ describe("openai transport stream", () => {
         name: "Grok 4.1 Fast",
         api: "openai-responses",
         provider: "xai",
+        baseUrl: "",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -355,5 +356,70 @@ describe("openai transport stream", () => {
 
     expect(params.max_tokens).toBe(2048);
     expect(params).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("uses Mistral compat defaults for direct Mistral completions providers", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mistral-large-latest",
+        name: "Mistral Large",
+        api: "openai-completions",
+        provider: "mistral",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 2048,
+        reasoningEffort: "high",
+      } as never,
+    );
+
+    expect(params).toMatchObject({
+      max_tokens: 2048,
+    });
+    expect(params).not.toHaveProperty("max_completion_tokens");
+    expect(params).not.toHaveProperty("store");
+    expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("uses Mistral compat defaults for custom providers on native Mistral hosts", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mistral-small-latest",
+        name: "Mistral Small",
+        api: "openai-completions",
+        provider: "custom-mistral-host",
+        baseUrl: "https://api.mistral.ai/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 2048,
+        reasoningEffort: "high",
+      } as never,
+    );
+
+    expect(params).toMatchObject({
+      max_tokens: 2048,
+    });
+    expect(params).not.toHaveProperty("max_completion_tokens");
+    expect(params).not.toHaveProperty("store");
+    expect(params).not.toHaveProperty("reasoning_effort");
   });
 });
