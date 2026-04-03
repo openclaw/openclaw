@@ -20,7 +20,7 @@ Status: legacy external CLI integration. Gateway spawns `imsg rpc` and communica
   <Card title="BlueBubbles (recommended)" icon="message-circle" href="/channels/bluebubbles">
     Preferred iMessage path for new setups.
   </Card>
-  <Card title="iMessage Relay (cloud)" icon="cloud">
+  <Card title="iMessage Relay (cloud)" icon="cloud" href="#cloud-relay-linuxvps">
     For Linux/VPS deployments. Uses Claw Messenger relay with Linq Partner API - no Mac required.
   </Card>
   <Card title="Pairing" icon="link" href="/channels/pairing">
