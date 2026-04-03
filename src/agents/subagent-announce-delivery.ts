@@ -405,6 +405,57 @@ function buildAnnounceQueueKey(sessionKey: string, origin?: DeliveryContext): st
   return `${sessionKey}:acct:${accountId}`;
 }
 
+function resolveDeliveryConversationIdentity(origin?: DeliveryContext): {
+  channel: string;
+  accountId: string;
+  conversationId: string;
+} | null {
+  const channel = origin?.channel?.trim().toLowerCase() ?? "";
+  const accountId = normalizeAccountId(origin?.accountId);
+  const to = origin?.to?.trim() ?? "";
+  const threadId =
+    origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId).trim() : "";
+  const conversationId =
+    threadId ||
+    resolveConversationIdFromTargets({
+      targets: [to],
+    }) ||
+    "";
+  if (!channel || !conversationId) {
+    return null;
+  }
+  return {
+    channel,
+    accountId,
+    conversationId,
+  };
+}
+
+function shouldForwardRequesterMessageId(params: {
+  requesterMessageId?: string;
+  expectsCompletionMessage: boolean;
+  completionDirectOrigin?: DeliveryContext;
+  directOrigin?: DeliveryContext;
+}): boolean {
+  const requesterMessageId = params.requesterMessageId?.trim();
+  if (!requesterMessageId) {
+    return false;
+  }
+  if (!params.expectsCompletionMessage) {
+    return true;
+  }
+  const source = resolveDeliveryConversationIdentity(params.directOrigin);
+  const destination = resolveDeliveryConversationIdentity(params.completionDirectOrigin);
+  if (!source || !destination) {
+    return false;
+  }
+  return (
+    source.channel === destination.channel &&
+    source.accountId === destination.accountId &&
+    source.conversationId === destination.conversationId
+  );
+}
+
 async function maybeQueueSubagentAnnounce(params: {
   requesterSessionKey: string;
   announceId?: string;
@@ -545,6 +596,14 @@ async function sendSubagentAnnounceDirectly(params: {
       isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
         ? normalizedSessionOnlyOriginChannel
         : undefined;
+    const currentMessageId = shouldForwardRequesterMessageId({
+      requesterMessageId: params.requesterMessageId,
+      expectsCompletionMessage: params.expectsCompletionMessage,
+      completionDirectOrigin,
+      directOrigin,
+    })
+      ? params.requesterMessageId
+      : undefined;
     if (params.signal?.aborted) {
       return {
         delivered: false,
@@ -601,6 +660,7 @@ async function sendSubagentAnnounceDirectly(params: {
               sourceTool: params.sourceTool ?? "subagent_announce",
             },
             idempotencyKey: params.directIdempotencyKey,
+            currentMessageId,
           },
           expectFinal: true,
           timeoutMs: announceTimeoutMs,
