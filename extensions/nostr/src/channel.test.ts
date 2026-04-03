@@ -231,6 +231,16 @@ describe("nostr setup wizard", () => {
     expect(result.cfg.channels?.nostr?.defaultAccount).toBe("work");
     expect(result.cfg.channels?.nostr?.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
   });
+
+  it("uses configured defaultAccount when setup accountId is omitted", () => {
+    expect(
+      nostrPlugin.setup?.resolveAccountId?.({
+        cfg: createConfiguredNostrCfg({ defaultAccount: "work" }) as OpenClawConfig,
+        accountId: undefined,
+        input: {},
+      } as never),
+    ).toBe("work");
+  });
 });
 
 describe("nostr account helpers", () => {

@@ -1310,7 +1310,7 @@ export async function promptParsedAllowFromForScopedChannel(params: {
 
 export function createTopLevelChannelParsedAllowFromPrompt(params: {
   channel: string;
-  defaultAccountId: string;
+  defaultAccountId: string | ((cfg: OpenClawConfig) => string);
   enabled?: boolean;
   noteTitle?: string;
   noteLines?: string[];
@@ -1325,7 +1325,10 @@ export function createTopLevelChannelParsedAllowFromPrompt(params: {
     ...(params.enabled ? { enabled: true } : {}),
   });
   return createPromptParsedAllowFromForAccount({
-    defaultAccountId: params.defaultAccountId,
+    defaultAccountId:
+      typeof params.defaultAccountId === "function"
+        ? params.defaultAccountId
+        : () => params.defaultAccountId,
     ...(params.noteTitle ? { noteTitle: params.noteTitle } : {}),
     ...(params.noteLines ? { noteLines: params.noteLines } : {}),
     message: params.message,
