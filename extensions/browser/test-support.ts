@@ -2,7 +2,6 @@ export {
   createCliRuntimeCapture,
   type CliMockOutputRuntime,
   type CliRuntimeCapture,
-  isLiveTestEnabled,
 } from "../../src/cli/test-runtime-capture.js";
 export { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 export { type OpenClawConfig } from "openclaw/plugin-sdk/browser-support";

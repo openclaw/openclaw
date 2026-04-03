@@ -434,15 +434,6 @@ export function resolveProviderConfigApiKeyWithPlugin(params: {
   return trimmed ? trimmed : undefined;
 }
 
-export function resolveProviderCapabilitiesWithPlugin(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}) {
-  return resolveProviderRuntimePlugin(params)?.capabilities;
-}
-
 export function resolveProviderReplayPolicyWithPlugin(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -483,6 +474,16 @@ export function normalizeProviderToolSchemasWithPlugin(params: {
   return resolveProviderHookPlugin(params)?.normalizeToolSchemas?.(params.context) ?? undefined;
 }
 
+export function inspectProviderToolSchemasWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderNormalizeToolSchemasContext;
+}) {
+  return resolveProviderHookPlugin(params)?.inspectToolSchemas?.(params.context) ?? undefined;
+}
+
 export function resolveProviderReasoningOutputModeWithPlugin(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -521,7 +522,7 @@ export function wrapProviderStreamFn(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderWrapStreamFnContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.wrapStreamFn?.(params.context) ?? undefined;
+  return resolveProviderHookPlugin(params)?.wrapStreamFn?.(params.context) ?? undefined;
 }
 
 export async function createProviderEmbeddingProvider(params: {

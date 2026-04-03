@@ -28,8 +28,8 @@ import {
   globalInstallArgs,
   globalInstallFallbackArgs,
   resolveExpectedInstalledVersionFromSpec,
+  resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
-  resolveGlobalPackageRoot,
 } from "./update-global.js";
 
 export type UpdateStepResult = {
@@ -1001,6 +1001,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const beforeVersion = await readPackageVersion(pkgRoot);
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
+    const installTarget = await resolveGlobalInstallTarget({
+      manager: globalManager,
+      runCommand,
+      timeoutMs,
+      pkgRoot,
+    });
     const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
@@ -1018,7 +1024,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const updateStep = await runStep({
       runCommand,
       name: "global update",
-      argv: globalInstallArgs(globalManager, spec, pkgRoot),
+      argv: globalInstallArgs(installTarget, spec),
       cwd: pkgRoot,
       timeoutMs,
       env: globalInstallEnv,
@@ -1030,7 +1036,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     let finalStep = updateStep;
     if (updateStep.exitCode !== 0) {
-      const fallbackArgv = globalInstallFallbackArgs(globalManager, spec, pkgRoot);
+      const fallbackArgv = globalInstallFallbackArgs(installTarget, spec);
       if (fallbackArgv) {
         const fallbackStep = await runStep({
           runCommand,
@@ -1049,7 +1055,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     }
 
     const verifiedPackageRoot =
-      (await resolveGlobalPackageRoot(globalManager, runCommand, timeoutMs, pkgRoot)) ?? pkgRoot;
+      (
+        await resolveGlobalInstallTarget({
+          manager: installTarget,
+          runCommand,
+          timeoutMs,
+        })
+      ).packageRoot ?? pkgRoot;
     const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
     const verificationErrors = await collectInstalledGlobalPackageErrors({
       packageRoot: verifiedPackageRoot,

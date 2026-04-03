@@ -33,8 +33,8 @@ import {
   cleanupGlobalRenameDirs,
   globalInstallArgs,
   resolveExpectedInstalledVersionFromSpec,
+  resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
-  resolveGlobalPackageRoot,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
@@ -350,8 +350,13 @@ async function runPackageInstallUpdate(params: {
   });
   const installEnv = await createGlobalInstallEnv();
   const runCommand = createGlobalCommandRunner();
-
-  const pkgRoot = await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs, params.root);
+  const installTarget = await resolveGlobalInstallTarget({
+    manager,
+    runCommand,
+    timeoutMs: params.timeoutMs,
+    pkgRoot: params.root,
+  });
+  const pkgRoot = installTarget.packageRoot;
   const packageName =
     (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
     DEFAULT_PACKAGE_NAME;
@@ -371,7 +376,7 @@ async function runPackageInstallUpdate(params: {
 
   const updateStep = await runUpdateStep({
     name: "global update",
-    argv: globalInstallArgs(manager, installSpec, params.root),
+    argv: globalInstallArgs(installTarget, installSpec),
     env: installEnv,
     timeoutMs: params.timeoutMs,
     progress: params.progress,
@@ -381,7 +386,13 @@ async function runPackageInstallUpdate(params: {
   let afterVersion = beforeVersion;
 
   const verifiedPackageRoot =
-    (await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs, params.root)) ?? pkgRoot;
+    (
+      await resolveGlobalInstallTarget({
+        manager: installTarget,
+        runCommand,
+        timeoutMs: params.timeoutMs,
+      })
+    ).packageRoot ?? pkgRoot;
   if (verifiedPackageRoot) {
     afterVersion = await readPackageVersion(verifiedPackageRoot);
     const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, installSpec);
@@ -482,9 +493,16 @@ async function runGitUpdate(params: {
       installKind: params.installKind,
       timeoutMs: effectiveTimeout,
     });
+    const runCommand = createGlobalCommandRunner();
+    const installTarget = await resolveGlobalInstallTarget({
+      manager,
+      runCommand,
+      timeoutMs: effectiveTimeout,
+      pkgRoot: params.root,
+    });
     const installStep = await runUpdateStep({
       name: "global install",
-      argv: globalInstallArgs(manager, updateRoot, params.root),
+      argv: globalInstallArgs(installTarget, updateRoot),
       cwd: updateRoot,
       env: installEnv,
       timeoutMs: effectiveTimeout,

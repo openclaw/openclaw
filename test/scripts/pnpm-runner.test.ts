@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mjs";
+import { createPnpmRunnerSpawnSpec, resolvePnpmRunner } from "../../scripts/pnpm-runner.mjs";
 
 describe("resolvePnpmRunner", () => {
   it("uses npm_execpath when it points to pnpm", () => {
@@ -65,6 +65,27 @@ describe("resolvePnpmRunner", () => {
       args: ["/d", "/s", "/c", "pnpm.cmd exec vitest -t @scope/pkg@^^1.2.3"],
       shell: false,
       windowsVerbatimArguments: true,
+    });
+  });
+
+  it("builds a shared spawn spec with inherited stdio and env overrides", () => {
+    const env = { PATH: "/custom/bin", FOO: "bar" };
+    expect(
+      createPnpmRunnerSpawnSpec({
+        npmExecPath: "",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "linux",
+        env,
+      }),
+    ).toEqual({
+      command: "pnpm",
+      args: ["exec", "vitest", "run"],
+      options: {
+        stdio: "inherit",
+        env,
+        shell: false,
+        windowsVerbatimArguments: undefined,
+      },
     });
   });
 });

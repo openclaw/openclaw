@@ -16,7 +16,9 @@ import {
   isExplicitPackageInstallSpec,
   isMainPackageTarget,
   OPENCLAW_MAIN_PACKAGE_SPEC,
+  resolveGlobalInstallCommand,
   resolveGlobalPackageRoot,
+  resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   resolveGlobalRoot,
   type CommandRunner,
@@ -170,6 +172,19 @@ describe("update global helpers", () => {
       await expect(resolveGlobalPackageRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(
         pkgRoot,
       );
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "npm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: brewNpm,
+        globalRoot: brewRoot,
+        packageRoot: pkgRoot,
+      });
       expect(globalInstallArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
         brewNpm,
         "i",
@@ -263,6 +278,10 @@ describe("update global helpers", () => {
   });
 
   it("builds install argv and npm fallback argv", () => {
+    expect(resolveGlobalInstallCommand("npm")).toEqual({
+      manager: "npm",
+      command: "npm",
+    });
     expect(globalInstallArgs("npm", "openclaw@latest")).toEqual([
       "npm",
       "i",
@@ -296,6 +315,9 @@ describe("update global helpers", () => {
       "--loglevel=error",
     ]);
     expect(globalInstallFallbackArgs("pnpm", "openclaw@latest")).toBeNull();
+    expect(
+      globalInstallArgs({ manager: "pnpm", command: "/opt/homebrew/bin/pnpm" }, "openclaw@latest"),
+    ).toEqual(["/opt/homebrew/bin/pnpm", "add", "-g", "openclaw@latest"]);
   });
 
   it("cleans only renamed package directories", async () => {

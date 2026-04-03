@@ -42,7 +42,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
 
-    return await monitorLineProvider({
+    return await (getLineRuntime().channel.line?.monitorLineProvider ?? monitorLineProvider)({
       channelAccessToken: token,
       channelSecret: secret,
       accountId: account.accountId,

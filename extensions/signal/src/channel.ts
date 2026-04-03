@@ -14,10 +14,8 @@ import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js"
 import { signalApprovalAuth } from "./approval-auth.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import { signalMessageActions } from "./message-actions.js";
-import { monitorSignalProvider } from "./monitor.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
-import { probeSignal, type SignalProbe } from "./probe.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import {
   buildBaseChannelStatusSummary,
@@ -39,6 +37,20 @@ import {
   signalSetupWizard,
 } from "./shared.js";
 type SignalSendFn = typeof sendMessageSignal;
+type SignalProbe = import("./probe.js").SignalProbe;
+
+let signalMonitorModulePromise: Promise<typeof import("./monitor.js")> | null = null;
+let signalProbeModulePromise: Promise<typeof import("./probe.js")> | null = null;
+
+async function loadSignalMonitorModule() {
+  signalMonitorModulePromise ??= import("./monitor.js");
+  return await signalMonitorModulePromise;
+}
+
+async function loadSignalProbeModule() {
+  signalProbeModulePromise ??= import("./probe.js");
+  return await signalProbeModulePromise;
+}
 
 function resolveSignalSendContext(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
@@ -273,6 +285,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           }),
         probeAccount: async ({ account, timeoutMs }) => {
           const baseUrl = account.baseUrl;
+          const { probeSignal } = await loadSignalProbeModule();
           return await probeSignal(baseUrl, timeoutMs);
         },
         formatCapabilitiesProbe: ({ probe }) =>
@@ -297,8 +310,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             baseUrl: account.baseUrl,
           });
           ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
-          // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-          return monitorSignalProvider({
+          const { monitorSignalProvider } = await loadSignalMonitorModule();
+          return await monitorSignalProvider({
             accountId: account.accountId,
             config: ctx.cfg,
             runtime: ctx.runtime,
