@@ -12,4 +12,4 @@ export {
   buildProbeChannelStatusSummary,
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/channel-status";
-export { chunkTextForOutbound, createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/feishu";
+export { chunkTextForOutbound, createDefaultChannelRuntimeState } from "../runtime-api.js";
