@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
@@ -10,6 +9,7 @@ import {
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
+import { createWhatsAppLoginTool } from "./agent-tools-login.js";
 import { whatsappApprovalAuth } from "./approval-auth.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
@@ -47,16 +47,6 @@ import {
 } from "./shared.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
-let whatsAppAgentToolsModuleCache: typeof import("./agent-tools-login.js") | null = null;
-
-const require = createRequire(import.meta.url);
-
-function loadWhatsAppAgentToolsModule() {
-  whatsAppAgentToolsModuleCache ??=
-    require("./agent-tools-login.js") as typeof import("./agent-tools-login.js");
-  return whatsAppAgentToolsModuleCache;
-}
-
 function parseWhatsAppExplicitTarget(raw: string) {
   const normalized = normalizeWhatsAppTarget(raw);
   if (!normalized) {
@@ -86,7 +76,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         isConfigured: async (account) =>
           await (await loadWhatsAppChannelRuntime()).webAuthExists(account.authDir),
       }),
-      agentTools: () => [loadWhatsAppAgentToolsModule().createWhatsAppLoginTool()],
+      agentTools: () => [createWhatsAppLoginTool()],
       allowlist: buildDmGroupAccountAllowlistAdapter({
         channelId: "whatsapp",
         resolveAccount: resolveWhatsAppAccount,
