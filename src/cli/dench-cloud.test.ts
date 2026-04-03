@@ -105,7 +105,7 @@ describe("dench-cloud helpers", () => {
           displayName: "Claude Opus 4.6",
           provider: "anthropic",
           transportProvider: "bedrock",
-          api: "openai-completions",
+          api: "openai-responses",
           input: ["text", "image"],
           reasoning: false,
           contextWindow: 200000,
@@ -129,7 +129,7 @@ describe("dench-cloud helpers", () => {
       expect.objectContaining({
         baseUrl: "https://gateway.merseoriginals.com/v1",
         apiKey: "dench_live_key",
-        api: "openai-completions",
+        api: "openai-responses",
         models: [
           expect.objectContaining({
             id: "anthropic.claude-opus-4-6-v1",
@@ -169,7 +169,7 @@ describe("dench-cloud helpers", () => {
           displayName: "Claude Opus 4.6",
           provider: "anthropic",
           transportProvider: "bedrock",
-          api: "openai-completions" as const,
+          api: "openai-responses" as const,
           input: ["text" as const, "image" as const],
           reasoning: false,
           contextWindow: 200000,

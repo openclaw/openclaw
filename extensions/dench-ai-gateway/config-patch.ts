@@ -8,7 +8,7 @@ import {
 export type DenchCloudProviderConfig = {
   baseUrl: string;
   apiKey: string;
-  api: "openai-completions";
+  api: "openai-completions" | "openai-responses";
   models: ReturnType<typeof buildDenchCloudProviderModels>;
 };
 
@@ -41,7 +41,7 @@ export function buildDenchCloudProviderConfig(params: {
   return {
     baseUrl: buildDenchGatewayApiBaseUrl(params.gatewayUrl),
     apiKey: params.apiKey,
-    api: "openai-completions",
+    api: "openai-responses",
     models: buildDenchCloudProviderModels(params.models),
   };
 }
