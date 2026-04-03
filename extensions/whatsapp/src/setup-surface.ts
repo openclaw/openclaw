@@ -14,6 +14,7 @@ import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { listWhatsAppAccountIds, resolveWhatsAppAccount, resolveWhatsAppAuthDir } from "./accounts.js";
 import { loginWeb } from "./login.js";
+import type { WhatsAppAccountConfig, WhatsAppConfig } from "./runtime-api.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 
 const channel = "whatsapp" as const;
@@ -24,16 +25,16 @@ function mergeWhatsAppConfig(
   patch: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>>,
   options?: { unsetOnUndefined?: string[] },
 ): OpenClawConfig {
-  const channelConfig = { ...(cfg.channels?.whatsapp ?? {}) } as Record<string, unknown>;
+  const channelConfig: WhatsAppConfig = { ...(cfg.channels?.whatsapp ?? {}) };
   if (accountId === DEFAULT_ACCOUNT_ID) {
     for (const [key, value] of Object.entries(patch)) {
       if (value === undefined) {
         if (options?.unsetOnUndefined?.includes(key)) {
-          delete channelConfig[key];
+          delete channelConfig[key as keyof WhatsAppConfig];
         }
         continue;
       }
-      channelConfig[key] = value;
+      channelConfig[key as keyof WhatsAppConfig] = value as WhatsAppConfig[keyof WhatsAppConfig];
     }
     return {
       ...cfg,
@@ -45,17 +46,18 @@ function mergeWhatsAppConfig(
   }
 
   const accounts = {
-    ...((channelConfig.accounts as Record<string, Record<string, unknown> | undefined> | undefined) ?? {}),
+    ...(channelConfig.accounts ?? {}),
   };
-  const nextAccount = { ...(accounts[accountId] ?? {}) };
+  const nextAccount: WhatsAppAccountConfig = { ...(accounts[accountId] ?? {}) };
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) {
       if (options?.unsetOnUndefined?.includes(key)) {
-        delete nextAccount[key];
+        delete nextAccount[key as keyof WhatsAppAccountConfig];
       }
       continue;
     }
-    nextAccount[key] = value;
+    nextAccount[key as keyof WhatsAppAccountConfig] =
+      value as WhatsAppAccountConfig[keyof WhatsAppAccountConfig];
   }
   accounts[accountId] = nextAccount;
   return {

@@ -965,7 +965,7 @@ export function buildOpenAIResponsesParams(
     { supportsDeveloperRole: compat.supportsDeveloperRole },
   );
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-  const params: Record<string, unknown> = {
+  const params: ResponseCreateParamsStreaming & Record<string, unknown> = {
     model: model.id,
     input: messages,
     stream: true,
