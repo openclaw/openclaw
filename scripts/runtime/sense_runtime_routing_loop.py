@@ -62,6 +62,21 @@ def manager_cmd(script_dir: Path, args: argparse.Namespace, intent: str) -> list
     return cmd
 
 
+def default_retry_state() -> dict:
+    return {
+        'retry_decision': None,
+        'retry_reason': None,
+        'retry_attempted': False,
+        'retry_allowed': False,
+        'retry_count': 0,
+        'retry_limit': 1,
+        'repeated_decision_detected': False,
+        'runtime_model_confirmation_source': None,
+        'previous_selected_model_runtime': None,
+        'current_selected_model_runtime': None,
+    }
+
+
 def main() -> int:
     args = build_parser().parse_args()
     script_dir = Path(__file__).resolve().parent
@@ -75,6 +90,7 @@ def main() -> int:
     last_decision: dict | None = None
     last_remediation: dict | None = None
     next_step = 'manual_review'
+    retry = default_retry_state()
 
     while attempts < max(1, args.max_attempts):
         attempts += 1
@@ -93,6 +109,21 @@ def main() -> int:
         if signature in seen_signatures:
             final_state = 'stopped_repeated_decision'
             next_step = str(decision.get('next_step') or 'manual_review')
+            retry['repeated_decision_detected'] = True
+            if isinstance(last_remediation, dict):
+                model_status = last_remediation.get('model_status')
+                if isinstance(model_status, dict) and model_status.get('selected_model_match') is False:
+                    final_state = 'selected_model_mismatch'
+                    retry.update({
+                        'retry_decision': 'skip_restart_repeated_mismatch',
+                        'retry_reason': 'runtime selected model differs from configured selected model and the same mismatch repeated',
+                        'retry_attempted': False,
+                        'retry_allowed': False,
+                        'retry_count': 1,
+                        'runtime_model_confirmation_source': model_status.get('runtime_model_confirmation_source'),
+                        'previous_selected_model_runtime': model_status.get('selected_model_runtime'),
+                        'current_selected_model_runtime': model_status.get('selected_model_runtime'),
+                    })
             break
         seen_signatures.add(signature)
 
@@ -230,16 +261,57 @@ def main() -> int:
             if isinstance(model_status, dict) and model_status.get('selected_model_present') is False:
                 final_state = 'selected_model_missing'
                 next_step = 'check_selected_model_config'
+                retry.update({
+                    'retry_decision': 'skip_retry_missing_selected_model',
+                    'retry_reason': 'selected model is not configured',
+                    'retry_attempted': False,
+                    'retry_allowed': False,
+                    'retry_count': 0,
+                    'runtime_model_confirmation_source': model_status.get('runtime_model_confirmation_source'),
+                    'previous_selected_model_runtime': model_status.get('selected_model_runtime'),
+                    'current_selected_model_runtime': model_status.get('selected_model_runtime'),
+                })
                 break
             if isinstance(model_status, dict) and model_status.get('selected_model_present') is True and model_status.get('selected_model_runtime_recognized') is False:
                 final_state = 'selected_model_not_ready'
                 next_step = 'check_selected_model_config'
+                retry.update({
+                    'retry_decision': 'recheck_runtime_status_once' if model_status.get('selected_model_runtime_source') == 'start-result' else 'runtime_model_unconfirmed',
+                    'retry_reason': 'selected model is configured but runtime has not confirmed it yet',
+                    'retry_attempted': model_status.get('selected_model_runtime_source') == 'start-result',
+                    'retry_allowed': False,
+                    'retry_count': 1 if model_status.get('selected_model_runtime_source') == 'start-result' else 0,
+                    'runtime_model_confirmation_source': model_status.get('runtime_model_confirmation_source'),
+                    'previous_selected_model_runtime': model_status.get('selected_model_runtime'),
+                    'current_selected_model_runtime': model_status.get('selected_model_runtime'),
+                })
                 break
             if isinstance(model_status, dict) and model_status.get('selected_model_match') is False:
                 final_state = 'selected_model_mismatch'
                 next_step = 'check_selected_model_config'
+                retry.update({
+                    'retry_decision': 'skip_restart_repeated_mismatch' if model_status.get('runtime_model_confirmation_source') in {'start-result+runtime', 'runtime'} else 'recheck_runtime_status_once',
+                    'retry_reason': 'runtime selected model differs from configured selected model',
+                    'retry_attempted': model_status.get('runtime_model_confirmation_source') not in {None, 'start-result'},
+                    'retry_allowed': False,
+                    'retry_count': 1 if model_status.get('runtime_model_confirmation_source') else 0,
+                    'runtime_model_confirmation_source': model_status.get('runtime_model_confirmation_source'),
+                    'previous_selected_model_runtime': model_status.get('selected_model_expected'),
+                    'current_selected_model_runtime': model_status.get('selected_model_runtime'),
+                })
                 break
             if next_step == 'run_runtime_task':
+                if isinstance(model_status, dict):
+                    retry.update({
+                        'retry_decision': 'runtime_model_confirmed',
+                        'retry_reason': 'runtime status confirmed the selected model',
+                        'retry_attempted': model_status.get('runtime_model_confirmation_source') in {'start-result+runtime', 'runtime'},
+                        'retry_allowed': False,
+                        'retry_count': 1 if model_status.get('runtime_model_confirmation_source') in {'start-result+runtime', 'runtime'} else 0,
+                        'runtime_model_confirmation_source': model_status.get('runtime_model_confirmation_source'),
+                        'previous_selected_model_runtime': model_status.get('selected_model_expected'),
+                        'current_selected_model_runtime': model_status.get('selected_model_runtime'),
+                    })
                 final_state = 'ready_for_runtime_task'
                 break
 
@@ -356,6 +428,7 @@ def main() -> int:
         'last_decision': last_decision,
         'last_remediation': last_remediation,
         'next_step': next_step,
+        'retry': retry,
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0

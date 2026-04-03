@@ -274,35 +274,67 @@ def infer_model_from_runtime_payloads(
     start_result: dict | None,
     runtime_status: dict | None,
 ) -> dict:
-    sandbox_model = str(sandbox_signals.get('model') or 'unknown')
-    if sandbox_model not in {'', 'unknown'}:
-        return {
-            'model': sandbox_model,
-            'model_runtime_recognized': True,
-            'model_runtime_source': 'sandbox-status',
-        }
-
-    for source_name, payload in [('start-result', start_result), ('runtime', runtime_status)]:
+    def extract_model(payload: dict | None) -> str | None:
         text = collect_runtime_text(payload)
         lowered = text.lower()
         for marker in ['using model ', 'model=', 'model: ']:
             idx = lowered.find(marker)
             if idx >= 0:
-                raw = text[idx + len(marker):].splitlines()[0].strip()
-                raw = raw.strip(' ."\'')
+                raw = text[idx + len(marker):].splitlines()[0].strip().strip(' ."\'')
                 if raw:
                     token = raw.split()[0].strip(',"\']')
                     if token and token.lower() not in {'unknown', 'none'}:
-                        return {
-                            'model': token,
-                            'model_runtime_recognized': True,
-                            'model_runtime_source': source_name,
-                        }
+                        return token
+        return None
+
+    sandbox_model = str(sandbox_signals.get('model') or 'unknown')
+    start_result_model = extract_model(start_result)
+    runtime_status_model = extract_model(runtime_status)
+    if sandbox_model not in {'', 'unknown'}:
+        return {
+            'model': sandbox_model,
+            'model_runtime_recognized': True,
+            'model_runtime_source': 'sandbox-status',
+            'start_result_model': start_result_model,
+            'runtime_status_model': runtime_status_model,
+            'runtime_model_confirmation_source': 'sandbox-status',
+        }
+
+    if start_result_model and runtime_status_model and start_result_model == runtime_status_model:
+        return {
+            'model': start_result_model,
+            'model_runtime_recognized': True,
+            'model_runtime_source': 'runtime',
+            'start_result_model': start_result_model,
+            'runtime_status_model': runtime_status_model,
+            'runtime_model_confirmation_source': 'start-result+runtime',
+        }
+    if runtime_status_model:
+        return {
+            'model': runtime_status_model,
+            'model_runtime_recognized': True,
+            'model_runtime_source': 'runtime',
+            'start_result_model': start_result_model,
+            'runtime_status_model': runtime_status_model,
+            'runtime_model_confirmation_source': 'runtime',
+        }
+    if start_result_model:
+        return {
+            'model': start_result_model,
+            'model_runtime_recognized': False,
+            'model_runtime_source': 'start-result',
+            'start_result_model': start_result_model,
+            'runtime_status_model': runtime_status_model,
+            'runtime_model_confirmation_source': 'start-result',
+        }
 
     return {
         'model': 'unknown',
         'model_runtime_recognized': False,
         'model_runtime_source': None,
+        'start_result_model': start_result_model,
+        'runtime_status_model': runtime_status_model,
+        'runtime_model_confirmation_source': None,
     }
 
 
@@ -317,6 +349,9 @@ def merge_provider_model_sources(runtime_signals: dict, config: dict, start_resu
     merged['provider_runtime_source'] = runtime_provider_signals.get('provider_runtime_source')
     merged['model_runtime_recognized'] = runtime_model_signals.get('model_runtime_recognized', False)
     merged['model_runtime_source'] = runtime_model_signals.get('model_runtime_source')
+    merged['start_result_model'] = runtime_model_signals.get('start_result_model')
+    merged['runtime_status_model'] = runtime_model_signals.get('runtime_status_model')
+    merged['runtime_model_confirmation_source'] = runtime_model_signals.get('runtime_model_confirmation_source')
     merged['default_model'] = config_signals.get('default_model', 'unknown')
     merged['default_model_source'] = config_signals.get('default_model_source')
     if runtime_provider not in {'', 'unknown'}:
@@ -521,7 +556,8 @@ def build_model_status(provider_status: dict) -> dict:
     configured_selected_model = str(provider_status.get('model') or 'unknown')
     selected_model_expected = default_model if default_model not in {'', 'unknown'} else (configured_selected_model if configured_selected_model not in {'', 'unknown'} else None)
     selected_model_expected_source = provider_status.get('default_model_source') if selected_model_expected == default_model and default_model not in {'', 'unknown'} else provider_status.get('model_source')
-    selected_model_runtime = str(provider_status.get('model') or 'unknown') if provider_status.get('model_runtime_recognized') else None
+    observed_runtime_model = provider_status.get('runtime_status_model') or provider_status.get('start_result_model')
+    selected_model_runtime = str(observed_runtime_model or '') or None
     if selected_model_runtime in {'', 'unknown'}:
         selected_model_runtime = None
     selected_model_match = None
@@ -530,6 +566,12 @@ def build_model_status(provider_status: dict) -> dict:
         selected_model_match = selected_model_expected == selected_model_runtime
         if selected_model_match is False:
             selected_model_diff_reason = 'runtime selected model differs from configured selected model'
+    model_ready = (
+        default_model not in {'', 'unknown'}
+        and configured_selected_model not in {'', 'unknown'}
+        and provider_status.get('model_runtime_recognized') is True
+        and selected_model_match is not False
+    )
     model_status = {
         'default_model': default_model,
         'default_model_source': provider_status.get('default_model_source'),
@@ -542,9 +584,12 @@ def build_model_status(provider_status: dict) -> dict:
         'selected_model_runtime': selected_model_runtime,
         'selected_model_runtime_recognized': provider_status.get('model_runtime_recognized'),
         'selected_model_runtime_source': provider_status.get('model_runtime_source'),
+        'runtime_model_confirmation_source': provider_status.get('runtime_model_confirmation_source'),
+        'start_result_model': provider_status.get('start_result_model'),
+        'runtime_status_model': provider_status.get('runtime_status_model'),
         'selected_model_match': selected_model_match,
         'selected_model_diff_reason': selected_model_diff_reason,
-        'model_ready': provider_status.get('model_ready'),
+        'model_ready': model_ready,
         'missing_requirements': [],
     }
     missing: list[str] = []

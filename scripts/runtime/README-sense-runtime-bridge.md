@@ -368,6 +368,20 @@ Selected-model diff semantics:
   - `false` when both values exist and differ
   - `null` when one side is still unknown
 
+Retry policy is intentionally conservative:
+
+- if only `start-result` shows a selected model
+  - the orchestration treats that as a one-time recheck signal
+  - `retry_decision = recheck_runtime_status_once`
+  - `selected_model_runtime_recognized` stays false until runtime status or sandbox confirms it
+- if `start-result` and `runtime status` confirm the same selected model
+  - `retry_decision = runtime_model_confirmed`
+- if the same selected-model mismatch repeats
+  - orchestration does not restart again
+  - `retry_decision = skip_restart_repeated_mismatch`
+- if runtime still does not expose a selected model
+  - orchestration stops with `selected_model_not_ready`
+
 Routing loop can now stop more specifically as:
 
 - `default_model_missing`
