@@ -31,6 +31,12 @@ import {
 } from "./doctor/shared/mutable-allowlist.js";
 import { collectDoctorPreviewWarnings } from "./doctor/shared/preview-warnings.js";
 
+function hasLegacyInternalHookHandlers(raw: unknown): boolean {
+  const handlers = (raw as { hooks?: { internal?: { handlers?: unknown } } })?.hooks?.internal
+    ?.handlers;
+  return Array.isArray(handlers) && handlers.length > 0;
+}
+
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
@@ -57,6 +63,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
   if (legacyStep.changeLines.length > 0) {
     note(legacyStep.changeLines.join("\n"), "Doctor changes");
+  }
+  if (hasLegacyInternalHookHandlers(snapshot.parsed)) {
+    note(
+      [
+        "- hooks.internal.handlers: legacy inline hook modules are no longer part of the public config surface.",
+        "- Migrate each entry to a managed or workspace hook directory with HOOK.md + handler.js, then enable it through hooks.internal.entries.<hookKey> as needed.",
+        "- openclaw doctor --fix does not rewrite this shape automatically.",
+      ].join("\n"),
+      "Legacy config keys detected",
+    );
   }
 
   const normalized = normalizeCompatibilityConfigValues(candidate);

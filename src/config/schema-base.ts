@@ -19,6 +19,8 @@ type JsonSchemaObject = Record<string, unknown> & {
   additionalProperties?: JsonSchemaObject | boolean;
 };
 
+const LEGACY_HIDDEN_PUBLIC_PATHS = ["hooks.internal.handlers"] as const;
+
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
   asSchemaObject<JsonSchemaObject>(value);
 
@@ -52,6 +54,50 @@ function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
   return next;
 }
 
+function stripObjectPropertyPath(schema: ConfigSchema, path: readonly string[]): void {
+  const root = asJsonSchemaObject(schema);
+  if (!root || path.length === 0) {
+    return;
+  }
+
+  let current: JsonSchemaObject | null = root;
+  for (const segment of path.slice(0, -1)) {
+    current = asJsonSchemaObject(current?.properties?.[segment]);
+    if (!current) {
+      return;
+    }
+  }
+
+  const key = path[path.length - 1];
+  if (!current?.properties || !key) {
+    return;
+  }
+  delete current.properties[key];
+  if (Array.isArray(current.required)) {
+    current.required = current.required.filter((entry) => entry !== key);
+  }
+}
+
+function stripLegacyCompatSchemaPaths(schema: ConfigSchema): ConfigSchema {
+  const next = cloneSchema(schema);
+  for (const path of LEGACY_HIDDEN_PUBLIC_PATHS) {
+    stripObjectPropertyPath(next, path.split("."));
+  }
+  return next;
+}
+
+function stripLegacyCompatHints(hints: ConfigUiHints): ConfigUiHints {
+  const next: ConfigUiHints = { ...hints };
+  for (const path of LEGACY_HIDDEN_PUBLIC_PATHS) {
+    for (const key of Object.keys(next)) {
+      if (key === path || key.startsWith(`${path}.`) || key.startsWith(`${path}[`)) {
+        delete next[key];
+      }
+    }
+  }
+  return next;
+}
+
 let baseConfigSchemaStablePayload: BaseConfigSchemaStablePayload | null = null;
 
 function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
@@ -74,8 +120,10 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
     isSensitiveUrlConfigPath,
   );
   const stablePayload = {
-    schema: stripChannelSchema(schema),
-    uiHints: applyDerivedTags(applySensitiveUrlHints(baseHints, sensitiveUrlPaths)),
+    schema: stripLegacyCompatSchemaPaths(stripChannelSchema(schema)),
+    uiHints: stripLegacyCompatHints(
+      applyDerivedTags(applySensitiveUrlHints(baseHints, sensitiveUrlPaths)),
+    ),
     version: VERSION,
   } satisfies BaseConfigSchemaStablePayload;
   baseConfigSchemaStablePayload = stablePayload;

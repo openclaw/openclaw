@@ -15,6 +15,7 @@ import { shouldIncludeHook } from "./config.js";
 import { buildImportUrl } from "./import-url.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import { registerInternalHook } from "./internal-hooks.js";
+import { getLegacyInternalHookHandlers } from "./legacy-config.js";
 import { resolveFunctionModuleExport } from "./module-loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
@@ -153,7 +154,7 @@ export async function loadInternalHooks(
   }
 
   // 2. Load legacy config handlers (backwards compatibility)
-  const handlers = cfg.hooks?.internal?.handlers ?? [];
+  const handlers = getLegacyInternalHookHandlers(cfg);
   for (const handlerConfig of handlers) {
     try {
       // Legacy handler paths: keep them workspace-relative.

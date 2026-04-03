@@ -18009,25 +18009,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               enabled: {
                 type: "boolean",
               },
-              handlers: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: {
-                    event: {
-                      type: "string",
-                    },
-                    module: {
-                      type: "string",
-                    },
-                    export: {
-                      type: "string",
-                    },
-                  },
-                  required: ["event", "module"],
-                  additionalProperties: false,
-                },
-              },
               entries: {
                 type: "object",
                 propertyNames: {
@@ -23568,27 +23549,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "hooks.internal.enabled": {
       label: "Internal Hooks Enabled",
-      help: "Enables processing for internal hook handlers and configured entries in the internal hook runtime. Keep disabled unless internal hook handlers are intentionally configured.",
-      tags: ["advanced"],
-    },
-    "hooks.internal.handlers": {
-      label: "Internal Hook Handlers",
-      help: "List of internal event handlers mapping event names to modules and optional exports. Keep handler definitions explicit so event-to-code routing is auditable.",
-      tags: ["advanced"],
-    },
-    "hooks.internal.handlers[].event": {
-      label: "Internal Hook Event",
-      help: "Internal event name that triggers this handler module when emitted by the runtime. Use stable event naming conventions to avoid accidental overlap across handlers.",
-      tags: ["advanced"],
-    },
-    "hooks.internal.handlers[].module": {
-      label: "Internal Hook Module",
-      help: "Safe relative module path for the internal hook handler implementation loaded at runtime. Keep module files in reviewed directories and avoid dynamic path composition.",
-      tags: ["advanced"],
-    },
-    "hooks.internal.handlers[].export": {
-      label: "Internal Hook Export",
-      help: "Optional named export for the internal hook handler function when module default export is not used. Set this when one module ships multiple handler entrypoints.",
+      help: "Enables processing for internal hooks and configured entries in the internal hook runtime. Keep disabled unless internal hooks are intentionally configured.",
       tags: ["advanced"],
     },
     "hooks.internal.entries": {
