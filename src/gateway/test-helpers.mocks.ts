@@ -17,31 +17,6 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
-
-type BuildSpeechProvider = () => SpeechProviderPlugin;
-
-let buildElevenLabsSpeechProviderCache: BuildSpeechProvider | undefined;
-let buildOpenAISpeechProviderCache: BuildSpeechProvider | undefined;
-
-function getBuildElevenLabsSpeechProvider(): BuildSpeechProvider {
-  if (!buildElevenLabsSpeechProviderCache) {
-    ({ buildElevenLabsSpeechProvider: buildElevenLabsSpeechProviderCache } =
-      loadBundledPluginTestApiSync<{
-        buildElevenLabsSpeechProvider: BuildSpeechProvider;
-      }>("elevenlabs"));
-  }
-  return buildElevenLabsSpeechProviderCache;
-}
-
-function getBuildOpenAISpeechProvider(): BuildSpeechProvider {
-  if (!buildOpenAISpeechProviderCache) {
-    ({ buildOpenAISpeechProvider: buildOpenAISpeechProviderCache } = loadBundledPluginTestApiSync<{
-      buildOpenAISpeechProvider: BuildSpeechProvider;
-    }>("openai"));
-  }
-  return buildOpenAISpeechProviderCache;
-}
 
 function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
   return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
@@ -103,6 +78,32 @@ const createStubChannelPlugin = (params: StubChannelOptions): ChannelPlugin => (
       loggedOut: false,
     }),
   },
+});
+
+type StubSpeechProviderOptions = {
+  id: SpeechProviderPlugin["id"];
+  label: string;
+  aliases?: string[];
+  voices?: string[];
+};
+
+const createStubSpeechProvider = (params: StubSpeechProviderOptions): SpeechProviderPlugin => ({
+  id: params.id,
+  label: params.label,
+  aliases: params.aliases,
+  voices: params.voices,
+  isConfigured: () => true,
+  synthesize: async () => ({
+    audioBuffer: Buffer.from(`${params.id}-audio`, "utf8"),
+    outputFormat: "mp3",
+    fileExtension: ".mp3",
+    voiceCompatible: true,
+  }),
+  listVoices: async () =>
+    (params.voices ?? []).map((voiceId) => ({
+      id: voiceId,
+      name: voiceId,
+    })),
 });
 
 const createStubPluginRegistry = (): PluginRegistry => ({
@@ -181,12 +182,20 @@ const createStubPluginRegistry = (): PluginRegistry => ({
     {
       pluginId: "openai",
       source: "test",
-      provider: getBuildOpenAISpeechProvider()(),
+      provider: createStubSpeechProvider({
+        id: "openai",
+        label: "OpenAI",
+        voices: ["alloy", "nova"],
+      }),
     },
     {
       pluginId: "elevenlabs",
       source: "test",
-      provider: getBuildElevenLabsSpeechProvider()(),
+      provider: createStubSpeechProvider({
+        id: "elevenlabs",
+        label: "ElevenLabs",
+        voices: ["EXAVITQu4vr4xnSDxMaL", "voice-default"],
+      }),
     },
   ],
   mediaUnderstandingProviders: [],
