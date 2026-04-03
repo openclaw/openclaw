@@ -1,4 +1,4 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import { buildUsageErrorSnapshot, buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -44,7 +44,10 @@ export async function fetchZaiUsage(
     });
   }
 
-  const data = (await res.json()) as ZaiUsageResponse;
+  const data = (await res.json().catch(() => null)) as ZaiUsageResponse | null;
+  if (!data) {
+    return buildUsageErrorSnapshot("zai", "Invalid JSON");
+  }
   if (!data.success || data.code !== 200) {
     const errorMessage = typeof data.msg === "string" ? data.msg.trim() : "";
     return {
