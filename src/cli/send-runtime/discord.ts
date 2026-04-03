@@ -1,7 +1,7 @@
-import { sendMessageDiscord as sendMessageDiscordImpl } from "../../plugin-sdk/discord-runtime-surface.js";
+import { sendMessageDiscord as sendMessageDiscordImpl } from "../../../extensions/discord/runtime-api.js";
 
 type RuntimeSend = {
-  sendMessage: typeof import("../../plugin-sdk/discord-runtime-surface.js").sendMessageDiscord;
+  sendMessage: typeof import("../../../extensions/discord/runtime-api.js").sendMessageDiscord;
 };
 
 export const runtimeSend = {

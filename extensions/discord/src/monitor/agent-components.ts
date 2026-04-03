@@ -25,25 +25,24 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import {
-  type PluginInteractiveDiscordHandlerContext,
-} from "openclaw/plugin-sdk/plugin-runtime";
+import { type PluginInteractiveDiscordHandlerContext } from "openclaw/plugin-sdk/plugin-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import {
   parseDiscordComponentCustomIdForCarbon,
   parseDiscordModalCustomIdForCarbon,
 } from "../component-custom-id.js";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
+import { editDiscordComponentMessage } from "../send.components.js";
 import {
   AGENT_BUTTON_KEY,
   AGENT_SELECT_KEY,
@@ -96,7 +95,6 @@ let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtim
 let replyPipelineRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>
   | undefined;
-let sendComponentsRuntimePromise: Promise<typeof import("../send.components.js")> | undefined;
 let typingRuntimePromise: Promise<typeof import("./typing.js")> | undefined;
 
 async function loadConversationRuntime() {
@@ -122,11 +120,6 @@ async function loadReplyRuntime() {
 async function loadReplyPipelineRuntime() {
   replyPipelineRuntimePromise ??= import("openclaw/plugin-sdk/channel-reply-pipeline");
   return await replyPipelineRuntimePromise;
-}
-
-async function loadSendComponentsRuntime() {
-  sendComponentsRuntimePromise ??= import("../send.components.js");
-  return await sendComponentsRuntimePromise;
 }
 
 async function loadTypingRuntime() {
@@ -269,7 +262,6 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     const approvalMessageId = params.messageId?.trim() || params.interaction.message?.id?.trim();
     if (approvalMessageId) {
       try {
-        const { editDiscordComponentMessage } = await loadSendComponentsRuntime();
         await editDiscordComponentMessage(
           normalizedConversationId,
           approvalMessageId,
@@ -901,7 +893,9 @@ async function handleDiscordModalTrigger(params: {
   }
 
   try {
-    await params.interaction.showModal((await loadComponentsRuntime()).createDiscordFormModal(modalEntry));
+    await params.interaction.showModal(
+      (await loadComponentsRuntime()).createDiscordFormModal(modalEntry),
+    );
   } catch (err) {
     logError(`${params.label}: failed to show modal: ${String(err)}`);
   }

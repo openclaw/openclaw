@@ -1,5 +1,9 @@
 import path from "node:path";
-import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
+import {
+  bundledPluginDependentUnitTestFiles,
+  isBundledPluginDependentUnitTestFile,
+  isUnitConfigTestFile,
+} from "../../vitest.unit-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "../lib/bundled-plugin-paths.mjs";
 import {
   loadChannelTimingManifest,
@@ -112,14 +116,21 @@ const normalizeSurfaces = (values = []) => [
   ),
 ];
 
-const EXPLICIT_PLAN_SURFACES = new Set(["unit", "extensions", "channels", "contracts", "gateway"]);
+const EXPLICIT_PLAN_SURFACES = new Set([
+  "unit",
+  "bundled",
+  "extensions",
+  "channels",
+  "contracts",
+  "gateway",
+]);
 const FAILURE_POLICIES = new Set(["fail-fast", "collect-all"]);
 
 const validateExplicitSurfaces = (surfaces) => {
   const invalidSurfaces = surfaces.filter((surface) => !EXPLICIT_PLAN_SURFACES.has(surface));
   if (invalidSurfaces.length > 0) {
     throw new Error(
-      `Unsupported --surface value(s): ${invalidSurfaces.join(", ")}. Supported surfaces: unit, extensions, channels, contracts, gateway.`,
+      `Unsupported --surface value(s): ${invalidSurfaces.join(", ")}. Supported surfaces: unit, bundled, extensions, channels, contracts, gateway.`,
     );
   }
 };
@@ -134,6 +145,9 @@ const buildRequestedSurfaces = (request, env) => {
   const skipDefaultRuns = env.OPENCLAW_TEST_SKIP_DEFAULT === "1";
   if (!skipDefaultRuns) {
     surfaces.push("unit");
+  }
+  if (env.OPENCLAW_TEST_INCLUDE_BUNDLED === "1") {
+    surfaces.push("bundled");
   }
   if (env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1") {
     surfaces.push("extensions");
@@ -264,6 +278,11 @@ const resolveEntryTimingEstimator = (entry, context) => {
       context.unitTimingManifest.files[file]?.durationMs ??
       context.unitTimingManifest.defaultDurationMs;
   }
+  if (config === "vitest.bundled.config.ts") {
+    return (file) =>
+      context.unitTimingManifest.files[file]?.durationMs ??
+      context.unitTimingManifest.defaultDurationMs;
+  }
   if (config === "vitest.channels.config.ts") {
     return (file) =>
       context.channelTimingManifest.files[file]?.durationMs ??
@@ -348,6 +367,9 @@ const resolveMaxWorkersForUnit = (unit, context) => {
   if (unit.surface === "extensions") {
     return budget.extensionWorkers;
   }
+  if (unit.surface === "bundled") {
+    return budget.unitSharedWorkers;
+  }
   if (unit.surface === "channels") {
     return budget.channelSharedWorkers ?? budget.unitSharedWorkers;
   }
@@ -390,6 +412,11 @@ const createExecutionUnit = (context, config) => {
 
 const withIncludeFileEnv = (context, unitId, files) => ({
   OPENCLAW_VITEST_INCLUDE_FILE: context.writeTempJsonArtifact(unitId, files),
+});
+
+const withBundledPluginsDisabled = (unitEnv) => ({
+  ...unitEnv,
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
 });
 
 const resolveUnitHeavyFileGroups = (context) => {
@@ -509,6 +536,7 @@ const buildDefaultUnits = (context, request) => {
   const selectedSurfaces = buildRequestedSurfaces(request, env);
   const selectedSurfaceSet = new Set(selectedSurfaces);
   const unitOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("unit");
+  const bundledOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("bundled");
   const channelsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("channels");
   const contractsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("contracts");
   const extensionsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("extensions");
@@ -631,10 +659,12 @@ const buildDefaultUnits = (context, request) => {
               batch,
               context,
             ),
-            env: withIncludeFileEnv(
-              context,
-              `vitest-unit-fast-include-${String(laneIndex + 1)}-${String(batchIndex + 1)}`,
-              batch,
+            env: withBundledPluginsDisabled(
+              withIncludeFileEnv(
+                context,
+                `vitest-unit-fast-include-${String(laneIndex + 1)}-${String(batchIndex + 1)}`,
+                batch,
+              ),
             ),
             args: [
               "vitest",
@@ -657,6 +687,7 @@ const buildDefaultUnits = (context, request) => {
           surface: "unit",
           isolate: true,
           estimatedDurationMs: estimateUnitDurationMs(file),
+          env: withBundledPluginsDisabled(),
           args: [
             "vitest",
             "run",
@@ -683,6 +714,7 @@ const buildDefaultUnits = (context, request) => {
           surface: "unit",
           isolate: false,
           estimatedDurationMs: files.reduce((sum, file) => sum + estimateUnitDurationMs(file), 0),
+          env: withBundledPluginsDisabled(),
           args: [
             "vitest",
             "run",
@@ -704,6 +736,7 @@ const buildDefaultUnits = (context, request) => {
           surface: "unit",
           isolate: true,
           estimatedDurationMs: estimateUnitDurationMs(file),
+          env: withBundledPluginsDisabled(),
           args: [
             "vitest",
             "run",
@@ -724,6 +757,7 @@ const buildDefaultUnits = (context, request) => {
           id: "unit-pinned",
           surface: "unit",
           isolate: false,
+          env: withBundledPluginsDisabled(),
           args: [
             "vitest",
             "run",
@@ -737,6 +771,23 @@ const buildDefaultUnits = (context, request) => {
         }),
       );
     }
+  }
+
+  if (selectedSurfaceSet.has("bundled")) {
+    units.push(
+      createExecutionUnit(context, {
+        id: "bundled",
+        surface: "bundled",
+        isolate: false,
+        serialPhase: bundledOnlyRun ? undefined : "bundled",
+        estimatedDurationMs: bundledPluginDependentUnitTestFiles.reduce(
+          (sum, file) => sum + estimateUnitDurationMs(file),
+          0,
+        ),
+        args: ["vitest", "run", "--config", "vitest.bundled.config.ts", ...noIsolateArgs],
+        reasons: ["bundled-surface"],
+      }),
+    );
   }
 
   if (selectedSurfaceSet.has("channels")) {
@@ -951,6 +1002,17 @@ const createTargetedUnit = (context, classification, filters) => {
         ...filters,
       ];
     }
+    if (owner === "bundled") {
+      return [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.bundled.config.ts",
+        ...(classification.isolated ? ["--pool=forks"] : []),
+        ...context.noIsolateArgs,
+        ...filters,
+      ];
+    }
     if (owner === "base-pinned") {
       return [
         "vitest",
@@ -1040,6 +1102,7 @@ const createTargetedUnit = (context, classification, filters) => {
     surface: classification.legacyBasePinned ? "base" : classification.surface,
     isolate: classification.isolated || owner === "base-pinned",
     args,
+    env: owner === "unit" ? withBundledPluginsDisabled() : undefined,
     reasons: classification.reasons,
   });
 };
@@ -1250,6 +1313,13 @@ const estimateTopLevelEntryDurationMs = (unit, context) => {
           context.unitTimingManifest.defaultDurationMs)
       );
     }
+    if (isBundledPluginDependentUnitTestFile(file)) {
+      return (
+        totalMs +
+        (context.unitTimingManifest.files[file]?.durationMs ??
+          context.unitTimingManifest.defaultDurationMs)
+      );
+    }
     if (context.catalog.channelTestPrefixes.some((prefix) => file.startsWith(prefix))) {
       return (
         totalMs +
@@ -1374,6 +1444,12 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
 
   const checksFastInclude = nodeEligible
     ? [
+        {
+          check_name: "checks-fast-bundled",
+          runtime: "node",
+          task: "bundled",
+          command: "pnpm test:bundled",
+        },
         ...createShardMatrixEntries({
           checkNamePrefix: "checks-fast-extensions",
           runtime: "node",

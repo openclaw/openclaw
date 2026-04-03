@@ -311,23 +311,6 @@ function buildPendingDevicePairingRequest(params: {
   };
 }
 
-function resolvePendingApprovalRole(pending: DevicePairingPendingRequest): string | null {
-  const role = normalizeRole(pending.role);
-  if (role) {
-    return role;
-  }
-  if (!Array.isArray(pending.roles)) {
-    return null;
-  }
-  for (const candidate of pending.roles) {
-    const normalized = normalizeRole(candidate);
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return null;
-}
-
 function newToken() {
   return generatePairingToken();
 }
@@ -492,19 +475,22 @@ export async function approveDevicePairing(
     if (!pending) {
       return null;
     }
-    const approvalRole = resolvePendingApprovalRole(pending);
-    if (approvalRole) {
-      const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
-        scope.startsWith(OPERATOR_SCOPE_PREFIX),
-      );
+    const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
+    const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
+      scope.startsWith(OPERATOR_SCOPE_PREFIX),
+    );
+    if (requestedOperatorScopes.length > 0) {
       if (!options?.callerScopes) {
         return {
           status: "forbidden",
           missingScope: requestedOperatorScopes[0] ?? "callerScopes-required",
         };
       }
+      if (!requestedRoles.includes("operator")) {
+        return { status: "forbidden", missingScope: requestedOperatorScopes[0] };
+      }
       const missingScope = resolveMissingRequestedScope({
-        role: approvalRole,
+        role: "operator",
         requestedScopes: requestedOperatorScopes,
         allowedScopes: options.callerScopes,
       });

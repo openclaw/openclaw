@@ -184,6 +184,30 @@ describe("device pairing tokens", () => {
     expect(paired?.scopes).toEqual(expect.arrayContaining(["operator.read", "operator.write"]));
   });
 
+  test("approves mixed node and operator requests with admin caller scopes", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        roles: ["node", "operator"],
+        scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveDevicePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.admin", "operator.pairing"] },
+        baseDir,
+      ),
+    ).resolves.toMatchObject({
+      status: "approved",
+      requestId: request.request.requestId,
+    });
+  });
+
   test("keeps superseded requests interactive when an existing pending request is interactive", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     const first = await requestDevicePairing(
