@@ -116,7 +116,7 @@ exec ssh -T gateway-host imsg "$@"
 
   </Tab>
 
-  <Tab title="Cloud relay (Linux/VPS)">
+  <Tab title="Cloud relay (Linux/VPS)" id="cloud-relay-linuxvps">
     For deployments without a Mac (Linux, VPS, containers), use the Claw Messenger relay service:
 
     <Steps>
