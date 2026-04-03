@@ -67,7 +67,7 @@ OpenClaw has three public release lanes:
   so we do not ship an empty browser dashboard again
 - If the release work touched CI planning, extension timing manifests, or fast
   test matrices, regenerate and review the planner-owned `checks-fast-extensions`
-  shard plan via `node scripts/ci-write-manifest-outputs.mjs --workflow ci`
+  workflow matrix outputs from `.github/workflows/ci.yml`
   before approval so release notes do not describe a stale CI layout
 - Stable macOS release readiness also includes the updater surfaces:
   - the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`
