@@ -2,6 +2,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardConfigure,
+  createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
@@ -30,6 +31,7 @@ vi.mock("./monitor.js", async () => {
 });
 
 const googlechatConfigure = createPluginSetupWizardConfigure(googlechatPlugin);
+const googlechatStatus = createPluginSetupWizardStatus(googlechatPlugin);
 
 function buildAccount(): ResolvedGoogleChatAccount {
   return {
@@ -184,6 +186,29 @@ describe("googlechat setup", () => {
         "alerts",
       ),
     ).toBe("allowlist");
+  });
+
+  it("reports configured state for the selected account instead of any account", async () => {
+    const status = await googlechatStatus({
+      cfg: {
+        channels: {
+          googlechat: {
+            accounts: {
+              default: {
+                serviceAccount: { client_email: "default@example.com" },
+              },
+              alerts: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {
+        googlechat: "alerts",
+      },
+      options: {},
+    });
+
+    expect(status.configured).toBe(false);
   });
 
   it("reports account-scoped config keys for named accounts", () => {

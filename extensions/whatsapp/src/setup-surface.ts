@@ -19,20 +19,20 @@ export const whatsappSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "not linked",
     configuredScore: 5,
     unconfiguredScore: 4,
-    resolveConfigured: async ({ cfg }) => {
-      for (const accountId of listWhatsAppAccountIds(cfg)) {
-        if (await detectWhatsAppLinked(cfg, accountId)) {
+    resolveConfigured: async ({ cfg, accountId }) => {
+      for (const resolvedAccountId of accountId ? [accountId] : listWhatsAppAccountIds(cfg)) {
+        if (await detectWhatsAppLinked(cfg, resolvedAccountId)) {
           return true;
         }
       }
       return false;
     },
-    resolveStatusLines: async ({ cfg, configured }) => {
+    resolveStatusLines: async ({ cfg, accountId, configured }) => {
       const linkedAccountId = (
         await Promise.all(
-          listWhatsAppAccountIds(cfg).map(async (accountId) => ({
-            accountId,
-            linked: await detectWhatsAppLinked(cfg, accountId),
+          (accountId ? [accountId] : listWhatsAppAccountIds(cfg)).map(async (resolvedAccountId) => ({
+            accountId: resolvedAccountId,
+            linked: await detectWhatsAppLinked(cfg, resolvedAccountId),
           })),
         )
       ).find((entry) => entry.linked)?.accountId;

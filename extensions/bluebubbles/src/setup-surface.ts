@@ -166,9 +166,9 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
       configuredScore: 1,
       unconfiguredScore: 0,
       includeStatusLine: true,
-      resolveConfigured: ({ cfg }) =>
-        listBlueBubblesAccountIds(cfg).some((accountId) => {
-          const account = resolveBlueBubblesAccount({ cfg, accountId });
+      resolveConfigured: ({ cfg, accountId }) =>
+        (accountId ? [accountId] : listBlueBubblesAccountIds(cfg)).some((resolvedAccountId) => {
+          const account = resolveBlueBubblesAccount({ cfg, accountId: resolvedAccountId });
           return account.configured;
         }),
     }),

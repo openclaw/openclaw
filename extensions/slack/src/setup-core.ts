@@ -166,9 +166,9 @@ export function createSlackSetupWizardBase(handlers: {
       unconfiguredHint: "needs tokens",
       configuredScore: 2,
       unconfiguredScore: 1,
-      resolveConfigured: ({ cfg }) =>
-        listSlackAccountIds(cfg).some((accountId) => {
-          const account = inspectSlackAccount({ cfg, accountId });
+      resolveConfigured: ({ cfg, accountId }) =>
+        (accountId ? [accountId] : listSlackAccountIds(cfg)).some((resolvedAccountId) => {
+          const account = inspectSlackAccount({ cfg, accountId: resolvedAccountId });
           return account.configured;
         }),
     }),
