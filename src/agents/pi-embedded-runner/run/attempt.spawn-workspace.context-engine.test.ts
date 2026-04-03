@@ -12,6 +12,7 @@ import {
   createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
   getHoisted,
+  resetEmbeddedAttemptHarness,
 } from "./attempt.spawn-workspace.test-support.js";
 
 const hoisted = getHoisted();
@@ -101,6 +102,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const tempPaths: string[] = [];
 
   beforeEach(() => {
+    resetEmbeddedAttemptHarness();
     hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   });
 
@@ -247,5 +249,27 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.runContextEngineMaintenanceMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ reason: "turn" }),
     );
+  });
+
+  it("releases the session lock even when teardown cleanup throws", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const releaseMock = vi.fn(async () => {});
+    hoisted.acquireSessionWriteLockMock.mockResolvedValue({
+      release: releaseMock,
+    });
+    hoisted.flushPendingToolResultsAfterIdleMock.mockRejectedValueOnce(new Error("flush failed"));
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: {
+        bootstrap,
+        assemble,
+      },
+      sessionKey,
+      tempPaths,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session");
   });
 });
