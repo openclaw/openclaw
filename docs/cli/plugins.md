@@ -162,6 +162,9 @@ Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 openclaw plugins install -l ./my-plugin
 ```
 
+`--force` is not supported with `--link` because linked installs reuse the
+source path instead of copying over a managed install target.
+
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
 `plugins.installs` while keeping the default behavior unpinned.
 

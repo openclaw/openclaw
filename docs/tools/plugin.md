@@ -222,6 +222,8 @@ openclaw plugins disable <id>
 ```
 
 `--force` overwrites an existing installed plugin or hook pack in place.
+It is not supported with `--link`, which reuses the source path instead of
+copying over a managed install target.
 
 `--dangerously-force-unsafe-install` is a break-glass override for false
 positives from the built-in dangerous-code scanner. It allows plugin installs

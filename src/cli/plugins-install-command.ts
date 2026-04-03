@@ -283,6 +283,10 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
   }
+  if (opts.link && opts.force) {
+    defaultRuntime.error("`--force` is not supported with `--link`.");
+    return defaultRuntime.exit(1);
+  }
   const requestResolution = resolvePluginInstallRequestContext({
     rawSpec: raw,
     marketplace: opts.marketplace,

@@ -110,6 +110,16 @@ describe("plugins cli install", () => {
     expect(installPluginFromMarketplace).not.toHaveBeenCalled();
   });
 
+  it("exits when --force is combined with --link", async () => {
+    await expect(
+      runPluginsCommand(["plugins", "install", "./plugin", "--link", "--force"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain("`--force` is not supported with `--link`.");
+    expect(installPluginFromMarketplace).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+  });
+
   it("exits when marketplace install fails", async () => {
     await expect(
       runPluginsCommand(["plugins", "install", "alpha", "--marketplace", "local/repo"]),
