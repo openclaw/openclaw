@@ -12,6 +12,7 @@ import type {
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
+import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -35,7 +36,10 @@ import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
+import type {
+  RuntimeWebFetchMetadata,
+  RuntimeWebSearchMetadata,
+} from "../secrets/runtime-web-tools.types.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -442,6 +446,7 @@ export type ProviderPrepareRuntimeAuthContext = {
 export type ProviderPreparedRuntimeAuth = {
   apiKey: string;
   baseUrl?: string;
+  request?: ProviderRequestTransportOverrides;
   expiresAt?: number;
 };
 
@@ -1309,8 +1314,15 @@ export type ProviderPlugin = {
 };
 
 export type WebSearchProviderId = string;
+export type WebFetchProviderId = string;
 
 export type WebSearchProviderToolDefinition = {
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+};
+
+export type WebFetchProviderToolDefinition = {
   description: string;
   parameters: Record<string, unknown>;
   execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -1320,6 +1332,12 @@ export type WebSearchProviderContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebSearchMetadata;
+};
+
+export type WebFetchProviderContext = {
+  config?: OpenClawConfig;
+  fetchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebFetchMetadata;
 };
 
 export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
@@ -1341,6 +1359,19 @@ export type WebSearchProviderSetupContext = {
   prompter: WizardPrompter;
   quickstartDefaults?: boolean;
   secretInputMode?: SecretInputMode;
+};
+
+export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebFetchRuntimeMetadataContext = {
+  config?: OpenClawConfig;
+  fetchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebFetchMetadata;
+  resolvedCredential?: {
+    value?: string;
+    source: WebFetchCredentialResolutionSource;
+    fallbackEnvVar?: string;
+  };
 };
 
 export type WebSearchProviderPlugin = {
@@ -1378,6 +1409,41 @@ export type WebSearchProviderPlugin = {
 };
 
 export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
+  pluginId: string;
+};
+
+export type WebFetchProviderPlugin = {
+  id: WebFetchProviderId;
+  label: string;
+  hint: string;
+  requiresCredential?: boolean;
+  credentialLabel?: string;
+  envVars: string[];
+  placeholder: string;
+  signupUrl: string;
+  docsUrl?: string;
+  autoDetectOrder?: number;
+  /** Canonical plugin-owned config path for this provider's primary fetch credential. */
+  credentialPath: string;
+  /**
+   * Legacy or inactive credential paths that should warn but not activate this provider.
+   * Include credentialPath here when overriding the list, because runtime classification
+   * treats inactiveSecretPaths as the full inactive surface for this provider.
+   */
+  inactiveSecretPaths?: string[];
+  getCredentialValue: (fetchConfig?: Record<string, unknown>) => unknown;
+  setCredentialValue: (fetchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  /** Apply the minimal config needed to select this provider without scattering plugin config writes in core. */
+  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  resolveRuntimeMetadata?: (
+    ctx: WebFetchRuntimeMetadataContext,
+  ) => Partial<RuntimeWebFetchMetadata> | Promise<Partial<RuntimeWebFetchMetadata>>;
+  createTool: (ctx: WebFetchProviderContext) => WebFetchProviderToolDefinition | null;
+};
+
+export type PluginWebFetchProviderEntry = WebFetchProviderPlugin & {
   pluginId: string;
 };
 
@@ -1539,6 +1605,13 @@ export type OpenClawPluginCommandDefinition = {
    * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
    */
   nativeNames?: Partial<Record<string, string>> & { default?: string };
+  /**
+   * Optional Telegram-native progress placeholder text.
+   * When set, Telegram native/plugin command delivery sends this text
+   * immediately, then edits that same message in place if the final reply
+   * is a simple text-only payload.
+   */
+  telegramNativeProgressMessage?: string;
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */
@@ -1873,6 +1946,8 @@ export type OpenClawPluginApi = {
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
+  /** Register a web fetch provider (web fetch capability). */
+  registerWebFetchProvider: (provider: WebFetchProviderPlugin) => void;
   /** Register a web search provider (web search capability). */
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
@@ -2407,11 +2482,25 @@ export type PluginHookSessionStartEvent = {
 };
 
 // session_end hook
+export type PluginHookSessionEndReason =
+  | "new"
+  | "reset"
+  | "idle"
+  | "daily"
+  | "compaction"
+  | "deleted"
+  | "unknown";
+
 export type PluginHookSessionEndEvent = {
   sessionId: string;
   sessionKey?: string;
   messageCount: number;
   durationMs?: number;
+  reason?: PluginHookSessionEndReason;
+  sessionFile?: string;
+  transcriptArchived?: boolean;
+  nextSessionId?: string;
+  nextSessionKey?: string;
 };
 
 // Subagent context

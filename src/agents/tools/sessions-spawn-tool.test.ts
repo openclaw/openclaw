@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -22,22 +22,12 @@ vi.mock("../acp-spawn.js", () => ({
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
 
-async function loadFreshSessionsSpawnToolModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../subagent-spawn.js", () => ({
-    SUBAGENT_SPAWN_MODES: ["run", "session"],
-    spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
-  }));
-  vi.doMock("../acp-spawn.js", () => ({
-    ACP_SPAWN_MODES: ["run", "session"],
-    ACP_SPAWN_STREAM_TARGETS: ["parent"],
-    spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
-  }));
-  ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
-}
-
 describe("sessions_spawn tool", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
+  });
+
+  beforeEach(() => {
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:1",
@@ -48,7 +38,6 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
     });
-    await loadFreshSessionsSpawnToolModuleForTest();
   });
 
   it("uses subagent runtime by default", async () => {

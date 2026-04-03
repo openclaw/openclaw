@@ -29,7 +29,7 @@ describe("runSearchSetupFlow", () => {
       provider: "grok",
       enabled: true,
     });
-    expect(next.tools?.web?.x_search).toMatchObject({
+    expect(next.plugins?.entries?.xai?.config?.xSearch).toMatchObject({
       enabled: true,
       model: "grok-4-1-fast",
     });
@@ -77,7 +77,7 @@ describe("runSearchSetupFlow", () => {
       provider: "grok",
       enabled: false,
     });
-    expect(next.tools?.web?.x_search).toMatchObject({
+    expect(next.plugins?.entries?.xai?.config?.xSearch).toMatchObject({
       enabled: true,
       model: "grok-4-1-fast",
     });

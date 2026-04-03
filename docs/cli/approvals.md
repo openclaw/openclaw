@@ -45,6 +45,54 @@ openclaw approvals set --node <id|name|ip> --file ./exec-approvals.json
 openclaw approvals set --gateway --file ./exec-approvals.json
 ```
 
+## "Never prompt" / YOLO example
+
+For a host that should never stop on exec approvals, set the host approvals defaults to `full` + `off`:
+
+```bash
+openclaw approvals set --stdin <<'EOF'
+{
+  version: 1,
+  defaults: {
+    security: "full",
+    ask: "off",
+    askFallback: "full"
+  }
+}
+EOF
+```
+
+Node variant:
+
+```bash
+openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
+{
+  version: 1,
+  defaults: {
+    security: "full",
+    ask: "off",
+    askFallback: "full"
+  }
+}
+EOF
+```
+
+This changes the **host approvals file** only. To keep the requested OpenClaw policy aligned, also set:
+
+```bash
+openclaw config set tools.exec.host gateway
+openclaw config set tools.exec.security full
+openclaw config set tools.exec.ask off
+```
+
+Why `tools.exec.host=gateway` in this example:
+
+- `host=auto` still means "sandbox when available, otherwise gateway".
+- YOLO is about approvals, not routing.
+- If you want host exec even when a sandbox is configured, make the host choice explicit with `gateway` or `/exec host=gateway`.
+
+This matches the current host-default YOLO behavior. Tighten it if you want approvals.
+
 ## Allowlist helpers
 
 ```bash
