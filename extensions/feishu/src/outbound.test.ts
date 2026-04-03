@@ -48,6 +48,14 @@ const cardRenderConfig: ClawdbotConfig = {
     },
   },
 };
+const cardRenderNoHeaderConfig: ClawdbotConfig = {
+  channels: {
+    feishu: {
+      renderMode: "card",
+      cardHeader: "disabled",
+    },
+  },
+};
 
 function resetOutboundMocks() {
   vi.clearAllMocks();
@@ -169,6 +177,21 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "card_msg" }));
   });
 
+  it("omits structured card header when cardHeader=disabled", async () => {
+    await sendText({
+      cfg: cardRenderNoHeaderConfig,
+      to: "chat_1",
+      text: "| a | b |\n| - | - |",
+      accountId: "main",
+    });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        header: expect.anything(),
+      }),
+    );
+  });
+
   it("forwards replyToId as replyToMessageId on sendText", async () => {
     await sendText({
       cfg: emptyConfig,
@@ -203,6 +226,48 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         to: "chat_1",
         text: "hello",
         replyToMessageId: "om_thread_2",
+        accountId: "main",
+      }),
+    );
+  });
+
+  it("passes replyInThread for plain text when threadId is used as reply target", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "hello",
+      replyToId: " ",
+      threadId: "om_thread_2",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "hello",
+        replyToMessageId: "om_thread_2",
+        replyInThread: true,
+        accountId: "main",
+      }),
+    );
+  });
+
+  it("passes replyInThread for structured cards when threadId is used as reply target", async () => {
+    await sendText({
+      cfg: cardRenderConfig,
+      to: "chat_1",
+      text: "plain text final answer",
+      replyToId: " ",
+      threadId: "om_thread_3",
+      accountId: "main",
+    });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "plain text final answer",
+        replyToMessageId: "om_thread_3",
+        replyInThread: true,
         accountId: "main",
       }),
     );

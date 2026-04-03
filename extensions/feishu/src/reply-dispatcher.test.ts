@@ -150,6 +150,16 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     };
   }
 
+  function setAccountConfig(config: Record<string, unknown>) {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config,
+    });
+  }
+
   it("skips typing indicator when account typingIndicator is disabled", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
@@ -470,15 +480,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("passes replyInThread to sendStructuredCardFeishu for card text", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "card",
-        streaming: false,
-      },
+    setAccountConfig({
+      renderMode: "card",
+      streaming: false,
     });
 
     const { options } = createDispatcherHarness({
@@ -491,6 +495,40 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect.objectContaining({
         replyToMessageId: "om_msg",
         replyInThread: true,
+        note: "Agent: agent",
+      }),
+    );
+  });
+
+  it("shows card footer by default on non-streaming card sends", async () => {
+    setAccountConfig({
+      renderMode: "card",
+      streaming: false,
+    });
+
+    const { options } = createDispatcherHarness();
+    await options.deliver({ text: "card text" }, { kind: "final" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        note: "Agent: agent",
+      }),
+    );
+  });
+
+  it("omits card footer when cardFooter=disabled on non-streaming card sends", async () => {
+    setAccountConfig({
+      renderMode: "card",
+      streaming: false,
+      cardFooter: "disabled",
+    });
+
+    const { options } = createDispatcherHarness();
+    await options.deliver({ text: "card text" }, { kind: "final" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        note: expect.anything(),
       }),
     );
   });
@@ -634,6 +672,31 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         note: "Agent: agent",
       }),
     );
+  });
+
+  it("omits card footer when cardFooter=disabled for streaming cards", async () => {
+    setAccountConfig({
+      renderMode: "card",
+      streaming: true,
+      cardFooter: "disabled",
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledWith(
+      "oc_chat",
+      "chat_id",
+      expect.not.objectContaining({
+        note: expect.anything(),
+      }),
+    );
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```ts\nconst x = 1\n```", {
+      note: undefined,
+    });
   });
 
   it("disables streaming for thread replies and keeps reply metadata", async () => {

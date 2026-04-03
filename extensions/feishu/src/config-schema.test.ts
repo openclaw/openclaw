@@ -199,6 +199,48 @@ describe("FeishuConfigSchema replyInThread", () => {
   });
 });
 
+describe("FeishuConfigSchema cardHeader", () => {
+  it("accepts cardHeader at top level", () => {
+    const result = FeishuConfigSchema.parse({ cardHeader: "disabled" });
+    expect(result.cardHeader).toBe("disabled");
+  });
+
+  it("accepts cardHeader in group config", () => {
+    const result = FeishuGroupSchema.parse({ cardHeader: "disabled" });
+    expect(result.cardHeader).toBe("disabled");
+  });
+
+  it("accepts cardHeader in account config", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: { cardHeader: "disabled" },
+      },
+    });
+    expect(result.accounts?.main?.cardHeader).toBe("disabled");
+  });
+});
+
+describe("FeishuConfigSchema cardFooter", () => {
+  it("accepts cardFooter at top level", () => {
+    const result = FeishuConfigSchema.parse({ cardFooter: "disabled" });
+    expect(result.cardFooter).toBe("disabled");
+  });
+
+  it("accepts cardFooter in group config", () => {
+    const result = FeishuGroupSchema.parse({ cardFooter: "disabled" });
+    expect(result.cardFooter).toBe("disabled");
+  });
+
+  it("accepts cardFooter in account config", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: { cardFooter: "disabled" },
+      },
+    });
+    expect(result.accounts?.main?.cardFooter).toBe("disabled");
+  });
+});
+
 describe("FeishuConfigSchema optimization flags", () => {
   it("defaults top-level typingIndicator and resolveSenderNames to true", () => {
     const result = FeishuConfigSchema.parse({});

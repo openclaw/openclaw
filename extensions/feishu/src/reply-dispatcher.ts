@@ -185,6 +185,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
+  const cardHeaderEnabled = (account.config?.cardHeader ?? "enabled") === "enabled";
+  const cardFooterEnabled = (account.config?.cardFooter ?? "enabled") === "enabled";
   // Card streaming may miss thread affinity in topic contexts; use direct replies there.
   const streamingEnabled =
     !threadReplyMode && account.config?.streaming !== false && renderMode !== "raw";
@@ -270,8 +272,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
       );
       try {
-        const cardHeader = resolveCardHeader(agentId, identity);
-        const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+        const cardHeader = cardHeaderEnabled ? resolveCardHeader(agentId, identity) : undefined;
+        const cardNote = cardFooterEnabled
+          ? resolveCardNote(agentId, identity, prefixContext.prefixContext)
+          : undefined;
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
@@ -297,7 +301,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+      const finalNote = cardFooterEnabled
+        ? resolveCardNote(agentId, identity, prefixContext.prefixContext)
+        : undefined;
       await streaming.close(text, { note: finalNote });
     }
     streaming = null;
@@ -414,8 +420,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
 
           if (useCard) {
-            const cardHeader = resolveCardHeader(agentId, identity);
-            const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+            const cardHeader = cardHeaderEnabled ? resolveCardHeader(agentId, identity) : undefined;
+            const cardNote = cardFooterEnabled
+              ? resolveCardNote(agentId, identity, prefixContext.prefixContext)
+              : undefined;
             await sendChunkedTextReply({
               text,
               useCard: true,
