@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import baseConfig, { resolveLocalVitestMaxWorkers } from "../vitest.config.ts";
 
 describe("resolveLocalVitestMaxWorkers", () => {
-  it("derives a moderate local cap for 64 GiB hosts", () => {
+  it("defaults local runs to a single worker even on larger hosts", () => {
     expect(
       resolveLocalVitestMaxWorkers(
         {
@@ -13,7 +13,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
           totalMemoryBytes: 64 * 1024 ** 3,
         },
       ),
-    ).toBe(4);
+    ).toBe(1);
   });
 
   it("lets OPENCLAW_VITEST_MAX_WORKERS override the inferred cap", () => {
@@ -45,7 +45,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
     ).toBe(3);
   });
 
-  it("keeps memory-constrained hosts conservative", () => {
+  it("keeps memory-constrained hosts on the same single-worker default", () => {
     expect(
       resolveLocalVitestMaxWorkers(
         {},
@@ -54,10 +54,10 @@ describe("resolveLocalVitestMaxWorkers", () => {
           totalMemoryBytes: 16 * 1024 ** 3,
         },
       ),
-    ).toBe(2);
+    ).toBe(1);
   });
 
-  it("lets roomy hosts use a higher default cap", () => {
+  it("keeps roomy hosts on the same single-worker default", () => {
     expect(
       resolveLocalVitestMaxWorkers(
         {},
@@ -66,7 +66,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
           totalMemoryBytes: 128 * 1024 ** 3,
         },
       ),
-    ).toBe(6);
+    ).toBe(1);
   });
 });
 
