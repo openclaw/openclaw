@@ -1341,6 +1341,8 @@ function detectCompat(model: OpenAIModeModel) {
   });
   const endpointClass = capabilities.endpointClass;
   const isDefaultRoute = endpointClass === "default";
+  const usesConfiguredNonOpenAIEndpoint =
+    endpointClass !== "default" && endpointClass !== "openai-public";
   const isMistral =
     capabilities.knownProviderFamily === "mistral" || endpointClass === "mistral-public";
   const isMoonshotLike =
@@ -1379,10 +1381,10 @@ function detectCompat(model: OpenAIModeModel) {
       : {};
   return {
     supportsStore: !isNonStandard,
-    supportsDeveloperRole: !isNonStandard && !isMoonshotLike,
+    supportsDeveloperRole: !isNonStandard && !isMoonshotLike && !usesConfiguredNonOpenAIEndpoint,
     supportsReasoningEffort: !isGrok && !isMistral && !isZai,
     reasoningEffortMap,
-    supportsUsageInStreaming: true,
+    supportsUsageInStreaming: !isNonStandard && !usesConfiguredNonOpenAIEndpoint,
     maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
     requiresToolResultName: false,
     requiresAssistantAfterToolResult: false,
@@ -1396,7 +1398,7 @@ function detectCompat(model: OpenAIModeModel) {
         : "openai",
     openRouterRouting: {},
     vercelGatewayRouting: {},
-    supportsStrictMode: true,
+    supportsStrictMode: !usesConfiguredNonOpenAIEndpoint,
   };
 }
 

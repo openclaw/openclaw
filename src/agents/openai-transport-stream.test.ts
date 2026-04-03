@@ -381,6 +381,43 @@ describe("openai transport stream", () => {
     expect(params.messages?.[0]).toMatchObject({ role: "system" });
   });
 
+  it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-completions",
+        provider: "custom-cpa",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      messages?: Array<{ role?: string }>;
+      stream_options?: unknown;
+      tools?: Array<{ function?: { strict?: boolean } }>;
+    };
+
+    expect(params.messages?.[0]).toMatchObject({ role: "system" });
+    expect(params).not.toHaveProperty("stream_options");
+    expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
+  });
+
   it("uses max_tokens for Chutes default-route completions providers without relying on baseUrl host sniffing", () => {
     const params = buildOpenAICompletionsParams(
       {
