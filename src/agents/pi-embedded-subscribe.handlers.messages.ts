@@ -349,6 +349,13 @@ type ToolUseBlock = {
   id: string;
 };
 
+type ToolCallBlock = {
+  type: "toolCall";
+  name: string;
+  arguments: Record<string, unknown>;
+  id: string;
+};
+
 /**
  * Extract tool calls from an assistant message.
  * Returns an array of {name, input} where input is the primary parameter
@@ -365,62 +372,72 @@ function extractToolCalls(assistantMessage: AgentMessage): { name: string; input
   const toolCalls: { name: string; input: string }[] = [];
 
   for (const block of content) {
-    if (
-      typeof block === "object" &&
-      block !== null &&
-      (block as ToolUseBlock).type === "tool_use"
-    ) {
+    if (typeof block !== "object" || block === null) {
+      continue;
+    }
+
+    const blockType = (block as { type: string }).type;
+    let name: string;
+    let inputObj: Record<string, unknown>;
+
+    if (blockType === "tool_use") {
       const toolBlock = block as ToolUseBlock;
-      const name = toolBlock.name;
+      name = toolBlock.name;
+      inputObj = toolBlock.input;
+    } else if (blockType === "toolCall") {
+      const toolBlock = block as ToolCallBlock;
+      name = toolBlock.name;
+      inputObj = toolBlock.arguments;
+    } else {
+      continue;
+    }
 
-      // Extract the primary input parameter as a compact string.
-      // Known tools: exec (command), Read (file/file_path), Write (file_path),
-      // web_search (query), web_fetch (url), etc.
-      const inputObj = toolBlock.input;
-      let inputStr = "";
+    // Extract the primary input parameter as a compact string.
+    // Known tools: exec (command), Read (file/file_path), Write (file_path),
+    // web_search (query), web_fetch (url), etc.
+    let inputStr = "";
 
-      if (inputObj) {
-        // Try common parameter names first
-        const primaryParams = [
-          "command",
-          "file",
-          "file_path",
-          "path",
-          "query",
-          "url",
-          "prompt",
-          "code",
-          "text",
-          "message",
-        ];
-        for (const param of primaryParams) {
-          if (typeof inputObj[param] === "string" && inputObj[param]) {
-            inputStr = inputObj[param];
-            break;
-          }
-        }
-
-        // If no common param found, use the first string value
-        if (!inputStr) {
-          for (const value of Object.values(inputObj)) {
-            if (typeof value === "string" && value) {
-              inputStr = value;
-              break;
-            }
-          }
-        }
-
-        // Fallback: stringify the entire input object
-        if (!inputStr) {
-          inputStr = JSON.stringify(inputObj);
+    if (inputObj) {
+      // Try common parameter names first
+      const primaryParams = [
+        "command",
+        "file",
+        "file_path",
+        "path",
+        "query",
+        "url",
+        "prompt",
+        "code",
+        "text",
+        "message",
+      ];
+      for (const param of primaryParams) {
+        if (typeof inputObj[param] === "string" && inputObj[param]) {
+          inputStr = inputObj[param];
+          break;
         }
       }
 
-      // Compact: replace newlines and truncate to 240 chars
-      inputStr = inputStr.replace(/\n+/g, " ").substring(0, 240);
+      // If no common param found, use the first string value
+      if (!inputStr) {
+        for (const value of Object.values(inputObj)) {
+          if (typeof value === "string" && value) {
+            inputStr = value;
+            break;
+          }
+        }
+      }
 
-      toolCalls.push({ name, input: inputStr });
+      // Fallback: stringify the entire input object
+      if (!inputStr) {
+        inputStr = JSON.stringify(inputObj);
+      }
     }
+
+    // Compact: replace newlines and truncate to 240 chars
+    inputStr = inputStr.replace(/\n+/g, " ").substring(0, 240);
+
+    toolCalls.push({ name, input: inputStr });
   }
 
   return toolCalls;
