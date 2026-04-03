@@ -241,6 +241,7 @@ export async function getReplyFromConfig(
     sessionId,
     isNewSession,
     resetTriggered,
+    scheduledResetTriggered,
     systemSent,
     abortedLastRun,
     storePath,
@@ -364,7 +365,25 @@ export async function getReplyFromConfig(
   model = resolvedModel;
 
   const maybeEmitMissingResetHooks = async () => {
-    if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
+    if (command.resetHookTriggered) {
+      return;
+    }
+    // Scheduled/daily reset: session became stale, not triggered by /new or /reset.
+    // Fire the same hook so session-memory (and other hooks) can flush context (#43524).
+    if (scheduledResetTriggered) {
+      await emitResetCommandHooks({
+        action: "new",
+        ctx,
+        cfg,
+        command,
+        sessionKey,
+        sessionEntry,
+        previousSessionEntry,
+        workspaceDir,
+      });
+      return;
+    }
+    if (!resetTriggered || !command.isAuthorizedSender) {
       return;
     }
     const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);

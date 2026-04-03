@@ -42,6 +42,11 @@ const SENTINEL_FAST_RE = new RegExp(
     .join("|"),
 );
 
+// Channel-injected envelope tag prepended directly to the message body (not via
+// buildInboundUserContextPrefix). Example: `[message_id: om_abc123]`.
+// Must stay in sync with envelope injection sites (e.g. extensions/feishu/src/bot.ts).
+const MESSAGE_ID_ENVELOPE_RE = /^\[message_id:[^\]]*\]$/;
+
 function isInboundMetaSentinelLine(line: string): boolean {
   const trimmed = line.trim();
   return INBOUND_META_SENTINELS.some((sentinel) => sentinel === trimmed);
@@ -229,6 +234,15 @@ export function stripLeadingInboundMetadata(text: string): string {
       return text;
     }
 
+    while (index < lines.length && lines[index].trim() === "") {
+      index++;
+    }
+  }
+
+  // Strip channel-injected envelope tags (e.g. `[message_id: om_xxx]`) that
+  // appear after the structured JSON blocks but before the actual user text.
+  while (index < lines.length && MESSAGE_ID_ENVELOPE_RE.test(lines[index].trim())) {
+    index++;
     while (index < lines.length && lines[index].trim() === "") {
       index++;
     }

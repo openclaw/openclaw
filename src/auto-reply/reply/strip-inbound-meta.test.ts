@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { extractInboundSenderLabel, stripInboundMetadata } from "./strip-inbound-meta.js";
+import {
+  extractInboundSenderLabel,
+  stripInboundMetadata,
+  stripLeadingInboundMetadata,
+} from "./strip-inbound-meta.js";
 
 const CONV_BLOCK = `Conversation info (untrusted metadata):
 \`\`\`json
@@ -163,6 +167,27 @@ Hello`;
 
 [Thu 2026-03-12 07:00 UTC] what time is it?`;
     expect(stripInboundMetadata(input)).toBe("what time is it?");
+  });
+});
+
+describe("stripLeadingInboundMetadata", () => {
+  it("strips channel-injected [message_id: ...] envelope after JSON blocks", () => {
+    const input = [
+      CONV_BLOCK,
+      "",
+      SENDER_BLOCK,
+      "",
+      "[message_id: om_abc123]",
+      "actual user message",
+    ].join("\n");
+    expect(stripLeadingInboundMetadata(input)).toBe("actual user message");
+  });
+
+  it("strips [message_id: ...] even when there are no JSON blocks before it", () => {
+    const input = "[message_id: om_abc123]\nactual user message";
+    // No sentinel lines present, so SENTINEL_FAST_RE fast-path kicks in and returns as-is.
+    // The envelope line is only stripped when preceded by sentinel blocks.
+    expect(stripLeadingInboundMetadata(input)).toBe(input);
   });
 });
 

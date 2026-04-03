@@ -543,4 +543,51 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
   });
+
+  it("strips channel-injected metadata from user messages before storing (#43524)", async () => {
+    // Simulate a Feishu message with injected metadata prefix
+    const feishuMessage = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"om_abc123","sender_id":"ou_xyz","sender":"赵九洲","timestamp":"Thu 2026-03-12 15:49 GMT+8"}',
+      "```",
+      "",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"label":"赵九洲 (ou_xyz)","id":"ou_xyz","name":"赵九洲"}',
+      "```",
+      "",
+      "[message_id: om_abc123]",
+      "赵九洲: 内网穿透地址是什么？",
+    ].join("\n");
+
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: feishuMessage },
+      { role: "assistant", content: "地址是 https://example.ngrok.app" },
+    ]);
+    const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
+
+    // Metadata should be stripped, only real content stored
+    expect(memoryContent).not.toContain("Conversation info (untrusted metadata)");
+    expect(memoryContent).not.toContain("Sender (untrusted metadata)");
+    expect(memoryContent).not.toContain("[message_id: om_abc123]");
+    expect(memoryContent).toContain("内网穿透地址是什么？");
+    expect(memoryContent).toContain("assistant: 地址是 https://example.ngrok.app");
+  });
+
+  it("triggers on 'new' action (daily/scheduled reset path, #43524)", async () => {
+    // Daily reset fires emitResetCommandHooks with action="new", same as manual /new.
+    // This test ensures the handler does NOT skip the event in that case.
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Late night message" },
+      { role: "assistant", content: "Late night reply" },
+    ]);
+    const { files, memoryContent } = await runNewWithPreviousSession({
+      sessionContent,
+      action: "new",
+    });
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Late night message");
+    expect(memoryContent).toContain("assistant: Late night reply");
+  });
 });
