@@ -189,6 +189,32 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     });
   });
 
+  it("sessions_spawn falls back to agents.defaults.subagents.allowAgents", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["beta"],
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    });
+    const getChildSessionKey = mockAcceptedSpawn(5050);
+
+    const result = await executeSpawn("call7-defaults", "beta");
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:beta:subagent:")).toBe(true);
+  });
+
   it("sessions_spawn allows any agent when allowlist is *", async () => {
     await expectAllowedSpawn({
       allowAgents: ["*"],

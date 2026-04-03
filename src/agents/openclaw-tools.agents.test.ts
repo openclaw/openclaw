@@ -86,6 +86,34 @@ describe("agents_list", () => {
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
   });
 
+  it("falls back to agents.defaults.subagents.allowAgents", async () => {
+    configOverride = {
+      session: createPerSenderSessionConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["research"],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            name: "Main",
+          },
+          {
+            id: "research",
+            name: "Research",
+          },
+        ],
+      },
+    };
+
+    const tool = requireAgentsListTool();
+    const result = await tool.execute("call2-defaults", {});
+    const agents = readAgentList(result);
+    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
+  });
+
   it("returns configured agents when allowlist is *", async () => {
     setConfigWithAgentList([
       {
