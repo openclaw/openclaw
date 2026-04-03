@@ -20,6 +20,8 @@ import {
   tryBeginFeishuMessageProcessing,
   warmupDedupFromDisk,
 } from "./dedup.js";
+import { FeishuExecApprovalHandler } from "./exec-approvals-handler.js";
+import { isFeishuExecApprovalHandlerConfigured } from "./exec-approvals.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { parseFeishuDriveCommentNoticeEventPayload } from "./monitor.comment.js";
@@ -868,7 +870,17 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   }
 
   let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null = null;
+  let execApprovalsHandler: FeishuExecApprovalHandler | null = null;
   try {
+    if (isFeishuExecApprovalHandlerConfigured({ cfg, accountId })) {
+      execApprovalsHandler = new FeishuExecApprovalHandler({
+        accountId,
+        cfg,
+        runtime,
+      });
+      await execApprovalsHandler.start();
+    }
+
     const eventDispatcher = createEventDispatcher(account);
     const chatHistories = new Map<string, HistoryEntry[]>();
     threadBindingManager = createFeishuThreadBindingManager({ accountId, cfg });
@@ -887,5 +899,6 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     return await monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
   } finally {
     threadBindingManager?.stop();
+    await execApprovalsHandler?.stop().catch(() => {});
   }
 }

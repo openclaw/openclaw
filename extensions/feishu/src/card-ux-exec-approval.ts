@@ -137,8 +137,11 @@ export function createExecApprovalResolvedCard(params: {
       ? "已允许（一次）"
       : params.decision === "allow-always"
         ? "已允许（始终）"
-        : "已拒绝";
-  const template = params.decision === "deny" ? "red" : "green";
+        : params.decision === "expired"
+          ? "已过期"
+          : "已拒绝";
+  const template =
+    params.decision === "deny" ? "red" : params.decision === "expired" ? "grey" : "green";
   const bodyLines: string[] = [`**审批 ID：** \`${approvalSlug}\``];
   if (params.command) {
     bodyLines.push(`**命令：** \`${params.command}\``);
@@ -148,7 +151,15 @@ export function createExecApprovalResolvedCard(params: {
   }
   bodyLines.push(`**结果：** ${decisionLabel}`);
   if (params.resolvedBy) {
-    bodyLines.push(`**操作人：** <at id="${params.resolvedBy}"></at>`);
+    // Only use Feishu <at> tag for Feishu open_ids (ou_xxx / on_xxx).
+    // For other resolvedBy values (e.g. gateway labels), display as plain text.
+    const isFeishuOpenId =
+      params.resolvedBy.startsWith("ou_") || params.resolvedBy.startsWith("on_");
+    if (isFeishuOpenId) {
+      bodyLines.push(`**操作人：** <at id="${params.resolvedBy}"></at>`);
+    } else {
+      bodyLines.push(`**操作人：** ${params.resolvedBy}`);
+    }
   }
 
   return {

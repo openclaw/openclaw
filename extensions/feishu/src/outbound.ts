@@ -100,9 +100,10 @@ async function sendOutboundText(params: {
   to: string;
   text: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
 }) {
-  const { cfg, to, text, accountId, replyToMessageId } = params;
+  const { cfg, to, text, accountId, replyToMessageId, replyInThread } = params;
   const commentResult = await sendCommentThreadReply({
     cfg,
     to,
@@ -117,10 +118,10 @@ async function sendOutboundText(params: {
   const renderMode = account.config?.renderMode ?? "auto";
 
   if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
-    return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId });
+    return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
+  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
 }
 
 export const feishuOutbound: ChannelOutboundAdapter = {
@@ -296,6 +297,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       text,
       accountId: accountId ?? undefined,
       replyToMessageId,
+      replyInThread,
     });
     return attachChannelToResult("feishu", result);
   },

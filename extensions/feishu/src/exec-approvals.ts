@@ -1,6 +1,13 @@
+import {
+  createChannelExecApprovalProfile,
+  isChannelExecApprovalClientEnabledFromConfig,
+  isChannelExecApprovalTargetRecipient,
+  resolveApprovalApprovers,
+  resolveApprovalRequestAccountId,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveFeishuAccount } from "./accounts.js";
 
 type FeishuExecApprovalConfig = {
@@ -15,6 +22,15 @@ function normalizeApproverId(value: string | number): string {
   return String(value).trim();
 }
 
+function normalizeFeishuDirectApproverId(value: string | number): string | undefined {
+  const normalized = normalizeApproverId(value);
+  if (!normalized) {
+    return undefined;
+  }
+  // Feishu user IDs start with ou_ or on_
+  return normalized;
+}
+
 export function resolveFeishuExecApprovalConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -27,46 +43,73 @@ export function getFeishuExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
-  return (resolveFeishuExecApprovalConfig(params)?.approvers ?? [])
-    .map(normalizeApproverId)
-    .filter(Boolean);
+  return resolveApprovalApprovers({
+    explicit: resolveFeishuExecApprovalConfig(params)?.approvers,
+    normalizeApprover: normalizeFeishuDirectApproverId,
+  });
 }
 
-export function isFeishuExecApprovalClientEnabled(params: {
+export function isFeishuExecApprovalTargetRecipient(params: {
   cfg: OpenClawConfig;
-  accountId?: string | null;
-}): boolean {
-  const config = resolveFeishuExecApprovalConfig(params);
-  return Boolean(config?.enabled && getFeishuExecApprovalApprovers(params).length > 0);
-}
-
-export function isFeishuExecApprovalApprover(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
   senderId?: string | null;
+  accountId?: string | null;
 }): boolean {
-  const senderId = params.senderId?.trim();
-  if (!senderId) {
-    return false;
-  }
-  const approvers = getFeishuExecApprovalApprovers(params);
-  return approvers.includes(senderId);
+  return isChannelExecApprovalTargetRecipient({
+    ...params,
+    channel: "feishu",
+    matchTarget: ({ target, normalizedSenderId }) => {
+      const to = target.to?.trim();
+      if (!to) {
+        return false;
+      }
+      // Strip "user:" prefix for DM targets
+      const normalized = to.startsWith("user:") ? to.slice(5) : to;
+      return normalized === normalizedSenderId;
+    },
+  });
 }
 
-export function resolveFeishuExecApprovalTarget(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): "dm" | "channel" | "both" {
-  return resolveFeishuExecApprovalConfig(params)?.target ?? "dm";
-}
+const feishuExecApprovalProfile = createChannelExecApprovalProfile({
+  resolveConfig: resolveFeishuExecApprovalConfig,
+  resolveApprovers: getFeishuExecApprovalApprovers,
+  isTargetRecipient: isFeishuExecApprovalTargetRecipient,
+  matchesRequestAccount: ({ cfg, accountId, request }) => {
+    const boundAccountId = resolveApprovalRequestAccountId({
+      cfg,
+      request,
+      channel:
+        request.request.turnSourceChannel?.trim().toLowerCase() === "feishu" ? null : "feishu",
+    });
+    return (
+      !boundAccountId ||
+      !accountId ||
+      normalizeAccountId(boundAccountId) === normalizeAccountId(accountId)
+    );
+  },
+  fallbackAgentIdFromSessionKey: true,
+  requireClientEnabledForLocalPromptSuppression: true,
+});
+
+export const isFeishuExecApprovalClientEnabled = feishuExecApprovalProfile.isClientEnabled;
+export const isFeishuExecApprovalApprover = feishuExecApprovalProfile.isApprover;
+export const isFeishuExecApprovalAuthorizedSender = feishuExecApprovalProfile.isAuthorizedSender;
+export const resolveFeishuExecApprovalTarget = feishuExecApprovalProfile.resolveTarget;
+export const shouldHandleFeishuExecApprovalRequest = feishuExecApprovalProfile.shouldHandleRequest;
 
 export function shouldSuppressLocalFeishuExecApprovalPrompt(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   payload: ReplyPayload;
 }): boolean {
-  return (
-    isFeishuExecApprovalClientEnabled(params) &&
-    getExecApprovalReplyMetadata(params.payload) !== null
-  );
+  return feishuExecApprovalProfile.shouldSuppressLocalPrompt(params);
+}
+
+export function isFeishuExecApprovalHandlerConfigured(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): boolean {
+  return isChannelExecApprovalClientEnabledFromConfig({
+    enabled: resolveFeishuExecApprovalConfig(params)?.enabled,
+    approverCount: getFeishuExecApprovalApprovers(params).length,
+  });
 }
