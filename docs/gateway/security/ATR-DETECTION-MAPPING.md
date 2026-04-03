@@ -2,11 +2,11 @@
 
 [Agent Threat Rules (ATR)](https://github.com/Agent-Threat-Rule/agent-threat-rules) is an open-source set of detection rules for AI agent security threats. This document maps ATR rules to OpenClaw's documented threat categories, providing practitioners with executable detection for each threat.
 
-**ATR version:** v0.4.0 (71 committed rules) | **License:** MIT | **Engines:** TypeScript + Python | **OWASP Agentic Top 10:** 10/10 coverage
+**ATR version:** v0.4.0+ (76 rules) | **License:** MIT | **Engines:** TypeScript + Python | **OWASP Agentic Top 10:** 10/10 coverage
 
 ## Why This Mapping Exists
 
-OpenClaw's security documentation describes **what** the threats are and how to harden against them. ATR provides **how** to detect active exploitation of those threats at runtime — 71 open-source regex rules with test cases, executing in <5ms per scan.
+OpenClaw's security documentation describes **what** the threats are and how to harden against them. ATR provides **how** to detect active exploitation of those threats at runtime — 76 open-source regex rules with test cases, executing in <5ms per scan.
 
 This gives OpenClaw operators a path from "understand the threat" to "detect it in production":
 
@@ -28,7 +28,7 @@ This gives OpenClaw operators a path from "understand the threat" to "detect it 
 | Data Exfiltration & Privacy Leakage         | 5 rules   | MODERATE |
 | Session & Memory Manipulation               | 4 rules   | MODERATE |
 
-**Total: 48 unique rules referenced across 9 threat categories (from ATR's 71-rule library)**
+**Total: 48 unique rules referenced across 9 threat categories (from ATR's 76-rule library)**
 
 ---
 
@@ -175,7 +175,7 @@ OpenClaw's session isolation "degrades over time" in async workloads. These rule
 ### Scan a skill before installation
 
 ```bash
-npx @panguard-ai/panguard audit <skill-name>
+npx @panguard-ai/panguard audit skill <skill-name>
 ```
 
 ### Run ATR engine programmatically
@@ -186,10 +186,11 @@ import { ATREngine } from "agent-threat-rules";
 const engine = new ATREngine();
 await engine.loadRules();
 const matches = engine.evaluate({
-  role: "assistant",
+  type: "tool_response",
+  timestamp: new Date().toISOString(),
   content: skillContent,
 });
-// matches: Array<{ ruleId, title, severity, confidence, match }>
+// matches: Array<{ rule, matchedConditions, matchedPatterns, confidence, timestamp }>
 ```
 
 ### ATR as MCP server (self-audit)
@@ -209,7 +210,7 @@ ATR ships as an MCP server, enabling AI agents to scan other skills and self-aud
 
 ---
 
-## Relationship to OpenClaw's Existing Security
+## Relationship to OpenClaw Existing Security
 
 | Layer                   | Tool                      | What it does                                                                            |
 | ----------------------- | ------------------------- | --------------------------------------------------------------------------------------- |
@@ -227,6 +228,6 @@ ATR complements VirusTotal (which doesn't detect prompt injection) and `openclaw
 - [ATR GitHub Repository](https://github.com/Agent-Threat-Rule/agent-threat-rules)
 - [PanGuard CLI](https://github.com/panguard-ai/panguard-ai) — Scanner using ATR rules, supports OpenClaw
 - [ATR Paper](https://doi.org/10.5281/zenodo.19178002) — Academic paper on Threat Crystallization methodology
-- [PINT Benchmark Results](https://github.com/Agent-Threat-Rule/agent-threat-rules/tree/main/data/pint-benchmark) — 61.4% recall, 99.6% precision on 850 adversarial samples
+- [PINT Benchmark Results](https://github.com/Agent-Threat-Rule/agent-threat-rules/tree/main/data/pint-benchmark) — 62.7% recall, 99.7% precision on 850 adversarial samples
 - [OWASP Agentic AI Top 10 Mapping](https://github.com/precize/Agentic-AI-Top10-Vulnerability/blob/main/ATR-DETECTION-MAPPING.md) — ATR mapping merged into OWASP repo
 - [OpenClaw Security Documentation](/gateway/security)
