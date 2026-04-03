@@ -176,23 +176,12 @@ function expectClearedSessionBinding(params: {
   ).toBeNull();
 }
 
-const discordDescribeMessageToolMock = vi.fn();
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (to: string, _message: string, opts?: { threadId?: string }) => ({
     messageId: opts?.threadId ? "$matrix-thread" : "$matrix-root",
     roomId: to.replace(/^room:/, ""),
   })),
 );
-
-setBundledChannelRuntime("discord", {
-  channel: {
-    discord: {
-      messageActions: {
-        describeMessageTool: discordDescribeMessageToolMock,
-      },
-    },
-  },
-} as never);
 
 setBundledChannelRuntime("line", {
   channel: {
@@ -401,17 +390,37 @@ export const actionContractRegistry: ActionsContractEntry[] = [
     plugin: requireBundledChannelPlugin("discord"),
     cases: [
       {
-        name: "forwards runtime-backed Discord actions and capabilities",
-        cfg: {} as OpenClawConfig,
-        expectedActions: ["send", "react", "poll"],
+        name: "describes configured Discord actions and capabilities",
+        cfg: {
+          channels: {
+            discord: {
+              token: "Bot token-main",
+              actions: {
+                polls: true,
+                reactions: true,
+                permissions: false,
+                messages: false,
+                pins: false,
+                threads: false,
+                search: false,
+                stickers: false,
+                memberInfo: false,
+                roleInfo: false,
+                emojiUploads: false,
+                stickerUploads: false,
+                channelInfo: false,
+                channels: false,
+                voiceStatus: false,
+                events: false,
+                roles: false,
+                moderation: false,
+                presence: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        expectedActions: ["send", "poll", "react", "reactions", "emoji-list"],
         expectedCapabilities: ["interactive", "components"],
-        beforeTest: () => {
-          discordDescribeMessageToolMock.mockReset();
-          discordDescribeMessageToolMock.mockReturnValue({
-            actions: ["send", "react", "poll"],
-            capabilities: ["interactive", "components"],
-          });
-        },
       },
     ],
   },
