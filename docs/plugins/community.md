@@ -50,7 +50,7 @@ openclaw plugins install @largezhou/ddingtalk
 
 Personal finance plugin for OpenClaw. Track expenses, income, recurring
 payments, and receipt OCR. Embedded SQLite database with multi-currency
-support. Works with any OpenClaw-supported channel.
+support. Works with any OpenClaw-supported channel. Requires Node.js 24+.
 
 - **npm:** `financialclaw`
 - **repo:** [github.com/riclara/financialclaw](https://github.com/riclara/financialclaw)
