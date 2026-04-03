@@ -27,10 +27,16 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
  * during config loading (see `applySqliteMmapConfigBridge`), so both
  * the env var and config file approaches work.
  *
- * Disable on NFS-backed volumes to prevent SIGBUS crashes: WAL mode's
- * shared-memory (-shm) files rely on mmap, which NFS does not support
- * reliably. A transient server interruption causes the kernel to deliver
- * SIGBUS when the process accesses a page no longer backed by the server.
+ * Disable on NFS-backed volumes to reduce SIGBUS risk: the pragma
+ * prevents memory-mapped reads of the main database file, which is
+ * the largest mmap surface area.
+ *
+ * **Limitation**: WAL mode separately mmaps the `-shm` index file
+ * (~32 KB) via SQLite's `xShmMap` VFS method, and that mapping is
+ * _not_ controlled by `mmap_size`. For full NFS safety in a
+ * single-process deployment, also set
+ * `PRAGMA locking_mode = EXCLUSIVE` — exclusive mode keeps the WAL
+ * index in heap memory, eliminating the `-shm` mmap entirely.
  */
 export function applySqliteMmapPragma(db: { exec: (sql: string) => void }): void {
   const envVal = process.env.OPENCLAW_SQLITE_MMAP?.trim().toLowerCase();
