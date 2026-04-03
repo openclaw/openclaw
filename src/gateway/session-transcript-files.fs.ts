@@ -267,3 +267,20 @@ export async function cleanupArchivedSessionTranscripts(opts: {
 
   return { removed, scanned };
 }
+
+/**
+ * Returns the path of the most recent `.reset.<timestamp>` archive for the given
+ * session, or undefined if none exist. Used as a fallback in readSessionMessages
+ * so that chat.history returns archived content instead of an empty response
+ * after a daily or manual session reset.
+ */
+export function findLatestResetArchive(sessionId: string, sessionsDir: string): string | undefined {
+  try {
+    const prefix = `${sessionId}.jsonl.reset.`;
+    const files = fs.readdirSync(sessionsDir);
+    const archives = files.filter((name) => name.startsWith(prefix)).toSorted(); // archive timestamps are ISO-derived and sort lexicographically
+    return archives.length > 0 ? path.join(sessionsDir, archives[archives.length - 1]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
