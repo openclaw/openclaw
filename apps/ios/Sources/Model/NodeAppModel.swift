@@ -1957,17 +1957,20 @@ private extension NodeAppModel {
                     continue
                 }
 
+                let reconnectAuth = self.currentGatewayReconnectAuth(
+                    fallbackToken: token,
+                    fallbackBootstrapToken: bootstrapToken,
+                    fallbackPassword: password)
                 let effectiveClientId =
                     GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID) ?? nodeOptions.clientId
                 let operatorOptions = self.makeOperatorConnectOptions(
                     clientId: effectiveClientId,
-                    displayName: nodeOptions.clientDisplayName)
+                    displayName: nodeOptions.clientDisplayName,
+                    includeApprovalScope: self.shouldRequestOperatorApprovalScope(
+                        token: reconnectAuth.token,
+                        password: reconnectAuth.password))
 
                 do {
-                    let reconnectAuth = self.currentGatewayReconnectAuth(
-                        fallbackToken: token,
-                        fallbackBootstrapToken: bootstrapToken,
-                        fallbackPassword: password)
                     try await self.operatorGateway.connect(
                         url: url,
                         token: reconnectAuth.token,
@@ -2266,10 +2269,47 @@ private extension NodeAppModel {
         }
     }
 
-    func makeOperatorConnectOptions(clientId: String, displayName: String?) -> GatewayConnectOptions {
-        GatewayConnectOptions(
+    func shouldRequestOperatorApprovalScope(token: String?, password: String?) -> Bool {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let storedOperatorScopes = DeviceAuthStore
+            .loadToken(deviceId: identity.deviceId, role: "operator")?
+            .scopes ?? []
+        return Self.shouldRequestOperatorApprovalScope(
+            token: token,
+            password: password,
+            storedOperatorScopes: storedOperatorScopes)
+    }
+
+    nonisolated static func shouldRequestOperatorApprovalScope(
+        token: String?,
+        password: String?,
+        storedOperatorScopes: [String]
+    ) -> Bool {
+        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedToken.isEmpty {
+            return true
+        }
+        let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedPassword.isEmpty {
+            return true
+        }
+        return storedOperatorScopes.contains("operator.approvals")
+    }
+
+    func makeOperatorConnectOptions(
+        clientId: String,
+        displayName: String?,
+        includeApprovalScope: Bool
+    ) -> GatewayConnectOptions {
+        var scopes = ["operator.read", "operator.write", "operator.talk.secrets"]
+        // Preserve reconnect compatibility for older paired operator tokens that were
+        // approved before iOS requested operator.approvals by default.
+        if includeApprovalScope {
+            scopes.append("operator.approvals")
+        }
+        return GatewayConnectOptions(
             role: "operator",
-            scopes: ["operator.read", "operator.write", "operator.approvals", "operator.talk.secrets"],
+            scopes: scopes,
             caps: [],
             commands: [],
             permissions: [:],
@@ -3159,9 +3199,13 @@ extension NodeAppModel {
 
     func _test_makeOperatorConnectOptions(
         clientId: String,
-        displayName: String?
+        displayName: String?,
+        includeApprovalScope: Bool
     ) -> GatewayConnectOptions {
-        self.makeOperatorConnectOptions(clientId: clientId, displayName: displayName)
+        self.makeOperatorConnectOptions(
+            clientId: clientId,
+            displayName: displayName,
+            includeApprovalScope: includeApprovalScope)
     }
 
     static func _test_currentDeepLinkKey() -> String {
@@ -3179,6 +3223,17 @@ extension NodeAppModel {
             bootstrapToken: bootstrapToken,
             password: password,
             hasStoredOperatorToken: hasStoredOperatorToken)
+    }
+
+    nonisolated static func _test_shouldRequestOperatorApprovalScope(
+        token: String?,
+        password: String?,
+        storedOperatorScopes: [String]
+    ) -> Bool {
+        self.shouldRequestOperatorApprovalScope(
+            token: token,
+            password: password,
+            storedOperatorScopes: storedOperatorScopes)
     }
 
     nonisolated static func _test_clearingBootstrapToken(

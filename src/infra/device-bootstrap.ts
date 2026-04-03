@@ -369,6 +369,12 @@ export async function verifyDeviceBootstrapToken(params: {
   });
 }
 
+/**
+ * Reads the already-bound bootstrap profile for a verified device identity.
+ *
+ * Call this only after `verifyDeviceBootstrapToken()` has returned `{ ok: true }`
+ * for the same `token` / `deviceId` / `publicKey` tuple in the current handshake.
+ */
 export async function getBoundDeviceBootstrapProfile(params: {
   token: string;
   deviceId: string;

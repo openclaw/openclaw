@@ -70,17 +70,50 @@ import UIKit
         }
     }
 
-    @Test @MainActor func operatorConnectOptionsRequestApprovalScope() {
+    @Test @MainActor func operatorConnectOptionsOnlyRequestApprovalScopeWhenEnabled() {
         let appModel = NodeAppModel()
-        let options = appModel._test_makeOperatorConnectOptions(
+        let withoutApprovalScope = appModel._test_makeOperatorConnectOptions(
             clientId: "openclaw-ios",
-            displayName: "OpenClaw iOS")
+            displayName: "OpenClaw iOS",
+            includeApprovalScope: false)
+        let withApprovalScope = appModel._test_makeOperatorConnectOptions(
+            clientId: "openclaw-ios",
+            displayName: "OpenClaw iOS",
+            includeApprovalScope: true)
 
-        #expect(options.role == "operator")
-        #expect(options.scopes.contains("operator.read"))
-        #expect(options.scopes.contains("operator.write"))
-        #expect(options.scopes.contains("operator.approvals"))
-        #expect(options.scopes.contains("operator.talk.secrets"))
+        #expect(withoutApprovalScope.role == "operator")
+        #expect(withoutApprovalScope.scopes.contains("operator.read"))
+        #expect(withoutApprovalScope.scopes.contains("operator.write"))
+        #expect(!withoutApprovalScope.scopes.contains("operator.approvals"))
+        #expect(withoutApprovalScope.scopes.contains("operator.talk.secrets"))
+
+        #expect(withApprovalScope.scopes.contains("operator.approvals"))
+    }
+
+    @Test func operatorApprovalScopeRequestsStayBackwardCompatible() {
+        #expect(
+            !NodeAppModel._test_shouldRequestOperatorApprovalScope(
+                token: nil,
+                password: nil,
+                storedOperatorScopes: ["operator.read", "operator.write", "operator.talk.secrets"])
+        )
+        #expect(
+            NodeAppModel._test_shouldRequestOperatorApprovalScope(
+                token: nil,
+                password: nil,
+                storedOperatorScopes: [
+                    "operator.approvals",
+                    "operator.read",
+                    "operator.write",
+                    "operator.talk.secrets",
+                ])
+        )
+        #expect(
+            NodeAppModel._test_shouldRequestOperatorApprovalScope(
+                token: "shared-token",
+                password: nil,
+                storedOperatorScopes: [])
+        )
     }
 
     @Test @MainActor func loadLastConnectionReadsSavedValues() {

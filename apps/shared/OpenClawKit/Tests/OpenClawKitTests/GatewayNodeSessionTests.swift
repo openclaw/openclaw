@@ -271,12 +271,6 @@ struct GatewayNodeSessionTests {
             "issuedAtMs": 1000,
             "deviceTokens": [
                 [
-                    "deviceToken": "node-device-token",
-                    "role": "node",
-                    "scopes": ["operator.admin"],
-                    "issuedAtMs": 1000,
-                ],
-                [
                     "deviceToken": "operator-device-token",
                     "role": "operator",
                     "scopes": [
