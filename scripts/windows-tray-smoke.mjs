@@ -46,11 +46,13 @@ if (callsPath) {
   fs.appendFileSync(callsPath, args.join(" ") + "\\n", "utf8");
 }
 
-  await fs.writeFile(
-    scriptPath,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-`,
+const scenario = process.env.OPENCLAW_TRAY_FAKE_SCENARIO || "running";
+if (args[0] === "gateway" && args[1] === "status" && args[2] === "--json") {
+  if (scenario === "running") {
+    process.stdout.write(JSON.stringify({
+      service: { loaded: true, runtime: { status: "running" } },
+      rpc: { ok: true },
+      logs: { directory: "C:\\\\Users\\\\user\\\\.openclaw\\\\logs\\\\gateway" },
       windows: {
         serviceMode: "scheduled-task",
         registrationDetail: "Scheduled Task is registered as OpenClaw Gateway.",
