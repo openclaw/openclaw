@@ -6,7 +6,7 @@ export function extractTextFromChatContent(
     normalizeText?: (text: string) => string;
   },
 ): string | null {
-  const normalizeText = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
+  const normalizeText = opts?.normalizeText ?? ((text: string) => (text ?? "").replace(/\s+/g, " ").trim());
   const joinWith = opts?.joinWith ?? " ";
   const coerceText = (value: unknown): string => {
     if (typeof value === "string") {

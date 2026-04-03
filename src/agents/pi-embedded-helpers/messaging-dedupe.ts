@@ -8,6 +8,9 @@ const MIN_DUPLICATE_TEXT_LENGTH = 10;
  * - Collapses multiple spaces to single space
  */
 export function normalizeTextForComparison(text: string): string {
+  if (!text) {
+    return "";
+  }
   return text
     .trim()
     .toLowerCase()

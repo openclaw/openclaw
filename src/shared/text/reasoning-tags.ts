@@ -25,7 +25,7 @@ export function stripReasoningTagsFromText(
   },
 ): string {
   if (!text) {
-    return text;
+    return "";
   }
   if (!QUICK_TAG_RE.test(text)) {
     return text;

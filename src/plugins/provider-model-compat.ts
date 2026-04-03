@@ -74,7 +74,7 @@ function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-
 }
 
 function normalizeAnthropicBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/v1\/?$/, "");
+  return (baseUrl ?? "").replace(/\/v1\/?$/, "");
 }
 
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {

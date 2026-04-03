@@ -193,7 +193,7 @@ export function buildToolActionFingerprint(
     appendFingerprintAlias(parts, record, "jobid", ["jobId", "job_id"]) || hasStableTarget;
   hasStableTarget = appendFingerprintAlias(parts, record, "id", ["id"]) || hasStableTarget;
   hasStableTarget = appendFingerprintAlias(parts, record, "model", ["model"]) || hasStableTarget;
-  const normalizedMeta = meta?.trim().replace(/\s+/g, " ").toLowerCase();
+  const normalizedMeta = meta ? meta.trim().replace(/\s+/g, " ").toLowerCase() : undefined;
   // Meta text often carries volatile details (for example "N chars").
   // Prefer stable arg-derived keys for matching; only fall back to meta
   // when no stable target key is available.

@@ -178,7 +178,7 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
  */
 export function sanitizeTextContent(text: string): string {
   if (!text) {
-    return text;
+    return "";
   }
   return stripThinkingTagsFromText(
     stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
