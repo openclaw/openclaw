@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  runSetupWizardPrepare,
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import { listAccountIds, resolveAccount } from "./accounts.js";
@@ -18,6 +18,7 @@ import {
   validateToken,
 } from "./security.js";
 import { buildSynologyChatInboundSessionKey } from "./session-key.js";
+import { synologyChatSetupWizard } from "./setup-surface.js";
 
 const synologyChatConfigure = createPluginSetupWizardConfigure(synologyChatPlugin);
 const originalEnv = { ...process.env };
@@ -176,7 +177,7 @@ describe("synology-chat core", () => {
   });
 
   it("persists explicit allowInsecureSsl: false for named accounts when prompt is declined", async () => {
-    const prepare = synologyChatPlugin.setupWizard?.prepare;
+    const prepare = synologyChatSetupWizard.prepare;
     if (!prepare) {
       throw new Error("setupWizard.prepare is required");
     }
@@ -187,8 +188,7 @@ describe("synology-chat core", () => {
       throw new Error(`Unexpected confirm prompt: ${message}`);
     });
 
-    const prepared = await runSetupWizardPrepare({
-      prepare,
+    const prepared = await prepare({
       cfg: {
         channels: {
           "synology-chat": {
@@ -204,17 +204,16 @@ describe("synology-chat core", () => {
       } as OpenClawConfig,
       accountId: "work",
       credentialValues: {},
+      runtime: createRuntimeEnv({ throwOnExit: false }),
       prompter: createTestWizardPrompter({
         confirm: confirm as WizardPrompter["confirm"],
       }),
+      options: {},
     });
-    if (!prepared) {
-      throw new Error("Expected prepare to return updated config");
-    }
-    const nextCfg = prepared.cfg;
-    if (!nextCfg) {
+    if (!prepared?.cfg) {
       throw new Error("Expected prepare to include cfg");
     }
+    const nextCfg = prepared.cfg;
 
     const channelConfig = nextCfg.channels?.["synology-chat"] as
       | {
