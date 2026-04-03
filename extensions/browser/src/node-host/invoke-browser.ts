@@ -51,6 +51,12 @@ function resolveBrowserProxyConfig() {
 
 let browserControlReady: Promise<void> | null = null;
 
+// Keep the production singleton but give tests a cheap reset seam so they do
+// not need to reload the entire module graph between cases.
+export function resetBrowserProxyCommandStateForTests(): void {
+  browserControlReady = null;
+}
+
 async function ensureBrowserControlService(): Promise<void> {
   if (browserControlReady) {
     return browserControlReady;

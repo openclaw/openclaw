@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const controlServiceMocks = vi.hoisted(() => ({
   createBrowserControlContext: vi.fn(() => ({ control: true })),
@@ -36,14 +36,18 @@ vi.mock("../core-api.js", async () => ({
   startBrowserControlServiceFromConfig: controlServiceMocks.startBrowserControlServiceFromConfig,
 }));
 
+let resetBrowserProxyCommandStateForTests: typeof import("./invoke-browser.js").resetBrowserProxyCommandStateForTests;
 let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxyCommand;
 
+beforeAll(async () => {
+  ({ resetBrowserProxyCommandStateForTests, runBrowserProxyCommand } =
+    await import("./invoke-browser.js"));
+});
+
 describe("runBrowserProxyCommand", () => {
-  beforeEach(async () => {
-    // No-isolate runs can reuse a cached invoke-browser module that was loaded
-    // via node-host entrypoints before this file's mocks were declared.
+  beforeEach(() => {
     vi.useRealTimers();
-    vi.resetModules();
+    resetBrowserProxyCommandStateForTests();
     dispatcherMocks.dispatch.mockReset();
     dispatcherMocks.createBrowserRouteDispatcher.mockReset().mockImplementation(() => ({
       dispatch: dispatcherMocks.dispatch,
@@ -58,7 +62,6 @@ describe("runBrowserProxyCommand", () => {
       enabled: true,
       defaultProfile: "openclaw",
     });
-    ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
     configMocks.loadConfig.mockReturnValue({
       browser: {},
       nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },
