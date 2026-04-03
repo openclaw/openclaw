@@ -207,12 +207,14 @@ async function installFromDirWithWarnings(params: {
   pluginDir: string;
   extensionsDir: string;
   dangerouslyForceUnsafeInstall?: boolean;
+  mode?: "install" | "update";
 }) {
   const warnings: string[] = [];
   const result = await installPluginFromDir({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     dirPath: params.pluginDir,
     extensionsDir: params.extensionsDir,
+    mode: params.mode,
     logger: {
       info: () => {},
       warn: (msg: string) => warnings.push(msg),
@@ -1003,6 +1005,75 @@ describe("installPluginFromArchive", () => {
         warning.includes("blocked by plugin hook: Blocked by enterprise policy"),
       ),
     ).toBe(true);
+  });
+
+  it("reports install mode to before_install when force-style update runs against a missing target", async () => {
+    const handler = vi.fn().mockReturnValue({});
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
+
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "fresh-force-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+    const { result } = await installFromDirWithWarnings({
+      pluginDir,
+      extensionsDir,
+      mode: "update",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      request: {
+        kind: "plugin-dir",
+        mode: "install",
+      },
+    });
+  });
+
+  it("reports update mode to before_install when replacing an existing target", async () => {
+    const handler = vi.fn().mockReturnValue({});
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
+
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    const existingTargetDir = resolvePluginInstallDir("replace-force-plugin", extensionsDir);
+    fs.mkdirSync(existingTargetDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(existingTargetDir, "package.json"),
+      JSON.stringify({ version: "0.9.0" }),
+    );
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "replace-force-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+    const { result } = await installFromDirWithWarnings({
+      pluginDir,
+      extensionsDir,
+      mode: "update",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      request: {
+        kind: "plugin-dir",
+        mode: "update",
+      },
+    });
   });
 
   it("scans extension entry files in hidden directories", async () => {
