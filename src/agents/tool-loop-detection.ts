@@ -478,6 +478,21 @@ export function detectToolCallLoop(
   if (
     !knownPollTool &&
     resolvedConfig.detectors.genericRepeat &&
+    recentCount >= resolvedConfig.criticalThreshold
+  ) {
+    log.warn(`Loop critical: ${toolName} called ${recentCount} times with identical arguments`);
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "generic_repeat",
+      count: recentCount,
+      message: `BLOCKED: You have called ${toolName} ${recentCount} times with identical arguments. This is not making progress. Stop retrying and report the task as failed or try a different approach.`,
+      warningKey: `generic:${toolName}:${currentHash}`,
+    };
+  }
+  if (
+    !knownPollTool &&
+    resolvedConfig.detectors.genericRepeat &&
     recentCount >= resolvedConfig.warningThreshold
   ) {
     log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
