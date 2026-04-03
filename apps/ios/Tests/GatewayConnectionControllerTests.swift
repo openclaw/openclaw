@@ -70,6 +70,19 @@ import UIKit
         }
     }
 
+    @Test @MainActor func operatorConnectOptionsRequestApprovalScope() {
+        let appModel = NodeAppModel()
+        let options = appModel._test_makeOperatorConnectOptions(
+            clientId: "openclaw-ios",
+            displayName: "OpenClaw iOS")
+
+        #expect(options.role == "operator")
+        #expect(options.scopes.contains("operator.read"))
+        #expect(options.scopes.contains("operator.write"))
+        #expect(options.scopes.contains("operator.approvals"))
+        #expect(options.scopes.contains("operator.talk.secrets"))
+    }
+
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
         let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
         defer {
