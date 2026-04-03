@@ -158,8 +158,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             return { ok: false, reason: "whatsapp-not-linked" };
           }
           const listenerActive = deps?.hasActiveWebListener
-            ? deps.hasActiveWebListener()
-            : Boolean((await loadWhatsAppChannelRuntime()).getActiveWebListener());
+            ? deps.hasActiveWebListener(account.accountId)
+            : Boolean((await loadWhatsAppChannelRuntime()).getActiveWebListener(account.accountId));
           if (!listenerActive) {
             return { ok: false, reason: "whatsapp-not-running" };
           }
