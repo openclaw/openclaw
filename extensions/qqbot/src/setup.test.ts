@@ -1,8 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
+import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import { qqbotSetupPlugin } from "./channel.setup.js";
 import { DEFAULT_ACCOUNT_ID } from "./config.js";
 import { qqbotSetupWizard } from "./setup-surface.js";
+
+const getQQBotSetupStatus = createPluginSetupWizardStatus(qqbotSetupPlugin);
 
 describe("qqbot setup", () => {
   it("treats SecretRef-backed default accounts as configured", () => {
@@ -41,6 +44,34 @@ describe("qqbot setup", () => {
     });
 
     expect(configured).toBe(true);
+  });
+
+  it("setup status honors the selected named account", async () => {
+    const status = await getQQBotSetupStatus({
+      cfg: {
+        channels: {
+          qqbot: {
+            appId: "123456",
+            clientSecret: {
+              source: "env",
+              provider: "default",
+              id: "QQBOT_CLIENT_SECRET",
+            },
+            accounts: {
+              bot2: {
+                appId: "654321",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {
+        qqbot: "bot2",
+      },
+    });
+
+    expect(status.configured).toBe(false);
+    expect(status.statusLines).toEqual(["QQ Bot: needs AppID + AppSecret"]);
   });
 
   it("marks unresolved SecretRef accounts as configured in setup-only plugin status", () => {

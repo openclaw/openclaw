@@ -73,9 +73,11 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "needs AppID + AppSecret",
     configuredScore: 1,
     unconfiguredScore: 6,
-    resolveConfigured: ({ cfg }) =>
-      listQQBotAccountIds(cfg).some((accountId) => {
-        const account = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
+    resolveConfigured: ({ cfg, accountId }) =>
+      (accountId ? [accountId] : listQQBotAccountIds(cfg)).some((resolvedAccountId) => {
+        const account = resolveQQBotAccount(cfg, resolvedAccountId, {
+          allowUnresolvedSecretRef: true,
+        });
         return Boolean(
           account.appId &&
           (Boolean(account.clientSecret) ||
