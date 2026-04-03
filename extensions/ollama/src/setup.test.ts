@@ -1,7 +1,7 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { jsonResponse, requestBodyText, requestUrl } from "../../../src/test-helpers/http.js";
 import {
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
