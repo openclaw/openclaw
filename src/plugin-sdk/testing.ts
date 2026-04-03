@@ -6,7 +6,7 @@ export {
   expectChannelInboundContextContract,
   primeChannelOutboundSendMock,
 } from "../channels/plugins/contracts/test-helpers.js";
-export { createSlackOutboundPayloadHarness } from "../channels/plugins/contracts/suites.js";
+export { createSlackOutboundPayloadHarness } from "../channels/plugins/contracts/slack-outbound-harness.js";
 export { buildDispatchInboundCaptureMock } from "../channels/plugins/contracts/inbound-testkit.js";
 export {
   createCliRuntimeCapture,

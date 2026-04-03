@@ -1,6 +1,6 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it } from "vitest";
-import { createSlackOutboundPayloadHarness } from "../../../src/channels/plugins/contracts/suites.js";
+import { createSlackOutboundPayloadHarness } from "../../../src/channels/plugins/contracts/slack-outbound-harness.js";
 
 function createHarness(params: {
   payload: ReplyPayload;

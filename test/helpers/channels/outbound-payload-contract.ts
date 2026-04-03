@@ -5,10 +5,8 @@ import {
 } from "../../../extensions/zalo/runtime-api.js";
 import { sendPayloadWithChunkedTextAndMedia as sendZalouserPayloadWithChunkedTextAndMedia } from "../../../extensions/zalouser/runtime-api.js";
 import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import {
-  createSlackOutboundPayloadHarness,
-  installChannelOutboundPayloadContractSuite,
-} from "../../../src/channels/plugins/contracts/suites.js";
+import { createSlackOutboundPayloadHarness } from "../../../src/channels/plugins/contracts/slack-outbound-harness.js";
+import { installChannelOutboundPayloadContractSuite } from "../../../src/channels/plugins/contracts/suites.js";
 import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/contracts/test-helpers.js";
 import { createDirectTextMediaOutbound } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
