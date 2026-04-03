@@ -158,6 +158,12 @@ function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boole
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   if (CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig) {
+    applyConfiguredContextWindows({
+      cache: MODEL_CONTEXT_TOKEN_CACHE,
+      modelsConfig: CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig.models as
+        | ModelsConfig
+        | undefined,
+    });
     return CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig;
   }
   if (Date.now() < CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs) {
