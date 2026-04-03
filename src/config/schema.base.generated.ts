@@ -782,6 +782,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "number",
                 exclusiveMinimum: 0,
               },
+              authPermanentBackoffMinutes: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              authPermanentMaxMinutes: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
               failureWindowHours: {
                 type: "number",
                 exclusiveMinimum: 0,
@@ -22565,6 +22573,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "auth.cooldowns.billingMaxHours": {
       label: "Billing Backoff Cap (hours)",
       help: "Cap (hours) for billing backoff (default: 24).",
+      tags: ["auth", "access", "performance"],
+    },
+    "auth.cooldowns.authPermanentBackoffMinutes": {
+      label: "Auth-Permanent Backoff (minutes)",
+      help: "Base backoff (minutes) for high-confidence auth_permanent failures (default: 10). Keep this shorter than billing so providers recover automatically after transient upstream auth incidents.",
+      tags: ["auth", "access", "reliability"],
+    },
+    "auth.cooldowns.authPermanentMaxMinutes": {
+      label: "Auth-Permanent Backoff Cap (minutes)",
+      help: "Cap (minutes) for auth_permanent backoff (default: 60).",
       tags: ["auth", "access", "performance"],
     },
     "auth.cooldowns.failureWindowHours": {

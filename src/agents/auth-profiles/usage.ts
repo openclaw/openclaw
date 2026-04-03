@@ -130,10 +130,7 @@ function applyWhamCooldownResult(params: {
       : 0;
   return {
     ...params.computed,
-    cooldownUntil: Math.max(
-      existingActiveCooldownUntil,
-      params.now + params.whamResult.cooldownMs,
-    ),
+    cooldownUntil: Math.max(existingActiveCooldownUntil, params.now + params.whamResult.cooldownMs),
   };
 }
 
@@ -528,10 +525,14 @@ function resolveAuthCooldownConfig(params: {
   const defaults = {
     billingBackoffHours: 5,
     billingMaxHours: 24,
+    authPermanentBackoffMinutes: 10,
+    authPermanentMaxMinutes: 60,
     failureWindowHours: 24,
   } as const;
 
   const resolveHours = (value: unknown, fallback: number) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+  const resolveMinutes = (value: unknown, fallback: number) =>
     typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 
   const cooldowns = params.cfg?.auth?.cooldowns;
@@ -553,16 +554,18 @@ function resolveAuthCooldownConfig(params: {
     defaults.billingBackoffHours,
   );
   const billingMaxHours = resolveHours(cooldowns?.billingMaxHours, defaults.billingMaxHours);
+  const authPermanentBackoffMinutes = resolveMinutes(
+    cooldowns?.authPermanentBackoffMinutes,
+    defaults.authPermanentBackoffMinutes,
+  );
+  const authPermanentMaxMinutes = resolveMinutes(
+    cooldowns?.authPermanentMaxMinutes,
+    defaults.authPermanentMaxMinutes,
+  );
   const failureWindowHours = resolveHours(
     cooldowns?.failureWindowHours,
     defaults.failureWindowHours,
   );
-
-  const resolveMinutes = (value: unknown, fallback: number) =>
-    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
-
-  const authPermanentBackoffMinutes = resolveMinutes(cooldowns?.authPermanentBackoffMinutes, 10);
-  const authPermanentMaxMinutes = resolveMinutes(cooldowns?.authPermanentMaxMinutes, 60);
 
   return {
     billingBackoffMs: billingBackoffHours * 60 * 60 * 1000,
@@ -688,13 +691,12 @@ function computeNextProfileUsageStats(params: {
     });
     updatedStats.disabledReason = params.reason;
   } else if (params.reason === "auth_permanent") {
-    // auth_permanent errors can be caused by transient provider outages (e.g.
-    // GCP returning API_KEY_INVALID during an incident). Use a much shorter
-    // backoff than billing so the provider recovers automatically once the
-    // upstream issue resolves.
-    const authPermCount = failureCounts[params.reason] ?? 1;
+    // Keep permanent-auth failures in the disabled lane, but use a much
+    // shorter backoff than billing. Some upstream incidents surface auth-ish
+    // payloads transiently, so the provider should recover automatically.
+    const authPermanentCount = failureCounts[params.reason] ?? 1;
     const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
-      errorCount: authPermCount,
+      errorCount: authPermanentCount,
       baseMs: params.cfgResolved.authPermanentBackoffMs,
       maxMs: params.cfgResolved.authPermanentMaxMs,
     });

@@ -823,7 +823,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-provider overrides for billing backoff (hours).",
   "auth.cooldowns.billingMaxHours": "Cap (hours) for billing backoff (default: 24).",
   "auth.cooldowns.authPermanentBackoffMinutes":
-    "Base backoff (minutes) for auth_permanent failures (default: 10). Shorter than billing because these errors are often caused by transient provider outages.",
+    "Base backoff (minutes) for high-confidence auth_permanent failures (default: 10). Keep this shorter than billing so providers recover automatically after transient upstream auth incidents.",
   "auth.cooldowns.authPermanentMaxMinutes":
     "Cap (minutes) for auth_permanent backoff (default: 60).",
   "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
