@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-helpers.js";
+import {
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "../../../test/helpers/plugins/plugin-registry.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
 import { linePlugin } from "./channel.js";
 import type { ResolvedLineAccount } from "./types.js";
@@ -59,7 +62,15 @@ describe("buildLineMessageContext", () => {
     }) as PostbackEvent;
 
   beforeEach(async () => {
-    setDefaultChannelPluginRegistryForTests();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: linePlugin.id,
+          plugin: linePlugin,
+          source: "test",
+        },
+      ]),
+    );
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-line-context-"));
     storePath = path.join(tmpDir, "sessions.json");

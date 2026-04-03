@@ -7,8 +7,8 @@ import {
   type MsgContext,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
-import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
+import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;

@@ -66,7 +66,7 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "./runtime-api.js";
-import { getSlackRuntime } from "./runtime.js";
+import { getOptionalSlackRuntime, getSlackRuntime } from "./runtime.js";
 import { fetchSlackScopes } from "./scopes.js";
 import { sendMessageSlack } from "./send.js";
 import { slackSetupAdapter } from "./setup-core.js";
@@ -94,6 +94,10 @@ const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount
 
 function resolveSlackProbe() {
   return probeSlack;
+}
+
+function resolveSlackHandleAction() {
+  return getOptionalSlackRuntime()?.channel?.slack?.handleSlackAction ?? handleSlackAction;
 }
 
 // Select the appropriate Slack token for read/write operations.
@@ -364,7 +368,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     },
     actions: createSlackActions(SLACK_CHANNEL, {
       invoke: async (action, cfg, toolContext) =>
-        await handleSlackAction(
+        await resolveSlackHandleAction()(
           action,
           cfg as OpenClawConfig,
           toolContext as SlackActionContext | undefined,

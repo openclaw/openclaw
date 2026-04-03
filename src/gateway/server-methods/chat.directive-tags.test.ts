@@ -246,6 +246,7 @@ function createChatContext(): Pick<
 }
 
 type ChatContext = ReturnType<typeof createChatContext>;
+type NonStreamingChatSendWaitFor = "broadcast" | "dedupe" | "none";
 
 async function runNonStreamingChatSend(params: {
   context: ChatContext;
@@ -259,6 +260,7 @@ async function runNonStreamingChatSend(params: {
   requestParams?: Record<string, unknown>;
   waitForCompletion?: boolean;
   waitForDedupe?: boolean;
+  waitFor?: NonStreamingChatSendWaitFor;
 }) {
   const sendParams: {
     sessionKey: string;
@@ -287,11 +289,17 @@ async function runNonStreamingChatSend(params: {
     context: params.context as GatewayRequestContext,
   });
 
-  const shouldExpectBroadcast = params.expectBroadcast ?? true;
-  if (!shouldExpectBroadcast) {
-    if (params.waitForCompletion === false || params.waitForDedupe === false) {
-      return undefined;
-    }
+  const waitFor =
+    params.waitFor ??
+    (params.waitForCompletion === false || params.waitForDedupe === false
+      ? "none"
+      : params.expectBroadcast === false
+        ? "dedupe"
+        : "broadcast");
+  if (waitFor === "none") {
+    return undefined;
+  }
+  if (waitFor === "dedupe") {
     await waitForAssertion(() => {
       expect(params.context.dedupe.has(`chat:${params.idempotencyKey}`)).toBe(true);
     });

@@ -11,9 +11,11 @@ Docs: https://docs.openclaw.ai
 - Providers/StepFun: add the bundled StepFun provider plugin with standard and Step Plan endpoints, China/global onboarding choices, `step-3.5-flash` on both catalogs, and `step-3.5-flash-2603` currently exposed on Step Plan. (#60032) Thanks @hengm3467.
 - Providers/config: add full `models.providers.*.request` transport overrides for model-provider paths, including headers, auth, proxy, and TLS, and keep media provider HTTP request transport overrides aligned with the same request-policy surface. Thanks @vincentkoc.
 - Control UI/skills: add ClawHub search, detail, and install flows directly in the Skills panel. (#60134) Thanks @samzong.
+- Outbound/runtime seams: split delivery, target-resolution, and session/transcript helper loading into narrower runtime seams so outbound hot paths and their owner tests avoid broader setup fan-out. (#60311) Thanks @shakkernerd.
 
 ### Fixes
 
+- Skills/uv install: block workspace `.env` from overriding `UV_PYTHON` and strip related interpreter override keys from uv skill-install subprocesses so repository-controlled env files cannot steer the selected Python runtime. (#59178) Thanks @pgondhi987.
 - Telegram/reactions: preserve `reactionNotifications: "own"` across gateway restarts by persisting sent-message ownership state instead of treating cold cache as a permissive fallback. (#59207) Thanks @samzong.
 - Gateway/startup: detect PID recycling in gateway lock files on Windows and macOS, and add startup progress so stale lock conflicts no longer block healthy restarts. (#59843) Thanks @TonyDerek-dot.
 - MS Teams/DM media: download inline images in 1:1 chats via Graph API so Teams DM image attachments stop failing to load. (#52212) Thanks @Ted-developer.
@@ -40,6 +42,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Google: separate OAuth CSRF state from PKCE code verifier during Gemini browser sign-in so state validation and token exchange use independent values. (#59116) Thanks @eleqtrizit.
 - Agents/subagents: honor `agents.defaults.subagents.allowAgents` for `sessions_spawn` and `agents_list`, so default cross-agent allowlists work without duplicating per-agent config. (#59944) Thanks @hclsys.
 - Agents/tools: normalize only truly empty MCP tool schemas to `{ type: "object", properties: {} }` so OpenAI accepts parameter-free tools without rewriting unrelated conditional schemas. (#60176) Thanks @Bartok9.
+- Update/npm: prefer the npm binary that owns the installed global OpenClaw prefix during package self-update, so mixed Homebrew-plus-nvm setups update the right install. (#60153) Thanks @jayeshp19.
 - Plugins/browser: block SSRF redirect bypass by installing a real-time Playwright route handler before `page.goto()` so navigation to private/internal IPs is intercepted and aborted mid-redirect instead of checked post-hoc. (#58771) Thanks @pgondhi987.
 - Android/gateway: require TLS for non-loopback remote gateway endpoints while still allowing local loopback and emulator cleartext setup flows. (#58475) Thanks @eleqtrizit.
 - Exec/Windows: hide transient console windows for `runExec` and `runCommandWithTimeout` child-process launches, matching other Windows exec paths and stopping visible shell flashes during tool runs. (#59466) Thanks @lawrence3699.
@@ -63,6 +66,8 @@ Docs: https://docs.openclaw.ai
 - Agents/tool policy: stop `tools.profile` warnings from flagging runtime-gated baseline core tools as unknown when the coding profile is missing tools like `code_execution`, `x_search`, `image`, or `image_generate`, while still warning on explicit extra allowlist entries. Thanks @vincentkoc.
 - Sessions/resolution: collapse alias-duplicate session-id matches before scoring, keep distinct structural ties ambiguous, and prefer current-store reuse when resolving equal cross-store duplicates so follow-up turns stop dropping or duplicating sessions on timestamp ties.
 - Mobile pairing/bootstrap: keep setup bootstrap tokens alive through the initial node auto-pair so the same QR bootstrap token can finish operator approval, then revoke it after the full issued profile connects successfully. (#60221) Thanks @obviyus.
+- Plugins/allowlists: let explicit bundled chat channel enablement bypass `plugins.allow`, while keeping auto-enabled channel activation and startup sidecars behind restrictive allowlists. (#60233) Thanks @dorukardahan.
+- Allowlist/commands: require owner access for `/allowlist add` and `/allowlist remove` so command-authorized non-owners cannot mutate persisted allowlists. (#59836) Thanks @eleqtrizit.
 
 ## 2026.4.2
 

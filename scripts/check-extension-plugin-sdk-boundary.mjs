@@ -67,7 +67,9 @@ function isTestLikeFile(relativePath) {
   return (
     /(^|\/)(__tests__|fixtures|test|tests|test-support)\//.test(relativePath) ||
     /(^|\/)test-support\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath) ||
-    /(^|\/)[^/]*test-(support|helpers)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath) ||
+    /(^|\/)[^/]*test-(support|helpers|fixtures)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(
+      relativePath,
+    ) ||
     /\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath)
   );
 }

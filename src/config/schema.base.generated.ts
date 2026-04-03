@@ -24061,7 +24061,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "plugins.allow": {
       label: "Plugin Allowlist",
-      help: "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Use this to enforce approved extension inventories in controlled environments.",
+      help: "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
       tags: ["access"],
     },
     "plugins.deny": {
