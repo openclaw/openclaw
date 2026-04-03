@@ -1249,6 +1249,7 @@
                   "providers/qwen_modelstudio",
                   "providers/qwen",
                   "providers/sglang",
+                  "providers/stepfun",
                   "providers/synthetic",
                   "providers/together",
                   "providers/venice",
