@@ -3,25 +3,34 @@ import { EventEmitter } from "node:events";
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
-import { attachChildProcessBridge } from "./child-process-bridge.js";
-import {
-  resolveCommandEnv,
-  resolveProcessExitCode,
-  runCommandWithTimeout,
-  shouldSpawnWithShell,
-} from "./exec.js";
+
+let attachChildProcessBridge: typeof import("./child-process-bridge.js").attachChildProcessBridge;
+let resolveCommandEnv: typeof import("./exec.js").resolveCommandEnv;
+let resolveProcessExitCode: typeof import("./exec.js").resolveProcessExitCode;
+let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
+let shouldSpawnWithShell: typeof import("./exec.js").shouldSpawnWithShell;
+
+async function loadExecModules() {
+  vi.resetModules();
+  vi.doUnmock("node:child_process");
+  ({ attachChildProcessBridge } = await import("./child-process-bridge.js"));
+  ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, shouldSpawnWithShell } =
+    await import("./exec.js"));
+}
 
 describe("runCommandWithTimeout", () => {
   function createSilentIdleArgv(): string[] {
     return [process.execPath, "-e", "setInterval(() => {}, 1_000)"];
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
+    await loadExecModules();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.doUnmock("node:child_process");
   });
 
   it("never enables shell execution (Windows cmd.exe injection hardening)", () => {

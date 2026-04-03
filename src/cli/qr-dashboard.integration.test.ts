@@ -104,6 +104,22 @@ async function loadCliModules() {
   for (const id of unmockedDependencyIds) {
     vi.doUnmock(id);
   }
+  vi.doMock("../config/config.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+    return {
+      ...actual,
+      loadConfig: loadConfigMock,
+      readConfigFileSnapshot: readConfigFileSnapshotMock,
+      resolveGatewayPort: resolveGatewayPortMock,
+    };
+  });
+  vi.doMock("../infra/clipboard.js", () => ({
+    copyToClipboard: copyToClipboardMock,
+  }));
+  vi.doMock("../runtime.js", () => ({
+    defaultRuntime: runtime,
+  }));
   ({ dashboardCommand } = await import("../commands/dashboard.js"));
   ({ registerQrCli } = await import("./qr-cli.js"));
 }
@@ -119,10 +135,6 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     ]);
   });
 
-  beforeAll(async () => {
-    await loadCliModules();
-  });
-
   afterAll(() => {
     envSnapshot.restore();
     vi.restoreAllMocks();
@@ -135,13 +147,14 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     vi.resetModules();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     vi.clearAllMocks();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.SHARED_GATEWAY_TOKEN;
+    await loadCliModules();
   });
 
   it("uses the same resolved token SecretRef for qr auth validation and dashboard commands", async () => {
