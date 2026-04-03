@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: () => undefined,
+  getOAuthProviders: () => [],
+}));
+
 import type { OpenClawConfig } from "../config/config.js";
 import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, VideoDescriptionRequest } from "./types.js";
@@ -90,6 +96,58 @@ describe("runCapability proxy fetch passthrough", () => {
       outputText: "transcribed",
     });
     expect(seenFetchFn).toBe(proxyFetchMocks.proxyFetch);
+  });
+
+  it("does not pass fetchFn to audio providers when baseUrl is covered by NO_PROXY", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "172.31.0.14");
+
+    let seenFetchFn: typeof fetch | undefined;
+    await withAudioFixture("openclaw-audio-private-no-proxy", async ({ ctx, media, cache }) => {
+      const providerRegistry = buildProviderRegistry({
+        openai: {
+          id: "openai",
+          capabilities: ["audio"],
+          transcribeAudio: async (req: AudioTranscriptionRequest) => {
+            seenFetchFn = req.fetchFn;
+            return { text: "transcribed", model: req.model };
+          },
+        },
+      });
+
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              apiKey: "test-key", // pragma: allowlist secret
+              baseUrl: "http://172.31.0.14:9001/v1",
+              models: [],
+            },
+          },
+        },
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [{ provider: "openai", model: "whisper-1" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = await runCapability({
+        capability: "audio",
+        cfg,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+      });
+
+      expect(result.outputs[0]?.text).toBe("transcribed");
+    });
+
+    expect(seenFetchFn).toBeUndefined();
   });
 
   it("passes fetchFn to video provider when HTTPS_PROXY is set", async () => {

@@ -513,10 +513,6 @@ export async function runProviderEntry(params: {
     throw new Error(`Media provider not available: ${providerId}`);
   }
 
-  // Resolve proxy-aware fetch from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
-  // so provider HTTP calls are routed through the proxy when configured.
-  const fetchFn = resolveProxyFetchFromEnv();
-
   if (capability === "audio") {
     if (!provider.transcribeAudio) {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
@@ -535,6 +531,9 @@ export async function runProviderEntry(params: {
       config: params.config,
       agentDir: params.agentDir,
     });
+    // Audio backends are often self-hosted on RFC1918/private addresses. Let
+    // resolveProxyFetchFromEnv decide whether the request should stay direct.
+    const fetchFn = resolveProxyFetchFromEnv(baseUrl);
     const providerQuery = resolveProviderQuery({
       providerId,
       config: params.config,
@@ -593,6 +592,7 @@ export async function runProviderEntry(params: {
     config: params.config,
     agentDir: params.agentDir,
   });
+  const fetchFn = resolveProxyFetchFromEnv(baseUrl);
   const result = await executeWithApiKeyRotation({
     provider: providerId,
     apiKeys,
