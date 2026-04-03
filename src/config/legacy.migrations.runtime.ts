@@ -429,10 +429,12 @@ function migrateLegacySandboxPerSession(
     } else {
       changes.push(`Removed ${pathLabel}.perSession (${pathLabel}.scope already set).`);
     }
+    delete sandbox.perSession;
   } else {
-    changes.push(`Removed ${pathLabel}.perSession (invalid non-boolean legacy value).`);
+    // Preserve invalid values so normal schema validation still surfaces the
+    // type error instead of silently falling back to the default sandbox scope.
+    return;
   }
-  delete sandbox.perSession;
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [

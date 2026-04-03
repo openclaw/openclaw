@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
@@ -460,6 +461,24 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.config?.agents?.defaults?.sandbox).toEqual({
       scope: "agent",
     });
+  });
+
+  it("does not migrate invalid sandbox perSession values", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          sandbox: {
+            perSession: "yes",
+          },
+        },
+      },
+    };
+
+    const res = migrateLegacyConfig(raw);
+
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
+    expect(validateConfigObjectWithPlugins(raw).ok).toBe(false);
   });
 });
 
