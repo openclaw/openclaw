@@ -20,6 +20,7 @@ export type IMessagePayload = {
   created_at?: string | null;
   attachments?: IMessageAttachment[] | null;
   chat_identifier?: string | null;
+  destination_caller_id?: string | null;
   chat_guid?: string | null;
   chat_name?: string | null;
   participants?: string[] | null;
