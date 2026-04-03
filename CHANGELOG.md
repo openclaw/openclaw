@@ -130,7 +130,6 @@ Docs: https://docs.openclaw.ai
 - Exec/Windows: include Windows-compatible env override keys like `ProgramFiles(x86)` in system-run approval binding so changed approved values are rejected instead of silently passing unbound. (#59182) Thanks @pgondhi987.
 - ACP/Windows spawn: fail closed on unresolved `.cmd` and `.bat` OpenClaw wrappers unless a caller explicitly opts into shell fallback, so Windows ACP launches do not silently drop into shell-mediated execution when wrapper unwrapping fails. (#58436) Thanks @eleqtrizit.
 - Exec/Windows: prefer strict-inline-eval denial over generic allowlist prompts for interpreter carriers, while keeping persisted Windows allow-always approvals argv-bound. (#59780) Thanks @luoyanglang.
-- Agents/sessions: release embedded runner session locks even when teardown cleanup throws, so timed-out or failed cleanup paths no longer leave sessions wedged until the stale-lock watchdog recovers them. (#59194) Thanks @samzong.
 
 ## 2026.4.1
 
