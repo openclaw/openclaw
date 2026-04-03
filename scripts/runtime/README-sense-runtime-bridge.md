@@ -413,6 +413,26 @@ Recommended separation:
 - `sense_runtime_manager_policy.py`
   - owns retry / stop / next-step decisions
 
+Current deterministic manager action matrix:
+
+- `provider_api_key_missing`
+  - `manager_action = configure_provider`
+- `selected_model_not_ready` + `retry_decision = recheck_runtime_status_once`
+  - `manager_action = retry_once`
+- `selected_model_mismatch` + repeated mismatch / `skip_restart_repeated_mismatch`
+  - `manager_action = stop_and_surface_diff`
+- `ready_for_runtime_task`
+  - `manager_action = run_runtime_task`
+
+Manager policy output now includes:
+
+- `manager_action`
+- `manager_reason`
+- `next_step`
+- `policy_trace`
+
+`policy_trace` identifies which deterministic rule fired and which fields matched, so the manager can explain why it retried, stopped, or promoted a runtime task.
+
 Routing loop can now stop more specifically as:
 
 - `default_model_missing`

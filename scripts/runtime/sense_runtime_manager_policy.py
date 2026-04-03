@@ -21,6 +21,26 @@ def load_payload(args: argparse.Namespace) -> dict:
     return json.loads(raw)
 
 
+def build_policy_output(
+    *,
+    manager_action: str,
+    manager_reason: str,
+    next_step: str,
+    retry_decision: str | None,
+    policy_input: dict,
+    policy_trace: dict,
+) -> dict:
+    return {
+        'manager_action': manager_action,
+        'manager_reason': manager_reason,
+        'next_step': next_step,
+        'retry_decision': retry_decision,
+        'policy_table_version': 'v1',
+        'policy_trace': policy_trace,
+        'policy_input': policy_input,
+    }
+
+
 def main() -> int:
     args = build_parser().parse_args()
     payload = load_payload(args)
@@ -28,27 +48,134 @@ def main() -> int:
     next_step = str(payload.get('next_step') or 'manual_review')
     retry = payload.get('retry') if isinstance(payload.get('retry'), dict) else {}
     retry_decision = retry.get('retry_decision')
+    repeated_decision_detected = retry.get('repeated_decision_detected') is True
 
-    manager_action = 'stop'
-    manager_reason = 'runtime evaluation requires manual review'
+    policy_input = payload.get('policy_input', {})
+
+    if final_state == 'provider_api_key_missing':
+        output = build_policy_output(
+            manager_action='configure_provider',
+            manager_reason='provider-specific API key is missing and provider remediation should be run before retrying runtime work',
+            next_step='configure_provider',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'provider_api_key_missing_configure_provider',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'configure_provider',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if (
+        final_state == 'selected_model_not_ready'
+        and retry_decision == 'recheck_runtime_status_once'
+        and retry.get('retry_allowed') is True
+    ):
+        output = build_policy_output(
+            manager_action='retry_once',
+            manager_reason='selected model was only observed in start-result and runtime status should be rechecked once before any restart',
+            next_step='check_selected_model_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'selected_model_not_ready_retry_once',
+                'matched_on': {
+                    'final_state': final_state,
+                    'retry_decision': retry_decision,
+                    'retry_allowed': True,
+                },
+                'selected_action': 'retry_once',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if (
+        final_state == 'selected_model_mismatch'
+        and (
+            retry_decision == 'skip_restart_repeated_mismatch'
+            or repeated_decision_detected
+        )
+    ):
+        output = build_policy_output(
+            manager_action='stop_and_surface_diff',
+            manager_reason='the same selected-model mismatch repeated, so manager should stop and surface the expected/runtime model diff instead of restarting',
+            next_step='check_selected_model_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'selected_model_mismatch_stop_and_surface_diff',
+                'matched_on': {
+                    'final_state': final_state,
+                    'retry_decision': retry_decision,
+                    'repeated_decision_detected': repeated_decision_detected,
+                },
+                'selected_action': 'stop_and_surface_diff',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
 
     if final_state == 'ready_for_runtime_task':
-        manager_action = 'run_next_step'
-        manager_reason = 'runtime evaluation indicates the runtime task can proceed'
-    elif retry_decision == 'recheck_runtime_status_once' and retry.get('retry_allowed') is True:
-        manager_action = 'retry'
-        manager_reason = 'runtime model was observed only in start-result and should be confirmed once'
-    elif retry_decision == 'runtime_model_confirmed':
-        manager_action = 'run_next_step'
-        manager_reason = 'runtime model is confirmed by runtime status'
-    elif retry_decision == 'skip_restart_repeated_mismatch':
-        manager_action = 'stop'
-        manager_reason = 'the same selected-model mismatch repeated and restart should be skipped'
-    elif final_state == 'manager_action_required':
-        manager_action = 'run_next_step'
-        manager_reason = 'routing evaluation produced a manager-owned next step'
-    elif final_state in {
-        'provider_api_key_missing',
+        output = build_policy_output(
+            manager_action='run_runtime_task',
+            manager_reason='runtime evaluation indicates provider, model, and readiness checks are satisfied enough to run the requested runtime task',
+            next_step='run_runtime_task',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'ready_for_runtime_task_run_runtime_task',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'run_runtime_task',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if retry_decision == 'runtime_model_confirmed':
+        output = build_policy_output(
+            manager_action='run_next_step',
+            manager_reason='runtime status confirmed the selected model, so manager can continue with the next planned runtime step',
+            next_step=next_step,
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'runtime_model_confirmed_run_next_step',
+                'matched_on': {
+                    'retry_decision': retry_decision,
+                },
+                'selected_action': 'run_next_step',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if final_state == 'manager_action_required':
+        output = build_policy_output(
+            manager_action='run_next_step',
+            manager_reason='routing evaluation produced a manager-owned next step that should be executed without additional retry logic',
+            next_step=next_step,
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'manager_action_required_run_next_step',
+                'matched_on': {
+                    'final_state': final_state,
+                    'next_step': next_step,
+                },
+                'selected_action': 'run_next_step',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if final_state in {
         'provider_config_missing',
         'provider_model_missing',
         'provider_not_ready',
@@ -61,17 +188,40 @@ def main() -> int:
         'selected_model_mismatch',
         'model_not_ready',
     }:
-        manager_action = 'stop'
-        manager_reason = 'routing evaluation found a concrete remediation state that manager should handle explicitly'
+        output = build_policy_output(
+            manager_action='manual_review',
+            manager_reason='routing evaluation found a concrete remediation state that should be handled explicitly by manager policy or an operator',
+            next_step=next_step,
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'explicit_runtime_state_manual_review',
+                'matched_on': {
+                    'final_state': final_state,
+                    'next_step': next_step,
+                },
+                'selected_action': 'manual_review',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
 
-    output = {
-        'manager_action': manager_action,
-        'manager_reason': manager_reason,
-        'next_step': next_step,
-        'retry_decision': retry_decision,
-        'policy_table_version': 'v1',
-        'policy_input': payload.get('policy_input', {}),
-    }
+    output = build_policy_output(
+        manager_action='stop',
+        manager_reason='runtime evaluation requires manual review because no deterministic manager policy rule matched',
+        next_step=next_step,
+        retry_decision=retry_decision,
+        policy_input=policy_input,
+        policy_trace={
+            'rule_id': 'fallback_stop',
+            'matched_on': {
+                'final_state': final_state,
+                'next_step': next_step,
+                'retry_decision': retry_decision,
+            },
+            'selected_action': 'stop',
+        },
+    )
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
 
