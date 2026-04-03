@@ -5,10 +5,10 @@ let registerSlackPinEvents: typeof import("./pins.js").registerSlackPinEvents;
 let buildPinHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
 type PinOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
-async function createChannelRuntimeMock(
-  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/infra-runtime")>,
-) {
-  const actual = await importOriginal();
+async function createChannelRuntimeMock() {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
+  );
   return { ...actual, enqueueSystemEvent: pinEnqueueMock };
 }
 

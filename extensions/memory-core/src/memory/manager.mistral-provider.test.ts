@@ -16,8 +16,8 @@ const { createEmbeddingProviderMock } = vi.hoisted(() => ({
   createEmbeddingProviderMock: vi.fn(),
 }));
 
-vi.mock("./embeddings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./embeddings.js")>();
+vi.mock("./embeddings.js", async () => {
+  const actual = await vi.importActual<typeof import("./embeddings.js")>("./embeddings.js");
   return {
     ...actual,
     createEmbeddingProvider: createEmbeddingProviderMock,

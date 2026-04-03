@@ -10,8 +10,8 @@ const deleteWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }))
 const getUpdatesMock = vi.fn(() => new Promise(() => {}));
 const setWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
 
-vi.mock("./api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api.js")>();
+vi.mock("./api.js", async () => {
+  const actual = await vi.importActual<typeof import("./api.js")>("./api.js");
   return {
     ...actual,
     deleteWebhook: deleteWebhookMock,

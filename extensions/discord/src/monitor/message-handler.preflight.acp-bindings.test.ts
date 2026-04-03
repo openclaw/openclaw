@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../src/channels/plugins/binding-routing.js", async (importOriginal) => {
+vi.mock("../../../../src/channels/plugins/binding-routing.js", async () => {
   const { createConfiguredBindingConversationRuntimeModuleMock } =
     await import("../test-support/configured-binding-runtime.js");
   return await createConfiguredBindingConversationRuntimeModuleMock(
@@ -12,7 +12,10 @@ vi.mock("../../../../src/channels/plugins/binding-routing.js", async (importOrig
       ensureConfiguredBindingRouteReadyMock,
       resolveConfiguredBindingRouteMock,
     },
-    importOriginal,
+    () =>
+      vi.importActual<typeof import("../../../../src/channels/plugins/binding-routing.js")>(
+        "../../../../src/channels/plugins/binding-routing.js",
+      ),
   );
 });
 
