@@ -33,6 +33,7 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { getDiscordApprovalCapability } from "./approval-native.js";
+import { discordMessageActions as discordMessageActionsImpl } from "./channel-actions.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -83,7 +84,6 @@ let discordProbeRuntimePromise: Promise<typeof import("./probe.runtime.js")> | u
 let discordAuditModulePromise: Promise<typeof import("./audit.js")> | undefined;
 let discordUiModuleCache: DiscordUiModule | null = null;
 let discordCarbonModuleCache: DiscordCarbonModule | null = null;
-let discordChannelActionsModuleCache: typeof import("./channel-actions.js") | null = null;
 
 const require = createRequire(import.meta.url);
 
@@ -105,12 +105,6 @@ async function loadDiscordAuditModule() {
 function loadDiscordCarbonModule() {
   discordCarbonModuleCache ??= require("@buape/carbon") as DiscordCarbonModule;
   return discordCarbonModuleCache;
-}
-
-function loadDiscordChannelActionsModule() {
-  discordChannelActionsModuleCache ??=
-    require("./channel-actions.js") as typeof import("./channel-actions.js");
-  return discordChannelActionsModuleCache;
 }
 
 function loadDiscordUiModule() {
@@ -151,13 +145,13 @@ const discordMessageActions = {
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0],
   ): ChannelMessageToolDiscovery | null =>
     resolveRuntimeDiscordMessageActions()?.describeMessageTool?.(ctx) ??
-    loadDiscordChannelActionsModule().discordMessageActions.describeMessageTool?.(ctx) ??
+    discordMessageActionsImpl.describeMessageTool?.(ctx) ??
     null,
   extractToolSend: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["extractToolSend"]>>[0],
   ) =>
     resolveRuntimeDiscordMessageActions()?.extractToolSend?.(ctx) ??
-    loadDiscordChannelActionsModule().discordMessageActions.extractToolSend?.(ctx) ??
+    discordMessageActionsImpl.extractToolSend?.(ctx) ??
     null,
   handleAction: async (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["handleAction"]>>[0],
@@ -166,7 +160,6 @@ const discordMessageActions = {
     if (runtimeHandleAction) {
       return await runtimeHandleAction(ctx);
     }
-    const discordMessageActionsImpl = loadDiscordChannelActionsModule().discordMessageActions;
     if (!discordMessageActionsImpl.handleAction) {
       throw new Error("Discord message actions not available");
     }
