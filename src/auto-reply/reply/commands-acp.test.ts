@@ -114,7 +114,10 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
 const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
-const { __testing: acpResetTargetTesting } = await import("./acp-reset-target.js");
+const {
+  __testing: acpResetTargetTesting,
+  resolveEffectiveResetTargetSessionKey,
+} = await import("./acp-reset-target.js");
 const { createTaskRecord, resetTaskRegistryForTests } =
   await import("../../tasks/task-registry.js");
 const { failTaskRunByRunId } = await import("../../tasks/task-executor.js");
@@ -1408,6 +1411,58 @@ describe("/acp command", () => {
       }),
     );
     expect(result?.reply?.text).toContain("Viewed diver package.");
+  });
+
+  it("resolves ACP reset targets through the configured default account when AccountId is omitted", () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        ...baseCfg.channels,
+        discord: {
+          ...baseCfg.channels.discord,
+          defaultAccount: "work",
+        },
+      },
+    } satisfies OpenClawConfig;
+    hoisted.sessionBindingResolveByConversationMock.mockImplementation(
+      (ref: {
+        channel?: string;
+        accountId?: string;
+        conversationId?: string;
+        parentConversationId?: string;
+      }) =>
+        ref.channel === "discord" &&
+        ref.accountId === "work" &&
+        ref.conversationId === defaultThreadId &&
+        ref.parentConversationId === "parent-1"
+          ? createSessionBinding({
+              targetSessionKey: defaultAcpSessionKey,
+              conversation: {
+                channel: "discord",
+                accountId: "work",
+                conversationId: defaultThreadId,
+                parentConversationId: "parent-1",
+              },
+            })
+          : null,
+    );
+
+    const result = resolveEffectiveResetTargetSessionKey({
+      cfg,
+      channel: "discord",
+      conversationId: defaultThreadId,
+      parentConversationId: "parent-1",
+    });
+
+    expect(hoisted.sessionBindingResolveByConversationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "work",
+        conversationId: defaultThreadId,
+        parentConversationId: "parent-1",
+      }),
+    );
+    expect(result).toBe(defaultAcpSessionKey);
   });
 
   it("blocks /acp steer when ACP dispatch is disabled by policy", async () => {

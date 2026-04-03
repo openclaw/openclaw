@@ -940,6 +940,60 @@ describe("/approve command", () => {
     );
   });
 
+  it("honors the configured default account for omitted-account /approve auth", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: {
+            ...telegramCommandTestPlugin,
+            config: {
+              ...telegramCommandTestPlugin.config,
+              defaultAccountId: (cfg: OpenClawConfig) =>
+                (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
+                  ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          allowFrom: ["*"],
+          accounts: {
+            work: {
+              execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+      AccountId: undefined,
+    });
+    params.command.isAuthorizedSender = false;
+
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc12345", decision: "allow-once" },
+      }),
+    );
+  });
+
   it("accepts Signal /approve from configured approvers even when chat access is otherwise blocked", async () => {
     const cfg = {
       commands: { text: true },
@@ -1775,6 +1829,52 @@ describe("handleCommands /config configWrites gating", () => {
     }
   });
 
+  it("honors the configured default account when gating omitted-account /config writes", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...telegramCommandTestPlugin,
+            config: {
+              ...telegramCommandTestPlugin.config,
+              defaultAccountId: (cfg: OpenClawConfig) =>
+                (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
+                  ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
+            },
+          },
+        },
+      ]),
+    );
+
+    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const cfg = {
+      commands: { config: true, text: true },
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          configWrites: true,
+          accounts: {
+            work: { configWrites: false, enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams('/config set messages.ackReaction=":)"', cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      AccountId: undefined,
+    });
+    params.command.senderIsOwner = true;
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
+    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+  });
+
   it("enforces gateway client permissions for /config commands", async () => {
     const baseCfg = {
       commands: { config: true, text: true },
@@ -2069,6 +2169,48 @@ describe("handleCommands /allowlist", () => {
     }
   });
 
+  it("uses the configured default account for omitted-account /allowlist list", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...telegramCommandTestPlugin,
+            config: {
+              ...telegramCommandTestPlugin.config,
+              defaultAccountId: (cfg: OpenClawConfig) =>
+                (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
+                  ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
+            },
+          },
+        },
+      ]),
+    );
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          accounts: { work: { allowFrom: ["123"] } },
+        },
+      },
+    } as OpenClawConfig;
+    readChannelAllowFromStoreMock.mockResolvedValueOnce([]);
+
+    const params = buildPolicyParams("/allowlist list dm", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      AccountId: undefined,
+    });
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Channel: telegram (account work)");
+    expect(result.reply?.text).toContain("DM allowFrom (config): 123");
+  });
+
   it("blocks config-targeted /allowlist edits when the target account disables writes", async () => {
     const previousWriteCount = writeConfigFileMock.mock.calls.length;
     const cfg = {
@@ -2090,6 +2232,55 @@ describe("handleCommands /allowlist", () => {
       AccountId: "default",
       Provider: "telegram",
       Surface: "telegram",
+    });
+    params.command.senderIsOwner = true;
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
+    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+  });
+
+  it("honors the configured default account when gating omitted-account /allowlist config edits", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...telegramCommandTestPlugin,
+            config: {
+              ...telegramCommandTestPlugin.config,
+              defaultAccountId: (cfg: OpenClawConfig) =>
+                (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
+                  ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
+            },
+          },
+        },
+      ]),
+    );
+
+    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          configWrites: true,
+          accounts: {
+            work: { configWrites: false, allowFrom: ["123"] },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: structuredClone(cfg),
+    });
+    const params = buildPolicyParams("/allowlist add dm --config 789", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      AccountId: undefined,
     });
     params.command.senderIsOwner = true;
     const result = await handleCommands(params);
