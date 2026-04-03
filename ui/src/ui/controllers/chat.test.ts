@@ -24,6 +24,9 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     connected: true,
     lastError: null,
     sessionKey: "main",
+    chatHistoryHasMore: false,
+    chatHistoryCursor: null,
+    chatLoadingMore: false,
     ...overrides,
   };
 }

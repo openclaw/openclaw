@@ -1107,9 +1107,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit } = params as {
+    const { sessionKey, limit, before } = params as {
       sessionKey: string;
       limit?: number;
+      before?: string;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
@@ -1117,11 +1118,28 @@ export const chatHandlers: GatewayRequestHandlers = {
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const localMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
-    const rawMessages = augmentChatHistoryWithCliSessionImports({
+    let rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
       localMessages,
     });
+
+    // Pagination: filter messages before the cursor (strict less-than to avoid duplicating the boundary message)
+    if (before) {
+      const beforeTs = parseInt(before, 10);
+      if (!isNaN(beforeTs)) {
+        rawMessages = (rawMessages as Array<{ timestamp?: number }>).filter((msg) => {
+          const ts = msg.timestamp;
+          // Exclude timestamp-less messages from paginated loads;
+          // they are covered by the initial full load.
+          if (ts === undefined || ts === null) {
+            return false;
+          }
+          return ts < beforeTs;
+        });
+      }
+    }
+
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
@@ -1155,6 +1173,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+
+    // Generate cursor and hasMore from the actual delivered messages
+    const delivered = bounded.messages as Array<{ timestamp?: number }>;
+    const oldestDelivered = delivered.length > 0 ? delivered[0] : null;
+    const cursor = oldestDelivered?.timestamp ? String(oldestDelivered.timestamp) : null;
+    // hasMore only if we have a usable cursor AND there are older messages beyond what we sliced
+    const hasMore = cursor !== null && rawMessages.length > sliced.length;
+
     respond(true, {
       sessionKey,
       sessionId,
@@ -1162,6 +1188,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
+      cursor,
+      hasMore,
     });
   },
   "chat.abort": ({ params, respond, context, client }) => {
