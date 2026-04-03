@@ -140,6 +140,39 @@ describe("synology-chat core", () => {
     expect(result.cfg.channels?.["synology-chat"]?.dmPolicy).toBe("allowlist");
     expect(result.cfg.channels?.["synology-chat"]?.allowedUserIds).toEqual(["123456", "789012"]);
   });
+
+  it("can enable insecure SSL during setup for trusted self-signed certs", async () => {
+    const confirm = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Allow insecure SSL for trusted self-signed NAS certificates?") {
+        return true;
+      }
+      throw new Error(`Unexpected confirm prompt: ${message}`);
+    });
+    const prompter = createTestWizardPrompter({
+      confirm: confirm as WizardPrompter["confirm"],
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Enter Synology Chat outgoing webhook token") {
+          return "synology-token";
+        }
+        if (message === "Incoming webhook URL") {
+          return "https://nas.example.com/webapi/entry.cgi?token=incoming";
+        }
+        if (message === "Outgoing webhook path (optional)") {
+          return "";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: synologyChatConfigure,
+      cfg: {} as OpenClawConfig,
+      prompter,
+      options: {},
+    });
+
+    expect(result.cfg.channels?.["synology-chat"]?.allowInsecureSsl).toBe(true);
+  });
 });
 
 describe("synology-chat account resolution", () => {

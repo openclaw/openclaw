@@ -140,6 +140,19 @@ function getSynologyWebhookInFlightKey(account: ResolvedSynologyChatAccount): st
   return account.accountId;
 }
 
+function resolveAllowInsecureSslConfigPath(account: ResolvedSynologyChatAccount): string {
+  return account.accountId === "default"
+    ? "channels.synology-chat.allowInsecureSsl"
+    : `channels.synology-chat.accounts.${account.accountId}.allowInsecureSsl`;
+}
+
+function buildReplyDeliveryFailureHint(account: ResolvedSynologyChatAccount): string {
+  if (account.allowInsecureSsl) {
+    return "allowInsecureSsl=true is already enabled; verify the incoming webhook URL, token, and NAS connectivity.";
+  }
+  return `TLS certificate validation may reject self-signed NAS certificates. For trusted self-signed certificates, set ${resolveAllowInsecureSslConfigPath(account)}: true and retry.`;
+}
+
 /** Read the full request body as a string. */
 async function readBody(req: IncomingMessage): Promise<
   | { ok: true; body: string }
@@ -541,12 +554,18 @@ async function processAuthorizedSynologyWebhook(params: {
       return;
     }
 
-    await synologyClient.sendMessage(
+    const sent = await synologyClient.sendMessage(
       params.account.incomingUrl,
       reply,
       deliveryUserId,
       params.account.allowInsecureSsl,
     );
+    if (!sent) {
+      params.log?.warn?.(
+        `Reply delivery failed for ${params.message.payload.username} (${deliveryUserId}). ${buildReplyDeliveryFailureHint(params.account)}`,
+      );
+      return;
+    }
     const replyPreview = reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
     params.log?.info?.(
       `Reply sent to ${params.message.payload.username} (${deliveryUserId}): ${replyPreview}`,
@@ -556,12 +575,17 @@ async function processAuthorizedSynologyWebhook(params: {
     params.log?.error?.(
       `Failed to process message from ${params.message.payload.username}: ${errMsg}`,
     );
-    await synologyClient.sendMessage(
+    const sent = await synologyClient.sendMessage(
       params.account.incomingUrl,
       "Sorry, an error occurred while processing your message.",
       deliveryUserId,
       params.account.allowInsecureSsl,
     );
+    if (!sent) {
+      params.log?.warn?.(
+        `Failed to deliver error fallback reply to ${params.message.payload.username} (${deliveryUserId}). ${buildReplyDeliveryFailureHint(params.account)}`,
+      );
+    }
   }
 }
 

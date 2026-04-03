@@ -510,6 +510,30 @@ describe("createWebhookHandler", () => {
     );
   });
 
+  it("logs an actionable TLS hint when reply delivery fails", async () => {
+    sendMessage.mockResolvedValueOnce(false);
+    const deliver = vi.fn().mockResolvedValue("Bot reply");
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "tls-failure-hint-" + Date.now(),
+        allowInsecureSsl: false,
+      }),
+      deliver,
+      log,
+    });
+
+    const req = makeReq("POST", validBody);
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(204);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("trusted self-signed certificates"),
+    );
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("allowInsecureSsl: true"));
+    expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining("Reply sent to"));
+  });
+
   it("keeps replies bound to payload.user_id by default", async () => {
     const deliver = vi.fn().mockResolvedValue("Bot reply");
     const handler = createWebhookHandler({
