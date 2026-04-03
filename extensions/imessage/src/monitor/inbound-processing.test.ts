@@ -162,6 +162,45 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       // Without destination_caller_id, self-chat heuristic applies
       expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
     });
+
+    it.each([
+      { label: "null", value: null },
+      { label: "undefined", value: undefined },
+      { label: "empty string", value: "" },
+      { label: "whitespace-only", value: "   " },
+    ])("treats $label destination_caller_id as absent (self-chat path)", ({ value }) => {
+      const selfChatCache = createSelfChatCache();
+      const echoHas = vi.fn(() => true);
+      const decision = resolveDecision({
+        message: {
+          id: 103,
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
+          destination_caller_id: value as string | null | undefined,
+          is_from_me: true,
+          text: "blank dest",
+        },
+        selfChatCache,
+        echoCache: { has: echoHas },
+      });
+      expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+    });
+
+    it("does not affect group chat classification", () => {
+      const decision = resolveDecision({
+        message: {
+          id: 104,
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
+          destination_caller_id: "bot@icloud.com",
+          is_from_me: true,
+          is_group: true,
+          text: "group msg",
+        },
+      });
+      // Groups use isGroup check, not self-chat heuristic; is_from_me → "from me"
+      expect(decision).toEqual({ kind: "drop", reason: "from me" });
+    });
   });
 
   it("drops reflected self-chat duplicates after seeing the from-me copy", () => {
