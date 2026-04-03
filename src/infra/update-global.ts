@@ -299,19 +299,19 @@ export function resolveGlobalManagerCommand(
           : "npm";
 
   const trimmedRoot = globalRoot?.trim();
-  if (!trimmedRoot || manager === "bun") {
+  if (!trimmedRoot || manager === "bun" || manager === "pnpm") {
     return baseCommand;
   }
 
   const resolvedRoot = path.resolve(trimmedRoot);
-  if (path.basename(resolvedRoot) === "node_modules") {
-    return path.join(path.dirname(resolvedRoot), baseCommand);
-  }
-
   const libNodeModulesSuffix = path.join("lib", "node_modules");
   if (resolvedRoot.endsWith(libNodeModulesSuffix)) {
     const prefix = resolvedRoot.slice(0, -libNodeModulesSuffix.length);
     return path.join(prefix, "bin", baseCommand);
+  }
+
+  if (path.basename(resolvedRoot) === "node_modules") {
+    return path.join(path.dirname(resolvedRoot), baseCommand);
   }
 
   return baseCommand;
