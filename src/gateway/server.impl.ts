@@ -607,6 +607,7 @@ export async function startGatewayServer(
   let pluginRegistry = emptyPluginRegistry;
   let baseGatewayMethods = baseMethods;
   if (!minimalTestGateway) {
+    log.info("loading plugins...");
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayStartupPlugins({
       cfg: gatewayPluginConfigAtStart,
       workspaceDir: defaultWorkspaceDir,
@@ -616,6 +617,7 @@ export async function startGatewayServer(
       pluginIds: startupPluginIds,
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
     }));
+    log.info(`plugins loaded (${pluginRegistry.plugins.length} plugins)`);
   } else {
     setActivePluginRegistry(emptyPluginRegistry);
   }
@@ -727,6 +729,7 @@ export async function startGatewayServer(
     channelManager,
     startedAt: serverStartedAt,
   });
+  log.info("starting HTTP server...");
   const {
     canvasHost,
     releasePluginRouteRegistry,
@@ -1376,6 +1379,7 @@ export async function startGatewayServer(
           logDiagnostics: false,
         }));
       }
+      log.info("starting channels and sidecars...");
       ({ pluginServices } = await startGatewaySidecars({
         cfg: gatewayPluginConfigAtStart,
         pluginRegistry,
