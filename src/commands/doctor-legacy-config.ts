@@ -915,12 +915,22 @@ export function normalizeCompatibilityConfigValues(cfg: unknown): {
   normalizeLegacyMediaProviderOptions();
   normalizeLegacyMistralModelMaxTokens();
 
-  const legacyAckReaction = cfg.messages?.ackReaction?.trim();
-  const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;
+  const legacyCfg = isRecord(cfg) ? cfg : undefined;
+  const legacyMessages = isRecord(legacyCfg?.messages) ? legacyCfg?.messages : undefined;
+  const legacyChannels = isRecord(legacyCfg?.channels) ? legacyCfg?.channels : undefined;
+  const legacyWhatsapp = isRecord(legacyChannels?.whatsapp) ? legacyChannels?.whatsapp : undefined;
+
+  const legacyAckReaction =
+    typeof legacyMessages?.ackReaction === "string" ? legacyMessages.ackReaction.trim() : undefined;
+  const hasWhatsAppConfig = legacyChannels?.whatsapp !== undefined;
   if (legacyAckReaction && hasWhatsAppConfig) {
-    const hasWhatsAppAck = cfg.channels?.whatsapp?.ackReaction !== undefined;
+    const hasWhatsAppAck = legacyWhatsapp?.ackReaction !== undefined;
     if (!hasWhatsAppAck) {
-      const legacyScope = cfg.messages?.ackReactionScope ?? "group-mentions";
+      const legacyScope =
+        typeof legacyMessages?.ackReactionScope === "string"
+          ? legacyMessages.ackReactionScope
+          : "group-mentions";
+
       let direct = true;
       let group: "always" | "mentions" | "never" = "mentions";
       if (legacyScope === "all") {
@@ -936,6 +946,7 @@ export function normalizeCompatibilityConfigValues(cfg: unknown): {
         direct = false;
         group = "mentions";
       }
+
       next = {
         ...next,
         channels: {

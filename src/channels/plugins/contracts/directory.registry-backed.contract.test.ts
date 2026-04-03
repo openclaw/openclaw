@@ -7,8 +7,6 @@ for (const entry of getDirectoryContractRegistry()) {
     installChannelDirectoryContractSuite({
       plugin: entry.plugin,
       coverage: entry.coverage,
-      cfg: entry.cfg,
-      accountId: entry.accountId,
     });
   });
 }
