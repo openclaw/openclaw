@@ -10,8 +10,8 @@ import {
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
-import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
+import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
 import {
   appendCronRunLog,
   resolveCronRunLogPath,
