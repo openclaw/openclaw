@@ -2,6 +2,10 @@ import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-en
 import { PROVIDER_LABELS } from "openclaw/plugin-sdk/provider-usage";
 import { applyXiaomiConfig, XIAOMI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXiaomiProvider } from "./provider-catalog.js";
+import {
+  createXiaomiReasoningContentTextWrapper,
+  shouldNormalizeXiaomiReasoningContentAsTextModel,
+} from "./stream.js";
 
 const PROVIDER_ID = "xiaomi";
 
@@ -39,5 +43,9 @@ export default defineSingleProviderPluginEntry({
       displayName: PROVIDER_LABELS.xiaomi,
       windows: [],
     }),
+    wrapStreamFn: ({ streamFn, model }) =>
+      shouldNormalizeXiaomiReasoningContentAsTextModel(model)
+        ? createXiaomiReasoningContentTextWrapper(streamFn)
+        : streamFn,
   },
 });
