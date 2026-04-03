@@ -4,7 +4,7 @@ import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 
-vi.mock("./tools/gateway.js", () => ({
+const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
 }));
 
@@ -13,12 +13,17 @@ let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-reque
 
 describe("requestExecApprovalDecision", () => {
   beforeAll(async () => {
-    ({ callGatewayTool } = await import("./tools/gateway.js"));
+    vi.resetModules();
+    vi.doMock("./tools/gateway.js", () => ({
+      callGatewayTool: gatewayMocks.callGatewayTool,
+    }));
+    callGatewayTool =
+      gatewayMocks.callGatewayTool as typeof import("./tools/gateway.js").callGatewayTool;
     ({ requestExecApprovalDecision } = await import("./bash-tools.exec-approval-request.js"));
   });
 
   beforeEach(() => {
-    vi.mocked(callGatewayTool).mockClear();
+    vi.mocked(callGatewayTool).mockReset();
   });
 
   it("returns string decisions", async () => {
