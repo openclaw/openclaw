@@ -245,7 +245,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   });
 
   it("passes per-agent heartbeat lightContext override after merging defaults", async () => {
-    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -276,6 +276,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         cfg,
         agentId: "ops",
         sessionKey,
+        replySpy,
       });
 
       expect(result.replySpy).toHaveBeenCalledWith(
