@@ -444,6 +444,23 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects --thread-id on systemEvent cron add jobs", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid-system-event-thread-id",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+      "--thread-id",
+      "48",
+    ]);
+  });
+
   it.each([
     { command: "enable" as const, expectedEnabled: true },
     { command: "disable" as const, expectedEnabled: false },
@@ -620,6 +637,20 @@ describe("cron cli", () => {
     expect(listCalls).toHaveLength(2);
     expect((listCalls[0][2] as { offset?: number }).offset).toBe(0);
     expect((listCalls[1][2] as { offset?: number }).offset).toBe(200);
+  });
+
+  it("rejects --thread-id without --to when existing target is non-telegram", async () => {
+    resetGatewayMock();
+    mockCronEditPagedJobLookup({
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      delivery: { channel: "discord", to: "123" },
+    });
+    const program = buildProgram();
+    await expect(
+      program.parseAsync(["cron", "edit", "job-1", "--channel", "telegram", "--thread-id", "48"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
   });
 
   it("supports --no-deliver on cron edit", async () => {
@@ -901,6 +932,31 @@ describe("cron cli", () => {
       tz: "UTC",
       staggerMs: 0,
     });
+    const listCalls = callGatewayFromCli.mock.calls.filter((call) => call[0] === "cron.list");
+    expect(listCalls).toHaveLength(2);
+    expect((listCalls[0][2] as { offset?: number }).offset).toBe(0);
+    expect((listCalls[1][2] as { offset?: number }).offset).toBe(200);
+  });
+
+  it("uses a single paged lookup traversal for --exact + --thread-id on edit", async () => {
+    resetGatewayMock();
+    mockCronEditPagedJobLookup({
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      delivery: { channel: "telegram", to: "-1001234567890" },
+    });
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--exact", "--thread-id", "48"], {
+      from: "user",
+    });
+
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.schedule).toEqual({
+      kind: "cron",
+      expr: "0 */2 * * *",
+      tz: "UTC",
+      staggerMs: 0,
+    });
+    expect(patch?.patch?.delivery?.to).toBe("-1001234567890:topic:48");
     const listCalls = callGatewayFromCli.mock.calls.filter((call) => call[0] === "cron.list");
     expect(listCalls).toHaveLength(2);
     expect((listCalls[0][2] as { offset?: number }).offset).toBe(0);

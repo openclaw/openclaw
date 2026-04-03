@@ -123,6 +123,14 @@ export function registerCronEditCommand(cron: Command) {
       )
       .action(async (id, opts) => {
         try {
+          let cachedExistingJob: CronJob | null | undefined;
+          const getExistingJob = async (): Promise<CronJob | undefined> => {
+            if (cachedExistingJob !== undefined) {
+              return cachedExistingJob ?? undefined;
+            }
+            cachedExistingJob = (await findCronJobById({ id, opts })) ?? null;
+            return cachedExistingJob ?? undefined;
+          };
           if (opts.session === "main" && opts.message) {
             throw new Error(
               "Main jobs cannot use --message; use --system-event or --session isolated.",
@@ -197,7 +205,7 @@ export function registerCronEditCommand(cron: Command) {
           if (scheduleRequest.kind === "direct") {
             patch.schedule = scheduleRequest.schedule;
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const existing = await findCronJobById({ id, opts });
+            const existing = await getExistingJob();
             if (!existing) {
               throw new Error(`unknown cron job id: ${id}`);
             }
@@ -294,7 +302,7 @@ export function registerCronEditCommand(cron: Command) {
               }
               let toRaw = typeof opts.to === "string" ? opts.to.trim() : "";
               if (threadId && (!toRaw || typeof opts.channel !== "string")) {
-                const existing = await findCronJobById({ id, opts });
+                const existing = await getExistingJob();
                 if (!existing) {
                   throw new Error(`Cron job ${id} not found`);
                 }
@@ -311,6 +319,11 @@ export function registerCronEditCommand(cron: Command) {
                   }
                 }
                 if (!toRaw) {
+                  if (existingChannel.toLowerCase() !== "telegram") {
+                    throw new Error(
+                      "--thread-id requires --to when existing target is not Telegram",
+                    );
+                  }
                   toRaw = (existing.delivery as Record<string, string> | undefined)?.to ?? "";
                 }
               }
