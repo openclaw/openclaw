@@ -1,7 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
-import { buildGatewayConnectionDetails, resolveGatewayClientConnection } from "../gateway/call.js";
-import { GatewayClient } from "../gateway/client.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -12,6 +10,16 @@ import { colorize, isRich, theme } from "../terminal/theme.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
+
+type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
+type LogsGatewayClient = InstanceType<LogsCliRuntimeModule["GatewayClient"]>;
+
+let logsCliRuntimePromise: Promise<LogsCliRuntimeModule> | undefined;
+
+async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
+  logsCliRuntimePromise ??= import("./logs-cli.runtime.js");
+  return logsCliRuntimePromise;
+}
 
 type LogsTailPayload = {
   file?: string;
@@ -126,7 +134,7 @@ function createAsyncQueue<T>() {
 }
 
 async function fetchLogsWithClient(
-  client: GatewayClient,
+  client: LogsGatewayClient,
   opts: LogsCliOptions,
   file: string | undefined,
   cursor: number | undefined,
@@ -145,7 +153,7 @@ async function fetchLogsWithClient(
 }
 
 async function createFollowLogsClient(opts: LogsCliOptions): Promise<{
-  client: GatewayClient;
+  client: LogsGatewayClient;
   methods: Set<string>;
   waitUntilReady: (opts?: { timeoutMs?: number; keepAlive?: boolean }) => Promise<void>;
   subscribeToStream: (
@@ -154,8 +162,9 @@ async function createFollowLogsClient(opts: LogsCliOptions): Promise<{
   ) => Promise<LogsTailPayload>;
   nextStreamPayload: () => Promise<LogsTailPayload>;
 }> {
+  const runtime = await loadLogsCliRuntime();
   const timeoutMs = parsePositiveInt(opts.timeout, 30_000);
-  const { clientOptions, connectionDetails } = await resolveGatewayClientConnection({
+  const { clientOptions, connectionDetails } = await runtime.resolveGatewayClientConnection({
     url: opts.url,
     token: opts.token,
     method: "logs.tail",
@@ -174,7 +183,7 @@ async function createFollowLogsClient(opts: LogsCliOptions): Promise<{
     ready = createDeferred<void>();
   };
 
-  const client = new GatewayClient({
+  const client = new runtime.GatewayClient({
     ...clientOptions,
     onHelloOk: (hello) => {
       connected = true;
@@ -304,7 +313,7 @@ async function waitForFollowClientReconnect(params: {
       if (!isRetryableFollowStartupError(err)) {
         throw err;
       }
-      emitFollowStartupRetryNotice({
+      await emitFollowStartupRetryNotice({
         err,
         opts: params.opts,
         firstFailure: false,
@@ -355,7 +364,7 @@ function summarizeRetryErrorText(err: unknown): string {
   return message.split(/\r?\n/u, 1)[0]?.trim().replace(/\s+/gu, " ");
 }
 
-function emitFollowStartupRetryNotice(params: {
+async function emitFollowStartupRetryNotice(params: {
   err: unknown;
   opts: LogsCliOptions;
   firstFailure: boolean;
@@ -364,9 +373,10 @@ function emitFollowStartupRetryNotice(params: {
   retryMs: number;
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean;
   errorLine: (text: string) => boolean;
-}): void {
+}): Promise<void> {
   const { err, opts, firstFailure, rich, jsonMode, retryMs, emitJsonLine, errorLine } = params;
-  const details = buildGatewayConnectionDetails({ url: opts.url });
+  const runtime = await loadLogsCliRuntime();
+  const details = runtime.buildGatewayConnectionDetails({ url: opts.url });
   const errorText = err instanceof Error ? err.message : String(err);
   const retryErrorText = summarizeRetryErrorText(err);
   const delayLabel = formatRetryDelayLabel(retryMs);
@@ -424,7 +434,7 @@ async function connectFollowLogsClientWithRetry(params: {
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean;
   errorLine: (text: string) => boolean;
 }): Promise<{
-  client: GatewayClient;
+  client: LogsGatewayClient;
   methods: Set<string>;
   waitUntilReady: (opts?: { timeoutMs?: number; keepAlive?: boolean }) => Promise<void>;
   subscribeToStream: (
@@ -443,7 +453,7 @@ async function connectFollowLogsClientWithRetry(params: {
       if (!isRetryableFollowStartupError(err)) {
         throw err;
       }
-      emitFollowStartupRetryNotice({
+      await emitFollowStartupRetryNotice({
         err,
         opts: params.opts,
         firstFailure,
@@ -656,15 +666,16 @@ function createLogWriters() {
   };
 }
 
-function emitGatewayError(
+async function emitGatewayError(
   err: unknown,
   opts: LogsCliOptions,
   mode: "json" | "text",
   rich: boolean,
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
   errorLine: (text: string) => boolean,
-) {
-  const details = buildGatewayConnectionDetails({ url: opts.url });
+): Promise<void> {
+  const runtime = await loadLogsCliRuntime();
+  const details = runtime.buildGatewayConnectionDetails({ url: opts.url });
   const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
   const errorText = formatErrorMessage(err);
@@ -803,7 +814,7 @@ export function registerLogsCli(program: Command) {
             }
           } catch (err) {
             if (opts.follow && isRetryableFollowStartupError(err)) {
-              emitFollowStartupRetryNotice({
+              await emitFollowStartupRetryNotice({
                 err,
                 opts,
                 firstFailure: false,
@@ -825,7 +836,14 @@ export function registerLogsCli(program: Command) {
               });
               continue;
             }
-            emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
+            await emitGatewayError(
+              err,
+              opts,
+              jsonMode ? "json" : "text",
+              rich,
+              emitJsonLine,
+              errorLine,
+            );
             process.exit(1);
             return;
           }
@@ -849,7 +867,7 @@ export function registerLogsCli(program: Command) {
           }
         } catch (err) {
           if (opts.follow && isRetryableFollowStartupError(err)) {
-            emitFollowStartupRetryNotice({
+            await emitFollowStartupRetryNotice({
               err,
               opts,
               firstFailure: false,
@@ -862,7 +880,14 @@ export function registerLogsCli(program: Command) {
             await delay(FOLLOW_CONNECT_RETRY_INTERVAL_MS);
             continue;
           }
-          emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
+          await emitGatewayError(
+            err,
+            opts,
+            jsonMode ? "json" : "text",
+            rich,
+            emitJsonLine,
+            errorLine,
+          );
           process.exit(1);
           return;
         }
@@ -897,7 +922,7 @@ export function registerLogsCli(program: Command) {
         await delay(interval);
       }
     } catch (err) {
-      emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
+      await emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
       process.exit(1);
       return;
     } finally {

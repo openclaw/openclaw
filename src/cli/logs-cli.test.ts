@@ -3,6 +3,7 @@ import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { __testing, formatLogTimestamp } from "./logs-cli.js";
 
 const callGatewayFromCli = vi.fn();
+const buildGatewayConnectionDetails = vi.fn();
 const resolveGatewayClientConnection = vi.fn();
 const gatewayClientRequest = vi.fn();
 const gatewayClientStopAndWait = vi.fn();
@@ -35,15 +36,7 @@ vi.mock("./gateway-rpc.js", async () => {
   };
 });
 
-vi.mock("../gateway/call.js", async () => {
-  const actual = await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
-  return {
-    ...actual,
-    resolveGatewayClientConnection: (...args: unknown[]) => resolveGatewayClientConnection(...args),
-  };
-});
-
-vi.mock("../gateway/client.js", () => {
+vi.mock("./logs-cli.runtime.js", () => {
   class MockGatewayClient {
     constructor(opts: Record<string, unknown>) {
       lastGatewayClientOptions = opts;
@@ -69,6 +62,8 @@ vi.mock("../gateway/client.js", () => {
   }
 
   return {
+    buildGatewayConnectionDetails: (...args: unknown[]) => buildGatewayConnectionDetails(...args),
+    resolveGatewayClientConnection: (...args: unknown[]) => resolveGatewayClientConnection(...args),
     GatewayClient: MockGatewayClient,
   };
 });
@@ -76,6 +71,9 @@ vi.mock("../gateway/client.js", () => {
 let registerLogsCli: typeof import("./logs-cli.js").registerLogsCli;
 
 beforeAll(async () => {
+  buildGatewayConnectionDetails.mockImplementation(() => ({
+    message: "Gateway URL: ws://127.0.0.1:18789",
+  }));
   ({ registerLogsCli } = await import("./logs-cli.js"));
 });
 async function runLogsCli(argv: string[]) {
@@ -88,6 +86,10 @@ async function runLogsCli(argv: string[]) {
 describe("logs cli", () => {
   afterEach(() => {
     callGatewayFromCli.mockClear();
+    buildGatewayConnectionDetails.mockReset();
+    buildGatewayConnectionDetails.mockImplementation(() => ({
+      message: "Gateway URL: ws://127.0.0.1:18789",
+    }));
     resolveGatewayClientConnection.mockReset();
     gatewayClientRequest.mockReset();
     gatewayClientStopAndWait.mockReset();
