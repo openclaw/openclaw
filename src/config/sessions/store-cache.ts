@@ -7,6 +7,10 @@ import type { SessionEntry } from "./types.js";
  * so JSON cloning is semantically equivalent. Unlike structuredClone, JSON
  * cloning keeps all memory within V8's managed heap, preventing the native
  * memory leak documented in #45438.
+ *
+ * NOTE: JSON.stringify drops properties with explicit `undefined` values.
+ * Callers must ensure T contains no `undefined`-valued fields (satisfied
+ * by all current call sites since stores originate from JSON.parse).
  */
 function cloneStore<T>(store: T): T {
   return JSON.parse(JSON.stringify(store)) as T;
