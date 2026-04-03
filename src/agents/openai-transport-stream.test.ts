@@ -1,6 +1,7 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  buildOpenAIResponsesParams,
   buildTransportAwareSimpleStreamFn,
   isTransportAwareApiSupported,
   parseTransportChunkUsage,
@@ -252,5 +253,55 @@ describe("openai transport stream", () => {
         effort: "high",
       },
     });
+  });
+
+  it("uses system role instead of developer for responses providers that disable developer role", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.1-fast",
+        name: "Grok 4.1 Fast",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { input?: Array<{ role?: string }> };
+
+    expect(params.input?.[0]).toMatchObject({ role: "system" });
+  });
+
+  it("keeps developer role for native OpenAI reasoning responses models", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { input?: Array<{ role?: string }> };
+
+    expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 });
