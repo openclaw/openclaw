@@ -207,7 +207,7 @@ function createBotTestRuntime(): PluginRuntime {
         buildPairingReply: vi.fn(),
       },
     },
-  } as PluginRuntime;
+  } as unknown as PluginRuntime;
 }
 
 const {
@@ -536,7 +536,7 @@ describe("handleFeishuMessage command authorization", () => {
       media: {
         detectMime: vi.fn(async () => "application/octet-stream"),
       },
-    } as PluginRuntime);
+    } as unknown as PluginRuntime);
   });
 
   it("does not enqueue inbound preview text as system events", async () => {
