@@ -2898,6 +2898,60 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
+
+  // ── tool-only replyMode: final replies filter (non-ACP path) ──
+
+  it("tool-only mode suppresses text-only finals in group context", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp", ChatType: "group" });
+    const cfg = {
+      agents: { defaults: { replyMode: "tool-only" } },
+    } as unknown as OpenClawConfig;
+    const replyResolver = async () => ({ text: "plain text reply" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("tool-only mode delivers interactive-only finals in group context", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp", ChatType: "group" });
+    const cfg = {
+      agents: { defaults: { replyMode: "tool-only" } },
+    } as unknown as OpenClawConfig;
+    const replyResolver = async () =>
+      ({
+        interactive: { blocks: [{ type: "buttons" as const, buttons: [{ label: "Ok", value: "ok" }] }] },
+      }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("tool-only mode delivers media finals in group context", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp", ChatType: "group" });
+    const cfg = {
+      agents: { defaults: { replyMode: "tool-only" } },
+    } as unknown as OpenClawConfig;
+    const replyResolver = async () =>
+      ({ mediaUrl: "https://example.com/image.png" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto mode still delivers text-only finals in group context", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp", ChatType: "group" });
+    const cfg = {
+      agents: { defaults: { replyMode: "auto" } },
+    } as unknown as OpenClawConfig;
+    const replyResolver = async () => ({ text: "plain text reply" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("before_dispatch hook", () => {

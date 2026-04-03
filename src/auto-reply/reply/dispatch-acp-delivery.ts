@@ -8,6 +8,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { routeReply } from "./route-reply.js";
+import { isNonTextVisibleFinal } from "./tool-only-filter.js";
 
 export type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
@@ -190,9 +191,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return false;
     }
 
-    // ── tool-only mode: suppress everything except media/error finals ──
+    // ── tool-only mode: suppress everything except non-text visible finals (media, error, interactive, channelData) ──
     // Block streaming text, ACP tool summaries (auto-generated narration),
-    // and text-only finals. Allow media-bearing finals and error finals through.
+    // and text-only finals. Allow non-text visible finals through
+    // (media, error, interactive, channelData).
     if (params.replyMode === "tool-only") {
       if (kind === "block") {
         return false;
@@ -200,12 +202,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (kind === "tool") {
         return false;
       }
-      if (kind === "final") {
-        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-        const isError = Boolean(payload.isError);
-        if (!hasMedia && !isError) {
-          return false;
-        }
+      if (kind === "final" && !isNonTextVisibleFinal(payload)) {
+        return false;
       }
     }
 

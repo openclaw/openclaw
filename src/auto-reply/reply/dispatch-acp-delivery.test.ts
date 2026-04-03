@@ -338,6 +338,32 @@ describe("tool-only replyMode filtering", () => {
     });
   });
 
+  it("delivers final with interactive blocks when replyMode is tool-only", async () => {
+    const { coordinator, dispatcher } = createToolOnlyCoordinator("tool-only");
+
+    const payload = {
+      interactive: {
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "OK", value: "ok" }] }],
+      },
+    };
+    const delivered = await coordinator.deliver("final", payload, { skipTts: true });
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(payload);
+  });
+
+  it("delivers final with channelData when replyMode is tool-only", async () => {
+    const { coordinator, dispatcher } = createToolOnlyCoordinator("tool-only");
+
+    const payload = {
+      channelData: { telegram: { reply_markup: { inline_keyboard: [] } } },
+    };
+    const delivered = await coordinator.deliver("final", payload, { skipTts: true });
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(payload);
+  });
+
   it("delivers block text when replyMode is undefined (auto behavior preserved)", async () => {
     const { coordinator, dispatcher } = createToolOnlyCoordinator(undefined);
 

@@ -46,6 +46,7 @@ import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
+import { isNonTextVisibleFinal } from "./tool-only-filter.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
@@ -678,7 +679,11 @@ export async function dispatchReplyFromConfig(params: {
             const isExecApprovalPayload =
               (cd?.execApproval && typeof cd.execApproval === "object") ||
               (cd?.execApprovalUnavailable && typeof cd.execApprovalUnavailable === "object");
-            if ((cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only" && !hasMedia && !isExecApprovalPayload) {
+            if (
+              (cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only" &&
+              !hasMedia &&
+              !isExecApprovalPayload
+            ) {
               return;
             }
             const ttsPayload = await maybeApplyTtsToPayload({
@@ -778,10 +783,15 @@ export async function dispatchReplyFromConfig(params: {
 
     let queuedFinal = false;
     let routedFinalCount = 0;
-    for (const reply of isToolOnlyMode ? [] : replies) {
+    for (const reply of replies) {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
       if (reply.isReasoning === true) {
+        continue;
+      }
+
+      // replyMode "tool-only": skip text-only finals; deliver media/error/interactive/channelData
+      if (isToolOnlyMode && !isNonTextVisibleFinal(reply)) {
         continue;
       }
       const finalReply = await sendFinalPayload(reply);
