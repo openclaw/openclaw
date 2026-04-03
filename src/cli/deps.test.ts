@@ -21,9 +21,11 @@ const sendFns = vi.hoisted(() => ({
 
 const whatsappBoundaryLoads = vi.hoisted(() => vi.fn());
 
-vi.mock("../plugins/runtime/runtime-whatsapp-boundary.js", async (importOriginal) => {
+vi.mock("../plugins/runtime/runtime-web-channel-boundary.js", async (importOriginal) => {
   whatsappBoundaryLoads();
-  return await importOriginal<typeof import("../plugins/runtime/runtime-whatsapp-boundary.js")>();
+  return await importOriginal<
+    typeof import("../plugins/runtime/runtime-web-channel-boundary.js")
+  >();
 });
 
 vi.mock("./send-runtime/whatsapp.js", () => {
