@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -134,6 +134,132 @@ describe("update global helpers", () => {
     await fs.rm(path.join(npmRoot, "openclaw"), { recursive: true, force: true });
     await fs.rm(path.join(pnpmRoot, "openclaw"), { recursive: true, force: true });
     await expect(detectGlobalInstallManagerByPresence(runCommand, 1000)).resolves.toBe("bun");
+  });
+
+  it("prefers the owning npm prefix when PATH npm points at a different global root", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    try {
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-npm-prefix-"));
+      const brewPrefix = path.join(base, "opt", "homebrew");
+      const brewBin = path.join(brewPrefix, "bin");
+      const brewRoot = path.join(brewPrefix, "lib", "node_modules");
+      const pkgRoot = path.join(brewRoot, "openclaw");
+      const pathNpmRoot = path.join(base, "nvm", "lib", "node_modules");
+      const brewNpm = path.join(brewBin, "npm");
+      await fs.mkdir(pkgRoot, { recursive: true });
+      await fs.mkdir(brewBin, { recursive: true });
+      await fs.writeFile(brewNpm, "", "utf8");
+
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv[0] === "npm") {
+          return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
+        }
+        if (argv[0] === brewNpm) {
+          return { stdout: `${brewRoot}\n`, stderr: "", code: 0 };
+        }
+        if (argv[0] === "pnpm") {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
+        "npm",
+      );
+      await expect(resolveGlobalRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(brewRoot);
+      await expect(resolveGlobalPackageRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(
+        pkgRoot,
+      );
+      expect(globalInstallArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
+        brewNpm,
+        "i",
+        "-g",
+        "openclaw@latest",
+        "--no-fund",
+        "--no-audit",
+        "--loglevel=error",
+      ]);
+      expect(globalInstallFallbackArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
+        brewNpm,
+        "i",
+        "-g",
+        "openclaw@latest",
+        "--omit=optional",
+        "--no-fund",
+        "--no-audit",
+        "--loglevel=error",
+      ]);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("does not infer npm ownership from path shape alone when the owning npm binary is absent", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-npm-missing-bin-"));
+    const brewRoot = path.join(base, "opt", "homebrew", "lib", "node_modules");
+    const pkgRoot = path.join(brewRoot, "openclaw");
+    const pathNpmRoot = path.join(base, "nvm", "lib", "node_modules");
+    await fs.mkdir(pkgRoot, { recursive: true });
+
+    const runCommand: CommandRunner = async (argv) => {
+      if (argv[0] === "npm") {
+        return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
+      }
+      if (argv[0] === "pnpm") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
+    };
+
+    await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBeNull();
+    expect(globalInstallArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
+      "npm",
+      "i",
+      "-g",
+      "openclaw@latest",
+      "--no-fund",
+      "--no-audit",
+      "--loglevel=error",
+    ]);
+  });
+
+  it("prefers npm.cmd for win32-style global npm roots", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-win32-npm-prefix-"));
+    const npmPrefix = path.join(base, "Roaming", "npm");
+    const npmRoot = path.join(npmPrefix, "node_modules");
+    const pkgRoot = path.join(npmRoot, "openclaw");
+    const npmCmd = path.join(npmPrefix, "npm.cmd");
+    const pathNpmRoot = path.join(base, "nvm", "node_modules");
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.writeFile(npmCmd, "", "utf8");
+
+    const runCommand: CommandRunner = async (argv) => {
+      if (argv[0] === "npm") {
+        return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
+      }
+      if (argv[0] === npmCmd) {
+        return { stdout: `${npmRoot}\n`, stderr: "", code: 0 };
+      }
+      if (argv[0] === "pnpm") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
+    };
+
+    await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe("npm");
+    await expect(resolveGlobalRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(npmRoot);
+    expect(globalInstallArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
+      npmCmd,
+      "i",
+      "-g",
+      "openclaw@latest",
+      "--no-fund",
+      "--no-audit",
+      "--loglevel=error",
+    ]);
+
+    platformSpy.mockRestore();
   });
 
   it("builds install argv and npm fallback argv", () => {

@@ -1018,7 +1018,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const updateStep = await runStep({
       runCommand,
       name: "global update",
-      argv: globalInstallArgs(globalManager, spec),
+      argv: globalInstallArgs(globalManager, spec, pkgRoot),
       cwd: pkgRoot,
       timeoutMs,
       env: globalInstallEnv,
@@ -1030,7 +1030,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     let finalStep = updateStep;
     if (updateStep.exitCode !== 0) {
-      const fallbackArgv = globalInstallFallbackArgs(globalManager, spec);
+      const fallbackArgv = globalInstallFallbackArgs(globalManager, spec, pkgRoot);
       if (fallbackArgv) {
         const fallbackStep = await runStep({
           runCommand,
@@ -1049,7 +1049,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     }
 
     const verifiedPackageRoot =
-      (await resolveGlobalPackageRoot(globalManager, runCommand, timeoutMs)) ?? pkgRoot;
+      (await resolveGlobalPackageRoot(globalManager, runCommand, timeoutMs, pkgRoot)) ?? pkgRoot;
     const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
     const verificationErrors = await collectInstalledGlobalPackageErrors({
       packageRoot: verifiedPackageRoot,

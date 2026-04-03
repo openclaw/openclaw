@@ -6,8 +6,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
+import {
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "../../../test/helpers/plugins/plugin-registry.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
 import { linePlugin } from "./channel.js";
 import type { ResolvedLineAccount } from "./types.js";
