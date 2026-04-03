@@ -19,6 +19,7 @@ export {
   resolveChannelEntryMatch,
   summarizeMapping,
   toLocationContext,
+  type BlockReplyContext,
   type MarkdownTableMode,
   type NormalizedLocation,
   type OpenClawConfig,

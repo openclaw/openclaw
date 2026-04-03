@@ -6,6 +6,7 @@ import {
   createChannelNativeApprovalRuntime,
   getExecApprovalApproverDmNoticeText,
   resolveExecApprovalCommandDisplay,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalChannelRuntime,
   type ExecApprovalDecision,
   type ExecApprovalRequest,
@@ -15,6 +16,7 @@ import { logError } from "openclaw/plugin-sdk/text-runtime";
 import { slackNativeApprovalAdapter } from "../approval-native.js";
 import {
   getSlackExecApprovalApprovers,
+  isSlackExecApprovalClientEnabled,
   normalizeSlackApproverId,
   shouldHandleSlackExecApprovalRequest,
 } from "../exec-approvals.js";
@@ -99,6 +101,8 @@ function buildSlackPendingApprovalBlocks(request: ExecApprovalRequest): SlackBlo
       text: "",
       interactive: buildApprovalInteractiveReply({
         approvalId: request.id,
+        ask: request.request.ask,
+        allowedDecisions: resolveExecApprovalRequestAllowedDecisions(request.request),
       }),
     }) ?? [];
   return [
@@ -236,13 +240,10 @@ export class SlackExecApprovalHandler {
       gatewayUrl: opts.gatewayUrl,
       nativeAdapter: slackNativeApprovalAdapter.native,
       isConfigured: () =>
-        Boolean(
-          opts.config.enabled &&
-          getSlackExecApprovalApprovers({
-            cfg: opts.cfg,
-            accountId: opts.accountId,
-          }).length > 0,
-        ),
+        isSlackExecApprovalClientEnabled({
+          cfg: opts.cfg,
+          accountId: opts.accountId,
+        }),
       shouldHandle: (request) => this.shouldHandle(request),
       buildPendingContent: ({ request }) => ({
         text: buildSlackPendingApprovalText(request),

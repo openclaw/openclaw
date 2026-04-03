@@ -2,6 +2,8 @@
 
 export {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalDecision,
   type ExecApprovalRequest,
   type ExecApprovalRequestPayload,
@@ -38,6 +40,7 @@ export {
 export { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers.js";
 export {
   createChannelExecApprovalProfile,
+  isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
 } from "./approval-client-helpers.js";
 export {

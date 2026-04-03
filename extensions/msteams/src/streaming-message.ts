@@ -35,6 +35,7 @@ export type TeamsStreamOptions = {
 };
 
 import { AI_GENERATED_ENTITY } from "./ai-entity.js";
+import { formatUnknownError } from "./errors.js";
 
 function extractId(response: unknown): string | undefined {
   if (response && typeof response === "object" && "id" in response) {
@@ -264,7 +265,7 @@ export class TeamsHttpStream {
       const axiosData = (err as { response?: { data?: unknown; status?: number } })?.response;
       const statusCode = axiosData?.status ?? (err as { statusCode?: number })?.statusCode;
       const responseBody = axiosData?.data ? JSON.stringify(axiosData.data).slice(0, 300) : "";
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = formatUnknownError(err);
       this.onError?.(
         new Error(
           `stream POST failed (HTTP ${statusCode ?? "?"}): ${msg}${responseBody ? ` body=${responseBody}` : ""}`,

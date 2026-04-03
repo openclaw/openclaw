@@ -168,6 +168,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "When exec returns approval-pending, include the concrete /approve command from tool output",
     );
+    expect(prompt).not.toContain("allow-once|allow-always|deny");
   });
 
   it("tells native approval channels not to duplicate plain chat /approve instructions", () => {
