@@ -1050,6 +1050,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(bootstrapSpy).toHaveBeenCalledTimes(2);
     expect((bootstrapSpy.mock.calls as unknown[][])[1]?.[1] ?? {}).toEqual({
       forceResetCrossSigning: true,
+      allowSecretStorageRecreateWithoutRecoveryKey: true,
       strict: true,
     });
   });
@@ -1193,7 +1194,9 @@ describe("MatrixClient crypto bootstrapping", () => {
     const callsAfterStart = databasesSpy.mock.calls.length;
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(databasesSpy.mock.calls.length).toBeGreaterThan(callsAfterStart);
+    await vi.waitFor(() => {
+      expect(databasesSpy.mock.calls.length).toBeGreaterThan(callsAfterStart);
+    });
 
     client.stop();
     const callsAfterStop = databasesSpy.mock.calls.length;
