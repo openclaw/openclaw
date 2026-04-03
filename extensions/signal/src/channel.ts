@@ -30,7 +30,6 @@ import { markdownToSignalTextChunks } from "./format.js";
 import { signalMessageActions } from "./message-actions.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
-import { sendMessageSignal } from "./send.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
   signalConfigAdapter,
@@ -38,11 +37,12 @@ import {
   signalSecurityAdapter,
   signalSetupWizard,
 } from "./shared.js";
-type SignalSendFn = typeof sendMessageSignal;
+type SignalSendFn = typeof import("./send.runtime.js").sendMessageSignal;
 type SignalProbe = import("./probe.js").SignalProbe;
 
 let signalMonitorModulePromise: Promise<typeof import("./monitor.js")> | null = null;
 let signalProbeModulePromise: Promise<typeof import("./probe.js")> | null = null;
+let signalSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | null = null;
 
 async function loadSignalMonitorModule() {
   signalMonitorModulePromise ??= import("./monitor.js");
@@ -54,12 +54,19 @@ async function loadSignalProbeModule() {
   return await signalProbeModulePromise;
 }
 
-function resolveSignalSendContext(params: {
+async function loadSignalSendRuntime() {
+  signalSendRuntimePromise ??= import("./send.runtime.js");
+  return await signalSendRuntimePromise;
+}
+
+async function resolveSignalSendContext(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   accountId?: string;
   deps?: { [channelId: string]: unknown };
 }) {
-  const send = resolveOutboundSendDep<SignalSendFn>(params.deps, "signal") ?? sendMessageSignal;
+  const send =
+    resolveOutboundSendDep<SignalSendFn>(params.deps, "signal") ??
+    (await loadSignalSendRuntime()).sendMessageSignal;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -79,7 +86,7 @@ async function sendSignalOutbound(params: {
   accountId?: string;
   deps?: { [channelId: string]: unknown };
 }) {
-  const { send, maxBytes } = resolveSignalSendContext(params);
+  const { send, maxBytes } = await resolveSignalSendContext(params);
   return await send(params.to, params.text, {
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
@@ -162,7 +169,7 @@ async function sendFormattedSignalText(ctx: {
   deps?: { [channelId: string]: unknown };
   abortSignal?: AbortSignal;
 }) {
-  const { send, maxBytes } = resolveSignalSendContext({
+  const { send, maxBytes } = await resolveSignalSendContext({
     cfg: ctx.cfg,
     accountId: ctx.accountId ?? undefined,
     deps: ctx.deps,
@@ -209,7 +216,7 @@ async function sendFormattedSignalMedia(ctx: {
   abortSignal?: AbortSignal;
 }) {
   ctx.abortSignal?.throwIfAborted();
-  const { send, maxBytes } = resolveSignalSendContext({
+  const { send, maxBytes } = await resolveSignalSendContext({
     cfg: ctx.cfg,
     accountId: ctx.accountId ?? undefined,
     deps: ctx.deps,
@@ -329,7 +336,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         message: PAIRING_APPROVED_MESSAGE,
         normalizeAllowEntry: createPairingPrefixStripper(/^signal:/i),
         notify: async ({ id, message }) => {
-          await sendMessageSignal(id, message);
+          await (await loadSignalSendRuntime()).sendMessageSignal(id, message);
         },
       },
     },
