@@ -251,15 +251,19 @@ describe("exec approval session target", () => {
       "agent:main:matrix:channel:!ops:example.org": {
         sessionId: "main",
         updatedAt: 1,
-        lastChannel: "matrix",
-        lastTo: "room:!ops:example.org",
-        lastAccountId: "ops",
+        origin: {
+          provider: "matrix",
+          accountId: "ops",
+        },
+        lastChannel: "slack",
+        lastTo: "channel:C123",
+        lastAccountId: "work",
       },
     });
     const request = buildRequest({
       sessionKey: "agent:main:matrix:channel:!ops:example.org",
-      turnSourceChannel: "slack",
-      turnSourceTo: "channel:C123",
+      turnSourceChannel: "discord",
+      turnSourceTo: "channel:D123",
       turnSourceAccountId: "work",
     });
 

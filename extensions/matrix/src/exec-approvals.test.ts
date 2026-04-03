@@ -276,9 +276,13 @@ describe("matrix exec approvals", () => {
         "agent:ops-agent:matrix:channel:!room:example.org": {
           sessionId: "main",
           updatedAt: 1,
-          lastChannel: "matrix",
-          lastTo: "room:!room:example.org",
-          lastAccountId: "ops",
+          origin: {
+            provider: "matrix",
+            accountId: "ops",
+          },
+          lastChannel: "slack",
+          lastTo: "channel:C999",
+          lastAccountId: "work",
         },
       }),
       "utf-8",

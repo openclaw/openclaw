@@ -128,9 +128,13 @@ describe("telegram exec approvals", () => {
         "agent:ops:telegram:direct:123": {
           sessionId: "main",
           updatedAt: 1,
-          lastChannel: "telegram",
-          lastTo: "123",
-          lastAccountId: "ops",
+          origin: {
+            provider: "telegram",
+            accountId: "ops",
+          },
+          lastChannel: "slack",
+          lastTo: "channel:C999",
+          lastAccountId: "work",
         },
       }),
       "utf-8",

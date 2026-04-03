@@ -83,6 +83,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: keep the Stop button visible during tool-only execution so abortable runs do not fall back to Send while tools are still running. (#54528) thanks @chziyue.
 - Discord/voice: make READY auto-join fire-and-forget while keeping the shorter initial voice-connect timeout separate from the longer playback-start wait. (#60345) Thanks @geekhuashan.
 - Agents/skills: add inherited `agents.defaults.skills` allowlists, make per-agent `agents.list[].skills` replace defaults instead of merging, and scope embedded, session, sandbox, and cron skill snapshots through the effective runtime agent. (#59992) Thanks @gumadeiras.
+- Matrix/Telegram exec approvals: recover stored same-channel account bindings even when session reply state drifted to another channel, so foreign-channel approvals route to the bound account instead of fanning out or being rejected as ambiguous. (#60417) thanks @gumadeiras.
 
 ## 2026.4.2
 

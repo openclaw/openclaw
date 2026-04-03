@@ -172,9 +172,9 @@ function resolveApprovalRequestSessionAccountBinding(params: {
     ? resolveApprovalRequestStoredSessionTarget(params)
     : resolveApprovalRequestSessionTarget(params);
   const sessionBinding = resolveApprovalRequestSessionBinding(params);
-  const channel = normalizeOptionalChannel(sessionTarget?.channel ?? sessionBinding?.channel);
+  const channel = normalizeOptionalChannel(sessionBinding?.channel ?? sessionTarget?.channel);
   const accountId = normalizeOptionalAccountId(
-    sessionTarget?.accountId ?? sessionBinding?.accountId,
+    sessionBinding?.accountId ?? sessionTarget?.accountId,
   );
   return channel || accountId ? { channel, accountId } : null;
 }
