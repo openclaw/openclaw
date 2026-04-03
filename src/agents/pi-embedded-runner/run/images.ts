@@ -1,8 +1,9 @@
 import path from "node:path";
+import fs from "node:fs/promises";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
-import { resolveMediaBufferPath, getMediaDir } from "../../../media/store.js";
+import { resolveMediaBufferPath } from "../../../media/store.js";
 import { loadWebMedia } from "../../../media/web-media.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
@@ -353,37 +354,42 @@ export async function loadImageFromRef(
   // exempt from workspaceOnly checks because they live in the media store
   // managed by the Gateway, not in the agent workspace.
   if (ref.type === "media-uri") {
-    const uriMatch = ref.resolved.match(MEDIA_URI_REGEX);
-    if (!uriMatch) {
-      log.debug(`Native image: malformed media URI, skipping: ${ref.resolved}`);
-      return null;
-    }
-    const mediaId = uriMatch[1];
-    try {
-      // resolveMediaBufferPath accepts the media ID (with optional extension
-      // and original-filename prefix) and returns the absolute path of the
-      // persisted file. It applies its own guards against path traversal,
-      // symlinks, and null bytes.
-      const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
-      const media = await loadWebMedia(physicalPath, {
-        maxBytes: options?.maxBytes,
-        localRoots: [getMediaDir()],
-      });
-      if (media.kind !== "image") {
-        log.debug(`Native image: media store entry is not an image: ${mediaId}`);
-        return null;
-      }
-      const mimeType = media.contentType ?? "image/jpeg";
-      const data = media.buffer.toString("base64");
-      log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
-      return { type: "image", data, mimeType };
-    } catch (err) {
-      log.debug(
-        `Native image: failed to load media-uri ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return null;
-    }
+  const uriMatch = ref.resolved.match(MEDIA_URI_REGEX);
+  if (!uriMatch) {
+    log.debug(`Native image: malformed media URI, skipping: ${ref.resolved}`);
+    return null;
   }
+  const mediaId = uriMatch[1];
+  try {
+    const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
+    const buffer = await fs.readFile(physicalPath);
+
+    if (options?.maxBytes !== undefined && buffer.byteLength > options.maxBytes) {
+      log.debug(`Native image: media-uri file exceeds maxBytes, skipping: ${mediaId}`);
+      return null;
+    }
+
+    const MEDIA_EXT_TO_MIME: Record<string, string> = {
+      ".jpg":  "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".png":  "image/png",
+      ".webp": "image/webp",
+      ".gif":  "image/gif",
+      ".heic": "image/heic",
+      ".heif": "image/heif",
+    };
+    const ext = path.extname(physicalPath).toLowerCase();
+    const mimeType = MEDIA_EXT_TO_MIME[ext] ?? "image/jpeg";
+
+    log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
+    return { type: "image", data: buffer.toString("base64"), mimeType };
+  } catch (err) {
+    log.debug(
+      `Native image: failed to load media-uri ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
 
   try {
     let targetPath = ref.resolved;
