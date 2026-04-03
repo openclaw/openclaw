@@ -322,10 +322,18 @@ export function assertGatewayAuthConfigured(
         "gateway auth mode is trusted-proxy, but trustedProxy.userHeader is empty (set gateway.auth.trustedProxy.userHeader)",
       );
     }
-    const trustedProxyAuthHeader = auth.trustedProxy.authHeader?.trim();
-    const trustedProxyAuthValue = auth.trustedProxy.authValue?.trim();
-    const hasTrustedProxyAuthHeader = Boolean(trustedProxyAuthHeader);
-    const hasTrustedProxyAuthValue = Boolean(trustedProxyAuthValue);
+    const trustedProxyAuthHeader = auth.trustedProxy.authHeader;
+    const trustedProxyAuthValue = auth.trustedProxy.authValue;
+    if (
+      (trustedProxyAuthHeader !== undefined && trustedProxyAuthHeader.trim() === "") ||
+      (trustedProxyAuthValue !== undefined && trustedProxyAuthValue.trim() === "")
+    ) {
+      throw new Error(
+        "gateway auth mode is trusted-proxy, but trustedProxy.authHeader and trustedProxy.authValue must be non-empty when configured",
+      );
+    }
+    const hasTrustedProxyAuthHeader = trustedProxyAuthHeader !== undefined;
+    const hasTrustedProxyAuthValue = trustedProxyAuthValue !== undefined;
     if (hasTrustedProxyAuthHeader !== hasTrustedProxyAuthValue) {
       throw new Error(
         "gateway auth mode is trusted-proxy, but trustedProxy.authHeader and trustedProxy.authValue must be set together",
@@ -359,12 +367,11 @@ function authorizeTrustedProxy(params: {
     return { reason: "trusted_proxy_untrusted_source" };
   }
   if (isLoopbackAddress(remoteAddr)) {
-    if (!trustedProxyConfig.unsafeAllowLoopbackProxies) {
-      return { reason: "trusted_proxy_loopback_source" };
-    }
-    // unsafeAllowLoopbackProxies is enabled for same-host reverse proxies.
-    // Keep this fail-closed: require a resolved, non-loopback forwarded client IP
-    // so direct localhost processes cannot spoof identity headers.
+    // Same-host reverse proxies on localhost are allowed only when loopback
+    // is explicitly trusted in gateway.trustedProxies, the client chain
+    // resolves to a non-loopback address, and the proxy proves its identity
+    // with a shared authenticity header. Non-loopback XFF alone is not enough
+    // because any local process can forge forwarded headers.
     const forwardedClientIp = resolveClientIp({
       remoteAddr,
       forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
@@ -372,6 +379,9 @@ function authorizeTrustedProxy(params: {
     });
     if (!forwardedClientIp || isLoopbackAddress(forwardedClientIp)) {
       return { reason: "trusted_proxy_loopback_client_invalid" };
+    }
+    if (!trustedProxyConfig.authHeader?.trim() || !trustedProxyConfig.authValue?.trim()) {
+      return { reason: "trusted_proxy_loopback_auth_required" };
     }
   }
 

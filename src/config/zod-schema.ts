@@ -716,7 +716,45 @@ export const OpenClawSchema = z
                 allowUsers: z.array(z.string()).optional(),
                 authHeader: z.string().optional(),
                 authValue: z.string().optional().register(sensitive),
-                unsafeAllowLoopbackProxies: z.boolean().optional(),
+              })
+              .superRefine((trustedProxy, ctx) => {
+                const authHeaderRaw = trustedProxy.authHeader;
+                const authValueRaw = trustedProxy.authValue;
+                const authHeader = authHeaderRaw?.trim();
+                const authValue = authValueRaw?.trim();
+                const hasAuthHeader = authHeaderRaw !== undefined;
+                const hasAuthValue = authValueRaw !== undefined;
+                if (hasAuthHeader && authHeader === "") {
+                  ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ["authHeader"],
+                    message: "authHeader must not be blank when configured",
+                  });
+                }
+                if (hasAuthValue && authValue === "") {
+                  ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ["authValue"],
+                    message: "authValue must not be blank when configured",
+                  });
+                }
+                const configuredAuthHeader = hasAuthHeader && authHeader !== "";
+                const configuredAuthValue = hasAuthValue && authValue !== "";
+                if (configuredAuthHeader !== configuredAuthValue) {
+                  if (configuredAuthHeader) {
+                    ctx.addIssue({
+                      code: z.ZodIssueCode.custom,
+                      path: ["authValue"],
+                      message: "authValue is required when authHeader is configured",
+                    });
+                  } else {
+                    ctx.addIssue({
+                      code: z.ZodIssueCode.custom,
+                      path: ["authHeader"],
+                      message: "authHeader is required when authValue is configured",
+                    });
+                  }
+                }
               })
               .strict()
               .optional(),

@@ -205,6 +205,94 @@ describe("gateway.remote.transport", () => {
   });
 });
 
+describe("gateway.auth.trustedProxy authHeader/authValue", () => {
+  it("rejects authHeader without authValue at parse time", () => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            authHeader: "x-gateway-proxy-auth",
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      return;
+    }
+    expect(result.error.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ["gateway", "auth", "trustedProxy", "authValue"],
+          message: "authValue is required when authHeader is configured",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects authValue without authHeader at parse time", () => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            authValue: "proxy-secret",
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      return;
+    }
+    expect(result.error.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ["gateway", "auth", "trustedProxy", "authHeader"],
+          message: "authHeader is required when authValue is configured",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects whitespace-only authHeader/authValue at parse time", () => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            authHeader: "   ",
+            authValue: "   ",
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      return;
+    }
+    expect(result.error.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ["gateway", "auth", "trustedProxy", "authHeader"],
+          message: "authHeader must not be blank when configured",
+        }),
+        expect.objectContaining({
+          path: ["gateway", "auth", "trustedProxy", "authValue"],
+          message: "authValue must not be blank when configured",
+        }),
+      ]),
+    );
+  });
+});
+
 describe("gateway.tools config", () => {
   it("accepts gateway.tools allow and deny lists", () => {
     const res = validateConfigObject({

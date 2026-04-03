@@ -850,6 +850,54 @@ describe("trusted-proxy auth", () => {
     ).toThrow(/must be set together/);
   });
 
+  it("rejects trusted-proxy mode when authHeader is whitespace only", () => {
+    const auth = resolveGatewayAuth({
+      authConfig: {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          authHeader: "   ",
+          authValue: "proxy-secret",
+        },
+      },
+    });
+
+    expect(() =>
+      assertGatewayAuthConfigured(auth, {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          authHeader: "   ",
+          authValue: "proxy-secret",
+        },
+      }),
+    ).toThrow(/must be non-empty when configured/);
+  });
+
+  it("rejects trusted-proxy mode when authValue is whitespace only", () => {
+    const auth = resolveGatewayAuth({
+      authConfig: {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          authHeader: "x-gateway-proxy-auth",
+          authValue: "   ",
+        },
+      },
+    });
+
+    expect(() =>
+      assertGatewayAuthConfigured(auth, {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          authHeader: "x-gateway-proxy-auth",
+          authValue: "   ",
+        },
+      }),
+    ).toThrow(/must be non-empty when configured/);
+  });
+
   it("supports Pomerium-style headers", async () => {
     const res = await authorizeTrustedProxy({
       auth: {
@@ -971,15 +1019,12 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
-    it("accepts same-host proxy identity headers when forwarded client IP is non-loopback", async () => {
+    it("rejects loopback proxy when proxy authenticity header is missing", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",
           allowTailscale: false,
-          trustedProxy: {
-            ...trustedProxyConfig,
-            unsafeAllowLoopbackProxies: true,
-          },
+          trustedProxy: trustedProxyConfig,
         },
         connectAuth: null,
         trustedProxies: ["127.0.0.1"],
@@ -994,12 +1039,8 @@ describe("trusted-proxy auth", () => {
         } as never,
       });
 
-      expect(res.ok).toBe(true);
-      if (!res.ok) {
-        return;
-      }
-      expect(res.method).toBe("trusted-proxy");
-      expect(res.user).toBe("nick@example.com");
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("trusted_proxy_loopback_auth_required");
     });
 
     it("fails closed when forwarded headers are present but the client chain resolves to loopback", async () => {
@@ -1090,15 +1131,12 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_no_proxies_configured");
     });
 
-    it("rejects unsafe loopback proxy when x-forwarded-for is missing", async () => {
+    it("rejects loopback proxy when x-forwarded-for is missing", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",
           allowTailscale: false,
-          trustedProxy: {
-            ...trustedProxyConfig,
-            unsafeAllowLoopbackProxies: true,
-          },
+          trustedProxy: trustedProxyConfig,
         },
         connectAuth: null,
         trustedProxies: ["127.0.0.1"],
@@ -1116,15 +1154,12 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_client_invalid");
     });
 
-    it("rejects unsafe loopback proxy when x-forwarded-for is empty", async () => {
+    it("rejects loopback proxy when x-forwarded-for is empty", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",
           allowTailscale: false,
-          trustedProxy: {
-            ...trustedProxyConfig,
-            unsafeAllowLoopbackProxies: true,
-          },
+          trustedProxy: trustedProxyConfig,
         },
         connectAuth: null,
         trustedProxies: ["127.0.0.1"],
@@ -1142,15 +1177,12 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_client_invalid");
     });
 
-    it("rejects unsafe loopback proxy when x-forwarded-for chain is empty", async () => {
+    it("rejects loopback proxy when x-forwarded-for chain is empty", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",
           allowTailscale: false,
-          trustedProxy: {
-            ...trustedProxyConfig,
-            unsafeAllowLoopbackProxies: true,
-          },
+          trustedProxy: trustedProxyConfig,
         },
         connectAuth: null,
         trustedProxies: ["127.0.0.1"],
@@ -1168,15 +1200,12 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_client_invalid");
     });
 
-    it("rejects unsafe loopback proxy when x-forwarded-for resolves to loopback", async () => {
+    it("rejects loopback proxy when x-forwarded-for resolves to loopback", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",
           allowTailscale: false,
-          trustedProxy: {
-            ...trustedProxyConfig,
-            unsafeAllowLoopbackProxies: true,
-          },
+          trustedProxy: trustedProxyConfig,
         },
         connectAuth: null,
         trustedProxies: ["127.0.0.1"],
@@ -1194,15 +1223,12 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_client_invalid");
     });
 
-    it("rejects unsafe loopback proxy when x-forwarded-for is not an IP chain", async () => {
+    it("rejects loopback proxy when x-forwarded-for is not an IP chain", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",
           allowTailscale: false,
-          trustedProxy: {
-            ...trustedProxyConfig,
-            unsafeAllowLoopbackProxies: true,
-          },
+          trustedProxy: trustedProxyConfig,
         },
         connectAuth: null,
         trustedProxies: ["127.0.0.1"],
@@ -1220,7 +1246,7 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_client_invalid");
     });
 
-    it("rejects unsafe loopback proxy without matching proxy auth header", async () => {
+    it("rejects loopback proxy without matching proxy auth header", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",
@@ -1229,7 +1255,6 @@ describe("trusted-proxy auth", () => {
             ...trustedProxyConfig,
             authHeader: "x-gateway-proxy-auth",
             authValue: "proxy-secret",
-            unsafeAllowLoopbackProxies: true,
           },
         },
         connectAuth: null,
@@ -1248,7 +1273,7 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_auth_header_mismatch");
     });
 
-    it("accepts unsafe loopback proxy with matching proxy auth header", async () => {
+    it("accepts loopback proxy when forwarded client IP is non-loopback and proxy auth header matches", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",
@@ -1257,7 +1282,6 @@ describe("trusted-proxy auth", () => {
             ...trustedProxyConfig,
             authHeader: "x-gateway-proxy-auth",
             authValue: "proxy-secret",
-            unsafeAllowLoopbackProxies: true,
           },
         },
         connectAuth: null,
@@ -1281,14 +1305,15 @@ describe("trusted-proxy auth", () => {
       expect(res.user).toBe("nick@example.com");
     });
 
-    it("accepts unsafe loopback proxy when x-forwarded-for contains valid client IPs", async () => {
+    it("accepts loopback proxy when x-forwarded-for contains valid client IPs and proxy auth header matches", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",
           allowTailscale: false,
           trustedProxy: {
             ...trustedProxyConfig,
-            unsafeAllowLoopbackProxies: true,
+            authHeader: "x-gateway-proxy-auth",
+            authValue: "proxy-secret",
           },
         },
         connectAuth: null,
@@ -1300,6 +1325,7 @@ describe("trusted-proxy auth", () => {
             "x-forwarded-user": "nick@example.com",
             "x-forwarded-proto": "https",
             "x-forwarded-for": "203.0.113.10, 10.0.0.1",
+            "x-gateway-proxy-auth": "proxy-secret",
           },
         } as never,
       });
