@@ -221,9 +221,18 @@ export function isRequestedExecTargetAllowed(params: {
   configuredTarget: ExecTarget;
   requestedTarget: ExecTarget;
 }) {
-  // `auto` is a routing strategy, not a wildcard allowlist. Keep per-call host
-  // selection pinned to the configured/session-selected target so a sandboxed
-  // session cannot silently hop to gateway or node.
+  // When the configured target is `auto`, allow the agent to additionally
+  // request `host="node"` so that per-call routing to connected remote
+  // nodes works without forcing the admin to pin `tools.exec.host` to a
+  // single value.
+  //
+  // We deliberately do NOT allow `gateway` or `sandbox` overrides under
+  // `auto` — `auto` already resolves to sandbox-when-available, falling
+  // back to gateway. Allowing those overrides would let a model bypass
+  // sandbox routing, which is a privilege escalation.
+  if (params.configuredTarget === "auto" && params.requestedTarget === "node") {
+    return true;
+  }
   return params.requestedTarget === params.configuredTarget;
 }
 
