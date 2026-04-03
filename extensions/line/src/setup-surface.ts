@@ -94,10 +94,7 @@ export const lineSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 0,
     includeStatusLine: true,
-    resolveConfigured: ({ cfg, accountId }) =>
-      accountId
-        ? isLineConfigured(cfg, accountId)
-        : listLineAccountIds(cfg).some((resolvedAccountId) => isLineConfigured(cfg, resolvedAccountId)),
+    resolveConfigured: ({ cfg, accountId }) => isLineConfigured(cfg, accountId),
     resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listLineAccountIds(cfg).length || 0}`],
   }),
   introNote: {
