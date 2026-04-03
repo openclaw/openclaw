@@ -11,7 +11,11 @@ import {
 import { convertMessages } from "@mariozechner/pi-ai/openai-completions";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+import type {
+  FunctionTool,
+  ResponseCreateParamsStreaming,
+  ResponseInput,
+} from "openai/resources/responses/responses.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import {
@@ -346,8 +350,8 @@ function convertResponsesMessages(
   context: Context,
   allowedToolCallProviders: Set<string>,
   options?: { includeSystemPrompt?: boolean; supportsDeveloperRole?: boolean },
-) {
-  const messages: unknown[] = [];
+): ResponseInput {
+  const messages: ResponseInput = [];
   const normalizeIdPart = (part: string) => {
     const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
     const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
@@ -412,7 +416,7 @@ function convertResponsesMessages(
         }
       }
     } else if (msg.role === "assistant") {
-      const output: unknown[] = [];
+      const output: ResponseInput = [];
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
@@ -489,7 +493,7 @@ function convertResponsesMessages(
 function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   options?: { strict?: boolean | null },
-) {
+): FunctionTool[] {
   const strict = options?.strict === undefined ? false : options.strict;
   return tools.map((tool) => ({
     type: "function",
@@ -965,7 +969,7 @@ export function buildOpenAIResponsesParams(
     { supportsDeveloperRole: compat.supportsDeveloperRole },
   );
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-  const params: ResponseCreateParamsStreaming & Record<string, unknown> = {
+  const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
@@ -1379,7 +1383,21 @@ function detectCompat(model: OpenAIModeModel) {
   };
 }
 
-function getCompat(model: OpenAIModeModel) {
+function getCompat(model: OpenAIModeModel): {
+  supportsStore: boolean;
+  supportsDeveloperRole: boolean;
+  supportsReasoningEffort: boolean;
+  reasoningEffortMap: Record<string, string>;
+  supportsUsageInStreaming: boolean;
+  maxTokensField: string;
+  requiresToolResultName: boolean;
+  requiresAssistantAfterToolResult: boolean;
+  requiresThinkingAsText: boolean;
+  thinkingFormat: string;
+  openRouterRouting: Record<string, unknown>;
+  vercelGatewayRouting: Record<string, unknown>;
+  supportsStrictMode: boolean;
+} {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
   return {
@@ -1409,6 +1427,26 @@ function getCompat(model: OpenAIModeModel) {
       (compat.supportsStrictMode as boolean | undefined) ?? detected.supportsStrictMode,
   };
 }
+
+type OpenAIResponsesRequestParams = {
+  model: string;
+  input: ResponseInput;
+  stream: true;
+  prompt_cache_key?: string;
+  prompt_cache_retention?: "24h";
+  store?: boolean;
+  max_output_tokens?: number;
+  temperature?: number;
+  service_tier?: ResponseCreateParamsStreaming["service_tier"];
+  tools?: FunctionTool[];
+  reasoning?:
+    | { effort: "none" }
+    | {
+        effort: NonNullable<OpenAIResponsesOptions["reasoningEffort"]>;
+        summary: NonNullable<OpenAIResponsesOptions["reasoningSummary"]>;
+      };
+  include?: string[];
+};
 
 function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, string>): string {
   return reasoningEffortMap[effort] ?? effort;
