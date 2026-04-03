@@ -20,10 +20,8 @@ type SlackMessageEvent = {
 
 type SlackPrepareResult = { ctxPayload: MsgContext } | null | undefined;
 
-const { buildFinalizedDiscordDirectInboundContext } = loadBundledPluginTestApiSync<{
-  buildFinalizedDiscordDirectInboundContext: () => MsgContext;
-}>("discord");
-const { createInboundSlackTestContext, prepareSlackMessage } = loadBundledPluginTestApiSync<{
+type BuildFinalizedDiscordDirectInboundContext = () => MsgContext;
+type SlackTestApi = {
   createInboundSlackTestContext: (params: { cfg: OpenClawConfig }) => {
     resolveUserName?: () => Promise<unknown>;
   };
@@ -35,7 +33,29 @@ const { createInboundSlackTestContext, prepareSlackMessage } = loadBundledPlugin
     message: SlackMessageEvent;
     opts: { source: string };
   }) => Promise<SlackPrepareResult>;
-}>("slack");
+};
+
+let buildFinalizedDiscordDirectInboundContextCache:
+  | BuildFinalizedDiscordDirectInboundContext
+  | undefined;
+let slackTestApiCache: SlackTestApi | undefined;
+
+function getBuildFinalizedDiscordDirectInboundContext(): BuildFinalizedDiscordDirectInboundContext {
+  if (!buildFinalizedDiscordDirectInboundContextCache) {
+    ({ buildFinalizedDiscordDirectInboundContext: buildFinalizedDiscordDirectInboundContextCache } =
+      loadBundledPluginTestApiSync<{
+        buildFinalizedDiscordDirectInboundContext: BuildFinalizedDiscordDirectInboundContext;
+      }>("discord"));
+  }
+  return buildFinalizedDiscordDirectInboundContextCache;
+}
+
+function getSlackTestApi(): SlackTestApi {
+  if (!slackTestApiCache) {
+    slackTestApiCache = loadBundledPluginTestApiSync<SlackTestApi>("slack");
+  }
+  return slackTestApiCache;
+}
 const telegramHarnessModuleId = resolveRelativeBundledPluginPublicModuleId({
   fromModuleUrl: import.meta.url,
   pluginId: "telegram",
@@ -161,7 +181,7 @@ function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessage
 
 export function installDiscordInboundContractSuite() {
   it("keeps inbound context finalized", () => {
-    const ctx = buildFinalizedDiscordDirectInboundContext();
+    const ctx = getBuildFinalizedDiscordDirectInboundContext()();
 
     expectChannelInboundContextContract(ctx);
   });
@@ -199,6 +219,7 @@ export function installSignalInboundContractSuite() {
 export function installSlackInboundContractSuite() {
   it("keeps inbound context finalized", async () => {
     await withTempHome(async () => {
+      const { createInboundSlackTestContext, prepareSlackMessage } = getSlackTestApi();
       const ctx = createInboundSlackTestContext({
         cfg: {
           channels: { slack: { enabled: true } },
