@@ -7,6 +7,8 @@ const ANSI_ESCAPE_PATTERN = new RegExp(
   `${ESCAPE}(?:\\][^${BELL}]*(?:${BELL}|${ESCAPE}\\\\)|\\[[0-?]*[ -/]*[@-~]|[@-Z\\\\-_])`,
   "g",
 );
+const GITHUB_CLI_LOG_PREFIX_PATTERN =
+  /^[^\t\r\n]+\t[^\t\r\n]+\t\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+/u;
 const GITHUB_ACTIONS_LOG_PREFIX_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+/u;
 
 const COMPLETED_TEST_FILE_LINE_PATTERN =
@@ -46,7 +48,9 @@ function stripAnsi(text) {
 }
 
 function normalizeLogLine(line) {
-  return line.replace(GITHUB_ACTIONS_LOG_PREFIX_PATTERN, "");
+  return line
+    .replace(GITHUB_CLI_LOG_PREFIX_PATTERN, "")
+    .replace(GITHUB_ACTIONS_LOG_PREFIX_PATTERN, "");
 }
 
 export function parseCompletedTestFileLines(text) {

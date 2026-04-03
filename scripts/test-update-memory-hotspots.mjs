@@ -1,9 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { intFlag, parseFlagArgs, stringFlag, stringListFlag } from "./lib/arg-utils.mjs";
 import { parseMemoryTraceSummaryLines } from "./test-parallel-memory.mjs";
 import { normalizeTrackedRepoPath, tryReadJsonFile, writeJsonFile } from "./test-report-utils.mjs";
 import { unitMemoryHotspotManifestPath } from "./test-runner-manifest.mjs";
+import { loadHotspotInputTexts } from "./test-update-memory-hotspots-sources.mjs";
 import { matchesHotspotSummaryLane } from "./test-update-memory-hotspots-utils.mjs";
 
 if (process.argv.slice(2).includes("--help")) {
@@ -19,6 +18,7 @@ if (process.argv.slice(2).includes("--help")) {
       "  --lane <name>              Primary lane name to match (default: unit-fast)",
       "  --lane-prefix <prefix>     Additional lane prefixes to include (repeatable)",
       "  --log <path>               Memory trace log to ingest (repeatable, required)",
+      "  --gh-job <id>              GitHub Actions job id to ingest via gh (repeatable)",
       "  --min-delta-kb <kb>        Minimum RSS delta to retain (default: 262144)",
       "  --limit <count>            Max hotspot entries to retain (default: 64)",
       "  --help                     Show this help text",
@@ -26,6 +26,7 @@ if (process.argv.slice(2).includes("--help")) {
       "Examples:",
       "  node scripts/test-update-memory-hotspots.mjs --log /tmp/unit-fast.log",
       "  node scripts/test-update-memory-hotspots.mjs --log a.log --log b.log --lane-prefix unit-fast-batch-",
+      "  node scripts/test-update-memory-hotspots.mjs --gh-job 69804189668 --gh-job 69804189672",
     ].join("\n"),
   );
   process.exit(0);
@@ -40,6 +41,7 @@ function parseArgs(argv) {
       lane: "unit-fast",
       lanePrefixes: [],
       logs: [],
+      ghJobs: [],
       minDeltaKb: 256 * 1024,
       limit: 64,
     },
@@ -49,6 +51,7 @@ function parseArgs(argv) {
       stringFlag("--lane", "lane"),
       stringListFlag("--lane-prefix", "lanePrefixes"),
       stringListFlag("--log", "logs"),
+      stringListFlag("--gh-job", "ghJobs"),
       intFlag("--min-delta-kb", "minDeltaKb", { min: 1 }),
       intFlag("--limit", "limit", { min: 1 }),
     ],
@@ -92,8 +95,8 @@ function mergeHotspotEntry(aggregated, file, value) {
 
 const opts = parseArgs(process.argv.slice(2));
 
-if (opts.logs.length === 0) {
-  console.error("[test-update-memory-hotspots] pass at least one --log <path>.");
+if (opts.logs.length === 0 && opts.ghJobs.length === 0) {
+  console.error("[test-update-memory-hotspots] pass at least one --log <path> or --gh-job <id>.");
   process.exit(2);
 }
 
@@ -104,8 +107,8 @@ if (existing) {
     mergeHotspotEntry(aggregated, file, value);
   }
 }
-for (const logPath of opts.logs) {
-  const text = fs.readFileSync(logPath, "utf8");
+for (const input of loadHotspotInputTexts({ logPaths: opts.logs, ghJobs: opts.ghJobs })) {
+  const text = input.text;
   const summaries = parseMemoryTraceSummaryLines(text).filter((summary) =>
     matchesHotspotSummaryLane(summary.lane, opts.lane, opts.lanePrefixes),
   );
@@ -116,7 +119,7 @@ for (const logPath of opts.logs) {
       }
       mergeHotspotEntry(aggregated, record.file, {
         deltaKb: record.deltaKb,
-        sources: [`${path.basename(logPath, path.extname(logPath))}:${summary.lane}`],
+        sources: [`${input.sourceName}:${summary.lane}`],
       });
     }
   }
