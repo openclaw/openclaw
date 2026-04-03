@@ -1,4 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeSlackWebhookPath } from "./paths.js";
+
+export { normalizeSlackWebhookPath } from "./paths.js";
 
 export type SlackHttpRequestHandler = (
   req: IncomingMessage,
@@ -13,14 +16,6 @@ type RegisterSlackHttpHandlerArgs = {
 };
 
 const slackHttpRoutes = new Map<string, SlackHttpRequestHandler>();
-
-export function normalizeSlackWebhookPath(path?: string | null): string {
-  const trimmed = path?.trim();
-  if (!trimmed) {
-    return "/slack/events";
-  }
-  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-}
 
 export function registerSlackHttpHandler(params: RegisterSlackHttpHandlerArgs): () => void {
   const normalizedPath = normalizeSlackWebhookPath(params.path);
