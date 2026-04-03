@@ -329,13 +329,28 @@ async function sendTextWithMedia(
     mediaMaxBytes,
   } = ctx;
 
+  // For channel conversations with a stored thread root, send proactively into
+  // the thread instead of creating a new top-level channel post.
+  const isChannel = ref.conversation?.conversationType?.toLowerCase() === "channel";
+  const proactiveReplyStyle = isChannel && ref.threadRootMessageId ? "thread" : "top-level";
+  const proactiveRef =
+    isChannel && ref.threadRootMessageId
+      ? {
+          ...ref,
+          conversation: {
+            ...ref.conversation!,
+            id: `${ref.conversation!.id};messageid=${ref.threadRootMessageId}`,
+          },
+        }
+      : ref;
+
   let messageIds: string[];
   try {
     messageIds = await sendMSTeamsMessages({
-      replyStyle: "top-level",
+      replyStyle: proactiveReplyStyle,
       adapter,
       appId,
-      conversationRef: ref,
+      conversationRef: proactiveRef,
       messages: [{ text: text || undefined, mediaUrl }],
       retry: {},
       onRetry: (event) => {
@@ -381,9 +396,22 @@ async function sendProactiveActivityRaw({
   activity,
 }: ProactiveActivityRawParams): Promise<string> {
   const baseRef = buildConversationReference(ref);
+  // Thread-aware proactive send: for channel threads, set activityId and
+  // append ;messageid= so files land in the correct thread.
+  const isChannel = ref.conversation?.conversationType?.toLowerCase() === "channel";
+  const threadActivityId =
+    isChannel && ref.threadRootMessageId ? ref.threadRootMessageId : undefined;
   const proactiveRef = {
     ...baseRef,
-    activityId: undefined,
+    activityId: threadActivityId,
+    ...(threadActivityId && baseRef.conversation
+      ? {
+          conversation: {
+            ...baseRef.conversation,
+            id: `${baseRef.conversation.id};messageid=${threadActivityId}`,
+          },
+        }
+      : {}),
   };
 
   let messageId = "unknown";

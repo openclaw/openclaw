@@ -497,17 +497,25 @@ export async function sendMSTeamsMessages(params: {
     threadActivityId?: string,
   ): Promise<string[]> => {
     const baseRef = buildConversationReference(params.conversationRef);
-    const isChannel = params.conversationRef.conversation?.conversationType === "channel";
+const isChannel =
+      params.conversationRef.conversation?.conversationType?.toLowerCase() === "channel";
+    // Prefer an explicit threadActivityId argument (passed from withRevokedProxyFallback),
+    // then fall back to the stored threadRootMessageId from the conversation reference.
+    const effectiveThreadId =
+      threadActivityId ??
+      (isChannel && params.conversationRef.threadRootMessageId
+        ? params.conversationRef.threadRootMessageId
+        : undefined);
     // For Teams channels, reconstruct the threaded conversation ID so the
     // proactive message lands in the correct thread instead of creating a
     // new top-level post in the channel.
     const conversationId =
-      isChannel && threadActivityId
-        ? `${baseRef.conversation.id};messageid=${threadActivityId}`
+      isChannel && effectiveThreadId
+        ? `${baseRef.conversation.id};messageid=${effectiveThreadId}`
         : baseRef.conversation.id;
     const proactiveRef: MSTeamsConversationReference = {
       ...baseRef,
-      activityId: undefined,
+      activityId: effectiveThreadId,
       conversation: { ...baseRef.conversation, id: conversationId },
     };
 
@@ -521,7 +529,10 @@ export async function sendMSTeamsMessages(params: {
   if (params.replyStyle === "thread") {
     const ctx = params.context;
     if (!ctx) {
-      throw new Error("Missing context for replyStyle=thread");
+      // No TurnContext available (proactive send path). Go straight to sendProactively
+      // with preserveThread=true so the message lands in the thread.
+      // The conversationRef already has ;messageid=THREAD_ROOT in conversation.id.
+      return await sendProactively(messages, 0);
     }
     const threadActivityId = params.conversationRef.activityId;
     const messageIds: string[] = [];
