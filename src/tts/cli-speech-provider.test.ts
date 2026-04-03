@@ -211,6 +211,27 @@ describe("CLI speech provider", () => {
       expect(args[5]).toBe("af_heart");
     });
 
+    it("leaves unconfigured {{VOICE}}/{{MODEL}} placeholders intact", async () => {
+      const config = makeConfig({
+        command: "/usr/local/bin/kokoro-tts",
+        args: ["--text", "{{TEXT_FILE}}", "--out", "{{OUTPUT_FILE}}", "--voice", "{{VOICE}}", "--model", "{{MODEL}}"],
+        // voice and model intentionally omitted
+      });
+
+      await provider.synthesize({
+        text: "Test",
+        cfg: {} as OpenClawConfig,
+        config,
+        target: "audio-file",
+      });
+
+      const [, args] = execFileMock.mock.calls[0];
+      expect(args[4]).toBe("--voice");
+      expect(args[5]).toBe("{{VOICE}}");
+      expect(args[6]).toBe("--model");
+      expect(args[7]).toBe("{{MODEL}}");
+    });
+
     it("throws when command is not configured", async () => {
       const config = makeConfig(undefined);
       await expect(
