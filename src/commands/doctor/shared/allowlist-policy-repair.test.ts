@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { maybeRepairAllowlistPolicyAllowFrom } from "./allowlist-policy-repair.js";
 
 const { readChannelAllowFromStoreMock } = vi.hoisted(() => ({
   readChannelAllowFromStoreMock: vi.fn(),
@@ -8,12 +9,8 @@ vi.mock("../../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: readChannelAllowFromStoreMock,
 }));
 
-let maybeRepairAllowlistPolicyAllowFrom: typeof import("./allowlist-policy-repair.js").maybeRepairAllowlistPolicyAllowFrom;
-
 describe("doctor allowlist-policy repair", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ maybeRepairAllowlistPolicyAllowFrom } = await import("./allowlist-policy-repair.js"));
+  beforeEach(() => {
     readChannelAllowFromStoreMock.mockReset();
   });
 

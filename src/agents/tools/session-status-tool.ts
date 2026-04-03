@@ -1,7 +1,11 @@
 import { Type } from "@sinclair/typebox";
-import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
-import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
-import { buildStatusMessage } from "../../auto-reply/status.js";
+import { buildStatusText } from "../../auto-reply/reply/commands-status.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -12,20 +16,14 @@ import {
 } from "../../config/sessions.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
-  formatUsageWindowSummary,
-  loadProviderUsageSummary,
-  resolveUsageProviderId,
-} from "../../infra/provider-usage.js";
-import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolveAgentConfig, resolveAgentDir } from "../agent-scope.js";
-import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
-import { resolveModelAuthLabel } from "../model-auth-label.js";
+import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
+import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -118,6 +116,30 @@ function resolveStoreScopedRequesterKey(params: {
   return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
 }
 
+function formatSessionTaskLine(params: {
+  relatedSessionKey: string;
+  callerOwnerKey: string;
+}): string | undefined {
+  const snapshot = buildTaskStatusSnapshotForRelatedSessionKeyForOwner({
+    relatedSessionKey: params.relatedSessionKey,
+    callerOwnerKey: params.callerOwnerKey,
+  });
+  const task = snapshot.focus;
+  if (!task) {
+    return undefined;
+  }
+  const headline =
+    snapshot.activeCount > 0
+      ? `${snapshot.activeCount} active`
+      : snapshot.recentFailureCount > 0
+        ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
+        : `latest ${task.status.replaceAll("_", " ")}`;
+  const title = formatTaskStatusTitle(task);
+  const detail = formatTaskStatusDetail(task);
+  const parts = [headline, task.runtime, title, detail].filter(Boolean);
+  return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
+}
+
 async function resolveModelOverride(params: {
   cfg: OpenClawConfig;
   raw: string;
@@ -191,7 +213,7 @@ export function createSessionStatusTool(opts?: {
     label: "Session Status",
     name: "session_status",
     description:
-      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides).",
+      "Show a /status-equivalent session status card (usage + time + cost when available), including linked background task context when present. Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides).",
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -205,7 +227,7 @@ export function createSessionStatusTool(opts?: {
       const requesterAgentId = resolveAgentIdFromSessionKey(
         opts?.agentSessionKey ?? effectiveRequesterKey,
       );
-      const visibilityRequesterKey = effectiveRequesterKey.trim();
+      const visibilityRequesterKey = (opts?.agentSessionKey ?? effectiveRequesterKey).trim();
       const usesLegacyMainAlias = alias === mainKey;
       const isLegacyMainVisibilityKey = (sessionKey: string) => {
         const trimmed = sessionKey.trim();
@@ -254,7 +276,8 @@ export function createSessionStatusTool(opts?: {
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
-      let resolvedTargetViaSessionId = false;
+      const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
+      let resolvedViaSessionId = false;
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
@@ -329,7 +352,7 @@ export function createSessionStatusTool(opts?: {
           }
           // If resolution points at another agent, enforce A2A policy before switching stores.
           ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
-          resolvedTargetViaSessionId = true;
+          resolvedViaSessionId = true;
           requestedKeyRaw = visibleSession.key;
           agentId = resolveAgentIdFromSessionKey(visibleSession.key);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -367,13 +390,15 @@ export function createSessionStatusTool(opts?: {
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
-      if (resolvedTargetViaSessionId || (opts?.sandboxed === true && !isExplicitAgentKey)) {
-        const access = visibilityGuard.check(
-          normalizeVisibilityTargetSessionKey(resolved.key, agentId),
-        );
-        if (!access.allowed) {
-          throw new Error(access.error);
-        }
+      // Preserve caller-scoped raw-key/current lookups as "self" for visibility checks.
+      const visibilityTargetKey =
+        !resolvedViaSessionId &&
+        (requestedKeyInput === "current" || resolved.key === requestedKeyInput)
+          ? visibilityRequesterKey
+          : normalizeVisibilityTargetSessionKey(resolved.key, agentId);
+      const access = visibilityGuard.check(visibilityTargetKey);
+      if (!access.allowed) {
+        throw new Error(access.error);
       }
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
@@ -412,7 +437,6 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
-      const agentDir = resolveAgentDir(cfg, agentId);
       const runtimeModelIdentity = resolveSessionModelIdentityRef(
         cfg,
         resolved.entry,
@@ -430,121 +454,62 @@ export function createSessionStatusTool(opts?: {
       const defaultModelForCard = hasExplicitModelOverride
         ? configured.model
         : runtimeModelForCard || configured.model;
-      // Preserve the "provider unknown" case for legacy runtime-only sessions so the
-      // status card does not synthesize a configured provider/model pair that never ran.
       const statusSessionEntry =
         !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
           ? { ...resolved.entry, providerOverride: "" }
           : resolved.entry;
       const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
       const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
-      const usageProvider = resolveUsageProviderId(providerForCard);
-      let usageLine: string | undefined;
-      if (usageProvider) {
-        try {
-          const usageSummary = await loadProviderUsageSummary({
-            timeoutMs: 3500,
-            providers: [usageProvider],
-            agentDir,
-          });
-          const snapshot = usageSummary.providers.find((entry) => entry.provider === usageProvider);
-          if (snapshot) {
-            const formatted = formatUsageWindowSummary(snapshot, {
-              now: Date.now(),
-              maxWindows: 2,
-              includeResets: true,
-            });
-            if (formatted && !formatted.startsWith("error:")) {
-              usageLine = `📊 Usage: ${formatted}`;
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
-
+      const primaryModelLabel =
+        providerForCard && defaultModelForCard
+          ? `${providerForCard}/${defaultModelForCard}`
+          : defaultModelForCard;
       const isGroup =
-        resolved.entry.chatType === "group" ||
-        resolved.entry.chatType === "channel" ||
+        statusSessionEntry.chatType === "group" ||
+        statusSessionEntry.chatType === "channel" ||
         resolved.key.includes(":group:") ||
         resolved.key.includes(":channel:");
-      const groupActivation = isGroup
-        ? (normalizeGroupActivation(resolved.entry.groupActivation) ?? "mention")
-        : undefined;
-
-      const queueSettings = resolveQueueSettings({
-        cfg,
-        channel:
-          resolved.entry.channel ??
-          resolved.entry.lastChannel ??
-          resolved.entry.origin?.provider ??
-          "unknown",
-        sessionEntry: resolved.entry,
+      const taskLine = formatSessionTaskLine({
+        relatedSessionKey: resolved.key,
+        callerOwnerKey: visibilityRequesterKey,
       });
-      const queueKey = resolved.key ?? resolved.entry.sessionId;
-      const queueDepth = queueKey ? getFollowupQueueDepth(queueKey) : 0;
-      const queueOverrides = Boolean(
-        resolved.entry.queueDebounceMs ?? resolved.entry.queueCap ?? resolved.entry.queueDrop,
-      );
-
-      const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-      const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
-      const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
-      const timeLine = userTime
-        ? `🕒 Time: ${userTime} (${userTimezone})`
-        : `🕒 Time zone: ${userTimezone}`;
-
-      const agentDefaults = cfg.agents?.defaults ?? {};
-      const agentConfig = resolveAgentConfig(cfg, agentId);
-      const defaultLabel = defaultProviderForCard
-        ? `${defaultProviderForCard}/${defaultModelForCard}`
-        : defaultModelForCard;
-      const agentModel =
-        typeof agentDefaults.model === "object" && agentDefaults.model
-          ? { ...agentDefaults.model, primary: defaultLabel }
-          : { primary: defaultLabel };
-      const statusText = buildStatusMessage({
-        config: cfg,
-        agent: {
-          ...agentDefaults,
-          model: agentModel,
-          thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,
-        },
-        agentId,
-        explicitConfiguredContextTokens:
-          typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
-            ? agentDefaults.contextTokens
-            : undefined,
+      const statusText = await buildStatusText({
+        cfg,
         sessionEntry: statusSessionEntry,
         sessionKey: resolved.key,
-        sessionStorePath: storePath,
-        groupActivation,
-        modelAuth: resolveModelAuthLabel({
-          provider: providerForCard,
-          cfg,
-          sessionEntry: statusSessionEntry,
-          agentDir,
-        }),
-        usageLine,
-        timeLine,
-        queue: {
-          mode: queueSettings.mode,
-          depth: queueDepth,
-          debounceMs: queueSettings.debounceMs,
-          cap: queueSettings.cap,
-          dropPolicy: queueSettings.dropPolicy,
-          showDetails: queueOverrides,
-        },
-        includeTranscriptUsage: true,
+        parentSessionKey: statusSessionEntry.parentSessionKey,
+        sessionScope: cfg.session?.scope,
+        storePath,
+        statusChannel:
+          statusSessionEntry.channel ??
+          statusSessionEntry.lastChannel ??
+          statusSessionEntry.origin?.provider ??
+          "unknown",
+        provider: providerForCard,
+        model: defaultModelForCard,
+        resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
+        resolvedFastMode: statusSessionEntry.fastMode,
+        resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
+        resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
+        resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
+        resolveDefaultThinkingLevel: async () => cfg.agents?.defaults?.thinkingDefault,
+        isGroup,
+        defaultGroupActivation: () => "mention",
+        taskLineOverride: taskLine,
+        skipDefaultTaskLookup: true,
+        primaryModelLabelOverride: primaryModelLabel,
+        ...(providerForCard ? {} : { modelAuthOverride: undefined }),
       });
+      const fullStatusText =
+        taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
 
       return {
-        content: [{ type: "text", text: statusText }],
+        content: [{ type: "text", text: fullStatusText }],
         details: {
           ok: true,
           sessionKey: resolved.key,
           changedModel,
-          statusText,
+          statusText: fullStatusText,
         },
       };
     },

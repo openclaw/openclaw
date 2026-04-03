@@ -337,7 +337,22 @@ export function resolveProfile(
     };
   }
 
-  if (rawProfileUrl) {
+  // When both cdpPort and cdpUrl are set and the URL contains a
+  // /devtools/browser/ path (a session-specific WebSocket ID), prefer
+  // cdpPort — the HTTP endpoint is stable across Chrome restarts while the
+  // WS path goes stale.  For cloud CDP services (e.g. Browserbase) that
+  // use WSS URLs without a devtools path, preserve the full URL.
+  const hasStaleWsPath =
+    rawProfileUrl !== "" &&
+    cdpPort > 0 &&
+    /^wss?:\/\//i.test(rawProfileUrl) &&
+    /\/devtools\/browser\//i.test(rawProfileUrl);
+
+  if (hasStaleWsPath) {
+    const parsed = new URL(rawProfileUrl);
+    cdpHost = parsed.hostname;
+    cdpUrl = `${resolved.cdpProtocol}://${cdpHost}:${cdpPort}`;
+  } else if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
     cdpHost = parsed.parsed.hostname;
     cdpPort = parsed.port;

@@ -7,10 +7,6 @@
       "durationMs": 6483.10009765625,
       "testCount": 5
     },
-    "src/infra/outbound/targets.channel-resolution.test.ts": {
-      "durationMs": 5879.394287109375,
-      "testCount": 2
-    },
     "src/cron/service.issue-regressions.test.ts": {
       "durationMs": 4524.16552734375,
       "testCount": 39

@@ -5,6 +5,12 @@ import type { TSchema } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
+  normalizeProviderToolSchemasWithPlugin,
+  sanitizeProviderReplayHistoryWithPlugin,
+  validateProviderReplayTurnsWithPlugin,
+} from "../../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../../plugins/types.js";
+import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
@@ -16,6 +22,8 @@ import {
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
+  validateAnthropicTurns,
+  validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
@@ -23,6 +31,7 @@ import {
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
@@ -407,12 +416,39 @@ export function sanitizeToolsForGoogle<
 >(params: {
   tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  modelId?: string;
+  modelApi?: string | null;
+  model?: ProviderRuntimeModel;
 }): AgentTool<TSchemaType, TResult>[] {
+  const provider = params.provider.trim();
+  const pluginNormalized = normalizeProviderToolSchemasWithPlugin({
+    provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    context: {
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      provider,
+      modelId: params.modelId,
+      modelApi: params.modelApi,
+      model: params.model,
+      tools: params.tools as unknown as AnyAgentTool[],
+    },
+  });
+  if (Array.isArray(pluginNormalized)) {
+    return pluginNormalized as AgentTool<TSchemaType, TResult>[];
+  }
+
   // Cloud Code Assist uses the OpenAPI 3.03 `parameters` field for both Gemini
   // AND Claude models.  This field does not support JSON Schema keywords such as
   // patternProperties, additionalProperties, $ref, etc.  We must clean schemas
   // for every provider that routes through this path.
-  if (params.provider !== "google-gemini-cli") {
+  if (provider !== "google-gemini-cli") {
     return params.tools;
   }
   return params.tools.map((tool) => {
@@ -428,8 +464,17 @@ export function sanitizeToolsForGoogle<
   });
 }
 
-export function logToolSchemasForGoogle(params: { tools: AgentTool[]; provider: string }) {
-  if (params.provider !== "google-gemini-cli") {
+export function logToolSchemasForGoogle(params: {
+  tools: AgentTool[];
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  modelId?: string;
+  modelApi?: string | null;
+  model?: ProviderRuntimeModel;
+}) {
+  if (params.provider.trim() !== "google-gemini-cli") {
     return;
   }
   const toolNames = params.tools.map((tool, index) => `${index}:${tool.name}`);
@@ -581,6 +626,9 @@ export async function sanitizeSessionHistory(params: {
   provider?: string;
   allowedToolNames?: Iterable<string>;
   config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  model?: ProviderRuntimeModel;
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
@@ -592,6 +640,10 @@ export async function sanitizeSessionHistory(params: {
       modelApi: params.modelApi,
       provider: params.provider,
       modelId: params.modelId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      model: params.model,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
   const canonicalizedAssistantHistory = canonicalizeAssistantHistoryMessages({
@@ -627,7 +679,9 @@ export async function sanitizeSessionHistory(params: {
   );
 
   const isOpenAIResponsesApi =
-    params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
+    params.modelApi === "openai-responses" ||
+    params.modelApi === "openai-codex-responses" ||
+    params.modelApi === "azure-openai-responses";
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
   const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
   const modelChanged = priorSnapshot
@@ -643,6 +697,29 @@ export async function sanitizeSessionHistory(params: {
         downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage),
       )
     : sanitizedCompactionUsage;
+  const provider = params.provider?.trim();
+  const providerSanitized =
+    provider && provider.length > 0
+      ? await sanitizeProviderReplayHistoryWithPlugin({
+          provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          context: {
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+            provider,
+            modelId: params.modelId,
+            modelApi: params.modelApi,
+            model: params.model,
+            sessionId: params.sessionId,
+            messages: sanitizedOpenAI,
+            allowedToolNames: params.allowedToolNames,
+          },
+        })
+      : undefined;
+  const sanitizedWithProvider = providerSanitized ?? sanitizedOpenAI;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
@@ -654,13 +731,13 @@ export async function sanitizeSessionHistory(params: {
   }
 
   if (!policy.applyGoogleTurnOrdering) {
-    return sanitizedOpenAI;
+    return sanitizedWithProvider;
   }
 
   // Google models use the full wrapper with logging and session markers.
   if (isGoogleModelApi(params.modelApi)) {
     return applyGoogleTurnOrderingFix({
-      messages: sanitizedOpenAI,
+      messages: sanitizedWithProvider,
       modelApi: params.modelApi,
       sessionManager: params.sessionManager,
       sessionId: params.sessionId,
@@ -671,5 +748,58 @@ export async function sanitizeSessionHistory(params: {
   // conversations that start with an assistant turn (e.g. delivery-mirror
   // messages after /new).  Apply the same ordering fix without the
   // Google-specific session markers.  See #38962.
-  return sanitizeGoogleTurnOrdering(sanitizedOpenAI);
+  return sanitizeGoogleTurnOrdering(sanitizedWithProvider);
+}
+
+export async function validateReplayTurns(params: {
+  messages: AgentMessage[];
+  modelApi?: string | null;
+  modelId?: string;
+  provider?: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  model?: ProviderRuntimeModel;
+  sessionId?: string;
+  policy?: TranscriptPolicy;
+}): Promise<AgentMessage[]> {
+  const policy =
+    params.policy ??
+    resolveTranscriptPolicy({
+      modelApi: params.modelApi,
+      provider: params.provider,
+      modelId: params.modelId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      model: params.model,
+    });
+  const provider = params.provider?.trim();
+  if (provider) {
+    const providerValidated = await validateProviderReplayTurnsWithPlugin({
+      provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      context: {
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        provider,
+        modelId: params.modelId,
+        modelApi: params.modelApi,
+        model: params.model,
+        sessionId: params.sessionId,
+        messages: params.messages,
+      },
+    });
+    if (providerValidated) {
+      return providerValidated;
+    }
+  }
+
+  const validatedGemini = policy.validateGeminiTurns
+    ? validateGeminiTurns(params.messages)
+    : params.messages;
+  return policy.validateAnthropicTurns ? validateAnthropicTurns(validatedGemini) : validatedGemini;
 }

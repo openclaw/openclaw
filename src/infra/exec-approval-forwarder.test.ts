@@ -29,6 +29,11 @@ afterEach(() => {
 
 const emptyRegistry = createTestRegistry([]);
 
+async function flushPendingDelivery(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 function isDiscordExecApprovalClientEnabledForTest(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -90,7 +95,7 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
             },
             {
               label: "Allow Always",
-              value: `/approve ${params.request.id} always`,
+              value: `/approve ${params.request.id} allow-always`,
               style: "primary",
             },
             {
@@ -110,7 +115,7 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
         buttons: [
           [
             { text: "Allow Once", callback_data: `/approve ${params.request.id} allow-once` },
-            { text: "Allow Always", callback_data: `/approve ${params.request.id} always` },
+            { text: "Allow Always", callback_data: `/approve ${params.request.id} allow-always` },
           ],
           [{ text: "Deny", callback_data: `/approve ${params.request.id} deny` }],
         ],
@@ -368,9 +373,8 @@ describe("exec approval forwarder", () => {
 
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
-    await vi.waitFor(() => {
-      expect(deliver).toHaveBeenCalled();
-    });
+    await flushPendingDelivery();
+    expect(deliver).toHaveBeenCalled();
     expect(beforeDeliverPayload).toHaveBeenCalledWith(
       expect.objectContaining({
         hint: { kind: "approval-pending", approvalKind: "exec" },
@@ -461,7 +465,7 @@ describe("exec approval forwarder", () => {
                     },
                     {
                       label: "Allow Always",
-                      value: "/approve req-1 always",
+                      value: "/approve req-1 allow-always",
                       style: "primary",
                     },
                     {
@@ -479,6 +483,31 @@ describe("exec approval forwarder", () => {
     );
   });
 
+  it("stores exec metadata on generic forwarded fallback payloads", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            channelData: expect.objectContaining({
+              execApproval: expect.objectContaining({
+                approvalId: "req-1",
+                approvalKind: "exec",
+                agentId: "main",
+                sessionKey: "agent:main:main",
+              }),
+            }),
+          }),
+        ],
+      }),
+    );
+  });
+
   it("formats single-line commands as inline code", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
@@ -489,6 +518,25 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Command: `echo hello`");
     expect(text).toContain("Expires in: 5s");
     expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
+  });
+
+  it("omits allow-always from forwarded fallback text when ask=always", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          ask: "always",
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("Reply with: /approve <id> allow-once|deny");
+    expect(text).not.toContain("allow-once|allow-always|deny");
+    expect(text).toContain("Allow Always is unavailable");
   });
 
   it.each([

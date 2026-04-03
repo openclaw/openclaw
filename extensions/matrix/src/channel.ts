@@ -35,8 +35,9 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { matrixMessageActions } from "./actions.js";
-import { matrixApprovalAuth } from "./approval-auth.js";
+import { matrixApprovalCapability } from "./approval-native.js";
 import { MatrixConfigSchema } from "./config-schema.js";
+import { shouldSuppressLocalMatrixExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveMatrixGroupRequireMention,
   resolveMatrixGroupToolPolicy,
@@ -62,6 +63,7 @@ import {
 import { getMatrixRuntime } from "./runtime.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import { matrixSetupAdapter } from "./setup-core.js";
+import { matrixSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
@@ -154,6 +156,7 @@ const matrixConfigAdapter = createScopedChannelConfigAdapter<
     "name",
     "homeserver",
     "allowPrivateNetwork",
+    "proxy",
     "userId",
     "accessToken",
     "password",
@@ -288,6 +291,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
     base: {
       id: "matrix",
       meta,
+      setupWizard: matrixSetupWizard,
       capabilities: {
         chatTypes: ["direct", "group", "thread"],
         polls: true,
@@ -309,7 +313,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             },
           }),
       },
-      auth: matrixApprovalAuth,
+      approvalCapability: matrixApprovalCapability,
       groups: {
         resolveRequireMention: resolveMatrixGroupRequireMention,
         resolveToolPolicy: resolveMatrixGroupToolPolicy,
@@ -439,6 +443,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
               accountId: account.accountId,
               allowPrivateNetwork: auth.allowPrivateNetwork,
               ssrfPolicy: auth.ssrfPolicy,
+              dispatcherPolicy: auth.dispatcherPolicy,
             });
           } catch (err) {
             return {
@@ -554,6 +559,12 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
+      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+        shouldSuppressLocalMatrixExecApprovalPrompt({
+          cfg,
+          accountId,
+          payload,
+        }),
       ...createRuntimeOutboundDelegates({
         getRuntime: loadMatrixChannelRuntime,
         sendText: {

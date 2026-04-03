@@ -1,8 +1,10 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import chokidar, { type FSWatcher } from "chokidar";
+import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
   createSubsystemLogger,
   resolveMemorySearchConfig,
@@ -17,7 +19,6 @@ import {
   buildSessionEntry,
   deriveQmdScopeChannel,
   deriveQmdScopeChatType,
-  extractKeywords,
   isQmdScopeAllowed,
   listSessionFilesForAgent,
   parseQmdQueryJson,
@@ -53,8 +54,15 @@ const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
-const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
+const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
+const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
+  factor: 1.2,
+  minTimeout: 250,
+  maxTimeout: 10_000,
+  randomize: true,
+} as const;
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
+const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -70,12 +78,20 @@ type McporterState = {
   daemonStart: Promise<void> | null;
 };
 
-let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
+type QmdEmbedQueueState = {
+  tail: Promise<void>;
+};
 
 function getMcporterState(): McporterState {
   return resolveGlobalSingleton<McporterState>(MCPORTER_STATE_KEY, () => ({
     coldStartWarned: false,
     daemonStart: null,
+  }));
+}
+
+function getQmdEmbedQueueState(): QmdEmbedQueueState {
+  return resolveGlobalSingleton<QmdEmbedQueueState>(QMD_EMBED_QUEUE_KEY, () => ({
+    tail: Promise.resolve(),
   }));
 }
 
@@ -85,52 +101,44 @@ function hasHanScript(value: string): boolean {
 
 function normalizeHanBm25Query(query: string): string {
   const trimmed = query.trim();
-  if (!trimmed || !hasHanScript(trimmed)) {
-    return trimmed;
+  // Keep Han/CJK BM25 queries intact so OpenClaw search semantics match direct qmd search.
+  return trimmed;
+}
+
+function parseQmdStatusVectorCount(raw: string): number | null {
+  const match = raw.match(/(?:^|\n)\s*Vectors:\s*(\d+)\b/i);
+  if (!match) {
+    return null;
   }
-  const keywords = extractKeywords(trimmed);
-  const normalizedKeywords: string[] = [];
-  const seen = new Set<string>();
-  for (const keyword of keywords) {
-    const token = keyword.trim();
-    if (!token || seen.has(token)) {
-      continue;
-    }
-    const includesHan = hasHanScript(token);
-    // Han unigrams are usually too broad for BM25 and can drown signal.
-    if (includesHan && Array.from(token).length < 2) {
-      continue;
-    }
-    if (!includesHan && token.length < 2) {
-      continue;
-    }
-    seen.add(token);
-    normalizedKeywords.push(token);
-    if (normalizedKeywords.length >= QMD_BM25_HAN_KEYWORD_LIMIT) {
-      break;
-    }
+  const count = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(count) ? count : null;
+}
+
+function resolveStableJitterMs(params: { seed: string; windowMs: number }): number {
+  if (params.windowMs <= 0) {
+    return 0;
   }
-  return normalizedKeywords.length > 0 ? normalizedKeywords.join(" ") : trimmed;
+  const hash = crypto.createHash("sha256").update(params.seed).digest();
+  const bucket = hash.readUInt32BE(0);
+  return bucket % (Math.floor(params.windowMs) + 1);
+}
+
+function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
+  const expectedEmbedMs = Math.max(1, embedTimeoutMs);
+  const waitBudgetMs = Math.max(QMD_EMBED_LOCK_MIN_WAIT_MS, expectedEmbedMs * 6);
+  return {
+    retries: {
+      retries: Math.max(60, Math.ceil(waitBudgetMs / QMD_EMBED_LOCK_RETRY_TEMPLATE.maxTimeout)),
+      ...QMD_EMBED_LOCK_RETRY_TEMPLATE,
+    },
+    stale: Math.max(QMD_EMBED_LOCK_MIN_WAIT_MS, expectedEmbedMs * 2),
+  };
 }
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
-}
-
-async function runWithQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
-  const previous = qmdEmbedQueueTail;
-  let release: (() => void) | undefined;
-  qmdEmbedQueueTail = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    release?.();
-  }
 }
 
 type CollectionRoot = {
@@ -261,10 +269,12 @@ export class QmdMemoryManager implements MemorySearchManager {
   private lastEmbedAt: number | null = null;
   private embedBackoffUntil: number | null = null;
   private embedFailureCount = 0;
+  private vectorAvailable: boolean | null = null;
+  private vectorStatusDetail: string | null = null;
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
   private readonly sessionWarm = new Set<string>();
-  private collectionPatternFlag: QmdCollectionPatternFlag | null = null;
+  private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
 
   private constructor(params: {
     cfg: OpenClawConfig;
@@ -363,11 +373,33 @@ export class QmdMemoryManager implements MemorySearchManager {
       }, this.qmd.update.intervalMs);
     }
     if (this.shouldScheduleEmbedTimer()) {
-      this.embedTimer = setInterval(() => {
-        void this.runUpdate("embed-interval").catch((err) => {
-          log.warn(`qmd embed interval update failed (${String(err)})`);
-        });
-      }, this.qmd.update.embedIntervalMs);
+      const startPeriodicEmbedTimer = () => {
+        this.embedTimer = setInterval(() => {
+          void this.runUpdate("embed-interval").catch((err) => {
+            log.warn(`qmd embed interval update failed (${String(err)})`);
+          });
+        }, this.qmd.update.embedIntervalMs);
+      };
+      const initialDelayMs = this.resolveEmbedStartupJitterMs();
+      if (initialDelayMs > 0) {
+        this.embedTimer = setTimeout(() => {
+          this.embedTimer = null;
+          if (this.closed) {
+            return;
+          }
+          void this.runUpdate("embed-interval")
+            .catch((err) => {
+              log.warn(`qmd embed interval update failed (${String(err)})`);
+            })
+            .finally(() => {
+              if (!this.closed) {
+                startPeriodicEmbedTimer();
+              }
+            });
+        }, initialDelayMs);
+      } else {
+        startPeriodicEmbedTimer();
+      }
     }
   }
 
@@ -734,16 +766,17 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private shouldRebindCollection(collection: ManagedCollection, listed: ListedCollection): boolean {
+    if (typeof listed.pattern === "string" && listed.pattern !== collection.pattern) {
+      return true;
+    }
     if (!listed.path) {
       // Older qmd versions may only return names from `collection list --json`.
-      // Do not perform destructive rebinds when metadata is incomplete: remove+add
-      // can permanently drop collections if add fails (for example on timeout).
+      // If the pattern is also missing, do not perform destructive rebinds when
+      // metadata is incomplete: remove+add can permanently drop collections if
+      // add fails (for example on timeout).
       return false;
     }
     if (!this.pathsMatch(listed.path, collection.path)) {
-      return true;
-    }
-    if (typeof listed.pattern === "string" && listed.pattern !== collection.pattern) {
       return true;
     }
     return false;
@@ -764,7 +797,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     const message = err instanceof Error ? err.message : String(err);
     const lower = message.toLowerCase();
     return (
-      (lower.includes("enotdir") || lower.includes("not a directory")) &&
+      (lower.includes("enotdir") ||
+        lower.includes("not a directory") ||
+        lower.includes("enoent") ||
+        lower.includes("no such file")) &&
       NUL_MARKER_RE.test(message)
     );
   }
@@ -982,7 +1018,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       const snippet = entry.snippet?.slice(0, this.qmd.limits.maxSnippetChars) ?? "";
-      const lines = this.extractSnippetLines(snippet);
+      const lines = this.resolveSnippetLines(entry, snippet);
       const score = typeof entry.score === "number" ? entry.score : 0;
       const minScore = opts?.minScore ?? 0;
       if (score < minScore) {
@@ -1070,7 +1106,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       dbPath: this.indexPath,
       sources: Array.from(this.sources),
       sourceCounts: counts.sourceCounts,
-      vector: { enabled: true, available: true },
+      vector: {
+        enabled: true,
+        available: this.vectorAvailable ?? undefined,
+        loadError: this.vectorStatusDetail ?? undefined,
+      },
       batch: {
         enabled: false,
         failures: 0,
@@ -1090,11 +1130,36 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
-    return { ok: true };
+    const ok = await this.probeVectorAvailability();
+    return {
+      ok,
+      error: ok ? undefined : (this.vectorStatusDetail ?? "QMD semantic vectors are unavailable"),
+    };
   }
 
   async probeVectorAvailability(): Promise<boolean> {
-    return true;
+    try {
+      const result = await this.runQmd(["status"], {
+        timeoutMs: Math.min(this.qmd.limits.timeoutMs, 5_000),
+      });
+      const vectorCount = parseQmdStatusVectorCount(`${result.stdout}\n${result.stderr}`);
+      if (vectorCount === null) {
+        this.vectorAvailable = false;
+        this.vectorStatusDetail = "Could not determine QMD vector status from `qmd status`";
+        return false;
+      }
+      this.vectorAvailable = vectorCount > 0;
+      this.vectorStatusDetail =
+        vectorCount > 0
+          ? null
+          : "QMD index has 0 vectors; semantic search is unavailable until embeddings finish";
+      return this.vectorAvailable;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.vectorAvailable = false;
+      this.vectorStatusDetail = `QMD status probe failed: ${message}`;
+      return false;
+    }
   }
 
   async close(): Promise<void> {
@@ -1107,7 +1172,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.updateTimer = null;
     }
     if (this.embedTimer) {
-      clearInterval(this.embedTimer);
+      clearTimeout(this.embedTimer);
       this.embedTimer = null;
     }
     if (this.watchTimer) {
@@ -1158,7 +1223,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.dirty = false;
       if (this.shouldRunEmbed(force)) {
         try {
-          await runWithQmdEmbedLock(async () => {
+          await this.withQmdEmbedLock(async () => {
             await this.runQmd(["embed"], {
               timeoutMs: this.qmd.update.embedTimeoutMs,
               discardOutput: true,
@@ -1323,6 +1388,49 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const updateIntervalMs = this.qmd.update.intervalMs;
     return updateIntervalMs <= 0 || updateIntervalMs > embedIntervalMs;
+  }
+
+  private resolveEmbedStartupJitterMs(): number {
+    const windowMs = this.qmd.update.embedIntervalMs;
+    if (windowMs <= 0) {
+      return 0;
+    }
+    const customCollections = this.qmd.collections
+      .filter((collection) => collection.kind === "custom")
+      .map((collection) => `${collection.path}\u0000${collection.pattern}`)
+      .toSorted()
+      .join("\u0001");
+    if (!customCollections) {
+      return 0;
+    }
+    return resolveStableJitterMs({
+      seed: `${this.agentId}:${customCollections}`,
+      windowMs,
+    });
+  }
+
+  private async withQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
+    const lockPath = path.join(this.stateDir, "qmd", "embed.lock");
+    const queue = getQmdEmbedQueueState();
+    const previous = queue.tail;
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    queue.tail = previous.then(
+      () => current,
+      () => current,
+    );
+    await previous.catch(() => undefined);
+    try {
+      return await withFileLock(
+        lockPath,
+        resolveQmdEmbedLockOptions(this.qmd.update.embedTimeoutMs),
+        task,
+      );
+    } finally {
+      releaseCurrent();
+    }
   }
 
   private noteEmbedFailure(reason: string, err: unknown): void {
@@ -1680,7 +1788,16 @@ export class QmdMemoryManager implements MemorySearchManager {
       const scoreRaw = item.score;
       const score = typeof scoreRaw === "number" ? scoreRaw : Number(scoreRaw);
       const snippet = typeof item.snippet === "string" ? item.snippet : "";
-      out.push({ docid, score: Number.isFinite(score) ? score : 0, snippet });
+      out.push({
+        docid,
+        score: Number.isFinite(score) ? score : 0,
+        snippet,
+        collection: typeof item.collection === "string" ? item.collection : undefined,
+        file: typeof item.file === "string" ? item.file : undefined,
+        body: typeof item.body === "string" ? item.body : undefined,
+        startLine: this.normalizeSnippetLine(item.start_line ?? item.startLine),
+        endLine: this.normalizeSnippetLine(item.end_line ?? item.endLine),
+      });
     }
     return out;
   }
@@ -2098,16 +2215,67 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private extractSnippetLines(snippet: string): { startLine: number; endLine: number } {
-    const match = SNIPPET_HEADER_RE.exec(snippet);
-    if (match) {
-      const start = Number(match[1]);
-      const count = Number(match[2]);
-      if (Number.isFinite(start) && Number.isFinite(count)) {
-        return { startLine: start, endLine: start + count - 1 };
-      }
+    const headerLines = this.parseSnippetHeaderLines(snippet);
+    if (headerLines) {
+      return headerLines;
     }
     const lines = snippet.split("\n").length;
     return { startLine: 1, endLine: lines };
+  }
+
+  private resolveSnippetLines(
+    entry: QmdQueryResult,
+    snippet: string,
+  ): { startLine: number; endLine: number } {
+    const explicitStart = this.normalizeSnippetLine(entry.startLine);
+    const explicitEnd = this.normalizeSnippetLine(entry.endLine);
+    const headerLines = this.parseSnippetHeaderLines(snippet);
+    if (explicitStart !== undefined && explicitEnd !== undefined) {
+      return explicitStart <= explicitEnd
+        ? { startLine: explicitStart, endLine: explicitEnd }
+        : { startLine: explicitEnd, endLine: explicitStart };
+    }
+    if (explicitStart !== undefined) {
+      if (headerLines) {
+        const width = headerLines.endLine - headerLines.startLine;
+        return {
+          startLine: explicitStart,
+          endLine: explicitStart + Math.max(0, width),
+        };
+      }
+      return { startLine: explicitStart, endLine: explicitStart };
+    }
+    if (explicitEnd !== undefined) {
+      if (headerLines) {
+        const width = headerLines.endLine - headerLines.startLine;
+        return {
+          startLine: Math.max(1, explicitEnd - Math.max(0, width)),
+          endLine: explicitEnd,
+        };
+      }
+      return { startLine: explicitEnd, endLine: explicitEnd };
+    }
+    if (headerLines) {
+      return headerLines;
+    }
+    return { startLine: 1, endLine: snippet.split("\n").length };
+  }
+
+  private normalizeSnippetLine(value: unknown): number | undefined {
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  }
+
+  private parseSnippetHeaderLines(snippet: string): { startLine: number; endLine: number } | null {
+    const match = SNIPPET_HEADER_RE.exec(snippet);
+    if (!match) {
+      return null;
+    }
+    const start = Number(match[1]);
+    const count = Number(match[2]);
+    if (Number.isFinite(start) && Number.isFinite(count)) {
+      return { startLine: start, endLine: start + count - 1 };
+    }
+    return null;
   }
 
   private readCounts(): {
@@ -2191,15 +2359,22 @@ export class QmdMemoryManager implements MemorySearchManager {
     relativeToWorkspace: string,
     absPath: string,
   ): string {
+    const sanitized = collectionRelativePath.replace(/^\/+/, "");
     const insideWorkspace = this.isInsideWorkspace(relativeToWorkspace);
     if (insideWorkspace) {
       const normalized = relativeToWorkspace.replace(/\\/g, "/");
       if (!normalized) {
         return path.basename(absPath);
       }
+      // `qmd/<collection>/...` is a reserved virtual path namespace consumed by
+      // readFile(). If a real workspace file happens to live under `qmd/...`,
+      // return the explicit collection-scoped virtual path so search->read
+      // remains roundtrip-safe.
+      if (normalized === "qmd" || normalized.startsWith("qmd/")) {
+        return `qmd/${collection}/${sanitized}`;
+      }
       return normalized;
     }
-    const sanitized = collectionRelativePath.replace(/^\/+/, "");
     return `qmd/${collection}/${sanitized}`;
   }
 

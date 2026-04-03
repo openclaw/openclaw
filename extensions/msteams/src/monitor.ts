@@ -196,7 +196,7 @@ export async function monitorMSTeamsProvider(
       }
     }
   } catch (err) {
-    runtime.log?.(`msteams resolve failed; using config entries. ${String(err)}`);
+    runtime.log?.(`msteams resolve failed; using config entries. ${formatUnknownError(err)}`);
   }
 
   msteamsCfg = {
@@ -266,24 +266,16 @@ export async function monitorMSTeamsProvider(
     next();
   });
 
-  expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
-  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
-    if (err && typeof err === "object" && "status" in err && err.status === 413) {
-      res.status(413).json({ error: "Payload too large" });
-      return;
-    }
-    next(err);
-  });
-
   // JWT validation — verify Bot Framework tokens using the Teams SDK's
   // JwtValidator (validates signature via JWKS, audience, issuer, expiration).
   const jwtValidator = await createBotFrameworkJwtValidator(creds);
   expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
     // Authorization header is guaranteed by the pre-parse auth gate above.
+    // `serviceUrl` is optional, so authenticate from headers alone before body
+    // I/O to avoid spending memory and CPU on unauthenticated requests.
     const authHeader = req.headers.authorization!;
-    const serviceUrl = (req.body as Record<string, unknown>)?.serviceUrl as string | undefined;
     jwtValidator
-      .validate(authHeader, serviceUrl)
+      .validate(authHeader)
       .then((valid) => {
         if (!valid) {
           log.debug?.("JWT validation failed");
@@ -293,9 +285,18 @@ export async function monitorMSTeamsProvider(
         next();
       })
       .catch((err) => {
-        log.debug?.(`JWT validation error: ${String(err)}`);
+        log.debug?.(`JWT validation error: ${formatUnknownError(err)}`);
         res.status(401).json({ error: "Unauthorized" });
       });
+  });
+
+  expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
+  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
+    if (err && typeof err === "object" && "status" in err && err.status === 413) {
+      res.status(413).json({ error: "Payload too large" });
+      return;
+    }
+    next(err);
   });
 
   // Set up the messages endpoint - use configured path and /api/messages as fallback
@@ -329,7 +330,7 @@ export async function monitorMSTeamsProvider(
     };
     const onError = (err: unknown) => {
       httpServer.off("listening", onListening);
-      log.error("msteams server error", { error: String(err) });
+      log.error("msteams server error", { error: formatUnknownError(err) });
       reject(err);
     };
     httpServer.once("listening", onListening);
@@ -338,7 +339,7 @@ export async function monitorMSTeamsProvider(
   applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
-    log.error("msteams server error", { error: String(err) });
+    log.error("msteams server error", { error: formatUnknownError(err) });
   });
 
   const shutdown = async () => {
@@ -346,7 +347,7 @@ export async function monitorMSTeamsProvider(
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {
-          log.debug?.("msteams server close error", { error: String(err) });
+          log.debug?.("msteams server close error", { error: formatUnknownError(err) });
         }
         resolve();
       });

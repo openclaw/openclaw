@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: string }) => {
   switch (params.provider) {
@@ -64,26 +64,27 @@ let shouldDropThinkingBlocksForModel: typeof import("./provider-capabilities.js"
 let shouldSanitizeGeminiThoughtSignaturesForModel: typeof import("./provider-capabilities.js").shouldSanitizeGeminiThoughtSignaturesForModel;
 let supportsOpenAiCompatTurnValidation: typeof import("./provider-capabilities.js").supportsOpenAiCompatTurnValidation;
 let usesMoonshotThinkingPayloadCompat: typeof import("./provider-capabilities.js").usesMoonshotThinkingPayloadCompat;
-
-async function loadFreshProviderCapabilitiesModuleForTest() {
-  vi.resetModules();
-  ({
-    isAnthropicProviderFamily,
-    isOpenAiProviderFamily,
-    requiresOpenAiCompatibleAnthropicToolPayload,
-    resolveProviderCapabilities,
-    resolveTranscriptToolCallIdMode,
-    shouldDropThinkingBlocksForModel,
-    shouldSanitizeGeminiThoughtSignaturesForModel,
-    supportsOpenAiCompatTurnValidation,
-    usesMoonshotThinkingPayloadCompat,
-  } = await import("./provider-capabilities.js"));
-}
+let providerCapabilityTesting: typeof import("./provider-capabilities.js").__testing;
 
 describe("resolveProviderCapabilities", () => {
-  beforeEach(async () => {
-    await loadFreshProviderCapabilitiesModuleForTest();
+  beforeAll(async () => {
+    ({
+      isAnthropicProviderFamily,
+      isOpenAiProviderFamily,
+      requiresOpenAiCompatibleAnthropicToolPayload,
+      resolveProviderCapabilities,
+      resolveTranscriptToolCallIdMode,
+      shouldDropThinkingBlocksForModel,
+      shouldSanitizeGeminiThoughtSignaturesForModel,
+      supportsOpenAiCompatTurnValidation,
+      usesMoonshotThinkingPayloadCompat,
+      __testing: providerCapabilityTesting,
+    } = await import("./provider-capabilities.js"));
+  });
+
+  beforeEach(() => {
     resolveProviderCapabilitiesWithPluginMock.mockClear();
+    providerCapabilityTesting.resetDepsForTests();
   });
 
   it("returns provider-owned anthropic defaults for ordinary providers", () => {
@@ -151,8 +152,8 @@ describe("resolveProviderCapabilities", () => {
   it("normalizes kimi aliases to the same capability set", () => {
     expect(resolveProviderCapabilities("kimi")).toEqual(resolveProviderCapabilities("kimi-code"));
     expect(resolveProviderCapabilities("kimi-code")).toEqual({
-      anthropicToolSchemaMode: "native",
-      anthropicToolChoiceMode: "native",
+      anthropicToolSchemaMode: "openai-functions",
+      anthropicToolChoiceMode: "openai-string-modes",
       openAiPayloadNormalizationMode: "moonshot-thinking",
       providerFamily: "default",
       preserveAnthropicThinkingSignatures: false,
@@ -205,9 +206,10 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
-  it("treats kimi aliases as native anthropic tool payload providers", () => {
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi")).toBe(false);
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);
+  it("treats kimi aliases as OpenAI-style anthropic tool payload providers", () => {
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi")).toBe(true);
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(true);
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(true);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("anthropic")).toBe(false);
   });
 
@@ -244,6 +246,9 @@ describe("resolveProviderCapabilities", () => {
   it("forwards config and workspace context to plugin capability lookup", () => {
     const config = { plugins: { enabled: true } };
     const env = { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+    const lookup = vi.fn(() => undefined);
+
+    providerCapabilityTesting.setResolveProviderCapabilitiesWithPluginForTest(lookup);
 
     resolveProviderCapabilities("anthropic", {
       config,
@@ -251,7 +256,7 @@ describe("resolveProviderCapabilities", () => {
       env,
     });
 
-    expect(resolveProviderCapabilitiesWithPluginMock).toHaveBeenLastCalledWith({
+    expect(lookup).toHaveBeenLastCalledWith({
       provider: "anthropic",
       config,
       workspaceDir: "/tmp/workspace",

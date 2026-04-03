@@ -25,6 +25,8 @@ export type CronDelivery = {
   mode: CronDeliveryMode;
   channel?: CronMessageChannel;
   to?: string;
+  /** Explicit thread/topic id for channels that support threaded delivery. */
+  threadId?: string | number;
   /** Explicit channel account id for multi-account setups (e.g. multiple Telegram bots). */
   accountId?: string;
   bestEffort?: boolean;
@@ -96,10 +98,8 @@ type CronAgentTurnPayloadFields = {
   externalContentSource?: HookExternalContentSource;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
-  deliver?: boolean;
-  channel?: CronMessageChannel;
-  to?: string;
-  bestEffortDeliver?: boolean;
+  /** Optional tool allow-list; when set, only these tools are sent to the model. */
+  toolsAllow?: string[];
 };
 
 type CronAgentTurnPayload = {
@@ -108,7 +108,9 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<CronAgentTurnPayloadFields>;
+} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
+    toolsAllow?: string[] | null;
+  };
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;

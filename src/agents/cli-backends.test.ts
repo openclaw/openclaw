@@ -288,6 +288,29 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.args).not.toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("bypassPermissions");
   });
+
+  it("keeps bundle MCP enabled for override-only claude-cli config when the plugin registry is absent", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "/usr/local/bin/claude",
+              args: ["-p", "--output-format", "json"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.bundleMcp).toBe(true);
+  });
 });
 
 describe("resolveCliBackendConfig google-gemini-cli defaults", () => {

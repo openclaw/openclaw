@@ -27,6 +27,7 @@ import {
   applyTlonSettingsOverrides,
   buildTlonSettingsMigrations,
   mergeUniqueStrings,
+  shouldMigrateTlonSetting,
 } from "./settings-helpers.js";
 import {
   extractMessageText,
@@ -180,13 +181,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     const migrations = buildTlonSettingsMigrations(account, currentSettings);
 
     for (const { key, fileValue, settingsValue } of migrations) {
-      // Only migrate if file has a value and settings store doesn't
-      const hasFileValue = Array.isArray(fileValue) ? fileValue.length > 0 : fileValue != null;
-      const hasSettingsValue = Array.isArray(settingsValue)
-        ? settingsValue.length > 0
-        : settingsValue != null;
-
-      if (hasFileValue && !hasSettingsValue) {
+      if (shouldMigrateTlonSetting(fileValue, settingsValue)) {
         try {
           await api!.poke({
             app: "settings",

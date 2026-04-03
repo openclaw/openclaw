@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { backupCreateCommand } from "./backup.js";
 
 const tarCreateMock = vi.hoisted(() => vi.fn());
 const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
@@ -14,8 +15,6 @@ vi.mock("tar", () => ({
 vi.mock("./backup-verify.js", () => ({
   backupVerifyCommand: backupVerifyCommandMock,
 }));
-
-const { backupCreateCommand } = await import("./backup.js");
 
 describe("backupCreateCommand atomic archive write", () => {
   let tempHome: TempHomeEnv;

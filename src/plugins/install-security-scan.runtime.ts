@@ -3,6 +3,7 @@ import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
@@ -35,6 +36,7 @@ type PluginInstallRequestKind =
 
 export type InstallSecurityScanResult = {
   blocked?: {
+    code?: "security_scan_blocked" | "security_scan_failed";
     reason: string;
   };
 };
@@ -46,6 +48,17 @@ function buildCriticalDetails(params: {
     .filter((finding) => finding.severity === "critical")
     .map((finding) => `${finding.message} (${finding.file}:${finding.line})`)
     .join("; ");
+}
+
+function buildCriticalBlockReason(params: {
+  findings: Array<{ file: string; line: number; message: string; severity: string }>;
+  targetLabel: string;
+}) {
+  return `${params.targetLabel} blocked: dangerous code patterns detected: ${buildCriticalDetails({ findings: params.findings })}`;
+}
+
+function buildScanFailureBlockReason(params: { error: string; targetLabel: string }) {
+  return `${params.targetLabel} blocked: code safety scan failed (${params.error}). Run "openclaw security audit --deep" for details.`;
 }
 
 function buildBuiltinScanFromError(error: unknown): BuiltinInstallScan {
@@ -81,7 +94,6 @@ async function scanDirectoryTarget(params: {
   includeFiles?: string[];
   logger: InstallScanLogger;
   path: string;
-  scanFailureMessage: string;
   suspiciousMessage: string;
   targetName: string;
   warningMessage: string;
@@ -104,15 +116,78 @@ async function scanDirectoryTarget(params: {
     }
     return builtinScan;
   } catch (err) {
-    params.logger.warn?.(params.scanFailureMessage.replace("{error}", String(err)));
     return buildBuiltinScanFromError(err);
   }
+}
+
+function buildBlockedScanResult(params: {
+  builtinScan: BuiltinInstallScan;
+  dangerouslyForceUnsafeInstall?: boolean;
+  targetLabel: string;
+}): InstallSecurityScanResult | undefined {
+  if (params.builtinScan.status === "error") {
+    return {
+      blocked: {
+        code: "security_scan_failed",
+        reason: buildScanFailureBlockReason({
+          error: params.builtinScan.error ?? "unknown error",
+          targetLabel: params.targetLabel,
+        }),
+      },
+    };
+  }
+  if (params.builtinScan.critical > 0) {
+    if (params.dangerouslyForceUnsafeInstall) {
+      return undefined;
+    }
+    return {
+      blocked: {
+        code: "security_scan_blocked",
+        reason: buildCriticalBlockReason({
+          findings: params.builtinScan.findings,
+          targetLabel: params.targetLabel,
+        }),
+      },
+    };
+  }
+  return undefined;
+}
+
+function logDangerousForceUnsafeInstall(params: {
+  findings: Array<{ file: string; line: number; message: string; severity: string }>;
+  logger: InstallScanLogger;
+  targetLabel: string;
+}) {
+  params.logger.warn?.(
+    `WARNING: ${params.targetLabel} forced despite dangerous code patterns via --dangerously-force-unsafe-install: ${buildCriticalDetails({ findings: params.findings })}`,
+  );
+}
+
+function resolveBuiltinScanDecision(
+  params: InstallSafetyOverrides & {
+    builtinScan: BuiltinInstallScan;
+    logger: InstallScanLogger;
+    targetLabel: string;
+  },
+): InstallSecurityScanResult | undefined {
+  const builtinBlocked = buildBlockedScanResult({
+    builtinScan: params.builtinScan,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    targetLabel: params.targetLabel,
+  });
+  if (params.dangerouslyForceUnsafeInstall && params.builtinScan.critical > 0) {
+    logDangerousForceUnsafeInstall({
+      findings: params.builtinScan.findings,
+      logger: params.logger,
+      targetLabel: params.targetLabel,
+    });
+  }
+  return builtinBlocked;
 }
 
 async function scanFileTarget(params: {
   logger: InstallScanLogger;
   path: string;
-  scanFailureMessage: string;
   suspiciousMessage: string;
   targetName: string;
   warningMessage: string;
@@ -122,7 +197,6 @@ async function scanFileTarget(params: {
     includeFiles: [params.path],
     logger: params.logger,
     path: directory,
-    scanFailureMessage: params.scanFailureMessage,
     suspiciousMessage: params.suspiciousMessage,
     targetName: params.targetName,
     warningMessage: params.warningMessage,
@@ -211,25 +285,32 @@ async function runBeforeInstallHook(params: {
   return undefined;
 }
 
-export async function scanBundleInstallSourceRuntime(params: {
-  logger: InstallScanLogger;
-  pluginId: string;
-  sourceDir: string;
-  requestKind?: PluginInstallRequestKind;
-  requestedSpecifier?: string;
-  mode?: "install" | "update";
-  version?: string;
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function scanBundleInstallSourceRuntime(
+  params: InstallSafetyOverrides & {
+    logger: InstallScanLogger;
+    pluginId: string;
+    sourceDir: string;
+    requestKind?: PluginInstallRequestKind;
+    requestedSpecifier?: string;
+    mode?: "install" | "update";
+    version?: string;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
   const builtinScan = await scanDirectoryTarget({
     logger: params.logger,
     path: params.sourceDir,
-    scanFailureMessage: `Bundle "${params.pluginId}" code safety scan failed ({error}). Installation continues; run "openclaw security audit --deep" after install.`,
     suspiciousMessage: `Bundle "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
     targetName: params.pluginId,
     warningMessage: `WARNING: Bundle "${params.pluginId}" contains dangerous code patterns`,
   });
+  const builtinBlocked = resolveBuiltinScanDecision({
+    builtinScan,
+    logger: params.logger,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    targetLabel: `Bundle "${params.pluginId}" installation`,
+  });
 
-  return await runBeforeInstallHook({
+  const hookResult = await runBeforeInstallHook({
     logger: params.logger,
     installLabel: `Bundle "${params.pluginId}" installation`,
     origin: "plugin-bundle",
@@ -248,20 +329,23 @@ export async function scanBundleInstallSourceRuntime(params: {
       ...(params.version ? { version: params.version } : {}),
     },
   });
+  return hookResult?.blocked ? hookResult : builtinBlocked;
 }
 
-export async function scanPackageInstallSourceRuntime(params: {
-  extensions: string[];
-  logger: InstallScanLogger;
-  packageDir: string;
-  pluginId: string;
-  requestKind?: PluginInstallRequestKind;
-  requestedSpecifier?: string;
-  mode?: "install" | "update";
-  packageName?: string;
-  manifestId?: string;
-  version?: string;
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function scanPackageInstallSourceRuntime(
+  params: InstallSafetyOverrides & {
+    extensions: string[];
+    logger: InstallScanLogger;
+    packageDir: string;
+    pluginId: string;
+    requestKind?: PluginInstallRequestKind;
+    requestedSpecifier?: string;
+    mode?: "install" | "update";
+    packageName?: string;
+    manifestId?: string;
+    version?: string;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
   const forcedScanEntries: string[] = [];
   for (const entry of params.extensions) {
     const resolvedEntry = path.resolve(params.packageDir, entry);
@@ -283,13 +367,18 @@ export async function scanPackageInstallSourceRuntime(params: {
     includeFiles: forcedScanEntries,
     logger: params.logger,
     path: params.packageDir,
-    scanFailureMessage: `Plugin "${params.pluginId}" code safety scan failed ({error}). Installation continues; run "openclaw security audit --deep" after install.`,
     suspiciousMessage: `Plugin "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
     targetName: params.pluginId,
     warningMessage: `WARNING: Plugin "${params.pluginId}" contains dangerous code patterns`,
   });
+  const builtinBlocked = resolveBuiltinScanDecision({
+    builtinScan,
+    logger: params.logger,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    targetLabel: `Plugin "${params.pluginId}" installation`,
+  });
 
-  return await runBeforeInstallHook({
+  const hookResult = await runBeforeInstallHook({
     logger: params.logger,
     installLabel: `Plugin "${params.pluginId}" installation`,
     origin: "plugin-package",
@@ -310,25 +399,33 @@ export async function scanPackageInstallSourceRuntime(params: {
       extensions: params.extensions.slice(),
     },
   });
+  return hookResult?.blocked ? hookResult : builtinBlocked;
 }
 
-export async function scanFileInstallSourceRuntime(params: {
-  filePath: string;
-  logger: InstallScanLogger;
-  mode?: "install" | "update";
-  pluginId: string;
-  requestedSpecifier?: string;
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function scanFileInstallSourceRuntime(
+  params: InstallSafetyOverrides & {
+    filePath: string;
+    logger: InstallScanLogger;
+    mode?: "install" | "update";
+    pluginId: string;
+    requestedSpecifier?: string;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
   const builtinScan = await scanFileTarget({
     logger: params.logger,
     path: params.filePath,
-    scanFailureMessage: `Plugin file "${params.pluginId}" code safety scan failed ({error}). Installation continues; run "openclaw security audit --deep" after install.`,
     suspiciousMessage: `Plugin file "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
     targetName: params.pluginId,
     warningMessage: `WARNING: Plugin file "${params.pluginId}" contains dangerous code patterns`,
   });
+  const builtinBlocked = resolveBuiltinScanDecision({
+    builtinScan,
+    logger: params.logger,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    targetLabel: `Plugin file "${params.pluginId}" installation`,
+  });
 
-  return await runBeforeInstallHook({
+  const hookResult = await runBeforeInstallHook({
     logger: params.logger,
     installLabel: `Plugin file "${params.pluginId}" installation`,
     origin: "plugin-file",
@@ -346,4 +443,68 @@ export async function scanFileInstallSourceRuntime(params: {
       extensions: [path.basename(params.filePath)],
     },
   });
+  return hookResult?.blocked ? hookResult : builtinBlocked;
+}
+
+export async function scanSkillInstallSourceRuntime(params: {
+  dangerouslyForceUnsafeInstall?: boolean;
+  installId: string;
+  installSpec?: {
+    id?: string;
+    kind: "brew" | "node" | "go" | "uv" | "download";
+    label?: string;
+    bins?: string[];
+    os?: string[];
+    formula?: string;
+    package?: string;
+    module?: string;
+    url?: string;
+    archive?: string;
+    extract?: boolean;
+    stripComponents?: number;
+    targetDir?: string;
+  };
+  logger: InstallScanLogger;
+  origin: string;
+  skillName: string;
+  sourceDir: string;
+}): Promise<InstallSecurityScanResult | undefined> {
+  const builtinScan = await scanDirectoryTarget({
+    logger: params.logger,
+    path: params.sourceDir,
+    suspiciousMessage:
+      'Skill "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.',
+    targetName: params.skillName,
+    warningMessage: `WARNING: Skill "${params.skillName}" contains dangerous code patterns`,
+  });
+  const builtinBlocked = buildBlockedScanResult({
+    builtinScan,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    targetLabel: `Skill "${params.skillName}" installation`,
+  });
+  if (params.dangerouslyForceUnsafeInstall && builtinScan.critical > 0) {
+    logDangerousForceUnsafeInstall({
+      findings: builtinScan.findings,
+      logger: params.logger,
+      targetLabel: `Skill "${params.skillName}" installation`,
+    });
+  }
+
+  const hookResult = await runBeforeInstallHook({
+    logger: params.logger,
+    installLabel: `Skill "${params.skillName}" installation`,
+    origin: params.origin,
+    sourcePath: params.sourceDir,
+    sourcePathKind: "directory",
+    targetName: params.skillName,
+    targetType: "skill",
+    requestKind: "skill-install",
+    requestMode: "install",
+    builtinScan,
+    skill: {
+      installId: params.installId,
+      ...(params.installSpec ? { installSpec: params.installSpec } : {}),
+    },
+  });
+  return hookResult?.blocked ? hookResult : builtinBlocked;
 }

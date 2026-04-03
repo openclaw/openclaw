@@ -132,7 +132,7 @@ Notes:
 
 Enforcement notes:
 
-- Sender policy is checked before signature verification and NIP-04 decryption.
+- Inbound event signatures are verified before sender policy and NIP-04 decryption, so forged events are rejected early.
 - Pairing replies are sent without processing the original DM body.
 - Inbound DMs are rate-limited and oversized payloads are dropped before decrypt.
 
@@ -240,10 +240,18 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 - Never commit private keys.
 - Use environment variables for keys.
 - Consider `allowlist` for production bots.
-- Pairing and allowlist policy is enforced before decrypt, so unknown senders cannot force full crypto work.
+- Signatures are verified before sender policy, and sender policy is enforced before decrypt, so forged events are rejected early and unknown senders cannot force full crypto work.
 
 ## Limitations (MVP)
 
 - Direct messages only (no group chats).
 - No media attachments.
 - NIP-04 only (NIP-17 gift-wrap planned).
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

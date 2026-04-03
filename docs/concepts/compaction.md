@@ -58,6 +58,26 @@ capable model for better summaries:
 }
 ```
 
+## Compaction start notice
+
+By default, compaction runs silently. To show a brief notice when compaction
+starts, enable `notifyUser`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      compaction: {
+        notifyUser: true,
+      },
+    },
+  },
+}
+```
+
+When enabled, the user sees a short message (for example, "Compacting
+context...") at the start of each compaction run.
+
 ## Compaction vs pruning
 
 |                  | Compaction                    | Pruning                          |
@@ -84,3 +104,10 @@ survive.
 For advanced configuration (reserve tokens, identifier preservation, custom
 context engines, OpenAI server-side compaction), see the
 [Session Management Deep Dive](/reference/session-management-compaction).
+
+## Related
+
+- [Session](/concepts/session) — session management and lifecycle
+- [Session Pruning](/concepts/session-pruning) — trimming tool results
+- [Context](/concepts/context) — how context is built for agent turns
+- [Hooks](/automation/hooks) — compaction lifecycle hooks (before_compaction, after_compaction)
