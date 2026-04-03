@@ -496,7 +496,7 @@ async function resolveHeartbeatPreflight(params: {
 }
 
 type HeartbeatPromptResolution = {
-  prompt: string;
+  prompt: string | null;
   hasExecCompletion: boolean;
   hasCronEvents: boolean;
 };
@@ -519,6 +519,7 @@ function resolveHeartbeatRunPrompt(params: {
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
   workspaceDir: string;
+  startedAt: number;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const pendingEvents = params.preflight.shouldInspectPendingEvents
@@ -555,7 +556,7 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
       return { prompt, hasExecCompletion: false, hasCronEvents: false };
     }
     // No tasks due - skip this heartbeat to avoid wasteful API calls
-    return null;
+    return { prompt: null, hasExecCompletion: false, hasCronEvents: false };
   }
 
   // Fallback to original behavior
@@ -694,7 +695,13 @@ export async function runHeartbeatOnce(opts: {
     preflight,
     canRelayToUser,
     workspaceDir,
+    startedAt,
   });
+
+  // If no tasks are due, skip heartbeat entirely
+  if (prompt === null) {
+    return { status: "skipped", reason: "no-tasks-due" };
+  }
 
   // Track if heartbeat completed successfully (for updating task timestamps)
   let heartbeatSuccess = false;
@@ -834,6 +841,8 @@ export async function runHeartbeatOnce(opts: {
         silent: !okSent,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
       });
+      heartbeatSuccess = true;
+      await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
