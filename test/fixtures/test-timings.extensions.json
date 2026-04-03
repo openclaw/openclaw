@@ -1048,11 +1048,11 @@
       "testCount": 5
     },
     "extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts": {
-      "durationMs": 10360,
+      "durationMs": 2720,
       "testCount": 27
     },
     "extensions/telegram/src/fetch.test.ts": {
-      "durationMs": 750,
+      "durationMs": 269,
       "testCount": 23
     }
   }
