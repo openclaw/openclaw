@@ -22,6 +22,8 @@ import {
   formatBtwTextForExternalDelivery,
   shouldSuppressReasoningPayload,
 } from "./reply-payloads.js";
+import { extractReplyToTag } from "./reply-tags.js";
+import { compileSlackInteractiveReplies } from "./slack-directives.js";
 
 let deliverRuntimePromise: Promise<
   typeof import("../../infra/outbound/deliver-runtime.js")
@@ -105,10 +107,23 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   if (!normalized) {
     return { ok: true };
   }
-  const externalPayload: ReplyPayload = {
+  const normalizedReplyTo = extractReplyToTag(normalized.text, normalized.replyToId);
+  const normalizedForExternal: ReplyPayload = {
     ...normalized,
-    text: formatBtwTextForExternalDelivery(normalized),
+    text: normalizedReplyTo.cleaned,
+    replyToId: normalizedReplyTo.replyToId ?? normalized.replyToId,
   };
+  const formattedPayload: ReplyPayload = {
+    ...normalizedForExternal,
+    text: formatBtwTextForExternalDelivery(normalizedForExternal),
+  };
+  // Compile interactive directives (e.g. [[slack_select:...]]) into structured
+  // payloads when the channel plugin opts in. Without this, directive-only
+  // routed replies would be sent as raw text or dropped as empty.
+  const interactiveEnabled = plugin?.messaging?.enableInteractiveReplies?.({ cfg }) === true;
+  const externalPayload: ReplyPayload = interactiveEnabled
+    ? compileSlackInteractiveReplies(formattedPayload)
+    : formattedPayload;
 
   let text = externalPayload.text ?? "";
   let mediaUrls = (externalPayload.mediaUrls?.filter(Boolean) ?? []).length
@@ -158,7 +173,13 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       threadId,
       replyToId,
     }) ?? null;
-  const resolvedReplyToId = replyTransport?.replyToId ?? replyToId ?? undefined;
+  // When no channel-specific transport resolver exists and replyToId is absent,
+  // fall back to threadId so threaded replies are anchored correctly (Mattermost
+  // and similar providers that treat threadId as the root post to reply under).
+  const resolvedReplyToId =
+    replyTransport?.replyToId ??
+    replyToId ??
+    (threadId != null && threadId !== "" ? String(threadId) : undefined);
   const resolvedThreadId =
     replyTransport && Object.hasOwn(replyTransport, "threadId")
       ? (replyTransport.threadId ?? null)

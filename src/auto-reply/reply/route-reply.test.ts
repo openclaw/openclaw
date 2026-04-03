@@ -175,6 +175,49 @@ describe("routeReply", () => {
     await expectSlackNoDelivery({ text: SILENT_REPLY_TOKEN });
   });
 
+  it("normalizes routed reply_to_current directives before send", async () => {
+    await routeReply({
+      payload: { text: "[[reply_to_current]] hi", replyToId: "1710000000.0001" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expectLastDelivery({
+      payloads: [
+        expect.objectContaining({
+          text: "hi",
+          replyToId: "1710000000.0001",
+        }),
+      ],
+      replyToId: "1710000000.0001",
+    });
+  });
+
+  it("does not send raw routed reply directives", async () => {
+    await routeReply({
+      payload: { text: "before [[reply_to_current]] after", replyToId: "1710000000.0001" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expectLastDelivery({
+      payloads: [
+        expect.objectContaining({
+          text: "before after",
+        }),
+      ],
+    });
+    const [{ payloads }] = mocks.deliverOutboundPayloads.mock.calls.at(-1) ?? [];
+    expect(payloads?.[0]?.text).not.toContain("[[reply_to_current]]");
+  });
+
+  it("skips routed sends when reply normalization strips all content", async () => {
+    await expectSlackNoDelivery({
+      text: "[[reply_to_current]]",
+      replyToId: "1710000000.0001",
+    });
+  });
+
   it("does not drop payloads that merely start with the silent token", async () => {
     const res = await routeReply({
       payload: { text: `${SILENT_REPLY_TOKEN} -- (why am I here?)` },
