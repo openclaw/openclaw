@@ -14,21 +14,11 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
-import {
-  readSessionUpdatedAt,
-  resolveChannelContextVisibilityMode,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/config-runtime";
-import {
-  recordInboundSession,
-  resolveConversationLabel,
-} from "openclaw/plugin-sdk/conversation-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
@@ -36,7 +26,6 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
-import { sendMessageSlack } from "../../send.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
@@ -49,10 +38,18 @@ import {
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
+import {
+  readSessionUpdatedAt,
+  resolveChannelContextVisibilityMode,
+  resolveStorePath,
+} from "../config.runtime.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
+import { recordInboundSession, resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import { resolveSlackThreadStarter } from "../media.js";
+import { finalizeInboundContext } from "../reply.runtime.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
+import { sendMessageSlack } from "../send.runtime.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import type { PreparedSlackMessage } from "./types.js";

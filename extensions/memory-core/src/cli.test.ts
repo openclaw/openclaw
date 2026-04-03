@@ -20,30 +20,15 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   })),
 );
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => {
+vi.mock("./cli.host.runtime.js", async () => {
   const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>();
-  return {
-    ...actual,
-    loadConfig,
-    resolveDefaultAgentId,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")>();
-  return {
-    ...actual,
-    resolveCommandSecretRefsViaGateway,
-  };
-});
-
-vi.mock("./memory/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./memory/index.js")>();
+    await vi.importActual<typeof import("./cli.host.runtime.js")>("./cli.host.runtime.js");
   return {
     ...actual,
     getMemorySearchManager,
+    loadConfig,
+    resolveCommandSecretRefsViaGateway,
+    resolveDefaultAgentId,
   };
 });
 
