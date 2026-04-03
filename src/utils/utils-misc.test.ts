@@ -62,6 +62,13 @@ describe("parseBooleanValue", () => {
     expect(parseBooleanValue("maybe")).toBeUndefined();
     expect(parseBooleanValue(1)).toBeUndefined();
   });
+
+  it("handles malformed truthy/falsy options without crashing", () => {
+    // @ts-expect-error - testing malformed input
+    expect(parseBooleanValue("yes", { truthy: "YES" })).toBeUndefined();
+    // @ts-expect-error - testing malformed input
+    expect(parseBooleanValue("no", { falsy: { not: "an array" } })).toBeUndefined();
+  });
 });
 
 describe("isReasoningTagProvider", () => {

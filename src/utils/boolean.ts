@@ -27,11 +27,19 @@ export function parseBooleanValue(
   const truthySet =
     truthy === DEFAULT_TRUTHY
       ? DEFAULT_TRUTHY_SET
-      : new Set(truthy.map((s) => (typeof s === "string" ? s.toLowerCase() : s)));
+      : new Set(
+          Array.isArray(truthy)
+            ? truthy.map((s) => (typeof s === "string" ? s.toLowerCase() : s))
+            : [],
+        );
   const falsySet =
     falsy === DEFAULT_FALSY
       ? DEFAULT_FALSY_SET
-      : new Set(falsy.map((s) => (typeof s === "string" ? s.toLowerCase() : s)));
+      : new Set(
+          Array.isArray(falsy)
+            ? falsy.map((s) => (typeof s === "string" ? s.toLowerCase() : s))
+            : [],
+        );
   if (truthySet.has(normalized)) {
     return true;
   }
