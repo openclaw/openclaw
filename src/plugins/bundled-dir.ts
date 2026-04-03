@@ -1,8 +1,21 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveUserPath } from "../utils.js";
+
+const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
+
+function bundledPluginsDisabled(env: NodeJS.ProcessEnv): boolean {
+  const raw = env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim().toLowerCase();
+  return raw === "1" || raw === "true";
+}
+
+function resolveDisabledBundledPluginsDir(): string {
+  fs.mkdirSync(DISABLED_BUNDLED_PLUGINS_DIR, { recursive: true });
+  return DISABLED_BUNDLED_PLUGINS_DIR;
+}
 
 function isSourceCheckoutRoot(packageRoot: string): boolean {
   return (
@@ -38,6 +51,10 @@ function resolveBundledDirFromPackageRoot(
 }
 
 export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (bundledPluginsDisabled(env)) {
+    return resolveDisabledBundledPluginsDir();
+  }
+
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   if (override) {
     const resolvedOverride = resolveUserPath(override, env);

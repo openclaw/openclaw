@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { channelTestPrefixes } from "../../vitest.channel-paths.mjs";
-import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
+import {
+  isBundledPluginDependentUnitTestFile,
+  isUnitConfigTestFile,
+} from "../../vitest.unit-paths.mjs";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
@@ -111,7 +114,9 @@ export function loadTestCatalog() {
     }
 
     let surface = "base";
-    if (isUnitConfigTestFile(normalizedFile)) {
+    if (isBundledPluginDependentUnitTestFile(normalizedFile)) {
+      surface = "bundled";
+    } else if (isUnitConfigTestFile(normalizedFile)) {
       surface = "unit";
     } else if (contractTestPrefixes.some((prefix) => normalizedFile.startsWith(prefix))) {
       surface = "contracts";
@@ -206,6 +211,7 @@ export function loadTestCatalog() {
 
 export const testSurfaces = [
   "unit",
+  "bundled",
   "extensions",
   "channels",
   "contracts",

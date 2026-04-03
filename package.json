@@ -1047,6 +1047,7 @@
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "vitest run --config vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
+    "test:bundled": "node scripts/test-parallel.mjs --surface bundled",
     "test:changed": "pnpm test -- --changed origin/main",
     "test:changed:max": "node scripts/test-parallel.mjs --profile max --changed origin/main",
     "test:channels": "node scripts/test-parallel.mjs --surface channels",

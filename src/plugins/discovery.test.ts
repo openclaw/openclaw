@@ -699,6 +699,7 @@ describe("discoverOpenClawPlugins", () => {
       const result = discoverOpenClawPlugins({
         env: {
           ...process.env,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
         },
