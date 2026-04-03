@@ -141,3 +141,4 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+ui/tsconfig.tsbuildinfo
