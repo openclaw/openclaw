@@ -43,14 +43,36 @@ describe("runCommandWithTimeout", () => {
     child.stdin = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdin"]>;
     child.stdin.write = vi.fn(() => true) as NonNullable<ChildProcess["stdin"]>["write"];
     child.stdin.end = vi.fn() as NonNullable<ChildProcess["stdin"]>["end"];
-    child.pid = 1234;
-    child.killed = false;
-    child.exitCode = null;
-    child.signalCode = null;
+    let killed = false;
+    let exitCode: number | null = null;
+    let signalCode: NodeJS.Signals | null = null;
+    Object.defineProperties(child, {
+      pid: {
+        configurable: true,
+        enumerable: true,
+        get: () => 1234,
+      },
+      killed: {
+        configurable: true,
+        enumerable: true,
+        get: () => killed,
+      },
+      exitCode: {
+        configurable: true,
+        enumerable: true,
+        get: () => exitCode,
+      },
+      signalCode: {
+        configurable: true,
+        enumerable: true,
+        get: () => signalCode,
+      },
+    });
     child.kill = vi.fn((receivedSignal?: NodeJS.Signals) => {
       const resolvedSignal = receivedSignal ?? signal;
-      child.killed = true;
-      child.signalCode = resolvedSignal;
+      killed = true;
+      exitCode = null;
+      signalCode = resolvedSignal;
       child.emit("exit", null, resolvedSignal);
       child.emit("close", null, resolvedSignal);
       return true;
