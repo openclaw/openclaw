@@ -412,10 +412,8 @@ export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBins
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
-export const validateSkillsSearchParams =
-  ajv.compile<SkillsSearchParams>(SkillsSearchParamsSchema);
-export const validateSkillsDetailParams =
-  ajv.compile<SkillsDetailParams>(SkillsDetailParamsSchema);
+export const validateSkillsSearchParams = ajv.compile<SkillsSearchParams>(SkillsSearchParamsSchema);
+export const validateSkillsDetailParams = ajv.compile<SkillsDetailParams>(SkillsDetailParamsSchema);
 export const validateCronListParams = ajv.compile<CronListParams>(CronListParamsSchema);
 export const validateCronStatusParams = ajv.compile<CronStatusParams>(CronStatusParamsSchema);
 export const validateCronAddParams = ajv.compile<CronAddParams>(CronAddParamsSchema);

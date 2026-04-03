@@ -4,7 +4,6 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
-  fetchSkillDetailFromClawHub,
   installSkillFromClawHub,
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
@@ -15,6 +14,7 @@ import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -158,7 +158,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const detail = await fetchSkillDetailFromClawHub({
+      const detail = await fetchClawHubSkillDetail({
         slug: (params as { slug: string }).slug,
       });
       respond(true, detail, undefined);

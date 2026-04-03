@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const searchSkillsFromClawHubMock = vi.fn();
-const fetchSkillDetailFromClawHubMock = vi.fn();
+const fetchClawHubSkillDetailMock = vi.fn();
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: vi.fn(() => ({})),
@@ -18,7 +18,13 @@ vi.mock("../../agents/skills-clawhub.js", () => ({
   installSkillFromClawHub: vi.fn(),
   updateSkillsFromClawHub: vi.fn(),
   searchSkillsFromClawHub: (...args: unknown[]) => searchSkillsFromClawHubMock(...args),
-  fetchSkillDetailFromClawHub: (...args: unknown[]) => fetchSkillDetailFromClawHubMock(...args),
+}));
+
+vi.mock("../../infra/clawhub.js", () => ({
+  fetchClawHubSkillDetail: (...args: unknown[]) => fetchClawHubSkillDetailMock(...args),
+  resolveClawHubBaseUrl: vi.fn(() => "https://clawhub.ai"),
+  searchClawHubSkills: vi.fn(),
+  downloadClawHubSkillArchive: vi.fn(),
 }));
 
 vi.mock("../../agents/skills-install.js", () => ({
@@ -27,29 +33,29 @@ vi.mock("../../agents/skills-install.js", () => ({
 
 const { skillsHandlers } = await import("./skills.js");
 
-function callHandler(method: string, params: unknown) {
+function callHandler(method: string, params: Record<string, unknown>) {
   let ok: boolean | null = null;
   let response: unknown;
   let error: unknown;
-  const promise = skillsHandlers[method]({
+  const result = skillsHandlers[method]({
     params,
     req: {} as never,
     client: null as never,
     isWebchatConnect: () => false,
     context: {} as never,
-    respond: (success: boolean, result: unknown, err: unknown) => {
+    respond: (success: boolean, res: unknown, err: unknown) => {
       ok = success;
-      response = result;
+      response = res;
       error = err;
     },
   });
-  return promise.then(() => ({ ok, response, error }));
+  return Promise.resolve(result).then(() => ({ ok, response, error }));
 }
 
 describe("skills.search handler", () => {
   beforeEach(() => {
     searchSkillsFromClawHubMock.mockReset();
-    fetchSkillDetailFromClawHubMock.mockReset();
+    fetchClawHubSkillDetailMock.mockReset();
   });
 
   it("searches ClawHub with query and limit", async () => {
@@ -111,10 +117,21 @@ describe("skills.search handler", () => {
     expect(error).toMatchObject({ message: "connection refused" });
   });
 
-  it("rejects invalid params", async () => {
+  it("rejects limit below minimum", async () => {
     const { ok, error } = await callHandler("skills.search", {
       query: "test",
       limit: 0,
+    });
+
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(searchSkillsFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects limit above maximum", async () => {
+    const { ok, error } = await callHandler("skills.search", {
+      query: "test",
+      limit: 101,
     });
 
     expect(ok).toBe(false);
@@ -126,7 +143,7 @@ describe("skills.search handler", () => {
 describe("skills.detail handler", () => {
   beforeEach(() => {
     searchSkillsFromClawHubMock.mockReset();
-    fetchSkillDetailFromClawHubMock.mockReset();
+    fetchClawHubSkillDetailMock.mockReset();
   });
 
   it("fetches detail for a valid slug", async () => {
@@ -147,20 +164,20 @@ describe("skills.detail handler", () => {
         displayName: "OpenClaw",
       },
     };
-    fetchSkillDetailFromClawHubMock.mockResolvedValue(detail);
+    fetchClawHubSkillDetailMock.mockResolvedValue(detail);
 
     const { ok, response, error } = await callHandler("skills.detail", {
       slug: "github",
     });
 
-    expect(fetchSkillDetailFromClawHubMock).toHaveBeenCalledWith({ slug: "github" });
+    expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({ slug: "github" });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
     expect(response).toEqual(detail);
   });
 
   it("returns error when slug is not found", async () => {
-    fetchSkillDetailFromClawHubMock.mockRejectedValue(new Error("not found"));
+    fetchClawHubSkillDetailMock.mockRejectedValue(new Error("not found"));
 
     const { ok, error } = await callHandler("skills.detail", { slug: "nonexistent" });
 
@@ -173,7 +190,7 @@ describe("skills.detail handler", () => {
 
     expect(ok).toBe(false);
     expect(error).toMatchObject({ code: "INVALID_REQUEST" });
-    expect(fetchSkillDetailFromClawHubMock).not.toHaveBeenCalled();
+    expect(fetchClawHubSkillDetailMock).not.toHaveBeenCalled();
   });
 
   it("rejects empty slug", async () => {
@@ -181,6 +198,6 @@ describe("skills.detail handler", () => {
 
     expect(ok).toBe(false);
     expect(error).toMatchObject({ code: "INVALID_REQUEST" });
-    expect(fetchSkillDetailFromClawHubMock).not.toHaveBeenCalled();
+    expect(fetchClawHubSkillDetailMock).not.toHaveBeenCalled();
   });
 });
