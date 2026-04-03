@@ -2,6 +2,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { callGatewayLeastPrivilege, randomIdempotencyKey } from "../../gateway/call.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import {
@@ -53,6 +54,8 @@ type MessageSendParams = {
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
+  /** Set by executeSendAction when it has already run the hook; prevents double-fire. */
+  skipMessageSendingHook?: boolean;
 };
 
 export type MessageSendResult = {
@@ -63,6 +66,7 @@ export type MessageSendResult = {
   mediaUrls?: string[];
   result?: OutboundDeliveryResult | { messageId: string };
   dryRun?: boolean;
+  cancelled?: true;
 };
 
 type MessagePollParams = {
@@ -252,6 +256,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
       silent: params.silent,
+      skipMessageSendingHook: params.skipMessageSendingHook,
       mirror: params.mirror
         ? {
             ...params.mirror,
@@ -272,12 +277,53 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     };
   }
 
+  // Run message_sending hook before gateway delivery when not already handled
+  // upstream (e.g. a direct sendMessage call that bypasses executeSendAction).
+  let gatewayContent = params.content;
+  if (!params.skipMessageSendingHook) {
+    const hookRunner = getGlobalHookRunner();
+    const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+    if (hasMessageSendingHooks) {
+      try {
+        const sendingResult = await hookRunner!.runMessageSending(
+          {
+            to: params.to,
+            content: gatewayContent,
+            metadata: {
+              channel,
+              accountId: params.accountId,
+            },
+          },
+          {
+            channelId: channel,
+            accountId: params.accountId ?? undefined,
+          },
+        );
+        if (sendingResult?.cancel) {
+          return {
+            channel,
+            to: params.to,
+            via: "gateway",
+            mediaUrl: primaryMediaUrl,
+            mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+            cancelled: true,
+          };
+        }
+        if (sendingResult?.content != null) {
+          gatewayContent = sendingResult.content;
+        }
+      } catch {
+        // Don't block delivery on hook failure.
+      }
+    }
+  }
+
   const result = await callMessageGateway<{ messageId: string }>({
     gateway: params.gateway,
     method: "send",
     params: {
       to: params.to,
-      message: params.content,
+      message: gatewayContent,
       mediaUrl: params.mediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
       gifPlayback: params.gifPlayback,

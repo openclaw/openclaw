@@ -281,6 +281,8 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** Skip firing the message_sending hook (already ran upstream, e.g. in executeSendAction). */
+  skipMessageSendingHook?: boolean;
 };
 
 function collectPayloadMediaSources(payloads: ReplyPayload[]): string[] {
@@ -650,7 +652,8 @@ async function deliverOutboundPayloadsCore(
     mirrorIsGroup,
     mirrorGroupId,
   });
-  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  const hasMessageSendingHooks =
+    !params.skipMessageSendingHook && (hookRunner?.hasHooks("message_sending") ?? false);
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
