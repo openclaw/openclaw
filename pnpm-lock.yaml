@@ -604,6 +604,8 @@ importers:
 
   extensions/speech-core: {}
 
+  extensions/stepfun: {}
+
   extensions/synology-chat: {}
 
   extensions/synthetic: {}
@@ -695,6 +697,8 @@ importers:
   extensions/xai: {}
 
   extensions/xiaomi: {}
+
+  extensions/you: {}
 
   extensions/zai: {}
 

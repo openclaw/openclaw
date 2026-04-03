@@ -92,6 +92,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
   <Card title="Tavily" icon="globe" href="/tools/tavily">
     Structured results with search depth, topic filtering, and `tavily_extract` for URL extraction.
   </Card>
+  <Card title="You.com" icon="search" href="/tools/you">
+    Structured results with free tier. Deep research via `web_research`. Content extraction via `web_contents`.
+  </Card>
 </CardGroup>
 
 ### Provider comparison
@@ -109,6 +112,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 | [Perplexity](/tools/perplexity-search)    | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
 | [SearXNG](/tools/searxng-search)          | Structured snippets        | Categories, language                             | None (self-hosted)                          |
 | [Tavily](/tools/tavily)                   | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
+| [You.com](/tools/you)                     | Structured snippets        | Via `web_research` and `web_contents` tools      | `YDC_API_KEY` (optional for search)         |
 
 ## Auto-detection
 
@@ -163,12 +167,13 @@ first one that is ready:
 6. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
 7. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`
 8. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
-9. **DuckDuckGo** -- key-free HTML fallback with no account or API key
-10. **Ollama Web Search** -- key-free fallback via your configured Ollama host; requires Ollama to be reachable and signed in with `ollama signin`
+9. **You.com** -- `YDC_API_KEY` or `plugins.entries.you.config.webSearch.apiKey` (free tier available without key)
+10. **DuckDuckGo** -- key-free HTML fallback with no account or API key
+11. **Ollama Web Search** -- key-free fallback via your configured Ollama host; requires Ollama to be reachable and signed in with `ollama signin`
 
 Key-free providers are checked after API-backed providers:
 
-11. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (auto-detect order 200)
+12. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (auto-detect order 200)
 
 If no provider is detected, it falls back to Brave (you will get a missing-key
 error prompting you to configure one).

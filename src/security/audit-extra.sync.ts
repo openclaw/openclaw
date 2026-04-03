@@ -348,6 +348,19 @@ function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
   return true;
 }
 
+function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  // web_research is provided by the You.com plugin; check plugin enable state
+  const normalizedPlugins = cfg.plugins?.entries;
+  const youPlugin = normalizedPlugins?.you;
+  if (!youPlugin || youPlugin.enabled === false) {
+    return false;
+  }
+  // web_research always requires an API key to be internet-capable.
+  const pluginConfig = youPlugin.config as { webSearch?: { apiKey?: unknown } } | undefined;
+  const raw = pluginConfig?.webSearch?.apiKey || env.YDC_API_KEY;
+  return typeof raw === "string" && raw.trim().length > 0;
+}
+
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
   // The audit only needs the enablement policy, not full browser runtime
   // resolution. Browser defaults to enabled unless it is explicitly disabled.
@@ -1240,6 +1253,11 @@ export function collectSmallModelRiskFindings(params: {
         exposed.push("web_fetch");
       }
     }
+    if (isWebResearchEnabled(params.cfg, params.env)) {
+      if (isToolAllowedByPolicies("web_research", policies)) {
+        exposed.push("web_research");
+      }
+    }
     if (isBrowserEnabled(params.cfg)) {
       if (isToolAllowedByPolicies("browser", policies)) {
         exposed.push("browser");
@@ -1278,7 +1296,7 @@ export function collectSmallModelRiskFindings(params: {
       `\n` +
       "Small models are not recommended for untrusted inputs.",
     remediation:
-      'If you must use small models, enable sandboxing for all sessions (agents.defaults.sandbox.mode="all") and disable web_search/web_fetch/browser (tools.deny=["group:web","browser"]).',
+      'If you must use small models, enable sandboxing for all sessions (agents.defaults.sandbox.mode="all") and disable web_search/web_fetch/web_research/browser (tools.deny=["group:web","browser"]).',
   });
 
   return findings;

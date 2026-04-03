@@ -310,6 +310,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/tavily/**"
+"extensions: you":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/you/**"
 "extensions: talk-voice":
   - changed-files:
       - any-glob-to-any-file:
