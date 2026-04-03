@@ -88,18 +88,23 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   sendPayload: async ({ to, payload, accountId, cfg }) => {
     const runtime = getLineRuntime();
     const lineData = (payload.channelData?.line as LineChannelDataWithMedia | undefined) ?? {};
-    const sendText = pushMessageLine;
-    const sendBatch = pushMessagesLine;
-    const sendFlex = pushFlexMessage;
-    const sendTemplate = pushTemplateMessage;
-    const sendLocation = pushLocationMessage;
-    const sendQuickReplies = pushTextMessageWithQuickReplies;
-    const buildTemplate = buildTemplateMessageFromPayload;
+    const lineRuntime = runtime.channel.line;
+    const sendText = lineRuntime?.pushMessageLine ?? pushMessageLine;
+    const sendBatch = lineRuntime?.pushMessagesLine ?? pushMessagesLine;
+    const sendFlex = lineRuntime?.pushFlexMessage ?? pushFlexMessage;
+    const sendTemplate = lineRuntime?.pushTemplateMessage ?? pushTemplateMessage;
+    const sendLocation = lineRuntime?.pushLocationMessage ?? pushLocationMessage;
+    const sendQuickReplies =
+      lineRuntime?.pushTextMessageWithQuickReplies ?? pushTextMessageWithQuickReplies;
+    const buildTemplate =
+      lineRuntime?.buildTemplateMessageFromPayload ?? buildTemplateMessageFromPayload;
 
     let lastResult: { messageId: string; chatId: string } | null = null;
     const quickReplies = lineData.quickReplies ?? [];
     const hasQuickReplies = quickReplies.length > 0;
-    const quickReply = hasQuickReplies ? createQuickReplyItems(quickReplies) : undefined;
+    const quickReply = hasQuickReplies
+      ? (lineRuntime?.createQuickReplyItems ?? createQuickReplyItems)(quickReplies)
+      : undefined;
 
     // LINE SDK expects Message[] but we build dynamically.
     const sendMessageBatch = async (messages: Array<Record<string, unknown>>) => {
@@ -139,7 +144,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           continue;
         }
         if (!useLineSpecificMedia) {
-          lastResult = await sendMessageLine(to, "", {
+          lastResult = await (lineRuntime?.sendMessageLine ?? sendMessageLine)(to, "", {
             verbose: false,
             mediaUrl: trimmed,
             cfg,
@@ -153,7 +158,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           durationMs: lineData.durationMs,
           trackingId: lineData.trackingId,
         });
-        lastResult = await sendMessageLine(to, "", {
+        lastResult = await (lineRuntime?.sendMessageLine ?? sendMessageLine)(to, "", {
           verbose: false,
           mediaUrl: resolved.mediaUrl,
           mediaKind: resolved.mediaKind,

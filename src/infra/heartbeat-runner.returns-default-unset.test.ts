@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { whatsappOutbound } from "../../test/channel-outbounds.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -14,6 +14,7 @@ import {
 } from "../config/sessions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
+import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import {
@@ -35,6 +36,16 @@ let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 
 let fixtureRoot = "";
 let fixtureCount = 0;
+let whatsappOutboundCache: ChannelOutboundAdapter | undefined;
+
+function getWhatsAppOutbound(): ChannelOutboundAdapter {
+  if (!whatsappOutboundCache) {
+    ({ whatsappOutbound: whatsappOutboundCache } = loadBundledPluginTestApiSync<{
+      whatsappOutbound: ChannelOutboundAdapter;
+    }>("whatsapp"));
+  }
+  return whatsappOutboundCache;
+}
 
 const createCaseDir = async (prefix: string) => {
   const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
@@ -45,7 +56,10 @@ const createCaseDir = async (prefix: string) => {
 beforeAll(async () => {
   previousRegistry = getActivePluginRegistry();
 
-  const whatsappPlugin = createOutboundTestPlugin({ id: "whatsapp", outbound: whatsappOutbound });
+  const whatsappPlugin = createOutboundTestPlugin({
+    id: "whatsapp",
+    outbound: getWhatsAppOutbound(),
+  });
   whatsappPlugin.config = {
     ...whatsappPlugin.config,
     resolveAllowFrom: ({ cfg }) =>

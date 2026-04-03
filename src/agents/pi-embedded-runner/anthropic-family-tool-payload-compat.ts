@@ -1,14 +1,12 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
-import {
-  type ProviderCapabilityLookupOptions,
-  requiresOpenAiCompatibleAnthropicToolPayload,
-  usesOpenAiFunctionAnthropicToolSchema,
-  usesOpenAiStringModeAnthropicToolChoice,
-} from "../provider-capabilities.js";
+type AnthropicToolSchemaMode = "openai-functions";
+type AnthropicToolChoiceMode = "openai-string-modes";
 
-type AnthropicToolPayloadResolverOptions = ProviderCapabilityLookupOptions;
+type AnthropicToolPayloadCompatibilityOptions = {
+  toolSchemaMode?: AnthropicToolSchemaMode;
+  toolChoiceMode?: AnthropicToolChoiceMode;
+};
 
 function hasOpenAiAnthropicToolPayloadCompatFlag(model: { compat?: unknown }): boolean {
   if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
@@ -24,54 +22,40 @@ function hasOpenAiAnthropicToolPayloadCompatFlag(model: { compat?: unknown }): b
 function requiresAnthropicToolPayloadCompatibilityForModel(
   model: {
     api?: unknown;
-    provider?: unknown;
     compat?: unknown;
   },
-  options?: AnthropicToolPayloadResolverOptions,
+  options?: AnthropicToolPayloadCompatibilityOptions,
 ): boolean {
   if (model.api !== "anthropic-messages") {
     return false;
   }
-
-  if (
-    typeof model.provider === "string" &&
-    requiresOpenAiCompatibleAnthropicToolPayload(model.provider, options)
-  ) {
-    return true;
-  }
-  return hasOpenAiAnthropicToolPayloadCompatFlag(model);
+  return (
+    Boolean(options?.toolSchemaMode || options?.toolChoiceMode) ||
+    hasOpenAiAnthropicToolPayloadCompatFlag(model)
+  );
 }
 
 function usesOpenAiFunctionAnthropicToolSchemaForModel(
   model: {
-    provider?: unknown;
     compat?: unknown;
   },
-  options?: AnthropicToolPayloadResolverOptions,
+  options?: AnthropicToolPayloadCompatibilityOptions,
 ): boolean {
-  if (
-    typeof model.provider === "string" &&
-    usesOpenAiFunctionAnthropicToolSchema(model.provider, options)
-  ) {
-    return true;
-  }
-  return hasOpenAiAnthropicToolPayloadCompatFlag(model);
+  return (
+    options?.toolSchemaMode === "openai-functions" || hasOpenAiAnthropicToolPayloadCompatFlag(model)
+  );
 }
 
 function usesOpenAiStringModeAnthropicToolChoiceForModel(
   model: {
-    provider?: unknown;
     compat?: unknown;
   },
-  options?: AnthropicToolPayloadResolverOptions,
+  options?: AnthropicToolPayloadCompatibilityOptions,
 ): boolean {
-  if (
-    typeof model.provider === "string" &&
-    usesOpenAiStringModeAnthropicToolChoice(model.provider, options)
-  ) {
-    return true;
-  }
-  return hasOpenAiAnthropicToolPayloadCompatFlag(model);
+  return (
+    options?.toolChoiceMode === "openai-string-modes" ||
+    hasOpenAiAnthropicToolPayloadCompatFlag(model)
+  );
 }
 
 function normalizeOpenAiFunctionAnthropicToolDefinition(
@@ -141,11 +125,7 @@ function normalizeOpenAiStringModeAnthropicToolChoice(toolChoice: unknown): unkn
 
 export function createAnthropicToolPayloadCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
-  resolverOptions?: {
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-  },
+  options?: AnthropicToolPayloadCompatibilityOptions,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, streamOptions) => {
@@ -156,32 +136,18 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
         if (
           payload &&
           typeof payload === "object" &&
-          requiresAnthropicToolPayloadCompatibilityForModel(model, {
-            config: resolverOptions?.config,
-            workspaceDir: resolverOptions?.workspaceDir,
-            env: resolverOptions?.env,
-          })
+          requiresAnthropicToolPayloadCompatibilityForModel(model, options)
         ) {
           const payloadObj = payload as Record<string, unknown>;
           if (
             Array.isArray(payloadObj.tools) &&
-            usesOpenAiFunctionAnthropicToolSchemaForModel(model, {
-              config: resolverOptions?.config,
-              workspaceDir: resolverOptions?.workspaceDir,
-              env: resolverOptions?.env,
-            })
+            usesOpenAiFunctionAnthropicToolSchemaForModel(model, options)
           ) {
             payloadObj.tools = payloadObj.tools
               .map((tool) => normalizeOpenAiFunctionAnthropicToolDefinition(tool))
               .filter((tool): tool is Record<string, unknown> => !!tool);
           }
-          if (
-            usesOpenAiStringModeAnthropicToolChoiceForModel(model, {
-              config: resolverOptions?.config,
-              workspaceDir: resolverOptions?.workspaceDir,
-              env: resolverOptions?.env,
-            })
-          ) {
+          if (usesOpenAiStringModeAnthropicToolChoiceForModel(model, options)) {
             payloadObj.tool_choice = normalizeOpenAiStringModeAnthropicToolChoice(
               payloadObj.tool_choice,
             );

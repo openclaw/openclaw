@@ -105,6 +105,27 @@ describe("amazon-bedrock provider plugin", () => {
     ).toBeUndefined();
   });
 
+  it("owns Anthropic-style replay policy for Claude Bedrock models", () => {
+    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "amazon-bedrock",
+        modelApi: "bedrock-converse-stream",
+        modelId: ANTHROPIC_MODEL,
+      } as never),
+    ).toEqual({
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveSignatures: true,
+      repairToolUseResultPairing: true,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+      dropThinkingBlocks: true,
+    });
+  });
+
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
     const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
     const wrapped = provider.wrapStreamFn?.({

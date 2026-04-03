@@ -8,22 +8,44 @@ import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import {
   createSlackOutboundPayloadHarness,
   installChannelOutboundPayloadContractSuite,
-  primeChannelOutboundSendMock,
 } from "../../../src/channels/plugins/contracts/suites.js";
+import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/contracts/test-helpers.js";
 import { createDirectTextMediaOutbound } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 type ParseZalouserOutboundTarget = (raw: string) => { threadId: string; isGroup: boolean };
 
-const { discordOutbound } = loadBundledPluginTestApiSync<{
-  discordOutbound: ChannelOutboundAdapter;
-}>("discord");
-const { whatsappOutbound } = loadBundledPluginTestApiSync<{
-  whatsappOutbound: ChannelOutboundAdapter;
-}>("whatsapp");
-const { parseZalouserOutboundTarget } = loadBundledPluginTestApiSync<{
-  parseZalouserOutboundTarget: ParseZalouserOutboundTarget;
-}>("zalouser");
+let discordOutboundCache: ChannelOutboundAdapter | undefined;
+let whatsappOutboundCache: ChannelOutboundAdapter | undefined;
+let parseZalouserOutboundTargetCache: ParseZalouserOutboundTarget | undefined;
+
+function getDiscordOutbound(): ChannelOutboundAdapter {
+  if (!discordOutboundCache) {
+    ({ discordOutbound: discordOutboundCache } = loadBundledPluginTestApiSync<{
+      discordOutbound: ChannelOutboundAdapter;
+    }>("discord"));
+  }
+  return discordOutboundCache;
+}
+
+function getWhatsAppOutbound(): ChannelOutboundAdapter {
+  if (!whatsappOutboundCache) {
+    ({ whatsappOutbound: whatsappOutboundCache } = loadBundledPluginTestApiSync<{
+      whatsappOutbound: ChannelOutboundAdapter;
+    }>("whatsapp"));
+  }
+  return whatsappOutboundCache;
+}
+
+function getParseZalouserOutboundTarget(): ParseZalouserOutboundTarget {
+  if (!parseZalouserOutboundTargetCache) {
+    ({ parseZalouserOutboundTarget: parseZalouserOutboundTargetCache } =
+      loadBundledPluginTestApiSync<{
+        parseZalouserOutboundTarget: ParseZalouserOutboundTarget;
+      }>("zalouser"));
+  }
+  return parseZalouserOutboundTargetCache;
+}
 
 type PayloadHarnessParams = {
   payload: ReplyPayload;
@@ -54,7 +76,7 @@ function createDiscordHarness(params: PayloadHarnessParams) {
     },
   };
   return {
-    run: async () => await discordOutbound.sendPayload!(ctx),
+    run: async () => await getDiscordOutbound().sendPayload!(ctx),
     sendMock: sendDiscord,
     to: ctx.to,
   };
@@ -73,7 +95,7 @@ function createWhatsAppHarness(params: PayloadHarnessParams) {
     },
   };
   return {
-    run: async () => await whatsappOutbound.sendPayload!(ctx),
+    run: async () => await getWhatsAppOutbound().sendPayload!(ctx),
     sendMock: sendWhatsApp,
     to: ctx.to,
   };
@@ -155,7 +177,7 @@ function createZalouserHarness(params: PayloadHarnessParams) {
       await sendZalouserPayloadWithChunkedTextAndMedia({
         ctx,
         sendText: async (nextCtx) => {
-          const target = parseZalouserOutboundTarget(nextCtx.to);
+          const target = getParseZalouserOutboundTarget()(nextCtx.to);
           return buildChannelSendResult(
             "zalouser",
             await sendZalouser(target.threadId, nextCtx.text, {
@@ -168,7 +190,7 @@ function createZalouserHarness(params: PayloadHarnessParams) {
           );
         },
         sendMedia: async (nextCtx) => {
-          const target = parseZalouserOutboundTarget(nextCtx.to);
+          const target = getParseZalouserOutboundTarget()(nextCtx.to);
           return buildChannelSendResult(
             "zalouser",
             await sendZalouser(target.threadId, nextCtx.text, {

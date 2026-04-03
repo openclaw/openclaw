@@ -288,13 +288,7 @@ const ConfiguredProviderRequestSchema = z
   .strict()
   .optional();
 
-const ConfiguredModelProviderRequestSchema = z
-  .object({
-    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
-    auth: ConfiguredProviderRequestAuthSchema,
-  })
-  .strict()
-  .optional();
+const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
 
 export const ModelDefinitionSchema = z
   .object({
