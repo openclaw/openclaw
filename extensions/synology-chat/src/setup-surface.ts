@@ -186,8 +186,12 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 0,
     includeStatusLine: true,
-    resolveConfigured: ({ cfg }) =>
-      listAccountIds(cfg).some((accountId) => isSynologyChatConfigured(cfg, accountId)),
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? isSynologyChatConfigured(cfg, accountId)
+        : listAccountIds(cfg).some((candidateAccountId) =>
+            isSynologyChatConfigured(cfg, candidateAccountId),
+          ),
     resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listAccountIds(cfg).length || 0}`],
   }),
   introNote: {

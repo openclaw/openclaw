@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 function makeSecurityAccount(
@@ -36,6 +37,8 @@ vi.mock("./webhook-handler.js", () => ({
 
 const freshChannelModulePath = "./channel.js?channel-test";
 const { createSynologyChatPlugin } = await import(freshChannelModulePath);
+const { synologyChatPlugin } = await import("./channel.js");
+const getSynologyChatSetupStatus = createPluginSetupWizardStatus(synologyChatPlugin);
 
 describe("createSynologyChatPlugin", () => {
   beforeEach(() => {
@@ -115,6 +118,35 @@ describe("createSynologyChatPlugin", () => {
     it("defaultAccountId returns 'default'", () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.config.defaultAccountId?.({})).toBe("default");
+    });
+
+    it("setup status honors the selected named account", async () => {
+      const status = await getSynologyChatSetupStatus({
+        cfg: {
+          channels: {
+            "synology-chat": {
+              accounts: {
+                ops: {
+                  token: "ops-token",
+                  incomingUrl: "https://nas/ops",
+                },
+                work: {
+                  token: "work-token",
+                },
+              },
+            },
+          },
+        },
+        accountOverrides: {
+          "synology-chat": "work",
+        },
+      });
+
+      expect(status.configured).toBe(false);
+      expect(status.statusLines).toEqual([
+        "Synology Chat: needs token + incoming webhook",
+        "Accounts: 2",
+      ]);
     });
 
     it("formats allowFrom entries through the shared adapter", () => {
