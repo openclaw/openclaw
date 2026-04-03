@@ -2,6 +2,8 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as clientModule from "./client.js";
+import { imessagePlugin } from "./channel.js";
+import * as channelRuntimeModule from "./channel.runtime.js";
 import {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
@@ -259,5 +261,42 @@ describe("probeIMessage", () => {
     expect(result.fatal).toBe(true);
     expect(result.error).toMatch(/rpc/i);
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("status probe uses account-scoped cliPath and dbPath", async () => {
+    const probeAccount = imessagePlugin.status?.probeAccount;
+    if (!probeAccount) {
+      throw new Error("imessage status.probeAccount unavailable");
+    }
+
+    const probeSpy = vi.spyOn(channelRuntimeModule, "probeIMessageAccount").mockResolvedValue({
+      ok: true,
+      cliPath: "imsg-work",
+      dbPath: "/tmp/work-db",
+    } as Awaited<ReturnType<typeof channelRuntimeModule.probeIMessageAccount>>);
+
+    const cfg = {
+      channels: {
+        imessage: {
+          cliPath: "imsg-root",
+          dbPath: "/tmp/root-db",
+          accounts: {
+            work: {
+              cliPath: "imsg-work",
+              dbPath: "/tmp/work-db",
+            },
+          },
+        },
+      },
+    } as const;
+    const account = imessagePlugin.config.resolveAccount(cfg, "work");
+
+    await probeAccount({ account, cfg, timeoutMs: 2500 } as never);
+
+    expect(probeSpy).toHaveBeenCalledWith({
+      timeoutMs: 2500,
+      cliPath: "imsg-work",
+      dbPath: "/tmp/work-db",
+    });
   });
 });
