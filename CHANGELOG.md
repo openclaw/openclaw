@@ -89,6 +89,7 @@ Docs: https://docs.openclaw.ai
 - Slack/app manifest: set `bot_user.always_online` to `true` in the onboarding and example Slack app manifest so the Slack app appears ready to respond.
 - Gateway/websocket auth: refresh auth on new websocket connects after secrets reload so rotated gateway tokens take effect immediately without requiring a restart. (#60323) Thanks @mappel-nv.
 - Agents/workspace: respect `agents.defaults.workspace` for non-default agents by resolving them under the configured base path instead of falling back to `workspace-<id>`. (#59858) Thanks @joelnishanth.
+- Config/All Settings: keep the raw config view intact when sensitive fields are blank instead of corrupting or dropping the snapshot during redaction. (#28214) thanks @solodmd.
 
 ## 2026.4.2
 
@@ -170,7 +171,6 @@ Docs: https://docs.openclaw.ai
 - Exec/node hosts: stop forwarding the gateway workspace cwd to remote node exec when no workdir was explicitly requested, so cross-platform node approvals fall back to the node default cwd instead of failing with `SYSTEM_RUN_DENIED`. (#58977) Thanks @Starhappysh.
 - TUI/chat: keep pending local sends visible and reconciled across history reloads, make busy/error recovery clearer through fallback and terminal-error paths, and reclaim transcript width for long links and paths. (#59800) Thanks @vincentkoc.
 - Exec approvals/channels: decouple initiating-surface approval availability from native delivery enablement so Telegram, Slack, and Discord still expose approvals when approvers exist and native target routing is configured separately. (#59776) Thanks @joelnishanth.
-- Config/All Settings: keep the raw config view intact when sensitive fields are blank instead of corrupting or dropping the snapshot during redaction. (#28214) thanks @solodmd.
 
 ## 2026.4.1
 
