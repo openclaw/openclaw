@@ -127,4 +127,25 @@ describe("qqbot setup", () => {
       } as never),
     ).toBe("bot2");
   });
+
+  it("uses configured defaultAccount when setup accountId is omitted", () => {
+    const setup = qqbotSetupPlugin.setup;
+    expect(setup).toBeDefined();
+
+    expect(
+      setup!.resolveAccountId?.({
+        cfg: {
+          channels: {
+            qqbot: {
+              defaultAccount: "bot2",
+              accounts: {
+                bot2: { appId: "123456" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        accountId: undefined,
+      } as never),
+    ).toBe("bot2");
+  });
 });

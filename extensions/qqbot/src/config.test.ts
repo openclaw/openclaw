@@ -345,6 +345,27 @@ describe("qqbot config", () => {
     });
   });
 
+  it("uses configured defaultAccount when runtime setup accountId is omitted", () => {
+    const runtimeSetup = qqbotPlugin.setup;
+    expect(runtimeSetup).toBeDefined();
+
+    expect(
+      runtimeSetup!.resolveAccountId?.({
+        cfg: {
+          channels: {
+            qqbot: {
+              defaultAccount: "bot2",
+              accounts: {
+                bot2: { appId: "123456" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        accountId: undefined,
+      } as never),
+    ).toBe("bot2");
+  });
+
   it("rejects --use-env for named accounts across setup paths", () => {
     const runtimeSetup = qqbotPlugin.setup;
     const lightweightSetup = qqbotSetupPlugin.setup;
