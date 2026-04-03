@@ -189,6 +189,34 @@ const resolveSessionStoreLookupByKey = (
   }
 };
 
+type AcpDispatchSessionData = {
+  sessionKey?: string;
+  entry?: SessionEntry;
+  suppressUserDelivery: boolean;
+};
+
+const resolveAcpDispatchSessionData = (params: {
+  ctx: FinalizedMsgContext;
+  cfg: OpenClawConfig;
+  routeSessionKey: string | undefined;
+  routeSessionEntry: SessionEntry | undefined;
+}): AcpDispatchSessionData => {
+  const { ctx, cfg, routeSessionKey, routeSessionEntry } = params;
+  const sessionKey = resolveAcpDispatchSessionKey(ctx, cfg) ?? routeSessionKey;
+  const sessionStoreEntry =
+    sessionKey && sessionKey !== routeSessionKey
+      ? resolveSessionStoreLookupByKey(sessionKey, cfg)
+      : {
+          sessionKey: routeSessionKey,
+          entry: routeSessionEntry,
+        };
+  return {
+    sessionKey,
+    entry: sessionStoreEntry.entry,
+    suppressUserDelivery: isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry),
+  };
+};
+
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
@@ -264,11 +292,12 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const routeSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
-  const acpDispatchSessionKey = resolveAcpDispatchSessionKey(ctx, cfg) ?? routeSessionKey;
-  const acpSessionStoreEntry =
-    acpDispatchSessionKey && acpDispatchSessionKey !== routeSessionKey
-      ? resolveSessionStoreLookupByKey(acpDispatchSessionKey, cfg)
-      : sessionStoreEntry;
+  const acpDispatchSession = resolveAcpDispatchSessionData({
+    ctx,
+    cfg,
+    routeSessionKey,
+    routeSessionEntry: sessionStoreEntry.entry,
+  });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
@@ -299,9 +328,6 @@ export async function dispatchReplyFromConfig(params: {
   // flow when the provider handles its own messages.
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
-  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(
-    acpSessionStoreEntry.entry,
-  );
   const routeReplyRuntime = await loadRouteReplyRuntime();
   const { originatingChannel, currentSurface, shouldRouteToOriginating, shouldSuppressTyping } =
     resolveReplyRoutingDecision({
@@ -310,7 +336,7 @@ export async function dispatchReplyFromConfig(params: {
       explicitDeliverRoute: ctx.ExplicitDeliverRoute,
       originatingChannel: ctx.OriginatingChannel,
       originatingTo: ctx.OriginatingTo,
-      suppressDirectUserDelivery: suppressAcpChildUserDelivery,
+      suppressDirectUserDelivery: acpDispatchSession.suppressUserDelivery,
       isRoutableChannel: routeReplyRuntime.isRoutableChannel,
     });
   const originatingTo = ctx.OriginatingTo;
@@ -538,19 +564,19 @@ export async function dispatchReplyFromConfig(params: {
 
     const sendPolicy = resolveSendPolicy({
       cfg,
-      entry: sessionStoreEntry.entry,
-      sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+      entry: acpDispatchSession.entry,
+      sessionKey: acpDispatchSession.sessionKey,
       channel:
-        sessionStoreEntry.entry?.channel ??
+        acpDispatchSession.entry?.channel ??
         ctx.OriginatingChannel ??
         ctx.Surface ??
         ctx.Provider ??
         undefined,
-      chatType: sessionStoreEntry.entry?.chatType,
+      chatType: acpDispatchSession.entry?.chatType,
     });
     if (sendPolicy === "deny" && !bypassAcpForCommand) {
       logVerbose(
-        `Send blocked by policy for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"}`,
+        `Send blocked by policy for session ${acpDispatchSession.sessionKey ?? "unknown"}`,
       );
       const counts = dispatcher.getQueuedCounts();
       recordProcessed("completed", { reason: "send_policy_deny" });
@@ -644,12 +670,12 @@ export async function dispatchReplyFromConfig(params: {
       cfg,
       dispatcher,
       runId: params.replyOptions?.runId,
-      sessionKey: acpDispatchSessionKey,
+      sessionKey: acpDispatchSession.sessionKey,
       abortSignal: params.replyOptions?.abortSignal,
       inboundAudio,
       sessionTtsAuto,
       ttsChannel,
-      suppressUserDelivery: suppressAcpChildUserDelivery,
+      suppressUserDelivery: acpDispatchSession.suppressUserDelivery,
       shouldRouteToOriginating,
       originatingChannel,
       originatingTo,
@@ -796,11 +822,12 @@ export async function dispatchReplyFromConfig(params: {
         cfg,
         dispatcher,
         runId: params.replyOptions?.runId,
-        sessionKey: acpDispatchSessionKey,
+        sessionKey: acpDispatchSession.sessionKey,
         abortSignal: params.replyOptions?.abortSignal,
         inboundAudio,
         sessionTtsAuto,
         ttsChannel,
+        suppressUserDelivery: acpDispatchSession.suppressUserDelivery,
         shouldRouteToOriginating,
         originatingChannel,
         originatingTo,
