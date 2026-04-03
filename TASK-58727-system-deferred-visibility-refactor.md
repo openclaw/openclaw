@@ -99,9 +99,15 @@ Desired result:
 
 Remaining gaps to close:
 
-- collect fallback behavior still needs final cleanup in `src/auto-reply/reply/queue/drain.ts`
-- mixed collect batches / retry semantics / overflow-summary behavior still have unresolved edge cases
+- remaining uncertainty is now concentrated in unresolved review-thread closure, not obvious missing core plumbing
+- collect fallback behavior in `src/auto-reply/reply/queue/drain.ts` still needs final thread-by-thread verification against review comments
 - latest branch state still contains WIP follow-up for Task 5 cleanup on top of this migration
+
+Additional validation landed locally:
+
+- follow-up queue regression coverage now also checks:
+  - summarize overflow is emitted before exiting forced individual collect drain
+  - debounce is still honored while draining mixed collect fallback items
 
 ### Task 3 — Migrate announce queue
 
@@ -127,9 +133,14 @@ Desired result:
 
 Remaining gaps to close:
 
-- collect fallback / retry behavior in announce queue still has unresolved edge cases
-- external delivery path still needs final confirmation that non-renderable summary-only payloads never wedge the queue
+- remaining uncertainty is now concentrated in unresolved review-thread closure, not obvious missing core plumbing
+- announce queue fallback / retry behavior still needs final thread-by-thread verification against review comments
 - some unresolved review comments still point at announce fallback semantics
+
+Additional validation already present in code/tests:
+
+- external queued announce delivery drops non-renderable summary-only items instead of enqueueing them
+- announce queue tests already cover forced-individual overflow-summary emission and retry persistence
 
 ### Task 4 — Add outbound visibility guard
 

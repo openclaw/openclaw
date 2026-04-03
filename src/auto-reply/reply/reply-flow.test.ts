@@ -1537,6 +1537,49 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).not.toContain("hidden two");
   });
 
+  it("emits summarize overflow before exiting forced individual collect drain", async () => {
+    const key = `test-followup-forced-individual-overflow-summary-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= 2) {
+        done.resolve();
+      }
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "first hidden item", displayText: "visible first" }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "second hidden item", displayText: "visible second" }),
+        display: { visibility: "summary-only", text: "hidden without summary" },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const prompts = calls.map(
+      (call) => call.display?.text ?? call.display?.summaryLine ?? call.execution.agentPrompt,
+    );
+    expect(prompts[0]).toContain("[Queue overflow]");
+    expect(prompts[0]).toContain("visible first");
+    expect(prompts).toHaveLength(2);
+    expect(calls[1]?.execution.agentPrompt).toBe("second hidden item");
+  });
+
   it("does not retry already-run collect fallback items after a later failure", async () => {
     const key = `test-collect-fallback-progress-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -1702,6 +1745,62 @@ describe("followup queue collect routing", () => {
 
     expect(calls.map((call) => call.execution.agentPrompt)).toEqual(expected);
     expect(calls[2]?.display).toEqual(second.display);
+  });
+
+  it("honors debounce while draining mixed collect fallback items", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const previousFast = process.env.OPENCLAW_TEST_FAST;
+    delete process.env.OPENCLAW_TEST_FAST;
+
+    try {
+      const key = `test-mixed-collect-debounce-${Date.now()}`;
+      const calls: Array<{ prompt: string; at: number }> = [];
+      let releaseFirst!: () => void;
+      const firstCallStarted = createDeferred<void>();
+      const firstCallCanFinish = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const settings: QueueSettings = {
+        mode: "collect",
+        debounceMs: 5_000,
+        cap: 50,
+        dropPolicy: "summarize",
+      };
+
+      const runFollowup = vi.fn(async (run: FollowupRun) => {
+        calls.push({ prompt: run.execution.agentPrompt, at: Date.now() });
+        if (calls.length === 1) {
+          firstCallStarted.resolve();
+          await firstCallCanFinish;
+        }
+      });
+
+      enqueueFollowupRun(key, createRun({ prompt: "hidden first" }), settings);
+      enqueueFollowupRun(key, createRun({ prompt: "visible second", displayText: "visible second" }), settings);
+
+      scheduleFollowupDrain(key, runFollowup);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await firstCallStarted.promise;
+      expect(calls.map((call) => call.prompt)).toEqual(["hidden first"]);
+
+      enqueueFollowupRun(key, createRun({ prompt: "hidden third" }), settings);
+      releaseFirst();
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(calls.map((call) => call.prompt)).toEqual(["hidden first"]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls[1]?.prompt).toBe("visible second");
+      expect(calls[2]?.prompt).toBe("hidden third");
+      expect(calls).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+      if (previousFast === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousFast;
+      }
+    }
   });
 
   it("emits collect overflow summary before falling back from an invalid display batch", async () => {
