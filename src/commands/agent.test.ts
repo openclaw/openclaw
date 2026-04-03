@@ -45,8 +45,10 @@ vi.mock("../logging/subsystem.js", () => {
   };
 });
 
-vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
+vi.mock("../agents/auth-profiles.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
+    "../agents/auth-profiles.js",
+  );
   return {
     ...actual,
     ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
@@ -64,8 +66,10 @@ vi.mock("../agents/workspace.js", () => {
   };
 });
 
-vi.mock("../agents/command/session-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/command/session-store.js")>();
+vi.mock("../agents/command/session-store.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/command/session-store.js")>(
+    "../agents/command/session-store.js",
+  );
   return {
     ...actual,
     updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
@@ -110,8 +114,10 @@ async function loadFreshAgentCommandModulesForTest() {
   vi.doMock("../agents/model-catalog.js", () => ({
     loadModelCatalog: loadModelCatalogMock,
   }));
-  vi.doMock("../agents/model-selection.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../agents/model-selection.js")>();
+  vi.doMock("../agents/model-selection.js", async () => {
+    const actual = await vi.importActual<typeof import("../agents/model-selection.js")>(
+      "../agents/model-selection.js",
+    );
     return {
       ...actual,
       isCliProvider: isCliProviderMock,

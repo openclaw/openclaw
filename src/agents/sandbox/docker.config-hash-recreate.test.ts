@@ -85,19 +85,15 @@ function spawnDockerProcess(command: string, args: string[]) {
   return child;
 }
 
-async function createChildProcessMock(
-  importOriginal: () => Promise<typeof import("node:child_process")>,
-) {
-  const actual = await importOriginal();
+async function createChildProcessMock() {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn: spawnDockerProcess,
   };
 }
 
-vi.mock("node:child_process", async (importOriginal) =>
-  createChildProcessMock(() => importOriginal<typeof import("node:child_process")>()),
-);
+vi.mock("node:child_process", async () => createChildProcessMock());
 
 let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
 
@@ -107,9 +103,7 @@ async function loadFreshDockerModuleForTest() {
     readRegistry: registryMocks.readRegistry,
     updateRegistry: registryMocks.updateRegistry,
   }));
-  vi.doMock("node:child_process", async (importOriginal) =>
-    createChildProcessMock(() => importOriginal<typeof import("node:child_process")>()),
-  );
+  vi.doMock("node:child_process", async () => createChildProcessMock());
   ({ ensureSandboxContainer } = await import("./docker.js"));
 }
 

@@ -5,8 +5,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { captureEnv } from "../test-utils/env.js";
 import type { UpdateCheckResult } from "./update-check.js";
 
-vi.mock("./openclaw-root.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./openclaw-root.js")>();
+vi.mock("./openclaw-root.js", async () => {
+  const actual = await vi.importActual<typeof import("./openclaw-root.js")>("./openclaw-root.js");
   return {
     ...actual,
     resolveOpenClawPackageRoot: vi.fn(),

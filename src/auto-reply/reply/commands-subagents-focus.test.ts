@@ -176,17 +176,20 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: hoisted.callGatewayMock,
 }));
 
-vi.mock("../../acp/runtime/session-meta.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../acp/runtime/session-meta.js")>();
+vi.mock("../../acp/runtime/session-meta.js", async () => {
+  const actual = await vi.importActual<typeof import("../../acp/runtime/session-meta.js")>(
+    "../../acp/runtime/session-meta.js",
+  );
   return {
     ...actual,
     readAcpSessionEntry: (params: unknown) => hoisted.readAcpSessionEntryMock(params),
   };
 });
 
-vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
+vi.mock("../../infra/outbound/session-binding-service.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../infra/outbound/session-binding-service.js")
+  >("../../infra/outbound/session-binding-service.js");
   return {
     ...actual,
     getSessionBindingService: () => buildFocusSessionBindingService(),
