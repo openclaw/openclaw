@@ -73,7 +73,10 @@ export function createGatewayCloseHandler(params: {
       for (const plugin of listChannelPlugins()) {
         await params.stopChannel(plugin.id);
       }
-      const pluginServices = await params.pluginServicesReady.catch(() => null);
+      const pluginServices = await Promise.race([
+        params.pluginServicesReady.catch(() => null),
+        new Promise<null>((r) => setTimeout(() => r(null), 10_000)),
+      ]);
       if (pluginServices) {
         await pluginServices.stop().catch(() => {});
       }
