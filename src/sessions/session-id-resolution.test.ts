@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { resolvePreferredSessionKeyForSessionIdMatches } from "./session-id-resolution.js";
+import {
+  resolvePreferredSessionKeyForSessionIdMatches,
+  resolveSessionIdMatchSelection,
+} from "./session-id-resolution.js";
 
 function entry(updatedAt: number, sessionId = "s1"): SessionEntry {
   return { sessionId, updatedAt };
@@ -39,6 +42,18 @@ describe("resolvePreferredSessionKeyForSessionIdMatches", () => {
       ["agent:main:alpha", entry(10)],
     ];
     expect(resolvePreferredSessionKeyForSessionIdMatches(matches, "s1")).toBeUndefined();
+  });
+
+  it("reports ambiguity for fuzzy-only matches with tied timestamps", () => {
+    const matches: Array<[string, SessionEntry]> = [
+      ["agent:main:beta", entry(10)],
+      ["agent:main:alpha", entry(10)],
+    ];
+
+    expect(resolveSessionIdMatchSelection(matches, "s1")).toEqual({
+      kind: "ambiguous",
+      sessionKeys: ["agent:main:beta", "agent:main:alpha"],
+    });
   });
 
   it("prefers the freshest structural match over a fresher fuzzy match", () => {
