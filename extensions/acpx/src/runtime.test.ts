@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { runAcpRuntimeAdapterContract } from "openclaw/plugin-sdk/testing";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveAcpxPluginConfig } from "./config.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
@@ -13,12 +13,13 @@ import {
   readMockRuntimeLogEntries,
 } from "./test-utils/runtime-fixtures.js";
 
-let sharedFixture: Awaited<ReturnType<typeof createMockRuntimeFixture>> | null = null;
-let missingCommandRuntime: AcpxRuntime | null = null;
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await cleanupMockRuntimeFixtures();
+});
 
-beforeAll(async () => {
-  sharedFixture = await createMockRuntimeFixture();
-  missingCommandRuntime = new AcpxRuntime(
+function createMissingCommandRuntime(): AcpxRuntime {
+  return new AcpxRuntime(
     {
       command: "/definitely/missing/acpx",
       allowPluginLocalInstall: false,
@@ -34,13 +35,7 @@ beforeAll(async () => {
     },
     { logger: NOOP_LOGGER },
   );
-});
-
-afterAll(async () => {
-  sharedFixture = null;
-  missingCommandRuntime = null;
-  await cleanupMockRuntimeFixtures();
-});
+}
 
 async function expectSessionEnsureFallback(params: {
   sessionKey: string;
@@ -523,11 +518,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("preserves leading spaces across streamed text deltas", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
+    const { runtime } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:space",
       agent: "codex",
@@ -565,11 +556,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("emits done once when ACP stream repeats stop reason responses", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
+    const { runtime } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:double-done",
       agent: "codex",
@@ -591,11 +578,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("maps acpx error events into ACP runtime error events", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
+    const { runtime } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:456",
       agent: "codex",
@@ -621,11 +604,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("maps acpx permission-denied exits to actionable guidance", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
+    const { runtime } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:permission-denied",
       agent: "codex",
@@ -934,10 +913,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("marks runtime unhealthy when command is missing", async () => {
-    expect(missingCommandRuntime).toBeDefined();
-    if (!missingCommandRuntime) {
-      throw new Error("missing-command runtime fixture missing");
-    }
+    const missingCommandRuntime = createMissingCommandRuntime();
     await missingCommandRuntime.probeAvailability();
     expect(missingCommandRuntime.isHealthy()).toBe(false);
   });
@@ -985,10 +961,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("returns doctor report for missing command", async () => {
-    expect(missingCommandRuntime).toBeDefined();
-    if (!missingCommandRuntime) {
-      throw new Error("missing-command runtime fixture missing");
-    }
+    const missingCommandRuntime = createMissingCommandRuntime();
     const report = await missingCommandRuntime.doctor();
     expect(report.ok).toBe(false);
     expect(report.code).toBe("ACP_BACKEND_UNAVAILABLE");
