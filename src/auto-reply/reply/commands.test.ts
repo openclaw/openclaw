@@ -949,9 +949,9 @@ describe("/approve command", () => {
             ...telegramCommandTestPlugin,
             config: {
               ...telegramCommandTestPlugin.config,
-              defaultAccountId: (cfg) =>
-                ((cfg.channels?.telegram as { defaultAccount?: string } | undefined)?.defaultAccount ??
-                  DEFAULT_ACCOUNT_ID),
+              defaultAccountId: (cfg: OpenClawConfig) =>
+                (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
+                  ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
             },
           },
           source: "test",
@@ -1839,9 +1839,9 @@ describe("handleCommands /config configWrites gating", () => {
             ...telegramCommandTestPlugin,
             config: {
               ...telegramCommandTestPlugin.config,
-              defaultAccountId: (cfg) =>
-                ((cfg.channels?.telegram as { defaultAccount?: string } | undefined)?.defaultAccount ??
-                  DEFAULT_ACCOUNT_ID),
+              defaultAccountId: (cfg: OpenClawConfig) =>
+                (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
+                  ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
             },
           },
         },
@@ -2179,9 +2179,9 @@ describe("handleCommands /allowlist", () => {
             ...telegramCommandTestPlugin,
             config: {
               ...telegramCommandTestPlugin.config,
-              defaultAccountId: (cfg) =>
-                ((cfg.channels?.telegram as { defaultAccount?: string } | undefined)?.defaultAccount ??
-                  DEFAULT_ACCOUNT_ID),
+              defaultAccountId: (cfg: OpenClawConfig) =>
+                (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
+                  ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
             },
           },
         },
@@ -2251,9 +2251,9 @@ describe("handleCommands /allowlist", () => {
             ...telegramCommandTestPlugin,
             config: {
               ...telegramCommandTestPlugin.config,
-              defaultAccountId: (cfg) =>
-                ((cfg.channels?.telegram as { defaultAccount?: string } | undefined)?.defaultAccount ??
-                  DEFAULT_ACCOUNT_ID),
+              defaultAccountId: (cfg: OpenClawConfig) =>
+                (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
+                  ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
             },
           },
         },

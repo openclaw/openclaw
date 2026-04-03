@@ -12,11 +12,7 @@ import {
   readChannelAllowFromStore,
   removeChannelAllowFromStoreEntry,
 } from "../../pairing/pairing-store.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeOptionalAccountId } from "../../routing/session-key.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import {
   rejectNonOwnerCommand,
