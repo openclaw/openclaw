@@ -613,6 +613,7 @@ export async function startGatewayServer(
   if (!minimalTestGateway) {
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayStartupPlugins({
       cfg: gatewayPluginConfigAtStart,
+      activationSourceConfig: cfgAtStart,
       workspaceDir: defaultWorkspaceDir,
       log,
       coreGatewayHandlers,

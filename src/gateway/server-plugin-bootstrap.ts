@@ -20,6 +20,7 @@ type GatewayPluginBootstrapLog = {
 
 type GatewayPluginBootstrapParams = {
   cfg: ReturnType<typeof loadConfig>;
+  activationSourceConfig?: ReturnType<typeof loadConfig>;
   workspaceDir: string;
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
@@ -59,14 +60,14 @@ function logGatewayPluginDiagnostics(params: {
 
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
   const autoEnabled = applyPluginAutoEnable({
-    config: params.cfg,
+    config: params.activationSourceConfig ?? params.cfg,
     env: process.env,
   });
   const resolvedConfig = autoEnabled.config;
   installGatewayPluginRuntimeEnvironment(resolvedConfig);
   const loaded = loadGatewayPlugins({
     cfg: resolvedConfig,
-    activationSourceConfig: params.cfg,
+    activationSourceConfig: params.activationSourceConfig ?? params.cfg,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     log: params.log,
