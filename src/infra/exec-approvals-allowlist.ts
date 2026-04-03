@@ -451,6 +451,7 @@ function resolveSegmentAllowlistMatch(params: {
     cwd: params.context.cwd,
     env: params.context.env,
     platform: params.context.platform,
+    resolutionMode: params.context.resolutionMode,
   });
   const shellPositionalArgvMatch = shellPositionalArgvCandidatePath
     ? matchAllowlist(
@@ -830,6 +831,7 @@ function resolveShellWrapperPositionalArgvCandidatePath(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  resolutionMode?: "host" | "virtual";
 }): string | undefined {
   if (!isShellWrapperSegment(params.segment)) {
     return undefined;
@@ -870,6 +872,7 @@ function resolveShellWrapperPositionalArgvCandidatePath(params: {
 
   const resolution = resolveCommandResolutionFromArgv([carriedExecutable], params.cwd, params.env, {
     platform: params.platform,
+    resolutionMode: params.resolutionMode,
   });
   return resolveExecutionTargetCandidatePath(resolution, params.cwd, params.platform);
 }
@@ -1007,6 +1010,7 @@ function collectAllowAlwaysPatterns(params: {
     cwd: params.cwd,
     env: params.env,
     platform: params.platform,
+    resolutionMode: params.resolutionMode,
   });
   if (positionalArgvPath) {
     addAllowAlwaysPattern(params.out, positionalArgvPath);

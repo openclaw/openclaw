@@ -591,6 +591,35 @@ describe("exec approvals shell analysis", () => {
       expect(winResult.allowlistSatisfied).toBe(true);
     });
 
+    it("propagates virtual resolution for shell positional carriers", () => {
+      const carriedPath = "/sandbox/bin/toolx";
+      const command = "sh -c '$0 $1' toolx --version";
+      const env = { PATH: "/sandbox/bin:/usr/bin:/bin" };
+
+      const virtualResult = evaluateShellAllowlist({
+        command,
+        allowlist: [{ pattern: carriedPath }],
+        safeBins: new Set(),
+        cwd: "/workspace",
+        env,
+        platform: "linux",
+        resolutionMode: "virtual",
+      });
+      expect(virtualResult.analysisOk).toBe(true);
+      expect(virtualResult.allowlistSatisfied).toBe(true);
+
+      const hostResult = evaluateShellAllowlist({
+        command,
+        allowlist: [{ pattern: carriedPath }],
+        safeBins: new Set(),
+        cwd: "/workspace",
+        env,
+        platform: "linux",
+      });
+      expect(hostResult.analysisOk).toBe(true);
+      expect(hostResult.allowlistSatisfied).toBe(false);
+    });
+
     it("allows the skill display prelude when a later skill wrapper is allowlisted", () => {
       if (process.platform === "win32") {
         return;
