@@ -326,6 +326,49 @@ describe("marketplace plugins", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "preserves relative local marketplace installs when the plugin path goes through a symlink",
+    async () => {
+      await withTempDir(async (rootDir) => {
+        const sharedPluginsDir = path.join(rootDir, "..", "shared-plugins");
+        const pluginDir = path.join(sharedPluginsDir, "frontend-design");
+        const linkedPluginDir = path.join(rootDir, "plugins", "frontend-design");
+        await fs.mkdir(pluginDir, { recursive: true });
+        await fs.mkdir(path.dirname(linkedPluginDir), { recursive: true });
+        await fs.symlink(pluginDir, linkedPluginDir);
+        const manifestPath = await writeLocalMarketplaceFixture({
+          rootDir,
+          manifest: {
+            plugins: [
+              {
+                name: "frontend-design",
+                source: "./plugins/frontend-design",
+              },
+            ],
+          },
+        });
+        installPluginFromPathMock.mockResolvedValue({
+          ok: true,
+          pluginId: "frontend-design",
+          targetDir: "/tmp/frontend-design",
+          version: "0.1.0",
+          extensions: ["index.ts"],
+        });
+
+        const result = await installPluginFromMarketplace({
+          marketplace: manifestPath,
+          plugin: "frontend-design",
+        });
+
+        expectLocalMarketplaceInstallResult({
+          result,
+          pluginDir: linkedPluginDir,
+          marketplaceSource: manifestPath,
+        });
+      });
+    },
+  );
+
   it("passes dangerous force unsafe install through to marketplace path installs", async () => {
     await withTempDir(async (rootDir) => {
       const pluginDir = path.join(rootDir, "plugins", "frontend-design");
