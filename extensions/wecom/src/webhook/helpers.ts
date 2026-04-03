@@ -6,8 +6,13 @@
  */
 
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import type { StreamState, WecomWebhookTarget, WebhookInboundMessage, WebhookInboundQuote } from "./types.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type {
+  StreamState,
+  WecomWebhookTarget,
+  WebhookInboundMessage,
+  WebhookInboundQuote,
+} from "./types.js";
 
 // ============================================================================
 // 常量
@@ -97,7 +102,8 @@ export function buildFallbackPrompt(params: {
   chatType?: "group" | "direct";
 }): string {
   const who = params.userId ? `（${params.userId}）` : "";
-  const scope = params.chatType === "group" ? "群聊" : params.chatType === "direct" ? "私聊" : "会话";
+  const scope =
+    params.chatType === "group" ? "群聊" : params.chatType === "direct" ? "私聊" : "会话";
   if (!params.agentConfigured) {
     return `${scope}中需要通过应用私信发送${params.filename ? `（${params.filename}）` : ""}，但管理员尚未配置企业微信自建应用（Agent）通道。请联系管理员配置后再试。${who}`.trim();
   }
@@ -122,7 +128,10 @@ export function buildFallbackPrompt(params: {
  */
 export function extractLocalFilePathsFromText(text: string): string[] {
   if (!text.trim()) return [];
-  const re = new RegExp(String.raw`(\/(?:Users|tmp|root|home)\/[^\s"'<>\u3000-\u303F\uFF00-\uFFEF\u4E00-\u9FFF\u3400-\u4DBF]+)`, "g");
+  const re = new RegExp(
+    String.raw`(\/(?:Users|tmp|root|home)\/[^\s"'<>\u3000-\u303F\uFF00-\uFFEF\u4E00-\u9FFF\u3400-\u4DBF]+)`,
+    "g",
+  );
   const found = new Set<string>();
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
@@ -172,7 +181,10 @@ export function looksLikeSendLocalFileIntent(rawBody: string): boolean {
 /**
  * 计算 taskKey（对齐原版 computeTaskKey）
  */
-export function computeTaskKey(target: WecomWebhookTarget, msg: WebhookInboundMessage): string | undefined {
+export function computeTaskKey(
+  target: WecomWebhookTarget,
+  msg: WebhookInboundMessage,
+): string | undefined {
   const msgid = msg.msgid ? String(msg.msgid) : "";
   if (!msgid) return undefined;
   const aibotid = String(msg.aibotid ?? "unknown").trim() || "unknown";
@@ -206,7 +218,10 @@ export function guessContentTypeFromPath(filePath: string): string | undefined {
  *
  * 包含 images/msg_item，对 content 做 truncateUtf8Bytes。
  */
-export function buildStreamReplyFromState(state: StreamState, maxBytes: number): Record<string, unknown> {
+export function buildStreamReplyFromState(
+  state: StreamState,
+  maxBytes: number,
+): Record<string, unknown> {
   const content = truncateUtf8Bytes(state.content, maxBytes);
   const result: Record<string, unknown> = {
     msgtype: "stream",
@@ -214,12 +229,14 @@ export function buildStreamReplyFromState(state: StreamState, maxBytes: number):
       id: state.streamId,
       finish: state.finished,
       content,
-      ...(state.finished && state.images?.length ? {
-        msg_item: state.images.map((img) => ({
-          msgtype: "image",
-          image: { base64: img.base64, md5: img.md5 },
-        })),
-      } : {}),
+      ...(state.finished && state.images?.length
+        ? {
+            msg_item: state.images.map((img) => ({
+              msgtype: "image",
+              image: { base64: img.base64, md5: img.md5 },
+            })),
+          }
+        : {}),
     },
   };
   return result;
@@ -289,7 +306,10 @@ export async function processInboundMessage(
     const aesKey = globalAesKey || (msg as any).image?.aeskey || "";
     if (url && aesKey) {
       try {
-        const decrypted = await decryptWecomMediaWithMeta(url, aesKey, { maxBytes, http: { proxyUrl } });
+        const decrypted = await decryptWecomMediaWithMeta(url, aesKey, {
+          maxBytes,
+          http: { proxyUrl },
+        });
         const inferred = inferInboundMediaMeta({
           kind: "image",
           buffer: decrypted.buffer,
@@ -323,7 +343,10 @@ export async function processInboundMessage(
     const aesKey = globalAesKey || (msg as any).file?.aeskey || "";
     if (url && aesKey) {
       try {
-        const decrypted = await decryptWecomMediaWithMeta(url, aesKey, { maxBytes, http: { proxyUrl } });
+        const decrypted = await decryptWecomMediaWithMeta(url, aesKey, {
+          maxBytes,
+          http: { proxyUrl },
+        });
         const inferred = inferInboundMediaMeta({
           kind: "file",
           buffer: decrypted.buffer,
@@ -356,7 +379,10 @@ export async function processInboundMessage(
     const aesKey = globalAesKey || (msg as any).video?.aeskey || "";
     if (url && aesKey) {
       try {
-        const decrypted = await decryptWecomMediaWithMeta(url, aesKey, { maxBytes, http: { proxyUrl } });
+        const decrypted = await decryptWecomMediaWithMeta(url, aesKey, {
+          maxBytes,
+          http: { proxyUrl },
+        });
         const inferred = inferInboundMediaMeta({
           kind: "file",
           buffer: decrypted.buffer,
@@ -402,7 +428,10 @@ export async function processInboundMessage(
             bodyParts.push(`[${t}]`);
           } else if (url) {
             try {
-              const decrypted = await decryptWecomMediaWithMeta(url, itemAesKey, { maxBytes, http: { proxyUrl } });
+              const decrypted = await decryptWecomMediaWithMeta(url, itemAesKey, {
+                maxBytes,
+                http: { proxyUrl },
+              });
               const inferred = inferInboundMediaMeta({
                 kind: t,
                 buffer: decrypted.buffer,
@@ -457,27 +486,26 @@ function formatDecryptError(err: unknown): string {
 }
 
 /** 从消息中提取显式文件名（对齐原版 pickBotFileName） */
-function pickBotFileName(msg: WebhookInboundMessage, item?: Record<string, any>): string | undefined {
+function pickBotFileName(
+  msg: WebhookInboundMessage,
+  item?: Record<string, any>,
+): string | undefined {
   const fromItem = item
     ? resolveInlineFileName(
-      item?.filename ??
-      item?.file_name ??
-      item?.fileName ??
-      item?.name ??
-      item?.title,
-    )
+        item?.filename ?? item?.file_name ?? item?.fileName ?? item?.name ?? item?.title,
+      )
     : undefined;
   if (fromItem) return fromItem;
 
   const fromFile = resolveInlineFileName(
     (msg as any)?.file?.filename ??
-    (msg as any)?.file?.file_name ??
-    (msg as any)?.file?.fileName ??
-    (msg as any)?.file?.name ??
-    (msg as any)?.file?.title ??
-    (msg as any)?.filename ??
-    (msg as any)?.fileName ??
-    (msg as any)?.FileName,
+      (msg as any)?.file?.file_name ??
+      (msg as any)?.file?.fileName ??
+      (msg as any)?.file?.name ??
+      (msg as any)?.file?.title ??
+      (msg as any)?.filename ??
+      (msg as any)?.fileName ??
+      (msg as any)?.FileName,
   );
   return fromFile;
 }
@@ -518,7 +546,11 @@ function hasLikelyExtension(name?: string): boolean {
 
 /** 归一化 Content-Type */
 function normalizeContentType(raw?: string | null): string | undefined {
-  const normalized = String(raw ?? "").trim().split(";")[0]?.trim().toLowerCase();
+  const normalized = String(raw ?? "")
+    .trim()
+    .split(";")[0]
+    ?.trim()
+    .toLowerCase();
   return normalized || undefined;
 }
 
@@ -559,18 +591,34 @@ function detectMimeFromBufferSync(buffer: Buffer): string | undefined {
   // PNG
   if (
     buffer.length >= 8 &&
-    buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47 &&
-    buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a
-  ) return "image/png";
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  )
+    return "image/png";
 
   // JPEG
   if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
 
   // GIF
-  if (buffer.subarray(0, 6).toString("ascii") === "GIF87a" || buffer.subarray(0, 6).toString("ascii") === "GIF89a") return "image/gif";
+  if (
+    buffer.subarray(0, 6).toString("ascii") === "GIF87a" ||
+    buffer.subarray(0, 6).toString("ascii") === "GIF89a"
+  )
+    return "image/gif";
 
   // WEBP
-  if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  )
+    return "image/webp";
 
   // BMP
   if (buffer[0] === 0x42 && buffer[1] === 0x4d) return "image/bmp";
@@ -582,10 +630,19 @@ function detectMimeFromBufferSync(buffer: Buffer): string | undefined {
   if (buffer.subarray(0, 4).toString("ascii") === "OggS") return "audio/ogg";
 
   // WAV
-  if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WAVE") return "audio/wav";
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WAVE"
+  )
+    return "audio/wav";
 
   // MP3
-  if (buffer.subarray(0, 3).toString("ascii") === "ID3" || (buffer[0] === 0xff && ((buffer[1] ?? 0) & 0xe0) === 0xe0)) return "audio/mpeg";
+  if (
+    buffer.subarray(0, 3).toString("ascii") === "ID3" ||
+    (buffer[0] === 0xff && ((buffer[1] ?? 0) & 0xe0) === 0xe0)
+  )
+    return "audio/mpeg";
 
   // MP4/MOV family
   if (buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") return "video/mp4";
@@ -593,9 +650,16 @@ function detectMimeFromBufferSync(buffer: Buffer): string | undefined {
   // Legacy Office (OLE Compound File)
   if (
     buffer.length >= 8 &&
-    buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0 &&
-    buffer[4] === 0xa1 && buffer[5] === 0xb1 && buffer[6] === 0x1a && buffer[7] === 0xe1
-  ) return "application/msword";
+    buffer[0] === 0xd0 &&
+    buffer[1] === 0xcf &&
+    buffer[2] === 0x11 &&
+    buffer[3] === 0xe0 &&
+    buffer[4] === 0xa1 &&
+    buffer[5] === 0xb1 &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0xe1
+  )
+    return "application/msword";
 
   // ZIP / OOXML
   const zipMagic =
@@ -604,9 +668,12 @@ function detectMimeFromBufferSync(buffer: Buffer): string | undefined {
     (buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x07 && buffer[3] === 0x08);
   if (zipMagic) {
     const probe = buffer.subarray(0, Math.min(buffer.length, 512 * 1024));
-    if (probe.includes(Buffer.from("word/"))) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    if (probe.includes(Buffer.from("xl/"))) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    if (probe.includes(Buffer.from("ppt/"))) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    if (probe.includes(Buffer.from("word/")))
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    if (probe.includes(Buffer.from("xl/")))
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    if (probe.includes(Buffer.from("ppt/")))
+      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
     return "application/zip";
   }
 
@@ -661,14 +728,16 @@ function inferInboundMediaMeta(params: {
   }
 
   const hasExt = Boolean(chosenName && /\.[a-z0-9]{1,16}$/i.test(chosenName));
-  const ext = guessExtensionFromContentType(contentType) || (params.kind === "image" ? "jpg" : "bin");
+  const ext =
+    guessExtensionFromContentType(contentType) || (params.kind === "image" ? "jpg" : "bin");
   const filename = chosenName
-    ? (hasExt ? chosenName : `${chosenName}.${ext}`)
+    ? hasExt
+      ? chosenName
+      : `${chosenName}.${ext}`
     : `${params.kind}.${ext}`;
 
   return { contentType, filename };
 }
-
 
 // ============================================================================
 // 配置解析
@@ -689,8 +758,12 @@ export function buildCfgForDispatch(config: OpenClawConfig): OpenClawConfig {
   const baseTools = (config as any)?.tools ?? {};
   const baseSandbox = (baseTools as any)?.sandbox ?? {};
   const baseSandboxTools = (baseSandbox as any)?.tools ?? {};
-  const existingTopLevelDeny = Array.isArray((baseTools as any).deny) ? ((baseTools as any).deny as string[]) : [];
-  const existingSandboxDeny = Array.isArray((baseSandboxTools as any).deny) ? ((baseSandboxTools as any).deny as string[]) : [];
+  const existingTopLevelDeny = Array.isArray((baseTools as any).deny)
+    ? ((baseTools as any).deny as string[])
+    : [];
+  const existingSandboxDeny = Array.isArray((baseSandboxTools as any).deny)
+    ? ((baseSandboxTools as any).deny as string[])
+    : [];
   const topLevelDeny = Array.from(new Set([...existingTopLevelDeny, "message"]));
   const sandboxDeny = Array.from(new Set([...existingSandboxDeny, "message"]));
   return {
@@ -727,7 +800,6 @@ export function buildCfgForDispatch(config: OpenClawConfig): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-
 /**
  * 解析企微 Bot 回调中的发送者 userid（对齐原版 resolveWecomSenderUserId）
  *
@@ -740,7 +812,6 @@ export function resolveWecomSenderUserId(msg: WebhookInboundMessage): string | u
   const legacy = String(rawMsg.fromuserid ?? rawMsg.from_userid ?? rawMsg.fromUserId ?? "").trim();
   return legacy || undefined;
 }
-
 
 // ============================================================================
 // 辅助函数
@@ -772,12 +843,15 @@ export function buildInboundBody(msg: WebhookInboundMessage): string {
   } else if (msgtype === "mixed") {
     const items = msg.mixed?.msg_item;
     if (Array.isArray(items)) {
-      body = items.map((item) => {
-        const t = String(item?.msgtype ?? "").toLowerCase();
-        if (t === "text") return item?.text?.content || "";
-        if (t === "image") return `[image] ${item?.image?.url || ""}`;
-        return `[${t || "item"}]`;
-      }).filter(Boolean).join("\n");
+      body = items
+        .map((item) => {
+          const t = String(item?.msgtype ?? "").toLowerCase();
+          if (t === "text") return item?.text?.content || "";
+          if (t === "image") return `[image] ${item?.image?.url || ""}`;
+          return `[${t || "item"}]`;
+        })
+        .filter(Boolean)
+        .join("\n");
     } else {
       body = "[mixed]";
     }
@@ -813,11 +887,14 @@ export function formatQuote(quote: WebhookInboundQuote): string {
   if (type === "text") return quote.text?.content || "";
   if (type === "image") return `[引用: 图片] ${quote.image?.url || ""}`;
   if (type === "mixed" && quote.mixed?.msg_item) {
-    const items = quote.mixed.msg_item.map((item) => {
-      if (item.msgtype === "text") return item.text?.content;
-      if (item.msgtype === "image") return `[图片] ${item.image?.url || ""}`;
-      return "";
-    }).filter(Boolean).join(" ");
+    const items = quote.mixed.msg_item
+      .map((item) => {
+        if (item.msgtype === "text") return item.text?.content;
+        if (item.msgtype === "image") return `[图片] ${item.image?.url || ""}`;
+        return "";
+      })
+      .filter(Boolean)
+      .join(" ");
     return `[引用: 图文] ${items}`;
   }
   if (type === "voice") return `[引用: 语音] ${quote.voice?.content || ""}`;
@@ -829,10 +906,10 @@ export function formatQuote(quote: WebhookInboundQuote): string {
 /** 检查消息是否有媒体内容 */
 export function hasMedia(message: WebhookInboundMessage): boolean {
   const type = message.msgtype;
-  return ["image", "file", "voice", "video"].includes(type) ||
-    (type === "mixed" && message.mixed?.msg_item?.some(
-      (item) => item.msgtype !== "text",
-    ) === true);
+  return (
+    ["image", "file", "voice", "video"].includes(type) ||
+    (type === "mixed" && message.mixed?.msg_item?.some((item) => item.msgtype !== "text") === true)
+  );
 }
 
 /**

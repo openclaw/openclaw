@@ -11,15 +11,15 @@
  * - 按 accountId 管理各自的 unregister，stop 时只注销该账号的 Target
  */
 
-import type { PluginRuntime } from "openclaw/plugin-sdk";
-import type { WebhookGatewayContext, WecomWebhookTarget, PendingInbound } from "./types.js";
-import { PRUNE_INTERVAL_MS, WEBHOOK_PATHS } from "./types.js";
-import { monitorState, WebhookMonitorState } from "./state.js";
-import { registerWecomWebhookTarget, hasActiveTargets } from "./target.js";
-import { startAgentForStream } from "./monitor.js";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { hasMultiAccounts } from "../accounts.js";
 import { DEFAULT_ACCOUNT_ID } from "../openclaw-compat.js";
 import { getWeComRuntime } from "../runtime.js";
+import { startAgentForStream } from "./monitor.js";
+import { monitorState, WebhookMonitorState } from "./state.js";
+import { registerWecomWebhookTarget, hasActiveTargets } from "./target.js";
+import type { WebhookGatewayContext, WecomWebhookTarget, PendingInbound } from "./types.js";
+import { PRUNE_INTERVAL_MS, WEBHOOK_PATHS } from "./types.js";
 
 // ============================================================================
 // 全局状态
@@ -50,10 +50,7 @@ function uniquePaths(paths: string[]): string[] {
  *
  * 参考 lh 版 resolveBotRegistrationPaths
  */
-function resolveBotRegistrationPaths(params: {
-  accountId: string;
-  matrixMode: boolean;
-}): string[] {
+function resolveBotRegistrationPaths(params: { accountId: string; matrixMode: boolean }): string[] {
   if (params.matrixMode) {
     return uniquePaths([
       `${WEBHOOK_PATHS.BOT_PLUGIN}/${params.accountId}`,
@@ -235,19 +232,18 @@ async function flushPending(pending: PendingInbound): Promise<void> {
   const { streamStore } = monitorState;
 
   // Merge all message contents (each is already formatted by buildInboundBody)
-  const mergedContents = contents.filter(c => c.trim()).join("\n").trim();
+  const mergedContents = contents
+    .filter((c) => c.trim())
+    .join("\n")
+    .trim();
 
   let core: PluginRuntime | null = null;
   try {
     core = getWeComRuntime();
   } catch (err) {
-    target.runtime.log?.(
-      `[webhook] flush pending: runtime not ready: ${String(err)}`,
-    );
+    target.runtime.log?.(`[webhook] flush pending: runtime not ready: ${String(err)}`);
     streamStore.markFinished(streamId);
-    target.runtime.log?.(
-      `[webhook] queue: runtime not ready，结束批次并推进 streamId=${streamId}`,
-    );
+    target.runtime.log?.(`[webhook] queue: runtime not ready，结束批次并推进 streamId=${streamId}`);
     streamStore.onStreamFinished(streamId);
     return;
   }
@@ -273,9 +269,7 @@ async function flushPending(pending: PendingInbound): Promise<void> {
         state.content = state.content || `Error: ${state.error}`;
         state.finished = true;
       });
-      target.runtime.error?.(
-        `[webhook] Agent 处理失败 (streamId=${streamId}): ${String(err)}`,
-      );
+      target.runtime.error?.(`[webhook] Agent 处理失败 (streamId=${streamId}): ${String(err)}`);
       streamStore.onStreamFinished(streamId);
     });
   }

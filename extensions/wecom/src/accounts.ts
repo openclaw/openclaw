@@ -1,10 +1,10 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { CHANNEL_ID } from "./const.js";
-import type { WeComConfig, WeComAccountConfig, ResolvedWeComAccount } from "./utils.js";
-import { DefaultWsUrl } from "./utils.js";
 import type { ResolvedAgentAccount } from "./types/account.js";
 import type { WecomAgentConfig } from "./types/config.js";
+import type { WeComConfig, WeComAccountConfig, ResolvedWeComAccount } from "./utils.js";
+import { DefaultWsUrl } from "./utils.js";
 
 // ============================================================================
 // 多账号配置结构
@@ -106,9 +106,7 @@ function mergeWeComAccountConfig(cfg: OpenClawConfig, accountId: string): WeComC
   const { groups: accountGroups, ...accountRest } = account;
 
   const mergedGroups =
-    baseGroups || accountGroups
-      ? { ...baseGroups, ...accountGroups }
-      : undefined;
+    baseGroups || accountGroups ? { ...baseGroups, ...accountGroups } : undefined;
 
   return {
     ...baseRest,
@@ -178,7 +176,10 @@ export function resolveWeComAccountMulti(params: {
       configured: true,
       corpId: agentCfg.corpId,
       corpSecret: agentCfg.corpSecret,
-      agentId: typeof agentCfg.agentId === "string" ? Number(agentCfg.agentId) || undefined : agentCfg.agentId,
+      agentId:
+        typeof agentCfg.agentId === "string"
+          ? Number(agentCfg.agentId) || undefined
+          : agentCfg.agentId,
       token: agentCfg.token,
       encodingAESKey: agentCfg.encodingAESKey,
       config: agentCfg,

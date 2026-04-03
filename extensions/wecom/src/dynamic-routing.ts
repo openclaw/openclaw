@@ -4,7 +4,7 @@
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { shouldUseDynamicAgent, generateAgentId } from "./dynamic-agent.js";
 
 /**
@@ -58,13 +58,13 @@ export interface DynamicRoutingResult {
 
 /**
  * 统一处理动态路由注入逻辑
- * 
+ *
  * 功能：
  * 1. 判断是否需要使用动态 Agent
  * 2. 根据 matchedBy 判断配置类型
  * 3. 返回最终的路由信息（不修改传入的 route 对象）
  * 4. 输出详细的调试日志
- * 
+ *
  * @param params 动态路由处理参数
  * @returns 处理结果
  */
@@ -72,9 +72,11 @@ export function processDynamicRouting(params: DynamicRoutingParams): DynamicRout
   const { route, config, accountId, chatType, chatId, senderId, log } = params;
 
   log?.(`[dynamic-routing] 🔍 调试 - matchedBy=${route.matchedBy}, agentId=${route.agentId}`);
-  
+
   if (route.matchedBy !== "default") {
-    log?.(`[dynamic-routing] ℹ️  检测到匹配的 bindings (matchedBy=${route.matchedBy})，跳过动态路由`);
+    log?.(
+      `[dynamic-routing] ℹ️  检测到匹配的 bindings (matchedBy=${route.matchedBy})，跳过动态路由`,
+    );
     return {
       useDynamicAgent: false,
       finalAgentId: route.agentId,
@@ -93,12 +95,16 @@ export function processDynamicRouting(params: DynamicRoutingParams): DynamicRout
 
   // 使用动态 Agent
   if (useDynamicAgent) {
-    log?.(`[dynamic-routing] 原始路由信息: agentId=${route.agentId}, matchedBy=${route.matchedBy}, sessionKey=${route.sessionKey}`);
-    
+    log?.(
+      `[dynamic-routing] 原始路由信息: agentId=${route.agentId}, matchedBy=${route.matchedBy}, sessionKey=${route.sessionKey}`,
+    );
+
     const targetAgentId = generateAgentId(chatType, chatId, accountId);
     const targetSessionKey = `agent:${targetAgentId}:wecom:${accountId}:${chatType}:${chatId}`;
 
-    log?.(`[dynamic-routing] 🔄 路由注入: agentId=${targetAgentId}, sessionKey=${targetSessionKey}`);
+    log?.(
+      `[dynamic-routing] 🔄 路由注入: agentId=${targetAgentId}, sessionKey=${targetSessionKey}`,
+    );
 
     return {
       useDynamicAgent: true,
@@ -107,8 +113,8 @@ export function processDynamicRouting(params: DynamicRoutingParams): DynamicRout
       routeModified: true,
     };
   }
-  
-  log?.('[dynamic-routing] 🔄不使用动态路由');
+
+  log?.("[dynamic-routing] 🔄不使用动态路由");
   // 不使用动态 Agent，返回原始路由
   return {
     useDynamicAgent: false,

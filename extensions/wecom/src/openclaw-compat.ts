@@ -9,8 +9,8 @@
  */
 
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import * as os from "node:os";
+import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "./state-dir-resolve.js";
 export { resolveStateDir };
@@ -45,7 +45,10 @@ export type DetectMimeOptions = {
 // ============================================================================
 
 interface SdkExports {
-  loadOutboundMediaFromUrl?: (url: string, opts?: OutboundMediaLoadOptions) => Promise<WebMediaResult>;
+  loadOutboundMediaFromUrl?: (
+    url: string,
+    opts?: OutboundMediaLoadOptions,
+  ) => Promise<WebMediaResult>;
   detectMime?: (opts: DetectMimeOptions) => Promise<string | undefined>;
   getDefaultMediaLocalRoots?: () => readonly string[];
   addWildcardAllowFrom?: (allowFrom: string[]) => string[];
@@ -82,7 +85,9 @@ const _setupSdkReady: Promise<void> = import("openclaw/plugin-sdk/setup")
       _cachedAddWildcardAllowFrom = sdk.addWildcardAllowFrom;
     }
   })
-  .catch(() => { /* plugin-sdk/setup 不可用 */ });
+  .catch(() => {
+    /* plugin-sdk/setup 不可用 */
+  });
 
 // 同时也从 core 模块的结果中缓存
 _sdkReady.then((sdk) => {
@@ -273,7 +278,9 @@ async function fetchRemoteMedia(
       const parsed = new URL(url);
       const base = path.basename(parsed.pathname);
       if (base && base.includes(".")) fileName = base;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   const contentType = await detectMimeFallback({ buffer, headerMime, filePath: fileName ?? url });
@@ -335,7 +342,9 @@ async function loadOutboundMediaFromUrlFallback(
     }
     const fh = await fs.open(mediaUrl, "r");
     try {
-      data = await fh.read({ buffer: Buffer.alloc(stat.size), length: stat.size }).then((r) => r.buffer.subarray(0, r.bytesRead));
+      data = await fh
+        .read({ buffer: Buffer.alloc(stat.size), length: stat.size })
+        .then((r) => r.buffer.subarray(0, r.bytesRead));
     } finally {
       await fh.close();
     }
@@ -442,7 +451,7 @@ export async function getDefaultMediaLocalRoots(): Promise<readonly string[]> {
 
 export function emptyPluginConfigSchema(): Record<string, unknown> {
   return {
-    type: 'object',
+    type: "object",
     additionalProperties: false,
     properties: {},
   };
@@ -583,8 +592,7 @@ function buildAccountScopedDmSecurityPolicyFallback(
   params: BuildAccountScopedDmSecurityPolicyParams,
 ): ChannelSecurityDmPolicyCompat {
   const DEFAULT_ACCOUNT = "default";
-  const resolvedAccountId =
-    params.accountId ?? params.fallbackAccountId ?? DEFAULT_ACCOUNT;
+  const resolvedAccountId = params.accountId ?? params.fallbackAccountId ?? DEFAULT_ACCOUNT;
 
   const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[
     params.channelKey
@@ -597,14 +605,11 @@ function buildAccountScopedDmSecurityPolicyFallback(
 
   const allowFromPath = `${basePath}${params.allowFromPathSuffix ?? ""}`;
   const policyPath =
-    params.policyPathSuffix != null
-      ? `${basePath}${params.policyPathSuffix}`
-      : undefined;
+    params.policyPathSuffix != null ? `${basePath}${params.policyPathSuffix}` : undefined;
 
   // 构建 approveHint 的简化版本（不依赖 formatCliCommand）
   const channelId = params.approveChannelId ?? params.channelKey;
-  const defaultApproveHint =
-    `Approve via: openclaw pairing list ${channelId} / openclaw pairing approve ${channelId} <code>`;
+  const defaultApproveHint = `Approve via: openclaw pairing list ${channelId} / openclaw pairing approve ${channelId} <code>`;
 
   return {
     policy: params.policy ?? params.defaultPolicy ?? "pairing",
@@ -624,9 +629,11 @@ const _sdkPolicyReady: Promise<{
 }> = (async () => {
   try {
     // 尝试从主 SDK 包导入
-    const sdk = await import("openclaw/plugin-sdk");
+    const sdk = await import("openclaw/plugin-sdk/channel-policy");
     if (typeof (sdk as any).buildAccountScopedDmSecurityPolicy === "function") {
-      return { buildAccountScopedDmSecurityPolicy: (sdk as any).buildAccountScopedDmSecurityPolicy };
+      return {
+        buildAccountScopedDmSecurityPolicy: (sdk as any).buildAccountScopedDmSecurityPolicy,
+      };
     }
     return {};
   } catch {
