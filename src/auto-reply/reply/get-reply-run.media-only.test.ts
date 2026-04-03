@@ -269,6 +269,40 @@ describe("runPreparedReply media-only handling", () => {
     expect(resetNoticeCall?.payload?.text).not.toContain("env:");
   });
 
+  it("routes reset notices through the effective session account when AccountId is omitted", async () => {
+    await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+          AccountId: undefined,
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          AccountId: "work",
+        },
+      }),
+    );
+
+    const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
+      | { accountId?: string }
+      | undefined;
+    expect(resetNoticeCall?.accountId).toBe("work");
+  });
+
   it("skips reset notice when only webchat fallback routing is available", async () => {
     await runPreparedReply(
       baseParams({

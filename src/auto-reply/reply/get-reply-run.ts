@@ -459,7 +459,7 @@ export async function runPreparedReply(
       command,
       sessionKey,
       cfg,
-      accountId: ctx.AccountId,
+      accountId: sessionCtx.AccountId,
       threadId: ctx.MessageThreadId,
       provider,
       model,
