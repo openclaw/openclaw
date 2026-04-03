@@ -89,9 +89,16 @@ type DiscordSnapshotAuthor = {
   name?: string | null;
 };
 
+export type DiscordEmbedLike = {
+  title?: string | null;
+  description?: string | null;
+  fields?: Array<{ name: string; value: string }> | null;
+  footer?: { text?: string | null } | null;
+};
+
 type DiscordSnapshotMessage = {
   content?: string | null;
-  embeds?: Array<{ description?: string | null; title?: string | null }> | null;
+  embeds?: Array<DiscordEmbedLike> | null;
   attachments?: APIAttachment[] | null;
   stickers?: APIStickerItem[] | null;
   sticker_items?: APIStickerItem[] | null;
@@ -576,25 +583,36 @@ function buildDiscordMediaPlaceholder(params: {
   return attachmentText || stickerText || "";
 }
 
-export function resolveDiscordEmbedText(
-  embed?: { title?: string | null; description?: string | null } | null,
-): string {
-  const title = embed?.title?.trim() || "";
-  const description = embed?.description?.trim() || "";
-  if (title && description) {
-    return `${title}\n${description}`;
+export function resolveDiscordEmbedText(embed?: DiscordEmbedLike | null): string {
+  if (!embed) {
+    return "";
   }
-  return title || description || "";
+  const parts: string[] = [];
+  if (embed.title?.trim()) {
+    parts.push(embed.title.trim());
+  }
+  if (embed.description?.trim()) {
+    parts.push(embed.description.trim());
+  }
+  for (const f of embed.fields ?? []) {
+    if (f.name?.trim() && f.value?.trim()) {
+      parts.push(`${f.name.trim()}: ${f.value.trim()}`);
+    }
+  }
+  if (embed.footer?.text?.trim()) {
+    parts.push(embed.footer.text.trim());
+  }
+  return parts.join("\n");
 }
 
 export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
-  const embedText = resolveDiscordEmbedText(
-    (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
-      null,
-  );
+  const embedText = (message.embeds ?? [])
+    .map((e) => resolveDiscordEmbedText(e))
+    .filter(Boolean)
+    .join("\n---\n");
   const rawText =
     message.content?.trim() ||
     buildDiscordMediaPlaceholder({
@@ -682,7 +700,10 @@ function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): st
     attachments: snapshot.attachments ?? undefined,
     stickers: resolveDiscordSnapshotStickers(snapshot),
   });
-  const embedText = resolveDiscordEmbedText(snapshot.embeds?.[0]);
+  const embedText = (snapshot.embeds ?? [])
+    .map((e) => resolveDiscordEmbedText(e))
+    .filter(Boolean)
+    .join("\n---\n");
   return content || attachmentText || embedText || "";
 }
 

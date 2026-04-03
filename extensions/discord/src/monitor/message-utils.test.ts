@@ -104,7 +104,12 @@ function expectAttachmentImageFallback(params: { result: unknown; attachment: { 
 
 function asForwardedSnapshotMessage(params: {
   content: string;
-  embeds: Array<{ title?: string; description?: string }>;
+  embeds: Array<{
+    title?: string;
+    description?: string;
+    fields?: Array<{ name: string; value: string }>;
+    footer?: { text: string };
+  }>;
 }) {
   return asMessage({
     content: "",
@@ -849,6 +854,89 @@ describe("resolveDiscordMessageText", () => {
     );
 
     expect(text).toBe("hello from content");
+  });
+
+  it("extracts embed fields when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [
+          {
+            fields: [
+              { name: "Status", value: "Online" },
+              { name: "Uptime", value: "3h" },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(text).toBe("Status: Online\nUptime: 3h");
+  });
+
+  it("extracts embed footer when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [{ title: "Alert", footer: { text: "Generated at 12:00" } }],
+      }),
+    );
+
+    expect(text).toBe("Alert\nGenerated at 12:00");
+  });
+
+  it("extracts title, description, fields, and footer together", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [
+          {
+            title: "System Status",
+            description: "All systems operational",
+            fields: [
+              { name: "CPU", value: "45%" },
+              { name: "RAM", value: "2.1GB" },
+            ],
+            footer: { text: "Last checked: now" },
+          },
+        ],
+      }),
+    );
+
+    expect(text).toBe(
+      "System Status\nAll systems operational\nCPU: 45%\nRAM: 2.1GB\nLast checked: now",
+    );
+  });
+
+  it("joins multiple embeds with separator", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [{ title: "Embed One" }, { title: "Embed Two", description: "Details" }],
+      }),
+    );
+
+    expect(text).toBe("Embed One\n---\nEmbed Two\nDetails");
+  });
+
+  it("skips fields with whitespace-only name or value", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [
+          {
+            title: "Test",
+            fields: [
+              { name: "  ", value: "val" },
+              { name: "Real", value: "   " },
+              { name: "Real", value: "data" },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(text).toBe("Test\nReal: data");
   });
 
   it("joins forwarded snapshot embed title and description when content is empty", () => {
