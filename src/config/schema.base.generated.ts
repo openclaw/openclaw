@@ -2610,6 +2610,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     alias: {
                       type: "string",
                     },
+                    routeTo: {
+                      type: "string",
+                    },
+                    contextTokens: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
                     params: {
                       type: "object",
                       propertyNames: {

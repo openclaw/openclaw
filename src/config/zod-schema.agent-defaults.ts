@@ -30,6 +30,10 @@ export const AgentDefaultsSchema = z
         z
           .object({
             alias: z.string().optional(),
+            /** Route this selectable model ref to another provider/model at execution time. */
+            routeTo: z.string().optional(),
+            /** Local context budget override used for compaction/status even when routeTo points upstream elsewhere. */
+            contextTokens: z.number().int().positive().optional(),
             /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
             params: z.record(z.string(), z.unknown()).optional(),
             /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
