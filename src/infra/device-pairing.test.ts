@@ -184,6 +184,133 @@ describe("device pairing tokens", () => {
     expect(paired?.scopes).toEqual(expect.arrayContaining(["operator.read", "operator.write"]));
   });
 
+  test("approves mixed node and operator requests with admin caller scopes", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        roles: ["node", "operator"],
+        scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveDevicePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.admin", "operator.pairing"] },
+        baseDir,
+      ),
+    ).resolves.toMatchObject({
+      status: "approved",
+      requestId: request.request.requestId,
+    });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired && listEffectivePairedDeviceRoles(paired)).toEqual(["node", "operator"]);
+    expect(paired?.tokens?.node?.scopes).toEqual([]);
+    expect(paired?.tokens?.operator?.scopes).toEqual([
+      "operator.read",
+      "operator.talk.secrets",
+      "operator.write",
+    ]);
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token: requireToken(paired?.tokens?.node?.token),
+        role: "node",
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token: requireToken(paired?.tokens?.operator?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  test("preserves requested non-operator scopes on newly minted role tokens", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+        scopes: ["node.exec"],
+      },
+      baseDir,
+    );
+
+    await expect(approveDevicePairing(request.request.requestId, baseDir)).resolves.toMatchObject({
+      status: "approved",
+      requestId: request.request.requestId,
+    });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.tokens?.node?.scopes).toEqual(["node.exec"]);
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token: requireToken(paired?.tokens?.node?.token),
+        role: "node",
+        scopes: ["node.exec"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  test("preserves existing non-operator scopes during operator-only mixed-role repairs", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const initial = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+        scopes: ["node.exec"],
+      },
+      baseDir,
+    );
+    await expect(approveDevicePairing(initial.request.requestId, baseDir)).resolves.toMatchObject({
+      status: "approved",
+      requestId: initial.request.requestId,
+    });
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        roles: ["node", "operator"],
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    await expect(
+      approveDevicePairing(repair.request.requestId, { callerScopes: ["operator.read"] }, baseDir),
+    ).resolves.toMatchObject({
+      status: "approved",
+      requestId: repair.request.requestId,
+    });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.tokens?.node?.scopes).toEqual(["node.exec"]);
+    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token: requireToken(paired?.tokens?.node?.token),
+        role: "node",
+        scopes: ["node.exec"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   test("keeps superseded requests interactive when an existing pending request is interactive", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     const first = await requestDevicePairing(
@@ -591,6 +718,21 @@ describe("device pairing tokens", () => {
     expect(paired?.roles).toContain("node");
     expect(listEffectivePairedDeviceRoles(paired)).toEqual([]);
     expect(hasEffectivePairedDeviceRole(paired, "node")).toBe(false);
+  });
+
+  test("falls back to legacy role fields when tokens map is empty", async () => {
+    const device: PairedDevice = {
+      deviceId: "device-fallback",
+      publicKey: "pk-fallback",
+      role: "node",
+      roles: ["node", "operator"],
+      tokens: {},
+      createdAtMs: Date.now(),
+      approvedAtMs: Date.now(),
+    };
+    expect(listEffectivePairedDeviceRoles(device)).toEqual(["node", "operator"]);
+    expect(hasEffectivePairedDeviceRole(device, "node")).toBe(true);
+    expect(hasEffectivePairedDeviceRole(device, "operator")).toBe(true);
   });
 
   test("removes paired devices by device id", async () => {

@@ -5,9 +5,14 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/public-artifacts.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+
+const TEST_BUNDLED_RUNTIME_SIDECAR_PATHS = [
+  "dist/extensions/discord/runtime-api.js",
+  "dist/extensions/slack/helper-api.js",
+  "dist/extensions/telegram/thread-bindings-runtime.js",
+] as const;
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -43,9 +48,14 @@ vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: vi.fn(),
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: vi.fn(),
-}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRoot: vi.fn(),
+    resolveOpenClawPackageRootSync: vi.fn(() => process.cwd()),
+  };
+});
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: vi.fn(),
@@ -671,14 +681,14 @@ describe("update-cli", () => {
       JSON.stringify({ name: "openclaw", version: "2026.3.23" }),
       "utf-8",
     );
-    for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+    for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
       const absolutePath = path.join(pkgRoot, relativePath);
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, "export {};\n", "utf-8");
     }
     readPackageVersion.mockResolvedValue("2026.3.23");
     pathExists.mockImplementation(async (candidate: string) =>
-      BUNDLED_RUNTIME_SIDECAR_PATHS.some(
+      TEST_BUNDLED_RUNTIME_SIDECAR_PATHS.some(
         (relativePath) => candidate === path.join(pkgRoot, relativePath),
       ),
     );

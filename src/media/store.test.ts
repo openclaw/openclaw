@@ -3,6 +3,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -537,7 +538,6 @@ describe("media store", () => {
 
   it("prefers header mime extension when sniffed mime lacks mapping", async () => {
     await withTempStore(async (_store, home) => {
-      vi.resetModules();
       vi.doMock("./mime.js", async () => {
         const actual = await vi.importActual<typeof import("./mime.js")>("./mime.js");
         return {
@@ -547,7 +547,10 @@ describe("media store", () => {
       });
 
       try {
-        const storeWithMock = await import("./store.js");
+        const storeWithMock = await importFreshModule<typeof import("./store.js")>(
+          import.meta.url,
+          "./store.js?scope=sniffed-mime-header-extension",
+        );
         const saved = await storeWithMock.saveMediaBuffer(
           Buffer.from("fake-audio"),
           "audio/ogg; codecs=opus",

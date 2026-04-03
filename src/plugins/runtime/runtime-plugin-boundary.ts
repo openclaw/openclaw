@@ -16,6 +16,13 @@ type PluginRuntimeRecord = {
   source: string;
 };
 
+type CachedPluginBoundaryLoaderParams = {
+  pluginId: string;
+  entryBaseName: string;
+  required?: boolean;
+  missingLabel?: string;
+};
+
 export function readPluginBoundaryConfigSafely() {
   try {
     return loadConfig();
@@ -103,4 +110,48 @@ export function loadPluginBoundaryModuleWithJiti<TModule>(
   loaders: Map<boolean, ReturnType<typeof createJiti>>,
 ): TModule {
   return getPluginBoundaryJiti(modulePath, loaders)(modulePath) as TModule;
+}
+
+export function createCachedPluginBoundaryModuleLoader<TModule>(
+  params: CachedPluginBoundaryLoaderParams,
+): () => TModule | null {
+  let cachedModulePath: string | null = null;
+  let cachedModule: TModule | null = null;
+  const loaders = new Map<boolean, ReturnType<typeof createJiti>>();
+
+  return () => {
+    const missingLabel = params.missingLabel ?? `${params.pluginId} plugin runtime`;
+    const record = resolvePluginRuntimeRecord(
+      params.pluginId,
+      params.required
+        ? () => {
+            throw new Error(`${missingLabel} is unavailable: missing plugin '${params.pluginId}'`);
+          }
+        : undefined,
+    );
+    if (!record) {
+      return null;
+    }
+    const modulePath = resolvePluginRuntimeModulePath(
+      record,
+      params.entryBaseName,
+      params.required
+        ? () => {
+            throw new Error(
+              `${missingLabel} is unavailable: missing ${params.entryBaseName} for plugin '${params.pluginId}'`,
+            );
+          }
+        : undefined,
+    );
+    if (!modulePath) {
+      return null;
+    }
+    if (cachedModule && cachedModulePath === modulePath) {
+      return cachedModule;
+    }
+    const loaded = loadPluginBoundaryModuleWithJiti<TModule>(modulePath, loaders);
+    cachedModulePath = modulePath;
+    cachedModule = loaded;
+    return loaded;
+  };
 }

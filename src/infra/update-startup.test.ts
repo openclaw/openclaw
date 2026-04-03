@@ -5,9 +5,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { captureEnv } from "../test-utils/env.js";
 import type { UpdateCheckResult } from "./update-check.js";
 
-vi.mock("./openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: vi.fn(),
-}));
+vi.mock("./openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRoot: vi.fn(),
+  };
+});
 
 vi.mock("./update-check.js", async () => {
   const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10));

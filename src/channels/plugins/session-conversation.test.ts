@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
@@ -12,6 +13,10 @@ import {
 describe("session conversation routing", () => {
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it("keeps generic :thread: parsing in core", () => {
@@ -49,38 +54,18 @@ describe("session conversation routing", () => {
     );
   });
 
-  it("keeps bundled Telegram topic parsing available before registry bootstrap", () => {
+  it("does not load bundled session-key fallbacks for inactive channel plugins", () => {
     resetPluginRuntimeStateForTest();
 
     expect(resolveSessionConversationRef("agent:main:telegram:group:-100123:topic:77")).toEqual({
       channel: "telegram",
       kind: "group",
       rawId: "-100123:topic:77",
-      id: "-100123",
-      threadId: "77",
-      baseSessionKey: "agent:main:telegram:group:-100123",
-      baseConversationId: "-100123",
-      parentConversationCandidates: ["-100123"],
-    });
-  });
-
-  it("keeps bundled Feishu parent fallbacks available before registry bootstrap", () => {
-    resetPluginRuntimeStateForTest();
-
-    expect(
-      resolveSessionConversationRef(
-        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      ),
-    ).toEqual({
-      channel: "feishu",
-      kind: "group",
-      rawId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      id: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      id: "-100123:topic:77",
       threadId: undefined,
-      baseSessionKey:
-        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      baseConversationId: "oc_group_chat",
-      parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
+      baseSessionKey: "agent:main:telegram:group:-100123:topic:77",
+      baseConversationId: "-100123:topic:77",
+      parentConversationCandidates: [],
     });
   });
 

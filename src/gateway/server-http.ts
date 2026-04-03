@@ -13,7 +13,6 @@ import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { handleSlackHttpRequest } from "../plugin-sdk/slack.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
@@ -325,9 +324,8 @@ export async function runGatewayHttpRequestStages(
     } catch (err) {
       // Log and skip the failing stage so subsequent stages (control-ui,
       // gateway-probes, etc.) remain reachable.  A common trigger is a
-      // bundled-plugin facade that fails to load because an optional
-      // dependency is missing (e.g. @slack/bolt after the lazy-facade
-      // refactor).
+      // plugin-owned route/runtime code can still fail to load when an
+      // optional dependency is missing. Keep later stages reachable.
       console.error(`[gateway-http] stage "${stage.name}" threw — skipping:`, err);
     }
   }
@@ -897,10 +895,6 @@ export function createGatewayHttpServer(opts: {
               allowRealIpFallback,
               rateLimiter,
             }),
-        },
-        {
-          name: "slack",
-          run: () => handleSlackHttpRequest(req, res),
         },
       ];
       if (openResponsesEnabled) {

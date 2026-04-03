@@ -343,7 +343,10 @@ function stageLiveTestState(params: {
   restoreClaudeConfigFromBackupIfNeeded(params.tempHome);
 }
 
-export function installTestEnv(): { cleanup: () => void; tempHome: string } {
+export function installTestEnv(options?: { loadProfileEnv?: boolean }): {
+  cleanup: () => void;
+  tempHome: string;
+} {
   const live =
     process.env.LIVE === "1" ||
     process.env.OPENCLAW_LIVE_TEST === "1" ||
@@ -352,7 +355,9 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   const realHome = process.env.HOME ?? os.homedir();
   const liveEnvSnapshot = { ...process.env };
 
-  loadProfileEnv(realHome);
+  if (options?.loadProfileEnv ?? live) {
+    loadProfileEnv(realHome);
+  }
 
   if (live && allowRealHome) {
     return { cleanup: () => {}, tempHome: realHome };
@@ -368,6 +373,9 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   return testEnv;
 }
 
-export function withIsolatedTestHome(): { cleanup: () => void; tempHome: string } {
-  return installTestEnv();
+export function withIsolatedTestHome(options?: { loadProfileEnv?: boolean }): {
+  cleanup: () => void;
+  tempHome: string;
+} {
+  return installTestEnv(options);
 }

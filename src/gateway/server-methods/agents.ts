@@ -35,7 +35,7 @@ import {
 } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
-import { movePathToTrash } from "../../plugin-sdk/browser-runtime.js";
+import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import {

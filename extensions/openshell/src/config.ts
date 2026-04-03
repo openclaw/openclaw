@@ -38,6 +38,10 @@ const DEFAULT_SOURCE = "openclaw";
 const DEFAULT_REMOTE_WORKSPACE_DIR = "/sandbox";
 const DEFAULT_REMOTE_AGENT_WORKSPACE_DIR = "/agent";
 const DEFAULT_TIMEOUT_MS = 120_000;
+const OPEN_SHELL_MANAGED_REMOTE_ROOTS = [
+  DEFAULT_REMOTE_WORKSPACE_DIR,
+  DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
+] as const;
 
 function normalizeProviders(value: string[] | undefined): string[] {
   const seen = new Set<string>();
@@ -100,11 +104,26 @@ function formatOpenShellConfigIssue(issue: z.ZodIssue | undefined): string {
   return issue.message;
 }
 
-function normalizeRemotePath(value: string | undefined, fallback: string): string {
+function isManagedOpenShellRemotePath(value: string): boolean {
+  return OPEN_SHELL_MANAGED_REMOTE_ROOTS.some(
+    (root) => value === root || value.startsWith(`${root}/`),
+  );
+}
+
+export function normalizeOpenShellRemotePath(
+  value: string | undefined,
+  fallback: string,
+  fieldName = "remote path",
+): string {
   const candidate = value ?? fallback;
   const normalized = path.posix.normalize(candidate.trim() || fallback);
   if (!normalized.startsWith("/")) {
-    throw new Error(`OpenShell remote path must be absolute: ${candidate}`);
+    throw new Error(`OpenShell ${fieldName} must be absolute: ${candidate}`);
+  }
+  if (!isManagedOpenShellRemotePath(normalized)) {
+    throw new Error(
+      `OpenShell ${fieldName} must stay under ${OPEN_SHELL_MANAGED_REMOTE_ROOTS.join(" or ")}: ${candidate}`,
+    );
   }
   return normalized;
 }
@@ -137,6 +156,8 @@ export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema 
 
 export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellPluginConfig {
   if (value === undefined) {
+    // The built-in defaults are managed OpenShell roots, so they do not need to
+    // flow back through normalizeOpenShellRemotePath.
     return {
       mode: DEFAULT_MODE,
       command: DEFAULT_COMMAND,
@@ -170,10 +191,15 @@ export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellP
     providers: normalizeProviders(cfg.providers),
     gpu: cfg.gpu ?? false,
     autoProviders: cfg.autoProviders ?? true,
-    remoteWorkspaceDir: normalizeRemotePath(cfg.remoteWorkspaceDir, DEFAULT_REMOTE_WORKSPACE_DIR),
-    remoteAgentWorkspaceDir: normalizeRemotePath(
+    remoteWorkspaceDir: normalizeOpenShellRemotePath(
+      cfg.remoteWorkspaceDir,
+      DEFAULT_REMOTE_WORKSPACE_DIR,
+      "remoteWorkspaceDir",
+    ),
+    remoteAgentWorkspaceDir: normalizeOpenShellRemotePath(
       cfg.remoteAgentWorkspaceDir,
       DEFAULT_REMOTE_AGENT_WORKSPACE_DIR,
+      "remoteAgentWorkspaceDir",
     ),
     timeoutMs:
       typeof cfg.timeoutSeconds === "number"
