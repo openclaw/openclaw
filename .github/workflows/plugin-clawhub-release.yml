@@ -216,7 +216,7 @@ jobs:
     needs: [preview_plugins_clawhub, preview_plugin_pack]
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
     runs-on: ubuntu-latest
-    environment: clawhub-release
+    environment: clawhub-plugin-release
     permissions:
       contents: read
       id-token: write
