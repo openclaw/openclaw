@@ -54,6 +54,7 @@ type ProviderRuntimeHooks = {
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
+  clearProviderRuntimeHookCache: () => void;
   prepareProviderDynamicModel: (
     params: Parameters<typeof prepareProviderDynamicModel>[0],
   ) => Promise<void>;
@@ -70,6 +71,7 @@ const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
+  clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
@@ -80,6 +82,7 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
+  clearProviderRuntimeHookCache: () => {},
   prepareProviderDynamicModel: async () => {},
   runProviderDynamicModel: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
@@ -720,7 +723,7 @@ export async function resolveModelAsync(
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
     if (attemptOptions?.clearHookCache) {
-      clearProviderRuntimeHookCache();
+      runtimeHooks.clearProviderRuntimeHookCache();
     }
     await runtimeHooks.prepareProviderDynamicModel({
       provider,

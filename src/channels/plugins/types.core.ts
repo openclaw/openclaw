@@ -117,7 +117,7 @@ export type ChannelAccountState =
 
 export type ChannelHeartbeatDeps = {
   webAuthExists?: () => Promise<boolean>;
-  hasActiveWebListener?: () => boolean;
+  hasActiveWebListener?: (accountId?: string) => boolean;
 };
 
 /** User-facing metadata used in docs, pickers, and setup surfaces. */

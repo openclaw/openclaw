@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import {
   createMattermostConnectOnce,
@@ -84,6 +84,10 @@ const testRuntime = (): RuntimeEnv =>
   }) as RuntimeEnv;
 
 describe("mattermost websocket monitor", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("rejects when websocket closes before open", async () => {
     const socket = new FakeWebSocket();
     const connectOnce = createMattermostConnectOnce({
@@ -107,12 +111,10 @@ describe("mattermost websocket monitor", () => {
   });
 
   it("retries when first attempt errors before open and next attempt succeeds", async () => {
-    const abort = new AbortController();
     const reconnectDelays: number[] = [];
     const onError = vi.fn();
     const patches: Array<Record<string, unknown>> = [];
     const sockets: FakeWebSocket[] = [];
-    let disconnects = 0;
 
     const connectOnce = createMattermostConnectOnce({
       wsUrl: "wss://example.invalid/api/v4/websocket",
@@ -123,15 +125,8 @@ describe("mattermost websocket monitor", () => {
         return () => seq++;
       })(),
       onPosted: async () => {},
-      abortSignal: abort.signal,
       statusSink: (patch) => {
         patches.push(patch as Record<string, unknown>);
-        if (patch.lastDisconnect) {
-          disconnects++;
-          if (disconnects >= 2) {
-            abort.abort();
-          }
-        }
       },
       webSocketFactory: () => {
         const socket = new FakeWebSocket();
@@ -151,10 +146,10 @@ describe("mattermost websocket monitor", () => {
     });
 
     await runWithReconnect(connectOnce, {
-      abortSignal: abort.signal,
       initialDelayMs: 1,
       onError,
       onReconnect: (delay) => reconnectDelays.push(delay),
+      shouldReconnect: ({ outcome }) => outcome === "rejected",
     });
 
     expect(sockets).toHaveLength(2);

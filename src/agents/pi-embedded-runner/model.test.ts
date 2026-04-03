@@ -1158,6 +1158,7 @@ describe("resolveModel", () => {
       runtimeHooks: {
         applyProviderResolvedModelCompatWithPlugins: () => undefined,
         buildProviderUnknownModelHintWithPlugin: () => undefined,
+        clearProviderRuntimeHookCache: () => {},
         prepareProviderDynamicModel: async () => {},
         runProviderDynamicModel: () => undefined,
         applyProviderResolvedTransportWithPlugin: ({ provider, context }) =>

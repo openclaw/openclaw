@@ -10,6 +10,9 @@ import { clearSlackRuntime, setSlackRuntime } from "./runtime.js";
 const { handleSlackActionMock } = vi.hoisted(() => ({
   handleSlackActionMock: vi.fn(),
 }));
+const { sendMessageSlackMock } = vi.hoisted(() => ({
+  sendMessageSlackMock: vi.fn(),
+}));
 
 vi.mock("./action-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./action-runtime.js")>("./action-runtime.js");
@@ -19,8 +22,14 @@ vi.mock("./action-runtime.js", async () => {
   };
 });
 
+vi.mock("./send.runtime.js", () => ({
+  sendMessageSlack: sendMessageSlackMock,
+}));
+
 beforeEach(async () => {
   handleSlackActionMock.mockReset();
+  sendMessageSlackMock.mockReset();
+  sendMessageSlackMock.mockResolvedValue({ messageId: "msg-1", channelId: "D123" });
   setSlackRuntime({
     channel: {
       slack: {
@@ -178,6 +187,41 @@ describe("slackPlugin actions", () => {
       ],
       capabilities: expect.arrayContaining(["blocks", "interactive"]),
     });
+  });
+
+  it("uses configured defaultAccount for pairing approval notifications", async () => {
+    const cfg = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    setSlackRuntime({
+      config: {
+        loadConfig: () => cfg,
+      },
+    } as never);
+
+    const notify = slackPlugin.pairing?.notifyApproval;
+    if (!notify) {
+      throw new Error("slack pairing notify unavailable");
+    }
+
+    await notify({
+      cfg,
+      id: "U12345678",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "user:U12345678",
+      expect.stringContaining("approved"),
+    );
   });
 
   it("keeps blocks optional in the message tool schema", () => {

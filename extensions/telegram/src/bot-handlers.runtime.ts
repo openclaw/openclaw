@@ -101,6 +101,7 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({
@@ -1085,7 +1086,12 @@ export const registerTelegramHandlers = ({
       conversationThreadId != null ? `${chatId}:topic:${conversationThreadId}` : String(chatId);
     const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceKey = senderId
-      ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}:${debounceLane}`
+      ? buildTelegramInboundDebounceKey({
+          accountId,
+          conversationKey,
+          senderId,
+          debounceLane,
+        })
       : null;
     await inboundDebouncer.enqueue({
       ctx,
