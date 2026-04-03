@@ -1,7 +1,6 @@
-import { createPluginBoundaryRuntimeSend } from "./plugin-boundary-send.js";
+import { createChannelOutboundRuntimeSend } from "./channel-outbound-send.js";
 
-export const runtimeSend = createPluginBoundaryRuntimeSend({
-  pluginId: "discord",
-  exportName: "sendMessageDiscord",
-  missingLabel: "Discord plugin runtime",
+export const runtimeSend = createChannelOutboundRuntimeSend({
+  channelId: "discord",
+  unavailableMessage: "Discord outbound adapter is unavailable.",
 });

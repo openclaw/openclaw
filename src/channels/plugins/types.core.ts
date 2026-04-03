@@ -401,6 +401,20 @@ export type ChannelMessagingAdapter = {
     sessionKey: string;
     ctx: MsgContext;
   }) => string | undefined;
+  resolveInboundConversation?: (params: {
+    from?: string;
+    to?: string;
+    conversationId?: string;
+    threadId?: string | number;
+    isGroup: boolean;
+  }) => {
+    conversationId?: string;
+    parentConversationId?: string;
+  } | null;
+  resolveDeliveryTarget?: (params: { conversationId: string; parentConversationId?: string }) => {
+    to?: string;
+    threadId?: string;
+  } | null;
   /**
    * Canonical plugin-owned session conversation grammar.
    * Use this when the provider encodes thread or scoped-conversation semantics
@@ -500,6 +514,12 @@ export type ChannelAgentPromptAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[] | undefined;
+  inboundFormattingHints?: (params: { accountId?: string | null }) =>
+    | {
+        text_markup: string;
+        rules: string[];
+      }
+    | undefined;
   reactionGuidance?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -567,6 +587,13 @@ export type ChannelMessageActionAdapter = {
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
+  resolveCliActionRequest?: (params: {
+    action: ChannelMessageActionName;
+    args: Record<string, unknown>;
+  }) => {
+    action: ChannelMessageActionName;
+    args: Record<string, unknown>;
+  };
   requiresTrustedRequesterSender?: (params: {
     action: ChannelMessageActionName;
     toolContext?: ChannelThreadingToolContext;

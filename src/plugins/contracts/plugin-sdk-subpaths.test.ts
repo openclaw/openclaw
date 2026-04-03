@@ -432,8 +432,6 @@ describe("plugin-sdk subpath exports", () => {
       "resolveThreadBindingThreadName",
       "resolveThreadBindingsEnabled",
       "formatThreadBindingDisabledError",
-      "DISCORD_THREAD_BINDING_CHANNEL",
-      "MATRIX_THREAD_BINDING_CHANNEL",
       "resolveControlCommandGate",
       "resolveCommandAuthorizedFromAuthorizers",
       "resolveDualTextControlCommandGate",
@@ -621,8 +619,6 @@ describe("plugin-sdk subpath exports", () => {
     ]);
 
     expectSourceMentions("conversation-runtime", [
-      "DISCORD_THREAD_BINDING_CHANNEL",
-      "MATRIX_THREAD_BINDING_CHANNEL",
       "formatThreadBindingDisabledError",
       "resolveThreadBindingFarewellText",
       "resolveThreadBindingConversationIdFromBindingId",

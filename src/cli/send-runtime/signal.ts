@@ -1,7 +1,6 @@
-import { createPluginBoundaryRuntimeSend } from "./plugin-boundary-send.js";
+import { createChannelOutboundRuntimeSend } from "./channel-outbound-send.js";
 
-export const runtimeSend = createPluginBoundaryRuntimeSend({
-  pluginId: "signal",
-  exportName: "sendMessageSignal",
-  missingLabel: "Signal plugin runtime",
+export const runtimeSend = createChannelOutboundRuntimeSend({
+  channelId: "signal",
+  unavailableMessage: "Signal outbound adapter is unavailable.",
 });

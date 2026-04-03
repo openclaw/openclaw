@@ -11,7 +11,6 @@ import type {
   OpenClawPluginServiceContext,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
-  PluginInteractiveTelegramHandlerContext,
   PluginLogger,
   ProviderAugmentModelCatalogContext,
   ProviderAuthContext,
@@ -117,7 +116,6 @@ export type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
   PluginLogger,
-  PluginInteractiveTelegramHandlerContext,
 };
 export type { OpenClawConfig };
 

@@ -15,6 +15,7 @@ export * from "./src/outbound-adapter.js";
 export * from "./src/outbound-params.js";
 export * from "./src/probe.js";
 export * from "./src/reaction-level.js";
+export * from "./src/security-audit.js";
 export * from "./src/sticker-cache.js";
 export * from "./src/status-issues.js";
 export * from "./src/targets.js";

@@ -1,7 +1,6 @@
-import { createPluginBoundaryRuntimeSend } from "./plugin-boundary-send.js";
+import { createChannelOutboundRuntimeSend } from "./channel-outbound-send.js";
 
-export const runtimeSend = createPluginBoundaryRuntimeSend({
-  pluginId: "whatsapp",
-  exportName: "sendMessageWhatsApp",
-  missingLabel: "WhatsApp plugin runtime",
+export const runtimeSend = createChannelOutboundRuntimeSend({
+  channelId: "whatsapp",
+  unavailableMessage: "WhatsApp outbound adapter is unavailable.",
 });

@@ -7,6 +7,7 @@ import type {
   ChannelCommandAdapter,
   ChannelConfigAdapter,
   ChannelConversationBindingSupport,
+  ChannelDoctorAdapter,
   ChannelDirectoryAdapter,
   ChannelResolverAdapter,
   ChannelElevatedAdapter,
@@ -107,6 +108,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   lifecycle?: ChannelLifecycleAdapter;
   approvals?: ChannelApprovalAdapter;
   allowlist?: ChannelAllowlistAdapter;
+  doctor?: ChannelDoctorAdapter;
   bindings?: ChannelConfiguredBindingProvider;
   conversationBindings?: ChannelConversationBindingSupport;
   streaming?: ChannelStreamingAdapter;
