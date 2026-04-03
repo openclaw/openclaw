@@ -913,37 +913,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
     }
 
-    // Run `openclaw doctor --non-interactive --fix` after global update.
-    // This repairs stale pnpm shims and strips unknown config keys introduced
-    // by schema changes between versions, preventing startup crashes.
-    if (finalStep.exitCode === 0) {
-      // Re-resolve pkgRoot after update — the pnpm store path may have changed
-      const newPkgRoot = await findPackageRoot(candidates);
-      const doctorRoot = newPkgRoot ?? pkgRoot;
-      const doctorEntry = path.join(doctorRoot, "openclaw.mjs");
-      const doctorEntryExists = await fs
-        .stat(doctorEntry)
-        .then(() => true)
-        .catch(() => false);
-
-      if (doctorEntryExists) {
-        const doctorNodePath = await resolveStableNodePath(process.execPath);
-        const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
-        const doctorStep = await runStep({
-          runCommand,
-          name: "openclaw doctor",
-          argv: doctorArgv,
-          cwd: doctorRoot,
-          timeoutMs,
-          env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-          progress,
-          stepIndex: steps.length,
-          totalSteps: steps.length + 1,
-        });
-        steps.push(doctorStep);
-      }
-    }
-
     const afterVersion = await readPackageVersion(pkgRoot);
     return {
       status: finalStep.exitCode === 0 ? "ok" : "error",
