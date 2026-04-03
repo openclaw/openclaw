@@ -1135,7 +1135,10 @@ export async function runEmbeddedAttempt(
       let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 
       // Wrap stream with idle timeout detection
-      const idleTimeoutMs = resolveLlmIdleTimeoutMs(params.config);
+      const idleTimeoutMs = resolveLlmIdleTimeoutMs({
+        cfg: params.config,
+        trigger: params.trigger,
+      });
       if (idleTimeoutMs > 0) {
         activeSession.agent.streamFn = streamWithIdleTimeout(
           activeSession.agent.streamFn,
