@@ -496,8 +496,12 @@ const sessionBindingContractEntries: Record<
   },
 };
 
-export const sessionBindingContractRegistry: SessionBindingContractEntry[] =
-  sessionBindingContractChannelIds.map((id) => ({
+let sessionBindingContractRegistryCache: SessionBindingContractEntry[] | undefined;
+
+export function getSessionBindingContractRegistry(): SessionBindingContractEntry[] {
+  sessionBindingContractRegistryCache ??= sessionBindingContractChannelIds.map((id) => ({
     id,
     ...sessionBindingContractEntries[id],
   }));
+  return sessionBindingContractRegistryCache;
+}
