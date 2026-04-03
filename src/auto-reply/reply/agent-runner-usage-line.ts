@@ -1,5 +1,36 @@
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
+import { derivePromptTokens } from "../../agents/usage.js";
 import type { ReplyPayload } from "../types.js";
+
+function resolveDisplayedInputTokens(params: {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+}): number | undefined {
+  const promptInput = derivePromptTokens({
+    input: params.input,
+    cacheRead: params.cacheRead,
+    cacheWrite: params.cacheWrite,
+  });
+  if (typeof promptInput !== "number") {
+    return params.input;
+  }
+
+  if (typeof params.total === "number" && typeof params.output === "number") {
+    const promptFromTotal = params.total - params.output;
+    if (
+      Number.isFinite(promptFromTotal) &&
+      promptFromTotal >= 0 &&
+      promptInput > promptFromTotal
+    ) {
+      return typeof params.input === "number" ? params.input : promptFromTotal;
+    }
+  }
+
+  return promptInput;
+}
 
 export const formatResponseUsageLine = (params: {
   usage?: {
@@ -7,6 +38,7 @@ export const formatResponseUsageLine = (params: {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    total?: number;
   };
   showCost: boolean;
   costConfig?: {
@@ -22,10 +54,17 @@ export const formatResponseUsageLine = (params: {
   }
   const input = usage.input;
   const output = usage.output;
-  if (typeof input !== "number" && typeof output !== "number") {
+  const inputDisplay = resolveDisplayedInputTokens({
+    input,
+    output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    total: usage.total,
+  });
+  if (typeof inputDisplay !== "number" && typeof output !== "number") {
     return null;
   }
-  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
+  const inputLabel = typeof inputDisplay === "number" ? formatTokenCount(inputDisplay) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
   const cost =
     params.showCost && typeof input === "number" && typeof output === "number"

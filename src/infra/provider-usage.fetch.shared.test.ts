@@ -9,6 +9,7 @@ import {
 
 describe("provider usage fetch shared helpers", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -61,26 +62,44 @@ describe("provider usage fetch shared helpers", () => {
 
   it("aborts timed out requests and clears the timer on rejection", async () => {
     vi.useFakeTimers();
-    try {
-      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-      const fetchFnMock = vi.fn(
-        (_input: URL | RequestInfo, init?: RequestInit) =>
-          new Promise<Response>((_, reject) => {
-            init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")), {
-              once: true,
-            });
-          }),
-      );
-      const fetchFn = withFetchPreconnect(fetchFnMock);
-      const responsePromise = fetchJson("https://example.com/usage", {}, 10, fetchFn);
-      const rejection = expect(responsePromise).rejects.toThrow("aborted by timeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    let observedSignal: AbortSignal | null | undefined;
+    const fetchFnMock = vi.fn(
+      (_input: URL | RequestInfo, init?: RequestInit) =>
+        new Promise<Response>((_, reject) => {
+          observedSignal = init?.signal;
+          const rejectOnAbort = () => reject(new Error("aborted by timeout"));
+          if (observedSignal?.aborted) {
+            rejectOnAbort();
+            return;
+          }
+          observedSignal?.addEventListener("abort", rejectOnAbort, { once: true });
+        }),
+    );
+    const fetchFn = withFetchPreconnect(fetchFnMock);
 
-      await vi.advanceTimersByTimeAsync(10);
-      await rejection;
-      expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
+    const request = fetchJson("https://example.com/usage", {}, 10, fetchFn);
+    const settledRequest = request.then(
+      () => ({ state: "resolved" as const }),
+      (error) => ({ state: "rejected" as const, error }),
+    );
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(observedSignal?.aborted).toBe(true);
+
+    let outcome: Awaited<typeof settledRequest> | undefined;
+    void settledRequest.then((result) => {
+      outcome = result;
+    });
+    await Promise.resolve();
+    if (!outcome) {
+      throw new Error("fetchJson did not settle after timeout abort");
     }
+    expect(outcome.state).toBe("rejected");
+    if (outcome.state === "rejected") {
+      expect(String(outcome.error)).toContain("aborted by timeout");
+    }
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });
 
   it("maps configured status codes to token expired", () => {

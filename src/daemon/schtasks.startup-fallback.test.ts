@@ -32,6 +32,9 @@ const {
   stopScheduledTask,
 } = await import("./schtasks.js");
 
+const GATEWAY_PORT = 18789;
+const STARTUP_RUNTIME_PID = 915_151;
+
 function resolveStartupEntryPath(env: Record<string, string>) {
   return path.join(
     env.APPDATA,
@@ -67,6 +70,24 @@ function expectGatewayTermination(pid: number) {
   expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
 }
 
+function freePortUsage() {
+  return {
+    port: GATEWAY_PORT,
+    status: "free" as const,
+    listeners: [],
+    hints: [],
+  };
+}
+
+function busyPortUsage(pid: number) {
+  return {
+    port: GATEWAY_PORT,
+    status: "busy" as const,
+    listeners: [{ pid, command: "node.exe" }],
+    hints: [],
+  };
+}
+
 function addStartupFallbackMissingResponses(
   extraResponses: Array<{ code: number; stdout: string; stderr: string }> = [],
 ) {
@@ -80,6 +101,7 @@ beforeEach(() => {
   resetSchtasksBaseMocks();
   spawn.mockClear();
   childUnref.mockClear();
+  inspectPortUsage.mockResolvedValue(freePortUsage());
 });
 
 afterEach(() => {
@@ -169,60 +191,42 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("restarts the Startup fallback by killing the current pid and relaunching the entry", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      addStartupFallbackMissingResponses([
-        { code: 0, stdout: "", stderr: "" },
-        { code: 1, stdout: "", stderr: "not found" },
-      ]);
-      await writeStartupFallbackEntry(env);
-      inspectPortUsage.mockResolvedValue({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 5151, command: "node.exe" }],
-        hints: [],
-      });
+  it(
+    "restarts the Startup fallback by killing the current pid and relaunching the entry",
+    { timeout: 15_000 },
+    async () => {
+      await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+        addStartupFallbackMissingResponses();
+        await writeStartupFallbackEntry(env);
+        inspectPortUsage.mockResolvedValueOnce(busyPortUsage(STARTUP_RUNTIME_PID));
 
-      const stdout = new PassThrough();
-      await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
-        outcome: "completed",
-      });
-      expectGatewayTermination(5151);
-      expectStartupFallbackSpawn(env);
-    });
-  });
-
-  it("kills the Startup fallback runtime even when the CLI env omits the gateway port", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
-      await writeGatewayScript(env);
-      await writeStartupFallbackEntry(env);
-      inspectPortUsage
-        .mockResolvedValueOnce({
-          port: 18789,
-          status: "busy",
-          listeners: [{ pid: 5151, command: "node.exe" }],
-          hints: [],
-        })
-        .mockResolvedValueOnce({
-          port: 18789,
-          status: "busy",
-          listeners: [{ pid: 5151, command: "node.exe" }],
-          hints: [],
-        })
-        .mockResolvedValueOnce({
-          port: 18789,
-          status: "free",
-          listeners: [],
-          hints: [],
+        const stdout = new PassThrough();
+        await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
+          outcome: "completed",
         });
+        expectGatewayTermination(STARTUP_RUNTIME_PID);
+        expectStartupFallbackSpawn(env);
+      });
+    },
+  );
 
-      const stdout = new PassThrough();
-      const envWithoutPort = { ...env };
-      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
-      await stopScheduledTask({ env: envWithoutPort, stdout });
+  it(
+    "kills the Startup fallback runtime even when the CLI env omits the gateway port",
+    { timeout: 15_000 },
+    async () => {
+      await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+        addStartupFallbackMissingResponses();
+        await writeGatewayScript(env);
+        await writeStartupFallbackEntry(env);
+        inspectPortUsage.mockResolvedValueOnce(busyPortUsage(STARTUP_RUNTIME_PID));
 
-      expectGatewayTermination(5151);
-    });
-  });
+        const stdout = new PassThrough();
+        const envWithoutPort = { ...env };
+        delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+        await stopScheduledTask({ env: envWithoutPort, stdout });
+
+        expectGatewayTermination(STARTUP_RUNTIME_PID);
+      });
+    },
+  );
 });

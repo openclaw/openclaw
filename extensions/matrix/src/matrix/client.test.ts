@@ -57,6 +57,13 @@ function requireCredentialsReadModule(): typeof import("./credentials-read.js") 
   return credentialsReadModule;
 }
 
+function requireCredentialsReadModule(): typeof import("./credentials-read.js") {
+  if (!credentialsReadModule) {
+    throw new Error("credentials-read test module not initialized");
+  }
+  return credentialsReadModule;
+}
+
 beforeEach(() => {
   installMatrixTestRuntime();
 });

@@ -117,8 +117,8 @@ describe("resolveDeliveryTarget thread session lookup", () => {
       to: "63448508:topic:1008013",
     });
 
-    expect(result.to).toBe("63448508");
-    expect(result.threadId).toBe(1008013);
+    expect(result.to).toBe("63448508:topic:1008013");
+    expect(result.threadId).toBeUndefined();
     expect(result.channel).toBe("telegram");
   });
 
@@ -158,8 +158,8 @@ describe("resolveDeliveryTarget thread session lookup", () => {
       to: "63448508:topic:1008013",
     });
 
-    expect(result.to).toBe("63448508");
-    expect(result.threadId).toBe(1008013);
+    expect(result.to).toBe("63448508:topic:1008013");
+    expect(result.threadId).toBeUndefined();
   });
 
   it("preserves explicit delivery.threadId on first run without topic syntax", async () => {

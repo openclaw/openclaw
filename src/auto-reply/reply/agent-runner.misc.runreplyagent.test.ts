@@ -1800,6 +1800,43 @@ describe("runReplyAgent response usage footer", () => {
     expect(String(payload?.text ?? "")).toContain("Usage:");
     expect(String(payload?.text ?? "")).not.toContain("· session ");
   });
+
+  it("formats input usage from prompt tokens when cache usage is present", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 7, cacheRead: 6_993, output: 545 },
+        },
+      },
+    });
+
+    const sessionKey = "agent:main:main";
+    const res = await createRun({ responseUsage: "tokens", sessionKey });
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(String(payload?.text ?? "")).toContain("Usage: 7.0k in / 545 out");
+  });
+
+  it("does not double count cached tokens when input already includes cache", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 1_113, cacheRead: 1_024, output: 5, total: 1_118 },
+        },
+      },
+    });
+
+    const sessionKey = "agent:main:main";
+    const res = await createRun({ responseUsage: "tokens", sessionKey });
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(String(payload?.text ?? "")).toContain("Usage: 1.1k in / 5 out");
+    expect(String(payload?.text ?? "")).not.toContain("Usage: 2.1k in / 5 out");
+  });
 });
 
 describe("runReplyAgent transient HTTP retry", () => {

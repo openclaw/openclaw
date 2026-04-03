@@ -51,6 +51,7 @@ export async function resolveDeliveryTarget(
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  const explicitThreadIdProvided = jobPayload.threadId != null && jobPayload.threadId !== "";
   const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;
@@ -104,6 +105,11 @@ export async function resolveDeliveryTarget(
 
   const channel = resolved.channel ?? fallbackChannel;
   const mode = resolved.mode as "explicit" | "implicit";
+  const preserveExplicitTelegramTopicTo =
+    mode === "explicit" &&
+    channel === "telegram" &&
+    typeof explicitTo === "string" &&
+    /:(?:topic:)?\d+$/i.test(explicitTo);
   let toCandidate = resolved.to;
 
   // Prefer an explicit accountId from the job's delivery config (set via
@@ -133,10 +139,12 @@ export async function resolveDeliveryTarget(
   // Session-derived threadIds are dropped when the target differs to prevent
   // stale thread IDs from leaking to a different chat.
   const threadId =
-    resolved.threadId &&
-    (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
-      ? resolved.threadId
-      : undefined;
+    preserveExplicitTelegramTopicTo && !explicitThreadIdProvided
+      ? undefined
+      : resolved.threadId &&
+          (explicitThreadIdProvided || (resolved.to && resolved.to === resolved.lastTo))
+        ? resolved.threadId
+        : undefined;
 
   if (!channel) {
     return {
@@ -200,10 +208,11 @@ export async function resolveDeliveryTarget(
     input: docked.to,
     accountId,
   });
+  const resolvedTo = idLikeTarget?.to ?? docked.to;
   return {
     ok: true,
     channel,
-    to: idLikeTarget?.to ?? docked.to,
+    to: preserveExplicitTelegramTopicTo && explicitTo ? explicitTo : resolvedTo,
     accountId,
     threadId,
     mode,
