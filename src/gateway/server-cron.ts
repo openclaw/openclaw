@@ -280,7 +280,6 @@ export function buildGatewayCronService(params: {
         sessionKey,
         heartbeat: heartbeatOverride,
         deps: { ...params.deps, runtime: defaultRuntime },
-        abortSignal: opts?.abortSignal,
       });
     },
     runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
