@@ -33,7 +33,12 @@ import { type SecretRefResolveCache, resolveSecretRefString } from "../../secret
 import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
-const PROBE_PROMPT = "Reply with OK. Do not use tools.";
+const PROBE_PROMPT = "Reply with exactly OK and nothing else. Do not use tools.";
+
+function buildProbePrompt(maxTokens: number): string {
+  const suffix = maxTokens === 1 ? "" : "s";
+  return `${PROBE_PROMPT} Keep the reply to at most ${maxTokens} token${suffix}.`;
+}
 
 let embeddedRunnerModulePromise: Promise<typeof import("../../agents/pi-embedded.js")> | undefined;
 
@@ -456,6 +461,9 @@ async function probeTarget(params: {
   await fs.mkdir(sessionDir, { recursive: true });
 
   const start = Date.now();
+  // CLI backends do not yet translate streamParams.maxTokens into backend-native
+  // argv, so keep auth probes explicitly tiny at the prompt layer too.
+  const prompt = buildProbePrompt(maxTokens);
   const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
     provider: target.provider,
     model: `${model.provider}/${model.model}`,
@@ -482,7 +490,7 @@ async function probeTarget(params: {
         agentId,
         workspaceDir,
         config: cfg,
-        prompt: PROBE_PROMPT,
+        prompt,
         provider: cliExecutionProvider,
         model: target.model.model,
         authProfileId: target.profileId,
@@ -499,7 +507,7 @@ async function probeTarget(params: {
         workspaceDir,
         agentDir,
         config: cfg,
-        prompt: PROBE_PROMPT,
+        prompt,
         provider: target.model.provider,
         model: target.model.model,
         authProfileId: target.profileId,
