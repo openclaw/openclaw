@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type {
@@ -654,12 +655,15 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
     <div class="agent-chat__welcome" style="--agent-color: var(--accent)">
       <div class="agent-chat__welcome-glow"></div>
       ${avatar
-        ? html`<img
-            src=${avatar}
-            alt=${name}
-            style="width:56px; height:56px; border-radius:50%; object-fit:cover;"
-            @error=${(event: Event) => handleAvatarImageError(event, props.basePath)}
-          />`
+        ? keyed(
+            `${props.sessionKey}:${avatar}`,
+            html`<img
+              src=${avatar}
+              alt=${name}
+              style="width:56px; height:56px; border-radius:50%; object-fit:cover;"
+              @error=${(event: Event) => handleAvatarImageError(event, props.basePath)}
+            />`,
+          )
         : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
             <img src=${logoUrl} alt="OpenClaw" />
           </div>`}

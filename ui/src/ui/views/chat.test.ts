@@ -435,6 +435,50 @@ describe("chat view", () => {
     expect(welcomeImage?.getAttribute("style")).toBeNull();
   });
 
+  it("recreates the welcome avatar when the source changes after a fallback", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Open",
+          assistantAvatar: "https://example.com/avatar-a.png",
+        }),
+      ),
+      container,
+    );
+
+    const firstImage = container.querySelector<HTMLImageElement>(".agent-chat__welcome > img");
+    expect(firstImage).not.toBeNull();
+    firstImage?.dispatchEvent(new Event("error"));
+
+    expect(firstImage?.getAttribute("src")).toBe("/favicon.svg");
+    expect(firstImage?.classList.contains("agent-chat__welcome-avatar--logo-fallback")).toBe(true);
+
+    render(
+      renderChat(
+        createProps({
+          sessionKey: "next-session",
+          assistantName: "Next",
+          assistantAvatar: "https://example.com/avatar-b.png",
+        }),
+      ),
+      container,
+    );
+
+    const secondImage = container.querySelector<HTMLImageElement>(".agent-chat__welcome > img");
+    expect(secondImage).not.toBeNull();
+    expect(secondImage).not.toBe(firstImage);
+    expect(secondImage?.getAttribute("src")).toBe("https://example.com/avatar-b.png");
+    expect(secondImage?.getAttribute("alt")).toBe("Next");
+    expect(secondImage?.classList.contains("agent-chat__welcome-avatar--logo-fallback")).toBe(
+      false,
+    );
+    expect(secondImage?.getAttribute("style")).toContain("width:56px");
+
+    secondImage?.dispatchEvent(new Event("error"));
+    expect(secondImage?.getAttribute("src")).toBe("/favicon.svg");
+  });
+
   it("falls back to the bundled logo in the welcome state when the assistant avatar is not a URL", () => {
     const container = document.createElement("div");
     render(
@@ -532,6 +576,61 @@ describe("chat view", () => {
     expect(avatar?.getAttribute("src")).toBe("/favicon.svg");
     expect(avatar?.getAttribute("alt")).toBe("OpenClaw");
     expect(avatar?.classList.contains("chat-avatar--logo")).toBe(true);
+  });
+
+  it("recreates grouped assistant avatars when the source changes after a fallback", () => {
+    const container = document.createElement("div");
+    const messages = [
+      {
+        role: "assistant",
+        content: "hello",
+        timestamp: 1000,
+      },
+    ];
+
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Open",
+          assistantAvatar: "https://example.com/avatar-a.png",
+          messages,
+        }),
+      ),
+      container,
+    );
+
+    const firstAvatar = container.querySelector<HTMLImageElement>(
+      ".chat-group.assistant .chat-avatar",
+    );
+    expect(firstAvatar).not.toBeNull();
+    firstAvatar?.dispatchEvent(new Event("error"));
+
+    expect(firstAvatar?.getAttribute("src")).toBe("/favicon.svg");
+    expect(firstAvatar?.classList.contains("chat-avatar--logo")).toBe(true);
+
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Next",
+          assistantAvatar: "https://example.com/avatar-b.png",
+          messages,
+        }),
+      ),
+      container,
+    );
+
+    const secondAvatar = container.querySelector<HTMLImageElement>(
+      ".chat-group.assistant .chat-avatar",
+    );
+    expect(secondAvatar).not.toBeNull();
+    expect(secondAvatar).not.toBe(firstAvatar);
+    expect(secondAvatar?.getAttribute("src")).toBe("https://example.com/avatar-b.png");
+    expect(secondAvatar?.getAttribute("alt")).toBe("Next");
+    expect(secondAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
+
+    secondAvatar?.dispatchEvent(new Event("error"));
+    expect(secondAvatar?.getAttribute("src")).toBe("/favicon.svg");
+    expect(secondAvatar?.classList.contains("chat-avatar--logo")).toBe(true);
   });
 
   it("keeps the persisted overview locale selected before i18n hydration finishes", async () => {

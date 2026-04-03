@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
@@ -524,21 +525,24 @@ function renderAvatar(
   if (assistantAvatar && normalized === "assistant") {
     if (isAvatarUrl(assistantAvatar)) {
       const logoUrl = agentLogoUrl(basePath ?? "");
-      return html`<img
-        class="chat-avatar ${className}"
-        src="${assistantAvatar}"
-        alt="${assistantName}"
-        @error=${(event: Event) => {
-          const img = event.currentTarget as HTMLImageElement | null;
-          if (!img || img.dataset.fallbackApplied === "1") {
-            return;
-          }
-          img.dataset.fallbackApplied = "1";
-          img.src = logoUrl;
-          img.alt = "OpenClaw";
-          img.classList.add("chat-avatar--logo");
-        }}
-      />`;
+      return keyed(
+        `${assistantName}:${assistantAvatar}`,
+        html`<img
+          class="chat-avatar ${className}"
+          src="${assistantAvatar}"
+          alt="${assistantName}"
+          @error=${(event: Event) => {
+            const img = event.currentTarget as HTMLImageElement | null;
+            if (!img || img.dataset.fallbackApplied === "1") {
+              return;
+            }
+            img.dataset.fallbackApplied = "1";
+            img.src = logoUrl;
+            img.alt = "OpenClaw";
+            img.classList.add("chat-avatar--logo");
+          }}
+        />`,
+      );
     }
     return html`<img
       class="chat-avatar ${className} chat-avatar--logo"
