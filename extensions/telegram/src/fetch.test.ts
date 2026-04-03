@@ -79,8 +79,11 @@ let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
 
+type TelegramDispatcherPolicy = NonNullable<
+  ReturnType<typeof resolveTelegramTransport>["dispatcherAttempts"]
+>[number]["dispatcherPolicy"];
+
 beforeAll(async () => {
-  vi.resetModules();
   ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
   ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
 });
@@ -390,6 +393,58 @@ describe("resolveTelegramFetch", () => {
     expect(dispatcher?.options?.requestTls).toEqual(
       expect.objectContaining({
         autoSelectFamily: false,
+      }),
+    );
+  });
+
+  it("exports fallback dispatcher attempts for Telegram media downloads", () => {
+    const transport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    expect(transport.sourceFetch).toBeDefined();
+    expect(transport.fetch).not.toBe(transport.sourceFetch);
+    expect(transport.dispatcherAttempts).toHaveLength(3);
+
+    const [defaultAttempt, ipv4Attempt, pinnedAttempt] = transport.dispatcherAttempts as Array<{
+      dispatcherPolicy?: TelegramDispatcherPolicy;
+    }>;
+
+    expect(defaultAttempt.dispatcherPolicy).toEqual(
+      expect.objectContaining({
+        mode: "direct",
+        connect: expect.objectContaining({
+          autoSelectFamily: true,
+          autoSelectFamilyAttemptTimeout: 300,
+          lookup: expect.any(Function),
+        }),
+      }),
+    );
+    expect(ipv4Attempt.dispatcherPolicy).toEqual(
+      expect.objectContaining({
+        mode: "direct",
+        connect: expect.objectContaining({
+          family: 4,
+          autoSelectFamily: false,
+          lookup: expect.any(Function),
+        }),
+      }),
+    );
+    expect(pinnedAttempt.dispatcherPolicy).toEqual(
+      expect.objectContaining({
+        mode: "direct",
+        pinnedHostname: {
+          hostname: "api.telegram.org",
+          addresses: ["149.154.167.220"],
+        },
+        connect: expect.objectContaining({
+          family: 4,
+          autoSelectFamily: false,
+          lookup: expect.any(Function),
+        }),
       }),
     );
   });

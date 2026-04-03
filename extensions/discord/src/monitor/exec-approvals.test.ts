@@ -296,7 +296,6 @@ beforeEach(() => {
 });
 
 beforeAll(async () => {
-  vi.resetModules();
   ({
     buildExecApprovalCustomId,
     extractDiscordChannelId,

@@ -32,6 +32,8 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   perplexity: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
   qianfan: ["QIANFAN_API_KEY"],
   sglang: ["SGLANG_API_KEY"],
+  stepfun: ["STEPFUN_API_KEY"],
+  "stepfun-plan": ["STEPFUN_API_KEY"],
   synthetic: ["SYNTHETIC_API_KEY"],
   tavily: ["TAVILY_API_KEY"],
   together: ["TOGETHER_API_KEY"],
