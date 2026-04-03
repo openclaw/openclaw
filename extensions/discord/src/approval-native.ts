@@ -187,8 +187,6 @@ export function getDiscordApprovalCapability() {
 }
 
 export function getDiscordNativeApprovalAdapter() {
-  cachedDiscordNativeApprovalAdapter ??= splitChannelApprovalCapability(
-    getDiscordApprovalCapability(),
-  );
+  cachedDiscordNativeApprovalAdapter ??= createDiscordNativeApprovalAdapter();
   return cachedDiscordNativeApprovalAdapter;
 }

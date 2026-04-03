@@ -24,16 +24,7 @@ export function resolveDiscordProxyFetchByUrl(
   proxyUrl: string | undefined,
   runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
-  const proxy = proxyUrl?.trim();
-  if (!proxy) {
-    return undefined;
-  }
-  try {
-    return makeProxyFetch(proxy);
-  } catch (err) {
-    runtime?.error?.(danger(`discord: invalid rest proxy: ${String(err)}`));
-    return undefined;
-  }
+  return withValidatedDiscordProxy(proxyUrl, runtime, (proxy) => makeProxyFetch(proxy));
 }
 
 export function resolveDiscordProxyFetchForAccount(
@@ -42,4 +33,21 @@ export function resolveDiscordProxyFetchForAccount(
   runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
   return resolveDiscordProxyFetchByUrl(resolveDiscordProxyUrl(account, cfg), runtime);
+}
+
+export function withValidatedDiscordProxy<T>(
+  proxyUrl: string | undefined,
+  runtime: Pick<RuntimeEnv, "error"> | undefined,
+  createValue: (proxyUrl: string) => T,
+): T | undefined {
+  const proxy = proxyUrl?.trim();
+  if (!proxy) {
+    return undefined;
+  }
+  try {
+    return createValue(proxy);
+  } catch (err) {
+    runtime?.error?.(danger(`discord: invalid rest proxy: ${String(err)}`));
+    return undefined;
+  }
 }
