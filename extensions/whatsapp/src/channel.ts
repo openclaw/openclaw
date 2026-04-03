@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
@@ -12,7 +13,6 @@ import {
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
-import { createWhatsAppLoginTool } from "./agent-tools-login.js";
 import { whatsappApprovalAuth } from "./approval-auth.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
@@ -57,6 +57,9 @@ type WhatsAppActionRuntimeModule = typeof import("./action-runtime.js");
 
 let whatsAppSendModulePromise: Promise<WhatsAppSendModule> | undefined;
 let whatsAppActionRuntimeModulePromise: Promise<WhatsAppActionRuntimeModule> | undefined;
+let whatsAppAgentToolsModuleCache: typeof import("./agent-tools-login.js") | null = null;
+
+const require = createRequire(import.meta.url);
 
 async function loadWhatsAppSendModule() {
   whatsAppSendModulePromise ??= import("./send.js");
@@ -66,6 +69,12 @@ async function loadWhatsAppSendModule() {
 async function loadWhatsAppActionRuntimeModule() {
   whatsAppActionRuntimeModulePromise ??= import("./action-runtime.js");
   return await whatsAppActionRuntimeModulePromise;
+}
+
+function loadWhatsAppAgentToolsModule() {
+  whatsAppAgentToolsModuleCache ??=
+    require("./agent-tools-login.js") as typeof import("./agent-tools-login.js");
+  return whatsAppAgentToolsModuleCache;
 }
 
 function normalizeWhatsAppPayloadText(text: string | undefined): string {
@@ -164,7 +173,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         isConfigured: async (account) =>
           await (await loadWhatsAppChannelRuntime()).webAuthExists(account.authDir),
       }),
-      agentTools: () => [createWhatsAppLoginTool()],
+      agentTools: () => [loadWhatsAppAgentToolsModule().createWhatsAppLoginTool()],
       allowlist: buildDmGroupAccountAllowlistAdapter({
         channelId: "whatsapp",
         resolveAccount: resolveWhatsAppAccount,
