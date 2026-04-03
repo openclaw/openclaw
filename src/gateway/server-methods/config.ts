@@ -28,7 +28,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
-import { resolveGatewayAuth } from "../auth.js";
+import { resolveEffectiveSharedGatewayAuth } from "../auth.js";
 import { diffConfigPaths } from "../config-reload.js";
 import {
   formatControlPlaneActor,
@@ -222,33 +222,17 @@ function parseValidateConfigFromRawOrRespond(
   return { config: validated.config, schema };
 }
 
-function getEffectiveSharedGatewayAuth(config: OpenClawConfig): {
-  mode: "token" | "password";
-  secret: string | undefined;
-} | null {
-  const resolvedAuth = resolveGatewayAuth({
-    authConfig: config.gateway?.auth,
-    env: process.env,
-    tailscaleMode: config.gateway?.tailscale?.mode,
-  });
-  if (resolvedAuth.mode === "token") {
-    return {
-      mode: "token",
-      secret: resolvedAuth.token,
-    };
-  }
-  if (resolvedAuth.mode === "password") {
-    return {
-      mode: "password",
-      secret: resolvedAuth.password,
-    };
-  }
-  return null;
-}
-
 function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
-  const prevAuth = getEffectiveSharedGatewayAuth(prev);
-  const nextAuth = getEffectiveSharedGatewayAuth(next);
+  const prevAuth = resolveEffectiveSharedGatewayAuth({
+    authConfig: prev.gateway?.auth,
+    env: process.env,
+    tailscaleMode: prev.gateway?.tailscale?.mode,
+  });
+  const nextAuth = resolveEffectiveSharedGatewayAuth({
+    authConfig: next.gateway?.auth,
+    env: process.env,
+    tailscaleMode: next.gateway?.tailscale?.mode,
+  });
   if (prevAuth === null || nextAuth === null) {
     return prevAuth !== nextAuth;
   }

@@ -38,6 +38,11 @@ export type ResolvedGatewayAuth = {
   trustedProxy?: GatewayTrustedProxyConfig;
 };
 
+export type EffectiveSharedGatewayAuth = {
+  mode: "token" | "password";
+  secret: string | undefined;
+};
+
 export type GatewayAuthResult = {
   ok: boolean;
   method?:
@@ -286,6 +291,28 @@ export function resolveGatewayAuth(params: {
     allowTailscale,
     trustedProxy,
   };
+}
+
+export function resolveEffectiveSharedGatewayAuth(params: {
+  authConfig?: GatewayAuthConfig | null;
+  authOverride?: GatewayAuthConfig | null;
+  env?: NodeJS.ProcessEnv;
+  tailscaleMode?: GatewayTailscaleMode;
+}): EffectiveSharedGatewayAuth | null {
+  const resolvedAuth = resolveGatewayAuth(params);
+  if (resolvedAuth.mode === "token") {
+    return {
+      mode: "token",
+      secret: resolvedAuth.token,
+    };
+  }
+  if (resolvedAuth.mode === "password") {
+    return {
+      mode: "password",
+      secret: resolvedAuth.password,
+    };
+  }
+  return null;
 }
 
 export function assertGatewayAuthConfigured(
