@@ -6,7 +6,7 @@ import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { basenameFromMediaSource, safeFileURLToPath } from "./local-file-access.js";
-import { resolveBlueBubblesMessageId } from "./monitor.js";
+import { resolveBlueBubblesMessageId } from "./monitor-reply-cache.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles } from "./send.js";

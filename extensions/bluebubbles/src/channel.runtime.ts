@@ -1,7 +1,7 @@
 import { sendBlueBubblesMedia as sendBlueBubblesMediaImpl } from "./media-send.js";
+import { resolveBlueBubblesMessageId as resolveBlueBubblesMessageIdImpl } from "./monitor-reply-cache.js";
 import {
   monitorBlueBubblesProvider as monitorBlueBubblesProviderImpl,
-  resolveBlueBubblesMessageId as resolveBlueBubblesMessageIdImpl,
   resolveWebhookPathFromConfig as resolveWebhookPathFromConfigImpl,
 } from "./monitor.js";
 import { probeBlueBubbles as probeBlueBubblesImpl } from "./probe.js";
