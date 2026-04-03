@@ -1222,6 +1222,42 @@ describe("doctor config flow", () => {
     }
   });
 
+  it("warns clearly about legacy sandbox perSession config and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          agents: {
+            defaults: {
+              sandbox: {
+                perSession: true,
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            String(message).includes("agents.defaults.sandbox:") &&
+            String(message).includes("agents.defaults.sandbox.perSession is legacy"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("migrates top-level heartbeat visibility into channels.defaults.heartbeat on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,

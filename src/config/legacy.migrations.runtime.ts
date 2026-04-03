@@ -45,6 +45,10 @@ const LEGACY_TALK_FIELD_KEYS = [
   "apiKey",
 ] as const;
 
+function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
+  return perSession ? "session" : "shared";
+}
+
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   if (typeof value !== "string") {
     return false;
@@ -149,6 +153,18 @@ function hasLegacyTalkFields(value: unknown): boolean {
     return false;
   }
   return LEGACY_TALK_FIELD_KEYS.some((key) => Object.prototype.hasOwnProperty.call(talk, key));
+}
+
+function hasLegacySandboxPerSession(value: unknown): boolean {
+  const sandbox = getRecord(value);
+  return Boolean(sandbox && Object.prototype.hasOwnProperty.call(sandbox, "perSession"));
+}
+
+function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => hasLegacySandboxPerSession(getRecord(agent)?.sandbox));
 }
 
 function resolveTalkMigrationTargetProviderId(talk: Record<string, unknown>): string | null {
@@ -380,7 +396,73 @@ const TALK_RULE: LegacyConfigRule = {
   match: (value) => hasLegacyTalkFields(value),
 };
 
+const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "sandbox"],
+    message:
+      "agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope instead (auto-migrated on load).",
+    match: (value) => hasLegacySandboxPerSession(value),
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      "agents.list[].sandbox.perSession is legacy; use agents.list[].sandbox.scope instead (auto-migrated on load).",
+    match: (value) => hasLegacyAgentListSandboxPerSession(value),
+  },
+];
+
+function migrateLegacySandboxPerSession(
+  sandbox: Record<string, unknown>,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!Object.prototype.hasOwnProperty.call(sandbox, "perSession")) {
+    return;
+  }
+  const rawPerSession = sandbox.perSession;
+  if (typeof rawPerSession === "boolean") {
+    if (sandbox.scope === undefined) {
+      sandbox.scope = sandboxScopeFromPerSession(rawPerSession);
+      changes.push(
+        `Moved ${pathLabel}.perSession → ${pathLabel}.scope (${String(sandbox.scope)}).`,
+      );
+    } else {
+      changes.push(`Removed ${pathLabel}.perSession (${pathLabel}.scope already set).`);
+    }
+    delete sandbox.perSession;
+  } else {
+    // Preserve invalid values so normal schema validation still surfaces the
+    // type error instead of silently falling back to the default sandbox scope.
+    return;
+  }
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "agents.sandbox.perSession->scope",
+    describe: "Move legacy agent sandbox perSession aliases to sandbox.scope",
+    legacyRules: LEGACY_SANDBOX_SCOPE_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      const defaultSandbox = getRecord(defaults?.sandbox);
+      if (defaultSandbox) {
+        migrateLegacySandboxPerSession(defaultSandbox, "agents.defaults.sandbox", changes);
+      }
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        const agentRecord = getRecord(agent);
+        const sandbox = getRecord(agentRecord?.sandbox);
+        if (!sandbox) {
+          continue;
+        }
+        migrateLegacySandboxPerSession(sandbox, `agents.list.${index}.sandbox`, changes);
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "talk.legacy-fields->talk.providers",
     describe: "Move legacy Talk flat fields into talk.providers.<provider>",
