@@ -302,19 +302,22 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "recommended · QR login",
     configuredScore: 1,
     unconfiguredScore: 15,
-    resolveConfigured: async ({ cfg }) => {
-      const ids = listZalouserAccountIds(cfg);
-      for (const accountId of ids) {
-        const account = resolveZalouserAccountSync({ cfg, accountId });
+    resolveConfigured: async ({ cfg, accountId }) => {
+      const ids = accountId ? [accountId] : listZalouserAccountIds(cfg);
+      for (const resolvedAccountId of ids) {
+        const account = resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId });
         if (await checkZcaAuthenticated(account.profile)) {
           return true;
         }
       }
       return false;
     },
-    resolveStatusLines: async ({ cfg, configured }) => {
+    resolveStatusLines: async ({ cfg, accountId, configured }) => {
       void cfg;
-      return [`Zalo Personal: ${configured ? "logged in" : "needs QR login"}`];
+      const label = accountId && accountId !== DEFAULT_ACCOUNT_ID
+        ? `Zalo Personal (${accountId})`
+        : "Zalo Personal";
+      return [`${label}: ${configured ? "logged in" : "needs QR login"}`];
     },
   },
   prepare: async ({ cfg, accountId, prompter, options }) => {

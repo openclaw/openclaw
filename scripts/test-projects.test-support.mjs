@@ -23,7 +23,7 @@ export function buildVitestArgs(args) {
     "vitest",
     ...(watchMode ? [] : ["run"]),
     "--config",
-    "vitest.projects.config.ts",
+    "vitest.config.ts",
     ...forwardedArgs,
   ];
 }

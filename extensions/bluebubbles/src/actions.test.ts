@@ -125,6 +125,28 @@ describe("bluebubblesMessageActions", () => {
       expect(actions).toContain("unsend");
     });
 
+    it("honors account-scoped action gates during discovery", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+            actions: { reactions: false },
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:5678",
+                password: "work-password",
+                actions: { reactions: true },
+              },
+            },
+          },
+        },
+      };
+
+      expect(describeMessageTool({ cfg, accountId: "default" })?.actions).not.toContain("react");
+      expect(describeMessageTool({ cfg, accountId: "work" })?.actions).toContain("react");
+    });
+
     it("hides private-api actions when private API is disabled", () => {
       vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
       const cfg: OpenClawConfig = {

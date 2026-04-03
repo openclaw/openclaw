@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -298,7 +299,7 @@ describe("browser config", () => {
         allowedHostnames: [" localhost ", ""],
         hostnameAllowlist: [" *.trusted.example ", " "],
       },
-    });
+    } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
       allowedHostnames: ["localhost"],

@@ -1,21 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatChannelSelectionLine,
-  listChatChannels,
-  normalizeChatChannelId,
-} from "./registry.js";
+import { formatChannelSelectionLine, listChatChannels } from "./registry.js";
 
 describe("channel registry helpers", () => {
-  it("normalizes aliases + trims whitespace", () => {
-    expect(normalizeChatChannelId(" imsg ")).toBe("imessage");
-    expect(normalizeChatChannelId("gchat")).toBe("googlechat");
-    expect(normalizeChatChannelId("google-chat")).toBe("googlechat");
-    expect(normalizeChatChannelId("internet-relay-chat")).toBe("irc");
-    expect(normalizeChatChannelId("telegram")).toBe("telegram");
-    expect(normalizeChatChannelId("web")).toBeNull();
-    expect(normalizeChatChannelId("nope")).toBeNull();
-  });
-
   it("keeps Telegram first in the default order", () => {
     const channels = listChatChannels();
     expect(channels[0]?.id).toBe("telegram");

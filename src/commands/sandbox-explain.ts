@@ -237,7 +237,6 @@ export async function sandboxExplainCommand(
     sandbox: {
       mode: sandboxCfg.mode,
       scope: sandboxCfg.scope,
-      perSession: sandboxCfg.scope === "session",
       workspaceAccess: sandboxCfg.workspaceAccess,
       workspaceRoot: sandboxCfg.workspaceRoot,
       sessionIsSandboxed,
@@ -286,7 +285,7 @@ export async function sandboxExplainCommand(
   lines.push(
     `  ${key("mode:")} ${value(payload.sandbox.mode)} ${key("scope:")} ${value(
       payload.sandbox.scope,
-    )} ${key("perSession:")} ${bool(payload.sandbox.perSession)}`,
+    )}`,
   );
   lines.push(
     `  ${key("workspaceAccess:")} ${value(

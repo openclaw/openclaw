@@ -11,7 +11,13 @@ import {
 import { convertMessages } from "@mariozechner/pi-ai/openai-completions";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+import type {
+  FunctionTool,
+  ResponseCreateParamsStreaming,
+  ResponseFunctionCallOutputItemList,
+  ResponseInput,
+  ResponseInputMessageContentList,
+} from "openai/resources/responses/responses.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import {
@@ -346,8 +352,8 @@ function convertResponsesMessages(
   context: Context,
   allowedToolCallProviders: Set<string>,
   options?: { includeSystemPrompt?: boolean; supportsDeveloperRole?: boolean },
-) {
-  const messages: unknown[] = [];
+): ResponseInput {
+  const messages: ResponseInput = [];
   const normalizeIdPart = (part: string) => {
     const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
     const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
@@ -396,8 +402,8 @@ function convertResponsesMessages(
           content: [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
         });
       } else {
-        const content = msg.content
-          .map((item) =>
+        const content = (
+          msg.content.map((item) =>
             item.type === "text"
               ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
               : {
@@ -405,14 +411,14 @@ function convertResponsesMessages(
                   detail: "auto",
                   image_url: `data:${item.mimeType};base64,${item.data}`,
                 },
-          )
-          .filter((item) => model.input.includes("image") || item.type !== "input_image");
+          ) as ResponseInputMessageContentList
+        ).filter((item) => model.input.includes("image") || item.type !== "input_image");
         if (content.length > 0) {
           messages.push({ role: "user", content });
         }
       }
     } else if (msg.role === "assistant") {
-      const output: unknown[] = [];
+      const output: ResponseInput = [];
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
@@ -466,7 +472,7 @@ function convertResponsesMessages(
         call_id: callId,
         output:
           hasImages && model.input.includes("image")
-            ? [
+            ? ([
                 ...(textResult
                   ? [{ type: "input_text", text: sanitizeTransportPayloadText(textResult) }]
                   : []),
@@ -477,7 +483,7 @@ function convertResponsesMessages(
                     detail: "auto",
                     image_url: `data:${item.mimeType};base64,${item.data}`,
                   })),
-              ]
+              ] as ResponseFunctionCallOutputItemList)
             : sanitizeTransportPayloadText(textResult || "(see attached image)"),
       });
     }
@@ -489,7 +495,7 @@ function convertResponsesMessages(
 function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   options?: { strict?: boolean | null },
-) {
+): FunctionTool[] {
   const strict = options?.strict === undefined ? false : options.strict;
   return tools.map((tool) => ({
     type: "function",
@@ -958,14 +964,16 @@ export function buildOpenAIResponsesParams(
   options: OpenAIResponsesOptions | undefined,
 ) {
   const compat = getCompat(model as OpenAIModeModel);
+  const supportsDeveloperRole =
+    typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
   const messages = convertResponsesMessages(
     model,
     context,
     new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
-    { supportsDeveloperRole: compat.supportsDeveloperRole },
+    { supportsDeveloperRole },
   );
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-  const params: Record<string, unknown> = {
+  const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
@@ -1319,7 +1327,6 @@ async function processOpenAICompletionsStream(
 
 function detectCompat(model: OpenAIModeModel) {
   const provider = model.provider;
-  const baseUrl = model.baseUrl ?? "";
   const capabilities = resolveProviderRequestCapabilities({
     provider,
     api: model.api,
@@ -1332,20 +1339,36 @@ function detectCompat(model: OpenAIModeModel) {
         ? (model.compat as { supportsStore?: boolean })
         : undefined,
   });
-  const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
+  const endpointClass = capabilities.endpointClass;
+  const isDefaultRoute = endpointClass === "default";
+  const usesConfiguredNonOpenAIEndpoint =
+    endpointClass !== "default" && endpointClass !== "openai-public";
+  const isMistral =
+    capabilities.knownProviderFamily === "mistral" || endpointClass === "mistral-public";
+  const isMoonshotLike =
+    capabilities.knownProviderFamily === "moonshot" ||
+    capabilities.knownProviderFamily === "modelstudio" ||
+    endpointClass === "moonshot-native" ||
+    endpointClass === "modelstudio-native";
+  const isZai = endpointClass === "zai-native" || (isDefaultRoute && provider === "zai");
   const isNonStandard =
-    provider === "cerebras" ||
-    baseUrl.includes("cerebras.ai") ||
-    provider === "xai" ||
-    baseUrl.includes("api.x.ai") ||
-    baseUrl.includes("chutes.ai") ||
-    baseUrl.includes("deepseek.com") ||
+    endpointClass === "cerebras-native" ||
+    endpointClass === "chutes-native" ||
+    endpointClass === "deepseek-native" ||
+    isMistral ||
+    endpointClass === "opencode-native" ||
+    endpointClass === "xai-native" ||
     isZai ||
-    provider === "opencode" ||
-    baseUrl.includes("opencode.ai");
-  const useMaxTokens = baseUrl.includes("chutes.ai");
-  const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
-  const isGroq = provider === "groq" || baseUrl.includes("groq.com");
+    (isDefaultRoute &&
+      (provider === "cerebras" ||
+        provider === "chutes" ||
+        provider === "deepseek" ||
+        provider === "opencode" ||
+        provider === "xai"));
+  const useMaxTokens =
+    endpointClass === "chutes-native" || (isDefaultRoute && provider === "chutes") || isMistral;
+  const isGrok = endpointClass === "xai-native" || (isDefaultRoute && provider === "xai");
+  const isGroq = endpointClass === "groq-native" || (isDefaultRoute && provider === "groq");
   const reasoningEffortMap: Record<string, string> =
     isGroq && model.id === "qwen/qwen3-32b"
       ? {
@@ -1358,10 +1381,10 @@ function detectCompat(model: OpenAIModeModel) {
       : {};
   return {
     supportsStore: !isNonStandard,
-    supportsDeveloperRole: !isNonStandard,
-    supportsReasoningEffort: !isGrok && !isZai,
+    supportsDeveloperRole: !isNonStandard && !isMoonshotLike && !usesConfiguredNonOpenAIEndpoint,
+    supportsReasoningEffort: !isGrok && !isMistral && !isZai,
     reasoningEffortMap,
-    supportsUsageInStreaming: true,
+    supportsUsageInStreaming: !isNonStandard && !usesConfiguredNonOpenAIEndpoint,
     maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
     requiresToolResultName: false,
     requiresAssistantAfterToolResult: false,
@@ -1375,17 +1398,38 @@ function detectCompat(model: OpenAIModeModel) {
         : "openai",
     openRouterRouting: {},
     vercelGatewayRouting: {},
-    supportsStrictMode: true,
+    supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
   };
 }
 
-function getCompat(model: OpenAIModeModel) {
+function getCompat(model: OpenAIModeModel): {
+  supportsStore: boolean;
+  supportsDeveloperRole: boolean;
+  supportsReasoningEffort: boolean;
+  reasoningEffortMap: Record<string, string>;
+  supportsUsageInStreaming: boolean;
+  maxTokensField: string;
+  requiresToolResultName: boolean;
+  requiresAssistantAfterToolResult: boolean;
+  requiresThinkingAsText: boolean;
+  thinkingFormat: string;
+  openRouterRouting: Record<string, unknown>;
+  vercelGatewayRouting: Record<string, unknown>;
+  supportsStrictMode: boolean;
+} {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
+  const supportsStore =
+    typeof compat.supportsStore === "boolean" ? compat.supportsStore : detected.supportsStore;
+  const supportsReasoningEffort =
+    typeof compat.supportsReasoningEffort === "boolean"
+      ? compat.supportsReasoningEffort
+      : detected.supportsReasoningEffort;
   return {
-    supportsStore: compat.supportsStore ?? detected.supportsStore,
-    supportsDeveloperRole: compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
-    supportsReasoningEffort: compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
+    supportsStore,
+    supportsDeveloperRole:
+      (compat.supportsDeveloperRole as boolean | undefined) ?? detected.supportsDeveloperRole,
+    supportsReasoningEffort,
     reasoningEffortMap:
       (compat.reasoningEffortMap as Record<string, string> | undefined) ??
       detected.reasoningEffortMap,
@@ -1409,6 +1453,26 @@ function getCompat(model: OpenAIModeModel) {
   };
 }
 
+type OpenAIResponsesRequestParams = {
+  model: string;
+  input: ResponseInput;
+  stream: true;
+  prompt_cache_key?: string;
+  prompt_cache_retention?: "24h";
+  store?: boolean;
+  max_output_tokens?: number;
+  temperature?: number;
+  service_tier?: ResponseCreateParamsStreaming["service_tier"];
+  tools?: FunctionTool[];
+  reasoning?:
+    | { effort: "none" }
+    | {
+        effort: NonNullable<OpenAIResponsesOptions["reasoningEffort"]>;
+        summary: NonNullable<OpenAIResponsesOptions["reasoningSummary"]>;
+      };
+  include?: string[];
+};
+
 function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, string>): string {
   return reasoningEffortMap[effort] ?? effort;
 }
@@ -1425,7 +1489,7 @@ function convertTools(tools: NonNullable<Context["tools"]>, compat: ReturnType<t
   }));
 }
 
-function buildOpenAICompletionsParams(
+export function buildOpenAICompletionsParams(
   model: OpenAIModeModel,
   context: Context,
   options: OpenAICompletionsOptions | undefined,

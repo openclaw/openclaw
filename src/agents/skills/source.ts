@@ -1,4 +1,4 @@
-import type { Skill } from "@mariozechner/pi-coding-agent";
+import type { Skill } from "./skill-contract.js";
 
 type SkillSourceCompat = Skill & {
   sourceInfo?: {
