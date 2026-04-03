@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
@@ -64,33 +64,12 @@ vi.mock("../../cli/nodes-screen.js", () => ({
 
 let createNodesTool: typeof import("./nodes-tool.js").createNodesTool;
 
-async function loadFreshNodesToolModuleForTest() {
-  vi.resetModules();
-  vi.doMock("./gateway.js", () => ({
-    callGatewayTool: gatewayMocks.callGatewayTool,
-    readGatewayCallOptions: gatewayMocks.readGatewayCallOptions,
-  }));
-  vi.doMock("./nodes-utils.js", () => ({
-    resolveNodeId: nodeUtilsMocks.resolveNodeId,
-    resolveNode: nodeUtilsMocks.resolveNode,
-  }));
-  vi.doMock("../../cli/nodes-camera.js", () => ({
-    cameraTempPath: nodesCameraMocks.cameraTempPath,
-    parseCameraClipPayload: nodesCameraMocks.parseCameraClipPayload,
-    parseCameraSnapPayload: nodesCameraMocks.parseCameraSnapPayload,
-    writeCameraClipPayloadToFile: nodesCameraMocks.writeCameraClipPayloadToFile,
-    writeCameraPayloadToFile: nodesCameraMocks.writeCameraPayloadToFile,
-  }));
-  vi.doMock("../../cli/nodes-screen.js", () => ({
-    parseScreenRecordPayload: screenMocks.parseScreenRecordPayload,
-    screenRecordTempPath: screenMocks.screenRecordTempPath,
-    writeScreenRecordToFile: screenMocks.writeScreenRecordToFile,
-  }));
-  ({ createNodesTool } = await import("./nodes-tool.js"));
-}
-
 describe("createNodesTool screen_record duration guardrails", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ createNodesTool } = await import("./nodes-tool.js"));
+  });
+
+  beforeEach(() => {
     gatewayMocks.callGatewayTool.mockReset();
     gatewayMocks.readGatewayCallOptions.mockReset();
     gatewayMocks.readGatewayCallOptions.mockReturnValue({});
@@ -101,7 +80,6 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodesCameraMocks.cameraTempPath.mockClear();
     nodesCameraMocks.parseCameraSnapPayload.mockClear();
     nodesCameraMocks.writeCameraPayloadToFile.mockClear();
-    await loadFreshNodesToolModuleForTest();
   });
 
   it("marks nodes as owner-only", () => {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
@@ -29,8 +29,7 @@ let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClaw
 let resetModelsJsonReadyCacheForTest: typeof import("./models-config.js").resetModelsJsonReadyCacheForTest;
 let readGeneratedModelsJson: typeof import("./models-config.test-utils.js").readGeneratedModelsJson;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ clearConfigCache, clearRuntimeConfigSnapshot, loadConfig, setRuntimeConfigSnapshot } =
     await import("../config/config.js"));
   ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
@@ -39,6 +38,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
   resetModelsJsonReadyCacheForTest();
 });
 

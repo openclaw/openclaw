@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
@@ -82,8 +82,11 @@ vi.mock("../infra/exec-obfuscation-detect.js", () => ({
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
 
 describe("processGatewayAllowlist", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ processGatewayAllowlist } = await import("./bash-tools.exec-host-gateway.js"));
+  });
+
+  beforeEach(() => {
     buildExecApprovalPendingToolResultMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReturnValue(null);
@@ -102,7 +105,6 @@ describe("processGatewayAllowlist", () => {
       sentApproverDms: false,
       unavailableReason: null,
     });
-    ({ processGatewayAllowlist } = await import("./bash-tools.exec-host-gateway.js"));
   });
 
   it("still requires approval when allowlist execution plan is unavailable despite durable trust", async () => {

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
@@ -35,15 +35,6 @@ let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
 let getExecApprovalApproverDmNoticeText: typeof import("../infra/exec-approval-reply.js").getExecApprovalApproverDmNoticeText;
 let sendMessage: typeof import("../infra/outbound/message.js").sendMessage;
-
-async function loadExecApprovalModules() {
-  vi.resetModules();
-  ({ callGatewayTool } = await import("./tools/gateway.js"));
-  ({ createExecTool } = await import("./bash-tools.exec.js"));
-  ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
-  ({ getExecApprovalApproverDmNoticeText } = await import("../infra/exec-approval-reply.js"));
-  ({ sendMessage } = await import("../infra/outbound/message.js"));
-}
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -224,6 +215,14 @@ describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
 
+  beforeAll(async () => {
+    ({ callGatewayTool } = await import("./tools/gateway.js"));
+    ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
+    ({ getExecApprovalApproverDmNoticeText } = await import("../infra/exec-approval-reply.js"));
+    ({ sendMessage } = await import("../infra/outbound/message.js"));
+  });
+
   beforeEach(async () => {
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
@@ -231,7 +230,9 @@ describe("exec approvals", () => {
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
-    await loadExecApprovalModules();
+    vi.mocked(callGatewayTool).mockReset();
+    vi.mocked(detectCommandObfuscation).mockReset();
+    vi.mocked(sendMessage).mockReset();
   });
 
   afterEach(() => {

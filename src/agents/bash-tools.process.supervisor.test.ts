@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { supervisorMock } = vi.hoisted(() => ({
   supervisorMock: {
@@ -29,14 +29,6 @@ let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").re
 let createProcessSessionFixture: typeof import("./bash-process-registry.test-helpers.js").createProcessSessionFixture;
 let createProcessTool: typeof import("./bash-tools.process.js").createProcessTool;
 
-async function loadFreshProcessToolModulesForTest() {
-  vi.resetModules();
-  ({ addSession, getFinishedSession, getSession, resetProcessRegistryForTests } =
-    await import("./bash-process-registry.js"));
-  ({ createProcessSessionFixture } = await import("./bash-process-registry.test-helpers.js"));
-  ({ createProcessTool } = await import("./bash-tools.process.js"));
-}
-
 function createBackgroundSession(id: string, pid?: number) {
   return createProcessSessionFixture({
     id,
@@ -47,8 +39,14 @@ function createBackgroundSession(id: string, pid?: number) {
 }
 
 describe("process tool supervisor cancellation", () => {
-  beforeEach(async () => {
-    await loadFreshProcessToolModulesForTest();
+  beforeAll(async () => {
+    ({ addSession, getFinishedSession, getSession, resetProcessRegistryForTests } =
+      await import("./bash-process-registry.js"));
+    ({ createProcessSessionFixture } = await import("./bash-process-registry.test-helpers.js"));
+    ({ createProcessTool } = await import("./bash-tools.process.js"));
+  });
+
+  beforeEach(() => {
     supervisorMock.spawn.mockClear();
     supervisorMock.cancel.mockClear();
     supervisorMock.cancelScope.mockClear();

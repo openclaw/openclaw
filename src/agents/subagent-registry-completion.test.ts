@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -40,11 +40,13 @@ describe("emitSubagentEndedHookOnce", () => {
     };
   };
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    mod = await import("./subagent-registry-completion.js");
+  });
+
+  beforeEach(() => {
     lifecycleMocks.getGlobalHookRunner.mockClear();
     lifecycleMocks.runSubagentEnded.mockClear();
-    mod = await import("./subagent-registry-completion.js");
   });
 
   it("records ended hook marker even when no subagent_ended hooks are registered", async () => {

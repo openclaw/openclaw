@@ -36,28 +36,7 @@ vi.mock("../infra/brew.js", () => ({
 let installSkill: typeof import("./skills-install.js").installSkill;
 let buildWorkspaceSkillStatus: typeof import("./skills-status.js").buildWorkspaceSkillStatus;
 
-async function loadFreshSkillsInstallModulesForTest() {
-  vi.resetModules();
-  vi.doMock("../process/exec.js", () => ({
-    runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
-  }));
-  vi.doMock("../infra/net/fetch-guard.js", () => ({
-    fetchWithSsrFGuard: vi.fn(),
-  }));
-  vi.doMock("../security/skill-scanner.js", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("../security/skill-scanner.js")>()),
-    scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
-  }));
-  vi.doMock("../shared/config-eval.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../shared/config-eval.js")>();
-    return {
-      ...actual,
-      hasBinary: (bin: string) => hasBinaryMock(bin),
-    };
-  });
-  vi.doMock("../infra/brew.js", () => ({
-    resolveBrewExecutable: () => undefined,
-  }));
+async function loadSkillsInstallModulesForTest() {
   ({ installSkill } = await import("./skills-install.js"));
   ({ buildWorkspaceSkillStatus } = await import("./skills-status.js"));
 }
@@ -121,14 +100,14 @@ describe("skills-install fallback edge cases", () => {
     await writeSkillWithInstaller(workspaceDir, "py-tool", "uv", {
       package: "example-package",
     });
+    await loadSkillsInstallModulesForTest();
   });
 
-  beforeEach(async () => {
+  beforeEach(() => {
     runCommandWithTimeoutMock.mockClear();
     scanDirectoryWithSummaryMock.mockClear();
     hasBinaryMock.mockClear();
     scanDirectoryWithSummaryMock.mockResolvedValue({ critical: 0, warn: 0, findings: [] });
-    await loadFreshSkillsInstallModulesForTest();
   });
 
   afterAll(async () => {

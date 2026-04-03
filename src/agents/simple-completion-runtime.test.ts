@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
@@ -23,8 +23,11 @@ vi.mock("./github-copilot-token.js", () => ({
 
 let prepareSimpleCompletionModel: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModel;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  ({ prepareSimpleCompletionModel } = await import("./simple-completion-runtime.js"));
+});
+
+beforeEach(() => {
   hoisted.resolveModelMock.mockReset();
   hoisted.getApiKeyForModelMock.mockReset();
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockReset();
@@ -54,7 +57,6 @@ beforeEach(async () => {
     source: "cache:/tmp/copilot-token.json",
     baseUrl: "https://api.individual.githubcopilot.com",
   });
-  ({ prepareSimpleCompletionModel } = await import("./simple-completion-runtime.js"));
 });
 
 describe("prepareSimpleCompletionModel", () => {
