@@ -15,6 +15,7 @@ import {
   markExited,
   setJobTtlMs,
 } from "./bash-process-registry.js";
+import { notifyExecSessionExit } from "./bash-tools.exec-runtime.js";
 import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
@@ -29,7 +30,34 @@ type WritableStdin = {
   end: () => void;
   destroyed?: boolean;
 };
+
 const DEFAULT_LOG_TAIL_LINES = 200;
+
+function resolveVisibleProcessStatus(status: "running" | "completed" | "failed" | "killed") {
+  return status;
+}
+
+function formatProcessExitText(params: {
+  status: "running" | "completed" | "failed" | "killed";
+  exitCode?: number | null;
+  exitSignal?: NodeJS.Signals | number | null;
+}) {
+  if (params.status === "running") {
+    return "Process still running.";
+  }
+  if (params.status === "killed") {
+    return "Process was cancelled by user.";
+  }
+  return `Process exited with ${
+    params.exitSignal ? `signal ${params.exitSignal}` : `code ${params.exitCode ?? 0}`
+  }.`;
+}
+
+function formatRunningProcessStateText(cancelRequestedByUser?: boolean) {
+  return cancelRequestedByUser
+    ? "Termination requested; process still running."
+    : "Process still running.";
+}
 
 function resolveLogSliceWindow(offset?: number, limit?: number) {
   const usingDefaultTail = offset === undefined && limit === undefined;
@@ -290,6 +318,17 @@ export function createProcessTool(
         },
       });
 
+      const markCancelRequested = (session: ProcessSession, opts?: { removeOnExit?: boolean }) => {
+        session.cancelRequestedByUser = true;
+        if (session.stallTimer) {
+          clearTimeout(session.stallTimer);
+          session.stallTimer = null;
+        }
+        if (opts?.removeOnExit) {
+          session.removeOnExit = true;
+        }
+      };
+
       switch (params.action) {
         case "poll": {
           if (!scopedSession) {
@@ -304,15 +343,15 @@ export function createProcessTool(
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
-                      `\n\nProcess exited with ${
-                        scopedFinished.exitSignal
-                          ? `signal ${scopedFinished.exitSignal}`
-                          : `code ${scopedFinished.exitCode ?? 0}`
-                      }.`,
+                      `\n\n${formatProcessExitText({
+                        status: scopedFinished.status,
+                        exitCode: scopedFinished.exitCode,
+                        exitSignal: scopedFinished.exitSignal,
+                      })}`,
                   },
                 ],
                 details: {
-                  status: scopedFinished.status === "completed" ? "completed" : "failed",
+                  status: resolveVisibleProcessStatus(scopedFinished.status),
                   sessionId: params.sessionId,
                   exitCode: scopedFinished.exitCode ?? undefined,
                   aggregated: scopedFinished.aggregated,
@@ -340,7 +379,11 @@ export function createProcessTool(
           const exitCode = scopedSession.exitCode ?? 0;
           const exitSignal = scopedSession.exitSignal ?? undefined;
           if (exited) {
-            const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
+            const status = scopedSession.cancelRequestedByUser
+              ? "killed"
+              : exitCode === 0 && exitSignal == null
+                ? "completed"
+                : "failed";
             markExited(
               scopedSession,
               scopedSession.exitCode ?? null,
@@ -349,9 +392,11 @@ export function createProcessTool(
             );
           }
           const status = exited
-            ? exitCode === 0 && exitSignal == null
-              ? "completed"
-              : "failed"
+            ? scopedSession.cancelRequestedByUser
+              ? "killed"
+              : exitCode === 0 && exitSignal == null
+                ? "completed"
+                : "failed"
             : "running";
           const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
           const hasNewOutput = output.length > 0;
@@ -368,10 +413,12 @@ export function createProcessTool(
                 text:
                   (output || "(no new output)") +
                   (exited
-                    ? `\n\nProcess exited with ${
-                        exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
-                      }.`
-                    : "\n\nProcess still running."),
+                    ? `\n\n${formatProcessExitText({
+                        status,
+                        exitCode,
+                        exitSignal,
+                      })}`
+                    : `\n\n${formatRunningProcessStateText(scopedSession.cancelRequestedByUser)}`),
               },
             ],
             details: {
@@ -408,7 +455,15 @@ export function createProcessTool(
             return {
               content: [{ type: "text", text: (slice || "(no output yet)") + logDefaultTailNote }],
               details: {
-                status: scopedSession.exited ? "completed" : "running",
+                status: scopedSession.exited
+                  ? resolveVisibleProcessStatus(
+                      scopedSession.cancelRequestedByUser
+                        ? "killed"
+                        : scopedSession.exitCode === 0 && scopedSession.exitSignal == null
+                          ? "completed"
+                          : "failed",
+                    )
+                  : "running",
                 sessionId: params.sessionId,
                 total: totalLines,
                 totalLines,
@@ -425,7 +480,7 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
-            const status = scopedFinished.status === "completed" ? "completed" : "failed";
+            const status = resolveVisibleProcessStatus(scopedFinished.status);
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
               content: [
@@ -554,15 +609,18 @@ export function createProcessTool(
           if (!scopedSession.backgrounded) {
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
+          markCancelRequested(scopedSession);
           const canceled = cancelManagedSession(scopedSession.id);
           if (!canceled) {
             const terminated = terminateSessionFallback(scopedSession);
             if (!terminated) {
+              scopedSession.cancelRequestedByUser = false;
               return failText(
                 `Unable to terminate session ${params.sessionId}: no active supervisor run or process id.`,
               );
             }
-            markExited(scopedSession, null, "SIGKILL", "failed");
+            markExited(scopedSession, null, "SIGKILL", "killed");
+            notifyExecSessionExit(scopedSession, "killed");
           }
           resetPollRetrySuggestion(params.sessionId);
           return {
@@ -575,7 +633,7 @@ export function createProcessTool(
               },
             ],
             details: {
-              status: "failed",
+              status: canceled ? "running" : "killed",
               name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
             },
           };
@@ -603,20 +661,19 @@ export function createProcessTool(
 
         case "remove": {
           if (scopedSession) {
+            markCancelRequested(scopedSession, { removeOnExit: true });
             const canceled = cancelManagedSession(scopedSession.id);
-            if (canceled) {
-              // Keep remove semantics deterministic: drop from process registry now.
-              scopedSession.backgrounded = false;
-              deleteSession(params.sessionId);
-            } else {
+            if (!canceled) {
               const terminated = terminateSessionFallback(scopedSession);
               if (!terminated) {
+                scopedSession.removeOnExit = false;
+                scopedSession.cancelRequestedByUser = false;
                 return failText(
                   `Unable to remove session ${params.sessionId}: no active supervisor run or process id.`,
                 );
               }
-              markExited(scopedSession, null, "SIGKILL", "failed");
-              deleteSession(params.sessionId);
+              markExited(scopedSession, null, "SIGKILL", "killed");
+              deleteSession(scopedSession.id);
             }
             resetPollRetrySuggestion(params.sessionId);
             return {
@@ -624,12 +681,12 @@ export function createProcessTool(
                 {
                   type: "text",
                   text: canceled
-                    ? `Removed session ${params.sessionId} (termination requested).`
+                    ? `Removal requested for session ${params.sessionId}; termination requested and final cleanup will finish after exit.`
                     : `Removed session ${params.sessionId}.`,
                 },
               ],
               details: {
-                status: "failed",
+                status: canceled ? "running" : "killed",
                 name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
               },
             };

@@ -1287,6 +1287,82 @@ describe("task-registry", () => {
     });
   });
 
+  it("uses the CLI runtime hook when reconciling orphaned CLI tasks", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-cli-maintenance",
+        task: "Background CLI job",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+        lastEventAt: now - 10 * 60_000,
+      });
+
+      configureTaskRegistryRuntime({
+        observers: {
+          isCliRunActive: (runId) => runId !== "run-cli-maintenance",
+        },
+      });
+
+      expect(await runTaskRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expect(getTaskById(task.taskId)).toMatchObject({
+        status: "lost",
+        error: "backing session missing",
+      });
+      expect(getTaskById(task.taskId)?.cleanupAfter).toBeGreaterThan(now);
+    });
+  });
+
+  it("keeps recently missing CLI tasks running until the lost grace expires", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-cli-recent-miss",
+        task: "Background CLI job",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+        lastEventAt: now - 1_000,
+      });
+
+      configureTaskRegistryRuntime({
+        observers: {
+          isCliRunActive: (runId) => runId !== "run-cli-recent-miss",
+        },
+      });
+
+      expect(await runTaskRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expect(getTaskById(task.taskId)).toMatchObject({
+        status: "running",
+      });
+    });
+  });
+
   it("prunes old terminal tasks during maintenance sweeps", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -1342,7 +1418,7 @@ describe("task-registry", () => {
                   notifyPolicy: "silent",
                   createdAt: now - 120_000,
                   endedAt: now - 60_000,
-                  lastEventAt: now - 60_000,
+                  lastEventAt: now - 1_000,
                 },
               ],
             ]),

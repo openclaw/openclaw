@@ -15,7 +15,7 @@ import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
-import { logInfo } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -35,6 +35,7 @@ import {
   resolveExecTarget,
   resolveApprovalRunningNoticeMs,
   runExecProcess,
+  armCliTaskNoOutputNotice,
   execSchema,
 } from "./bash-tools.exec-runtime.js";
 import type {
@@ -60,6 +61,13 @@ export type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+
+let taskExecutorModulePromise: Promise<typeof import("../tasks/task-executor.js")> | null = null;
+
+async function loadTaskExecutorModule() {
+  taskExecutorModulePromise ??= import("../tasks/task-executor.js");
+  return await taskExecutorModulePromise;
+}
 
 function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
@@ -1584,29 +1592,72 @@ export function createExecTool(
             },
           });
 
-        const onYieldNow = () => {
+        const createBackgroundCliTaskIfNeeded = async () => {
+          if (run.session.cliTaskCreated) {
+            return;
+          }
+          if (!run.session.cliTaskCreationPromise) {
+            run.session.cliTaskCreationPromise = (async () => {
+              try {
+                const { createRunningTaskRun } = await loadTaskExecutorModule();
+                const hadOutputBeforeTaskCreation = typeof run.session.lastOutputAt === "number";
+                const taskLastEventAt = run.session.lastOutputAt ?? Date.now();
+                createRunningTaskRun({
+                  runtime: "cli",
+                  sourceId: run.session.id,
+                  ...(notifySessionKey
+                    ? {
+                        ownerKey: notifySessionKey,
+                        requesterSessionKey: notifySessionKey,
+                        scopeKind: "session" as const,
+                        deliveryStatus: "pending" as const,
+                      }
+                    : {
+                        scopeKind: "system" as const,
+                        deliveryStatus: "not_applicable" as const,
+                      }),
+                  runId: run.session.id,
+                  task: params.command,
+                  notifyPolicy: "silent",
+                  startedAt: run.startedAt,
+                  lastEventAt: taskLastEventAt,
+                  progressSummary: hadOutputBeforeTaskCreation
+                    ? "Output received."
+                    : "Started background command.",
+                });
+                run.session.cliTaskCreated = true;
+                run.session.taskOutputSeen = hadOutputBeforeTaskCreation;
+                run.session.lastTaskUpdateAt = taskLastEventAt;
+                armCliTaskNoOutputNotice(run.session);
+              } catch (error) {
+                logWarn(`exec: failed to create background CLI task for ${run.session.id}: ${String(error)}`);
+              } finally {
+                run.session.cliTaskCreationPromise = null;
+              }
+            })();
+          }
+          await run.session.cliTaskCreationPromise;
+        };
+
+        const onYieldNow = async () => {
           if (yieldTimer) {
             clearTimeout(yieldTimer);
           }
-          if (yielded) {
+          if (yielded || run.session.exited) {
             return;
           }
           yielded = true;
           markBackgrounded(run.session);
+          await createBackgroundCliTaskIfNeeded();
           resolveRunning();
         };
 
         if (allowBackground && yieldWindow !== null) {
           if (yieldWindow === 0) {
-            onYieldNow();
+            void onYieldNow();
           } else {
             yieldTimer = setTimeout(() => {
-              if (yielded) {
-                return;
-              }
-              yielded = true;
-              markBackgrounded(run.session);
-              resolveRunning();
+              void onYieldNow();
             }, yieldWindow);
           }
         }

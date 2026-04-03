@@ -81,7 +81,7 @@ describe("process tool supervisor cancellation", () => {
     });
   });
 
-  it("remove drops running session immediately when cancellation is requested", async () => {
+  it("keeps a running session inspectable after remove until exit finalizes cleanup", async () => {
     supervisorMock.getRecord.mockReturnValue({
       runId: "sess",
       state: "running",
@@ -95,11 +95,23 @@ describe("process tool supervisor cancellation", () => {
     });
 
     expect(supervisorMock.cancel).toHaveBeenCalledWith("sess", "manual-cancel");
-    expect(getSession("sess")).toBeUndefined();
+    expect(getSession("sess")).toBeDefined();
     expect(getFinishedSession("sess")).toBeUndefined();
+    expect(result.details).toMatchObject({ status: "running" });
     expect(result.content[0]).toMatchObject({
       type: "text",
-      text: "Removed session sess (termination requested).",
+      text:
+        "Removal requested for session sess; termination requested and final cleanup will finish after exit.",
+    });
+
+    const poll = await processTool.execute("toolcall", {
+      action: "poll",
+      sessionId: "sess",
+    });
+    expect(poll.details).toMatchObject({ status: "running" });
+    expect(poll.content[0]).toMatchObject({
+      type: "text",
+      text: "(no new output)\n\nTermination requested; process still running.",
     });
   });
 
@@ -115,10 +127,20 @@ describe("process tool supervisor cancellation", () => {
 
     expect(killProcessTreeMock).toHaveBeenCalledWith(4242);
     expect(getSession("sess-fallback")).toBeUndefined();
-    expect(getFinishedSession("sess-fallback")).toBeDefined();
+    expect(getFinishedSession("sess-fallback")?.status).toBe("killed");
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: "Killed session sess-fallback.",
+    });
+
+    const poll = await processTool.execute("toolcall", {
+      action: "poll",
+      sessionId: "sess-fallback",
+    });
+    expect(poll.details).toMatchObject({ status: "killed" });
+    expect(poll.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Process was cancelled by user."),
     });
   });
 

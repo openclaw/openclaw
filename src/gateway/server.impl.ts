@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isCliRunActive } from "../agents/bash-process-registry.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
@@ -78,6 +79,10 @@ import {
   getInspectableTaskRegistrySummary,
   startTaskRegistryMaintenance,
 } from "../tasks/task-registry.maintenance.js";
+import {
+  configureTaskRegistryRuntime,
+  getTaskRegistryObservers,
+} from "../tasks/task-registry.store.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
@@ -904,6 +909,12 @@ export async function startGatewayServer(
         });
 
     if (!minimalTestGateway) {
+      configureTaskRegistryRuntime({
+        observers: {
+          ...getTaskRegistryObservers(),
+          isCliRunActive,
+        },
+      });
       startTaskRegistryMaintenance();
       ({ tickInterval, healthInterval, dedupeCleanup, mediaCleanup } =
         startGatewayMaintenanceTimers({

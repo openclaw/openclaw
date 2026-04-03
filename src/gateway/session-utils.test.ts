@@ -9,6 +9,9 @@ import {
 import { resetConfigRuntimeState, writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
+import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
 import {
@@ -91,6 +94,7 @@ function createLegacyRuntimeStore(model: string): Record<string, SessionEntry> {
 describe("gateway session utils", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests();
   });
 
   test("capArrayByJsonBytes trims from the front", () => {
@@ -1629,9 +1633,11 @@ describe("listSessionsFromStore search", () => {
 describe("listSessionsFromStore subagent metadata", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests();
   });
   beforeEach(() => {
     resetSubagentRegistryForTests({ persist: false });
+    resetTaskRegistryForTests();
   });
 
   const cfg = {
@@ -2146,6 +2152,132 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(followup?.status).toBe("running");
     expect(followup?.startedAt).toBe(now - 150_000);
     expect(followup?.runtimeMs).toBeGreaterThanOrEqual(150_000);
+  });
+
+  test("marks a session row running when it owns an active linked CLI task", () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:main";
+    const store: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId: "sess-main-cli-task",
+        updatedAt: now,
+        status: "done",
+        endedAt: now - 5_000,
+        runtimeMs: 10,
+      } as SessionEntry,
+    };
+
+    createRunningTaskRun({
+      runtime: "cli",
+      ownerKey: sessionKey,
+      requesterSessionKey: sessionKey,
+      scopeKind: "session",
+      runId: "cli-run-row-active",
+      sourceId: "cli-run-row-active",
+      task: "pnpm test",
+      startedAt: now - 30_000,
+      lastEventAt: now - 1_000,
+      progressSummary: "Output received.",
+      notifyPolicy: "silent",
+      deliveryStatus: "pending",
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const main = result.sessions.find((session) => session.key === sessionKey);
+    expect(main?.status).toBe("running");
+    expect(main?.startedAt).toBe(now - 30_000);
+    expect(main?.endedAt).toBeUndefined();
+    expect(main?.runtimeMs).toBeGreaterThanOrEqual(30_000);
+    expect(main?.updatedAt).toBe(now);
+  });
+
+  test("keeps an active CLI-backed session visible under activeMinutes using task-driven updatedAt", () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:main";
+    const store: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId: "sess-main-cli-task-filter",
+        updatedAt: now - 10 * 60_000,
+        status: "done",
+        endedAt: now - 10 * 60_000,
+        runtimeMs: 10,
+      } as SessionEntry,
+    };
+
+    createRunningTaskRun({
+      runtime: "cli",
+      ownerKey: sessionKey,
+      requesterSessionKey: sessionKey,
+      scopeKind: "session",
+      runId: "cli-run-row-filter",
+      sourceId: "cli-run-row-filter",
+      task: "pnpm test",
+      startedAt: now - 30_000,
+      lastEventAt: now - 1_000,
+      progressSummary: "Output received.",
+      notifyPolicy: "silent",
+      deliveryStatus: "pending",
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { activeMinutes: 5 },
+    });
+
+    expect(result.sessions.some((session) => session.key === sessionKey)).toBe(true);
+  });
+
+  test("does not keep a session row running from a CLI task that is missing beyond the lost grace", () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:main";
+    const store: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId: "sess-main-cli-task-stale",
+        updatedAt: now,
+        status: "done",
+        endedAt: now - 5_000,
+        runtimeMs: 10,
+      } as SessionEntry,
+    };
+
+    createRunningTaskRun({
+      runtime: "cli",
+      ownerKey: sessionKey,
+      requesterSessionKey: sessionKey,
+      scopeKind: "session",
+      runId: "cli-run-row-stale",
+      sourceId: "cli-run-row-stale",
+      task: "pnpm test",
+      startedAt: now - 10 * 60_000,
+      lastEventAt: now - 10 * 60_000,
+      progressSummary: "No output for 120s.",
+      notifyPolicy: "silent",
+      deliveryStatus: "pending",
+    });
+    configureTaskRegistryRuntime({
+      observers: {
+        isCliRunActive: (runId) => runId !== "cli-run-row-stale",
+      },
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const main = result.sessions.find((session) => session.key === sessionKey);
+    expect(main?.status).toBe("failed");
+    expect(main?.endedAt).toBeGreaterThan(now - 20_000);
   });
 
   test("uses the newest child-session row for stale/current replacement pairs", () => {

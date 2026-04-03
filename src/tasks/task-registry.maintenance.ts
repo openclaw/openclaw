@@ -14,10 +14,12 @@ import {
 import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
 import type { TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
+import { getTaskRegistryObservers } from "./task-registry.store.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
 
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const CLI_TASK_RECONCILE_GRACE_MS = 5_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
 /**
@@ -60,10 +62,18 @@ function isTerminalTask(task: TaskRecord): boolean {
 
 function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
-  return now - referenceAt >= TASK_RECONCILE_GRACE_MS;
+  const graceMs = task.runtime === "cli" ? CLI_TASK_RECONCILE_GRACE_MS : TASK_RECONCILE_GRACE_MS;
+  return now - referenceAt >= graceMs;
 }
 
 function hasBackingSession(task: TaskRecord): boolean {
+  if (task.runtime === "cli") {
+    const runId = task.runId?.trim();
+    if (!runId) {
+      return true;
+    }
+    return getTaskRegistryObservers()?.isCliRunActive?.(runId) ?? true;
+  }
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
     return true;
@@ -77,7 +87,7 @@ function hasBackingSession(task: TaskRecord): boolean {
     }
     return Boolean(acpEntry.entry);
   }
-  if (task.runtime === "subagent" || task.runtime === "cli") {
+  if (task.runtime === "subagent") {
     const agentId = parseAgentSessionKey(childSessionKey)?.agentId;
     const storePath = resolveStorePath(undefined, { agentId });
     const store = loadSessionStore(storePath);
@@ -146,8 +156,10 @@ function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
   };
 }
 
-export function reconcileTaskRecordForOperatorInspection(task: TaskRecord): TaskRecord {
-  const now = Date.now();
+export function reconcileTaskRecordForOperatorInspection(
+  task: TaskRecord,
+  now = Date.now(),
+): TaskRecord {
   if (!shouldMarkLost(task, now)) {
     return task;
   }

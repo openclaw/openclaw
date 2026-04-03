@@ -6,8 +6,9 @@ import {
 } from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../tasks/task-registry.js";
 import { captureEnv } from "../test-utils/env.js";
-import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { getFinishedSession, getSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
 
@@ -413,6 +414,7 @@ const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoop
 beforeEach(() => {
   callIdCounter = 0;
   resetProcessRegistryForTests();
+  resetTaskRegistryForTests();
   resetSystemEventsForTest();
 });
 
@@ -456,6 +458,87 @@ describe("exec tool backgrounding", () => {
     const sessions = await listProcessSessions(processTool);
     expect(hasSession(sessions, sessionId)).toBe(true);
     expect(sessions.find((s) => s.sessionId === sessionId)?.name).toBe(COMMAND_ECHO_HELLO);
+  });
+
+  it("creates and completes a linked CLI task for background execs with a session owner", async () => {
+    const tool = createNotifyOnExitExecTool({ notifyOnExit: false });
+    const command = echoAfterDelay("task-visible");
+    const sessionId = await startBackgroundCommand(tool, command);
+
+    await expect
+      .poll(() => findTaskByRunId(sessionId)?.status, BACKGROUND_POLL_OPTIONS)
+      .toBe("running");
+
+    await expect
+      .poll(() => findTaskByRunId(sessionId)?.runtime, BACKGROUND_POLL_OPTIONS)
+      .toBe("cli");
+
+    await expect
+      .poll(() => findTaskByRunId(sessionId)?.status, NOTIFY_POLL_OPTIONS)
+      .toBe("succeeded");
+  });
+
+  it("marks pre-yield output as already seen when creating the linked CLI task", async () => {
+    const tool = createTestExecTool({
+      allowBackground: true,
+      backgroundMs: 50,
+      notifyOnExit: false,
+      sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
+    });
+    const command = joinCommands([
+      shellEcho("early"),
+      isWin ? "Start-Sleep -Milliseconds 250" : "sleep 0.25",
+      shellEcho("late"),
+    ]);
+
+    const result = await executeExecCommand(tool, command);
+    const sessionId = requireRunningSessionId(result);
+
+    await expect
+      .poll(() => getSession(sessionId)?.taskOutputSeen, BACKGROUND_POLL_OPTIONS)
+      .toBe(true);
+
+    await expect
+      .poll(() => findTaskByRunId(sessionId)?.progressSummary, BACKGROUND_POLL_OPTIONS)
+      .toBe("Output received.");
+  });
+
+  it("marks linked CLI tasks cancelled when a background exec exits cleanly after remove", async () => {
+    const tool = createNotifyOnExitExecTool({ notifyOnExit: false });
+    const gracefulCancelCommand =
+      'node -e "process.on(\'SIGTERM\', () => process.exit(0)); setInterval(() => {}, 1000)"';
+    const sessionId = await startBackgroundCommand(tool, gracefulCancelCommand);
+
+    const removeResult = await executeProcessTool(processTool, {
+      action: "remove",
+      sessionId,
+    });
+    expect(readProcessStatus(removeResult.details)).toBe("running");
+
+    await expect
+      .poll(() => findTaskByRunId(sessionId)?.status, NOTIFY_POLL_OPTIONS)
+      .toBe("cancelled");
+  });
+
+  it("creates a linked CLI task even without a notifying session owner", async () => {
+    const tool = createTestExecTool({ notifyOnExit: false });
+    const sessionId = await startBackgroundCommand(tool, echoAfterDelay("task-visible-no-owner"));
+
+    await expect
+      .poll(() => findTaskByRunId(sessionId)?.runtime, BACKGROUND_POLL_OPTIONS)
+      .toBe("cli");
+
+    await expect
+      .poll(() => findTaskByRunId(sessionId)?.scopeKind, BACKGROUND_POLL_OPTIONS)
+      .toBe("system");
+
+    await expect
+      .poll(() => findTaskByRunId(sessionId)?.deliveryStatus, BACKGROUND_POLL_OPTIONS)
+      .toBe("not_applicable");
+
+    await expect
+      .poll(() => findTaskByRunId(sessionId)?.status, NOTIFY_POLL_OPTIONS)
+      .toBe("succeeded");
   });
 
   it.each<DisallowedElevationCase>(DISALLOWED_ELEVATION_CASES)(

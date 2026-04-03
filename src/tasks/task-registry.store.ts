@@ -50,6 +50,7 @@ export type TaskRegistryObserverEvent =
 export type TaskRegistryObservers = {
   // Observers are incremental/best-effort only. Snapshot persistence belongs to TaskRegistryStore.
   onEvent?: (event: TaskRegistryObserverEvent) => void;
+  isCliRunActive?: (runId: string) => boolean;
 };
 
 const defaultTaskRegistryStore: TaskRegistryStore = {

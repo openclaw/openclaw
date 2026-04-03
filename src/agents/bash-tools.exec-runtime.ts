@@ -31,6 +31,7 @@ import {
   addSession,
   appendOutput,
   createSessionSlug,
+  deleteSession,
   markExited,
   tail,
 } from "./bash-process-registry.js";
@@ -45,6 +46,13 @@ import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 const SMKX = "\x1b[?1h";
 const RMKX = "\x1b[?1l";
+
+let taskExecutorModulePromise: Promise<typeof import("../tasks/task-executor.js")> | null = null;
+
+async function loadTaskExecutorModule() {
+  taskExecutorModulePromise ??= import("../tasks/task-executor.js");
+  return await taskExecutorModulePromise;
+}
 
 /**
  * Detect cursor key mode from PTY output chunk.
@@ -303,8 +311,14 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   }
 }
 
-function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
-  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
+function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed" | "killed") {
+  if (
+    !session.backgrounded ||
+    !session.notifyOnExit ||
+    session.exitNotified ||
+    session.removed === true ||
+    session.removeOnExit === true
+  ) {
     return;
   }
   const sessionKey = session.sessionKey?.trim();
@@ -321,13 +335,21 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
     return;
   }
+  const notifyStatus = status === "killed" ? "cancelled" : status;
   const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+    ? `Exec ${notifyStatus} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
+    : `Exec ${notifyStatus} (${session.id.slice(0, 8)}, ${exitLabel})`;
   enqueueSystemEvent(summary, { sessionKey });
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(sessionKey, { reason: `exec:${session.id}:exit` }),
   );
+}
+
+export function notifyExecSessionExit(
+  session: ProcessSession,
+  status: "completed" | "failed" | "killed",
+) {
+  maybeNotifyOnExit(session, status);
 }
 
 export function createApprovalSlug(id: string) {
@@ -512,6 +534,69 @@ export function buildExecRuntimeErrorOutcome(params: {
   };
 }
 
+const CLI_TASK_NO_OUTPUT_STALL_MS = 120_000;
+
+function shouldAcceptCliTaskUpdates(session: ProcessSession) {
+  return !session.cancelRequestedByUser && !session.removed && !session.exited;
+}
+
+export function armCliTaskNoOutputNotice(session: ProcessSession) {
+  if (session.stallTimer) {
+    clearTimeout(session.stallTimer);
+    session.stallTimer = null;
+  }
+  if (
+    !session.backgrounded ||
+    !session.cliTaskCreated ||
+    !shouldAcceptCliTaskUpdates(session) ||
+    session.stallNotified
+  ) {
+    return;
+  }
+
+  const lastOutputAt = session.lastOutputAt ?? session.startedAt;
+  const elapsedMs = Math.max(0, Date.now() - lastOutputAt);
+  const delayMs = Math.max(0, CLI_TASK_NO_OUTPUT_STALL_MS - elapsedMs);
+
+  session.stallTimer = setTimeout(() => {
+    if (
+      !session.backgrounded ||
+      !session.cliTaskCreated ||
+      !shouldAcceptCliTaskUpdates(session) ||
+      session.stallNotified
+    ) {
+      session.stallTimer = null;
+      return;
+    }
+    const now = Date.now();
+    const latestOutputAt = session.lastOutputAt ?? session.startedAt;
+    if (now - latestOutputAt < CLI_TASK_NO_OUTPUT_STALL_MS) {
+      armCliTaskNoOutputNotice(session);
+      return;
+    }
+
+    session.stallNotified = true;
+    session.lastTaskUpdateAt = now;
+    session.stallTimer = null;
+    void loadTaskExecutorModule()
+      .then(({ recordTaskRunProgressByRunId }) => {
+        if (!shouldAcceptCliTaskUpdates(session) || session.stallNotified !== true) {
+          return;
+        }
+        recordTaskRunProgressByRunId({
+          runId: session.id,
+          runtime: "cli",
+          lastEventAt: now,
+          progressSummary: "No output for 120s.",
+        });
+      })
+      .catch((error) => {
+        logWarn(`exec: failed to record CLI stall notice for ${session.id}: ${String(error)}`);
+      });
+  }, delayMs);
+  session.stallTimer.unref?.();
+}
+
 export async function runExecProcess(opts: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -563,14 +648,56 @@ export async function runExecProcess(opts: {
     pendingStderrChars: 0,
     aggregated: "",
     tail: "",
+    lastOutputAt: undefined,
     exited: false,
     exitCode: undefined as number | null | undefined,
     exitSignal: undefined as NodeJS.Signals | number | null | undefined,
     truncated: false,
     backgrounded: false,
+    cliTaskCreated: false,
+    cliTaskCreationPromise: null,
+    taskOutputSeen: false,
+    lastTaskUpdateAt: undefined,
+    stallNotified: false,
+    cancelRequestedByUser: false,
+    removeOnExit: false,
+    removed: false,
+    stallTimer: null,
     cursorKeyMode: opts.usePty ? "unknown" : "normal",
   };
   addSession(session);
+
+  const reportCliTaskProgress = (summary?: string) => {
+    if (
+      !session.cliTaskCreated ||
+      !session.backgrounded ||
+      !shouldAcceptCliTaskUpdates(session)
+    ) {
+      return;
+    }
+    if (summary) {
+      const now = Date.now();
+      session.lastTaskUpdateAt = now;
+      void loadTaskExecutorModule()
+        .then(({ recordTaskRunProgressByRunId }) => {
+          if (!shouldAcceptCliTaskUpdates(session)) {
+            return;
+          }
+          recordTaskRunProgressByRunId({
+            runId: session.id,
+            runtime: "cli",
+            lastEventAt: now,
+            progressSummary: summary,
+          });
+        })
+        .catch((error) => {
+          logWarn(`exec: failed to record CLI task progress for ${session.id}: ${String(error)}`);
+        });
+    }
+    session.stallNotified = false;
+    session.taskOutputSeen = true;
+    armCliTaskNoOutputNotice(session);
+  };
 
   const emitUpdate = () => {
     if (!opts.onUpdate) {
@@ -604,6 +731,15 @@ export async function runExecProcess(opts: {
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stdout", chunk);
       emitUpdate();
+      if (chunk.length > 0) {
+        reportCliTaskProgress(
+          session.taskOutputSeen
+            ? session.stallNotified
+              ? "Resumed output."
+              : undefined
+            : "Output received.",
+        );
+      }
     }
   };
 
@@ -612,6 +748,15 @@ export async function runExecProcess(opts: {
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stderr", chunk);
       emitUpdate();
+      if (chunk.length > 0) {
+        reportCliTaskProgress(
+          session.taskOutputSeen
+            ? session.stallNotified
+              ? "Resumed output."
+              : undefined
+            : "Output received.",
+        );
+      }
     }
   };
 
@@ -749,13 +894,47 @@ export async function runExecProcess(opts: {
           onStderr: handleStderr,
         });
       } catch (retryErr) {
+        const now = Date.now();
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
+        if (session.cliTaskCreated) {
+          try {
+            const { failTaskRunByRunId } = await loadTaskExecutorModule();
+            failTaskRunByRunId({
+              runId: session.id,
+              runtime: "cli",
+              status: "failed",
+              endedAt: now,
+              lastEventAt: now,
+              error: `Command spawn failed: ${String(retryErr)}`,
+              terminalSummary: "Command spawn failed.",
+            });
+          } catch (taskError) {
+            logWarn(`exec: failed to record CLI spawn failure for ${session.id}: ${String(taskError)}`);
+          }
+        }
         throw retryErr;
       }
     } else {
+      const now = Date.now();
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
+      if (session.cliTaskCreated) {
+        try {
+          const { failTaskRunByRunId } = await loadTaskExecutorModule();
+          failTaskRunByRunId({
+            runId: session.id,
+            runtime: "cli",
+            status: "failed",
+            endedAt: now,
+            lastEventAt: now,
+            error: `Command spawn failed: ${String(err)}`,
+            terminalSummary: "Command spawn failed.",
+          });
+        } catch (taskError) {
+          logWarn(`exec: failed to record CLI spawn failure for ${session.id}: ${String(taskError)}`);
+        }
+      }
       throw err;
     }
   }
@@ -773,8 +952,69 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
-      markExited(session, exit.exitCode, exit.exitSignal, outcome.status);
-      maybeNotifyOnExit(session, outcome.status);
+      if (session.cliTaskCreationPromise) {
+        await session.cliTaskCreationPromise;
+      }
+
+      const now = Date.now();
+      const cancelledByUser = session.cancelRequestedByUser === true;
+
+      if (session.cliTaskCreated) {
+        if (!cancelledByUser && outcome.status === "completed") {
+          try {
+            const { completeTaskRunByRunId } = await loadTaskExecutorModule();
+            completeTaskRunByRunId({
+              runId: session.id,
+              runtime: "cli",
+              endedAt: now,
+              lastEventAt: now,
+              terminalSummary: "Completed.",
+            });
+          } catch (taskError) {
+            logWarn(`exec: failed to record CLI completion for ${session.id}: ${String(taskError)}`);
+          }
+        } else {
+          const terminalStatus = cancelledByUser ? "cancelled" : exit.timedOut ? "timed_out" : "failed";
+          const terminalError =
+            outcome.status === "failed"
+              ? outcome.reason
+              : cancelledByUser
+                ? "Command cancelled by user."
+                : undefined;
+          try {
+            const { failTaskRunByRunId } = await loadTaskExecutorModule();
+            failTaskRunByRunId({
+              runId: session.id,
+              runtime: "cli",
+              status: terminalStatus,
+              endedAt: now,
+              lastEventAt: now,
+              error: terminalError,
+              terminalSummary:
+                terminalStatus === "cancelled"
+                  ? "Terminated by user."
+                  : terminalStatus === "timed_out"
+                    ? "Timed out."
+                    : "Failed.",
+            });
+          } catch (taskError) {
+            logWarn(`exec: failed to record CLI terminal state for ${session.id}: ${String(taskError)}`);
+          }
+        }
+      }
+
+      if (session.stallTimer) {
+        clearTimeout(session.stallTimer);
+        session.stallTimer = null;
+      }
+
+      markExited(
+        session,
+        exit.exitCode,
+        exit.exitSignal,
+        cancelledByUser ? "killed" : outcome.status,
+      );
+      maybeNotifyOnExit(session, cancelledByUser ? "killed" : outcome.status);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
       }
@@ -786,15 +1026,47 @@ export async function runExecProcess(opts: {
           token: sandboxFinalizeToken,
         });
       }
+      if (session.removeOnExit) {
+        session.removed = true;
+        deleteSession(session.id);
+      }
       return outcome;
     })
-    .catch((err): ExecProcessOutcome => {
-      markExited(session, null, null, "failed");
-      maybeNotifyOnExit(session, "failed");
+    .catch(async (err): Promise<ExecProcessOutcome> => {
+      if (session.cliTaskCreationPromise) {
+        await session.cliTaskCreationPromise;
+      }
+      const now = Date.now();
+      if (session.stallTimer) {
+        clearTimeout(session.stallTimer);
+        session.stallTimer = null;
+      }
+      if (session.cliTaskCreated) {
+        try {
+          const { failTaskRunByRunId } = await loadTaskExecutorModule();
+          failTaskRunByRunId({
+            runId: session.id,
+            runtime: "cli",
+            status: session.cancelRequestedByUser ? "cancelled" : "failed",
+            endedAt: now,
+            lastEventAt: now,
+            error: String(err),
+            terminalSummary: session.cancelRequestedByUser ? "Terminated by user." : "Failed.",
+          });
+        } catch (taskError) {
+          logWarn(`exec: failed to record CLI runtime failure for ${session.id}: ${String(taskError)}`);
+        }
+      }
+      markExited(session, null, null, session.cancelRequestedByUser ? "killed" : "failed");
+      maybeNotifyOnExit(session, session.cancelRequestedByUser ? "killed" : "failed");
+      if (session.removeOnExit) {
+        session.removed = true;
+        deleteSession(session.id);
+      }
       return buildExecRuntimeErrorOutcome({
         error: err,
         aggregated: session.aggregated.trim(),
-        durationMs: Date.now() - startedAt,
+        durationMs: now - startedAt,
       });
     });
 

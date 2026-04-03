@@ -60,10 +60,14 @@ import {
   readLatestSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscript,
 } from "./session-utils.fs.js";
+import { listTasksForOwnerKey } from "../tasks/task-registry.js";
+import { reconcileTaskRecordForOperatorInspection } from "../tasks/task-registry.reconcile.js";
+import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
 import type {
   GatewayAgentRow,
   GatewaySessionRow,
   GatewaySessionsDefaults,
+  SessionRunStatus,
   SessionsListResult,
 } from "./session-utils.types.js";
 
@@ -91,6 +95,25 @@ export type {
 } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
+
+function mapTaskStatusToSessionRunStatus(status?: string): SessionRunStatus | undefined {
+  switch (status) {
+    case "queued":
+    case "running":
+      return "running";
+    case "succeeded":
+      return "done";
+    case "cancelled":
+      return "killed";
+    case "timed_out":
+      return "timeout";
+    case "failed":
+    case "lost":
+      return "failed";
+    default:
+      return undefined;
+  }
+}
 
 function tryResolveExistingPath(value: string): string | null {
   try {
@@ -1161,6 +1184,39 @@ export function buildGatewaySessionRow(params: {
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
   const subagentRuntimeMs = subagentRun ? resolveSessionRuntimeMs(subagentRun, now) : undefined;
+  const ownerTaskSnapshot = buildTaskStatusSnapshot(
+    listTasksForOwnerKey(key).map((task) => reconcileTaskRecordForOperatorInspection(task, now)),
+    { now },
+  );
+  const activeOwnerTask = ownerTaskSnapshot.active[0];
+  const taskDrivenFocus = !subagentRun ? activeOwnerTask ?? ownerTaskSnapshot.focus : undefined;
+  const taskDrivenStatus = !subagentRun
+    ? mapTaskStatusToSessionRunStatus(taskDrivenFocus?.status)
+    : undefined;
+  const taskDrivenStartedAt =
+    typeof taskDrivenStatus === "string"
+      ? (taskDrivenFocus?.startedAt ?? taskDrivenFocus?.createdAt)
+      : undefined;
+  const taskDrivenEndedAt =
+    typeof taskDrivenStatus === "string" && taskDrivenStatus !== "running"
+      ? (taskDrivenFocus?.endedAt ?? taskDrivenFocus?.lastEventAt ?? now)
+      : undefined;
+  const taskDrivenRuntimeMs =
+    typeof taskDrivenStartedAt === "number"
+      ? Math.max(
+          0,
+          (taskDrivenStatus === "running" ? now : (taskDrivenEndedAt ?? now)) - taskDrivenStartedAt,
+        )
+      : undefined;
+  const taskDrivenUpdatedAt =
+    typeof taskDrivenStatus === "string"
+      ? (taskDrivenFocus?.lastEventAt ?? taskDrivenFocus?.endedAt ?? taskDrivenFocus?.startedAt ?? taskDrivenFocus?.createdAt)
+      : undefined;
+  const rowUpdatedAt =
+    typeof taskDrivenUpdatedAt === "number"
+      ? Math.max(updatedAt ?? 0, taskDrivenUpdatedAt)
+      : updatedAt;
+
   const resolvedModel = resolveSessionModelIdentityRef(
     cfg,
     entry,
@@ -1271,7 +1327,7 @@ export function buildGatewaySessionRow(params: {
     space,
     chatType: entry?.chatType,
     origin,
-    updatedAt,
+    updatedAt: rowUpdatedAt,
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
@@ -1286,10 +1342,14 @@ export function buildGatewaySessionRow(params: {
     totalTokens,
     totalTokensFresh,
     estimatedCostUsd,
-    status: subagentRun ? subagentStatus : entry?.status,
-    startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
-    endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
-    runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
+    status: subagentRun ? subagentStatus : taskDrivenStatus ?? entry?.status,
+    startedAt: subagentRun ? subagentStartedAt : taskDrivenStartedAt ?? entry?.startedAt,
+    endedAt: subagentRun
+      ? subagentEndedAt
+      : taskDrivenStatus === "running"
+        ? undefined
+        : taskDrivenEndedAt ?? entry?.endedAt,
+    runtimeMs: subagentRun ? subagentRuntimeMs : taskDrivenRuntimeMs ?? entry?.runtimeMs,
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,

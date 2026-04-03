@@ -47,11 +47,21 @@ export interface ProcessSession {
   pendingStderrChars: number;
   aggregated: string;
   tail: string;
+  lastOutputAt?: number;
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exited: boolean;
   truncated: boolean;
   backgrounded: boolean;
+  cliTaskCreated?: boolean;
+  cliTaskCreationPromise?: Promise<void> | null;
+  taskOutputSeen?: boolean;
+  lastTaskUpdateAt?: number;
+  stallNotified?: boolean;
+  cancelRequestedByUser?: boolean;
+  removeOnExit?: boolean;
+  removed?: boolean;
+  stallTimer?: NodeJS.Timeout | null;
   /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
   cursorKeyMode: "unknown" | "normal" | "application";
 }
@@ -91,7 +101,8 @@ export function addSession(session: ProcessSession) {
 }
 
 export function getSession(id: string) {
-  return runningSessions.get(id);
+  const session = runningSessions.get(id);
+  return session?.removed ? undefined : session;
 }
 
 export function getFinishedSession(id: string) {
@@ -126,6 +137,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
+  session.lastOutputAt = Date.now();
   const aggregated = trimWithCap(session.aggregated + chunk, session.maxOutputChars);
   session.truncated =
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
@@ -149,6 +161,10 @@ export function markExited(
   exitSignal: NodeJS.Signals | number | null,
   status: ProcessStatus,
 ) {
+  if (session.stallTimer) {
+    clearTimeout(session.stallTimer);
+    session.stallTimer = null;
+  }
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
@@ -194,7 +210,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     delete session.stdin;
   }
 
-  if (!session.backgrounded) {
+  if (!session.backgrounded || session.removed) {
     return;
   }
   finishedSessions.set(session.id, {
@@ -259,7 +275,12 @@ export function trimWithCap(text: string, max: number) {
 }
 
 export function listRunningSessions() {
-  return Array.from(runningSessions.values()).filter((s) => s.backgrounded);
+  return Array.from(runningSessions.values()).filter((s) => s.backgrounded && !s.removed);
+}
+
+export function isCliRunActive(runId: string): boolean {
+  const session = runningSessions.get(runId);
+  return Boolean(session && session.backgrounded && !session.exited);
 }
 
 export function listFinishedSessions() {
@@ -271,6 +292,12 @@ export function clearFinished() {
 }
 
 export function resetProcessRegistryForTests() {
+  for (const session of runningSessions.values()) {
+    if (session.stallTimer) {
+      clearTimeout(session.stallTimer);
+      session.stallTimer = null;
+    }
+  }
   runningSessions.clear();
   finishedSessions.clear();
   stopSweeper();

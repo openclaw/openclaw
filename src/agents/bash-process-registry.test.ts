@@ -5,6 +5,8 @@ import {
   addSession,
   appendOutput,
   drainSession,
+  getSession,
+  isCliRunActive,
   listFinishedSessions,
   markBackgrounded,
   markExited,
@@ -113,6 +115,25 @@ describe("bash process registry", () => {
     markBackgrounded(session);
     markExited(session, 0, null, "completed");
     expect(listFinishedSessions()).toHaveLength(1);
+  });
+
+  it("keeps removed sessions hidden from process tools while preserving CLI-task liveness until exit", () => {
+    const session = createRegistrySession({
+      id: "sess-removed",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+
+    addSession(session);
+    session.removed = true;
+
+    expect(getSession("sess-removed")).toBeUndefined();
+    expect(isCliRunActive("sess-removed")).toBe(true);
+
+    markExited(session, 0, null, "killed");
+    expect(isCliRunActive("sess-removed")).toBe(false);
+    expect(listFinishedSessions().find((entry) => entry.id === "sess-removed")).toBeUndefined();
   });
 });
 

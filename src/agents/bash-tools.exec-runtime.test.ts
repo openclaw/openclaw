@@ -288,3 +288,54 @@ describe("buildExecExitOutcome", () => {
     });
   });
 });
+
+
+describe("armCliTaskNoOutputNotice", () => {
+  it("records a stalled progress update for silent background CLI tasks", async () => {
+    const now = Date.now();
+    const [
+      { armCliTaskNoOutputNotice },
+      { createProcessSessionFixture },
+      { createRunningTaskRun },
+      { findTaskByRunId, resetTaskRegistryForTests },
+    ] = await Promise.all([
+      import("./bash-tools.exec-runtime.js"),
+      import("./bash-process-registry.test-helpers.js"),
+      import("../tasks/task-executor.js"),
+      import("../tasks/task-registry.js"),
+    ]);
+
+    resetTaskRegistryForTests();
+    createRunningTaskRun({
+      runtime: "cli",
+      ownerKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "cli-stall-notice",
+      sourceId: "cli-stall-notice",
+      task: "pnpm test",
+      startedAt: now - 121_000,
+      lastEventAt: now - 121_000,
+      progressSummary: "Started background command.",
+      notifyPolicy: "silent",
+      deliveryStatus: "pending",
+    });
+
+    const session = createProcessSessionFixture({
+      id: "cli-stall-notice",
+      backgrounded: true,
+      startedAt: now - 121_000,
+    });
+    session.cliTaskCreated = true;
+    session.lastOutputAt = now - 121_000;
+
+    armCliTaskNoOutputNotice(session);
+
+    await expect.poll(() => findTaskByRunId("cli-stall-notice")?.progressSummary).toBe(
+      "No output for 120s.",
+    );
+    expect(session.stallNotified).toBe(true);
+
+    resetTaskRegistryForTests();
+  });
+});
