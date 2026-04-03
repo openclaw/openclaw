@@ -354,6 +354,45 @@ describe("subagent-announce-queue", () => {
     expect(overflowSummary).not.toContain("hidden execution fallback");
   });
 
+  it("emits summarize overflow before exiting forced individual collect drain", async () => {
+    const send = vi.fn(async () => {});
+
+    enqueueAnnounce({
+      key: "announce:test:forced-individual-overflow-summary",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "first internal" },
+        display: { visibility: "user-visible", text: "first visible" },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "collect", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+      send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:forced-individual-overflow-summary",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "invalid summary-only" },
+        display: { visibility: "summary-only" },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "collect", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+      send,
+    });
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalledTimes(2);
+    });
+
+    const prompts = send.mock.calls.map((call) => {
+      const item = call[0]!;
+      return item.display.text ?? item.display.summaryLine ?? item.execution.agentPrompt;
+    });
+    expect(prompts[0]).toContain("[Queue overflow]");
+    expect(prompts[0]).toContain("first visible");
+    expect(prompts).toHaveLength(2);
+  });
+
   it("uses debounce floor for retries when debounce exceeds backoff", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));

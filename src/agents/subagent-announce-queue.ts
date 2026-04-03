@@ -148,6 +148,17 @@ function scheduleAnnounceDrain(key: string) {
             queue.collectForceIndividual = true;
           }
           if (collectDrainResult === "empty") {
+            const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
+            const summaryTarget = queue.items[0];
+            if (summaryPrompt && summaryTarget) {
+              await queue.send({
+                ...summaryTarget,
+                execution: { visibility: "internal", agentPrompt: summaryPrompt },
+                display: { visibility: "user-visible", text: summaryPrompt },
+              });
+              clearQueueSummaryState(queue);
+              continue;
+            }
             break;
           }
           if (collectDrainResult === "drained") {
