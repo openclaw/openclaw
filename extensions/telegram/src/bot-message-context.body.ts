@@ -6,20 +6,23 @@ import {
   resolveMentionGatingWithBypass,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
+import { dispatchSilentMessageIngest } from "openclaw/plugin-sdk/ingest-runtime";
 import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { sanitizeUserText } from "openclaw/plugin-sdk/text-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed } from "./bot-access.js";
 import type {
@@ -29,13 +32,14 @@ import type {
 } from "./bot-message-context.types.js";
 import {
   buildSenderLabel,
+  buildSenderName,
   expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
   resolveTelegramMediaPlaceholder,
 } from "./bot/body-helpers.js";
-import { buildTelegramGroupPeerId } from "./bot/helpers.js";
+import { buildTelegramGroupFrom, buildTelegramGroupPeerId } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 
@@ -70,6 +74,7 @@ export async function resolveTelegramInboundBody(params: {
   allMedia: TelegramMediaRef[];
   isGroup: boolean;
   chatId: number | string;
+  accountId?: string;
   senderId: string;
   senderUsername: string;
   resolvedThreadId?: number;
@@ -91,6 +96,7 @@ export async function resolveTelegramInboundBody(params: {
     allMedia,
     isGroup,
     chatId,
+    accountId,
     senderId,
     senderUsername,
     resolvedThreadId,
@@ -260,6 +266,58 @@ export async function resolveTelegramInboundBody(params: {
           }
         : null,
     });
+
+    // Silent ingest: run hooks on non-mentioned group messages
+    // Respect wildcard fallback: exact group config first, then groups["*"]
+    const { groupConfig: resolvedGroupConfig, defaultConfig: wildcardGroupConfig } =
+      resolveChannelGroupPolicy({
+        cfg,
+        channel: "telegram",
+        groupId: String(chatId),
+        accountId,
+      });
+    const ingestConfig =
+      topicConfig?.ingest ??
+      (resolvedGroupConfig as { ingest?: unknown } | undefined)?.ingest ??
+      (wildcardGroupConfig as { ingest?: unknown } | undefined)?.ingest;
+    if (rawBody && rawBody.trim().length > 0) {
+      const messageIdForHook =
+        typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
+      // Use canonical IDs matching the normal message pipeline
+      const canonicalTo = `telegram:${chatId}`;
+      const canonicalFrom = buildTelegramGroupFrom(chatId, resolvedThreadId);
+      const ingestConversationId = buildTelegramGroupPeerId(chatId, resolvedThreadId);
+      const sanitizedMetadata = {
+        to: canonicalTo,
+        provider: "telegram",
+        surface: "telegram",
+        threadId: resolvedThreadId,
+        originatingChannel: "telegram",
+        originatingTo: canonicalTo,
+        messageId: messageIdForHook,
+        senderId: senderId || undefined,
+        senderName: sanitizeUserText(buildSenderName(msg)),
+        senderUsername: sanitizeUserText(senderUsername),
+      };
+      const ingestEvent = {
+        from: canonicalFrom,
+        content: rawBody,
+        timestamp: msg.date ? msg.date * 1000 : undefined,
+        metadata: sanitizedMetadata,
+      };
+      await dispatchSilentMessageIngest({
+        ingest: ingestConfig,
+        event: ingestEvent,
+        ctx: {
+          channelId: "telegram",
+          accountId,
+          conversationId: ingestConversationId,
+        },
+        channelLabel: "telegram",
+        logVerbose,
+      });
+    }
+
     return null;
   }
 

@@ -120,3 +120,5 @@ export {
   isDangerousNameMatchingEnabled,
   resolveDangerousNameMatchingEnabled,
 } from "../config/dangerous-name-matching.js";
+export { ALLOWED_INGEST_HOOKS } from "../config/ingest-hooks.js";
+export type { AllowedIngestHook } from "../config/ingest-hooks.js";

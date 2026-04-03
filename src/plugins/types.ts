@@ -2016,6 +2016,7 @@ export type PluginHookName =
   | "before_reset"
   | "inbound_claim"
   | "message_received"
+  | "message_ingest"
   | "message_sending"
   | "message_sent"
   | "before_tool_call"
@@ -2046,6 +2047,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_reset",
   "inbound_claim",
   "message_received",
+  "message_ingest",
   "message_sending",
   "message_sent",
   "before_tool_call",
@@ -2741,6 +2743,10 @@ export type PluginHookHandlerMap = {
     ctx: PluginHookBeforeDispatchContext,
   ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
   message_received: (
+    event: PluginHookMessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<void> | void;
+  message_ingest: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
   ) => Promise<void> | void;

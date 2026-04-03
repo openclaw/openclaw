@@ -295,6 +295,30 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     await Promise.all(promises);
   }
 
+  async function runVoidHookForPlugin<K extends PluginHookName>(
+    hookName: K,
+    pluginId: string,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<void> {
+    const hooks = getHooksForNameAndPlugin(registry, hookName, pluginId);
+    if (hooks.length === 0) {
+      return;
+    }
+
+    logger?.debug?.(`[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers)`);
+
+    const promises = hooks.map(async (hook) => {
+      try {
+        await (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx);
+      } catch (err) {
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+    });
+
+    await Promise.all(promises);
+  }
+
   /**
    * Run a hook that can return a modifying result.
    * Handlers are executed sequentially in priority order, and results are merged.
@@ -649,6 +673,29 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookMessageContext,
   ): Promise<void> {
     return runVoidHook("message_received", event, ctx);
+  }
+
+  /**
+   * Run message_ingest hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runMessageIngest(
+    event: PluginHookMessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("message_ingest", event, ctx);
+  }
+
+  /**
+   * Run message_ingest hook for a specific plugin id.
+   * Used by channel-level ingest allowlists to target configured plugins only.
+   */
+  async function runMessageIngestForPlugin(
+    pluginId: string,
+    event: PluginHookMessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHookForPlugin("message_ingest", pluginId, event, ctx);
   }
 
   /**
@@ -1051,10 +1098,25 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Check if a specific plugin has handlers for a given hook name.
+   */
+  function hasHooksForPlugin(hookName: PluginHookName, pluginId: string): boolean {
+    return registry.typedHooks.some((h) => h.hookName === hookName && h.pluginId === pluginId);
+  }
+
+  /**
    * Get count of registered hooks for a given hook name.
    */
   function getHookCount(hookName: PluginHookName): number {
     return registry.typedHooks.filter((h) => h.hookName === hookName).length;
+  }
+
+  /**
+   * Get count of registered hooks for a given hook name + plugin id.
+   */
+  function getHookCountForPlugin(hookName: PluginHookName, pluginId: string): number {
+    return registry.typedHooks.filter((h) => h.hookName === hookName && h.pluginId === pluginId)
+      .length;
   }
 
   return {
@@ -1074,6 +1136,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
     runMessageReceived,
+    runMessageIngest,
+    runMessageIngestForPlugin,
     runBeforeDispatch,
     runMessageSending,
     runMessageSent,
@@ -1097,7 +1161,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeInstall,
     // Utility
     hasHooks,
+    hasHooksForPlugin,
     getHookCount,
+    getHookCountForPlugin,
   };
 }
 

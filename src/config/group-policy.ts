@@ -2,6 +2,7 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
+import type { IngestConfig } from "./ingest-hooks.js";
 import {
   parseToolsBySenderTypedKey,
   type GroupToolPolicyBySenderConfig,
@@ -15,6 +16,8 @@ export type ChannelGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Silent ingest: run hooks on non-mentioned messages in this group. */
+  ingest?: IngestConfig;
 };
 
 export type ChannelGroupPolicy = {

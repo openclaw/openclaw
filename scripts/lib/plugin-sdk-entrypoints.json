@@ -14,6 +14,7 @@
   "setup-tools",
   "approval-runtime",
   "config-runtime",
+  "ingest-runtime",
   "reply-runtime",
   "reply-dispatch-runtime",
   "reply-chunking",

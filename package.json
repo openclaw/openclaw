@@ -99,6 +99,10 @@
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
       "default": "./dist/plugin-sdk/config-runtime.js"
     },
+    "./plugin-sdk/ingest-runtime": {
+      "types": "./dist/plugin-sdk/ingest-runtime.d.ts",
+      "default": "./dist/plugin-sdk/ingest-runtime.js"
+    },
     "./plugin-sdk/reply-runtime": {
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-runtime.js"

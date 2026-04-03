@@ -1,3 +1,4 @@
+import type { IngestConfig } from "./ingest-hooks.js";
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -8,6 +9,8 @@ export type SignalGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Silent ingest: run hooks on non-mentioned messages in this group. */
+  ingest?: IngestConfig;
 };
 
 export type SignalAccountConfig = CommonChannelMessagingConfig & {

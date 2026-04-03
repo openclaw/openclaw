@@ -1,3 +1,4 @@
+import type { IngestConfig } from "./ingest-hooks.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -231,6 +232,8 @@ export type TelegramAccountConfig = {
 
 export type TelegramTopicConfig = {
   requireMention?: boolean;
+  /** Silent ingest: run hooks on non-mentioned messages in this topic. */
+  ingest?: IngestConfig;
   /** Per-topic override for group message policy (open|disabled|allowlist). */
   groupPolicy?: GroupPolicy;
   /** If specified, only load these skills for this topic. Omit = all skills; empty = no skills. */
@@ -253,6 +256,8 @@ export type TelegramTopicConfig = {
 
 export type TelegramGroupConfig = {
   requireMention?: boolean;
+  /** Silent ingest: run hooks on non-mentioned messages in this group. */
+  ingest?: IngestConfig;
   /** Per-group override for group message policy (open|disabled|allowlist). */
   groupPolicy?: GroupPolicy;
   /** Optional tool policy overrides for this group. */

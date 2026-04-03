@@ -17,9 +17,13 @@ import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pi
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
-import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
+} from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { dispatchSilentMessageIngest } from "openclaw/plugin-sdk/ingest-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -35,6 +39,7 @@ import {
   DM_GROUP_ACCESS_REASON,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "openclaw/plugin-sdk/security-runtime";
+import { sanitizeUserText } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatSignalPairingIdLine,
@@ -715,6 +720,57 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
         },
       });
+
+      // Silent ingest: run hooks on non-mentioned group messages
+      // Respect wildcard fallback: exact group config first, then groups["*"]
+      const { groupConfig, defaultConfig: wildcardGroupConfig } = resolveChannelGroupPolicy({
+        cfg: deps.cfg,
+        channel: "signal",
+        groupId,
+        accountId: deps.accountId,
+      });
+      const ingestConfig =
+        (groupConfig as { ingest?: unknown } | undefined)?.ingest ??
+        (wildcardGroupConfig as { ingest?: unknown } | undefined)?.ingest;
+      if (groupId && pendingBodyText && pendingBodyText.trim().length > 0) {
+        const timestamp =
+          typeof envelope.timestamp === "number" && envelope.timestamp > 0
+            ? envelope.timestamp
+            : undefined;
+        const messageIdForHook = timestamp ? String(timestamp) : undefined;
+        // Use canonical IDs matching the normal Signal message pipeline
+        const canonicalGroupTarget =
+          normalizeSignalMessagingTarget(`group:${groupId}`) ?? `group:${groupId}`;
+        const senderName = envelope.sourceName ?? senderDisplay;
+        const sanitizedMetadata = {
+          to: canonicalGroupTarget,
+          provider: "signal",
+          surface: "signal",
+          messageId: messageIdForHook,
+          originatingChannel: "signal",
+          originatingTo: canonicalGroupTarget,
+          senderId: senderRecipient,
+          senderName: sanitizeUserText(senderName),
+        };
+        const ingestEvent = {
+          from: canonicalGroupTarget,
+          content: pendingBodyText,
+          timestamp,
+          metadata: sanitizedMetadata,
+        };
+        await dispatchSilentMessageIngest({
+          ingest: ingestConfig,
+          event: ingestEvent,
+          ctx: {
+            channelId: "signal",
+            accountId: deps.accountId,
+            conversationId: canonicalGroupTarget,
+          },
+          channelLabel: "signal",
+          logVerbose,
+        });
+      }
+
       return;
     }
 

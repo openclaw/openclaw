@@ -7,6 +7,7 @@ import {
   resolveSlackStreamingMode,
   resolveTelegramPreviewStreamMode,
 } from "./discord-preview-streaming.js";
+import { ALLOWED_INGEST_HOOKS } from "./ingest-hooks.js";
 import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
@@ -86,6 +87,14 @@ const SlackCapabilitiesSchema = z.union([
 ]);
 
 const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
+
+const IngestConfigSchema = z
+  .object({
+    enabled: z.boolean(),
+    hooks: z.array(z.enum(ALLOWED_INGEST_HOOKS)),
+  })
+  .strict();
+
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -98,6 +107,7 @@ export const TelegramTopicSchema = z
     agentId: z.string().optional(),
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
+    ingest: IngestConfigSchema.optional(),
   })
   .strict();
 
@@ -115,6 +125,7 @@ export const TelegramGroupSchema = z
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
+    ingest: IngestConfigSchema.optional(),
   })
   .strict();
 
@@ -1048,6 +1059,7 @@ const SignalGroupEntrySchema = z
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
+    ingest: IngestConfigSchema.optional(),
   })
   .strict();
 
