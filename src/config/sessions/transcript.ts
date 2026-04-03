@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { loadConfig } from "../io.js";
 import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
   resolveDefaultSessionStorePath,
@@ -17,6 +19,7 @@ import type { SessionEntry } from "./types.js";
 async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
+  cwd: string;
 }): Promise<void> {
   if (fs.existsSync(params.sessionFile)) {
     return;
@@ -27,7 +30,7 @@ async function ensureSessionHeader(params: {
     version: CURRENT_SESSION_VERSION,
     id: params.sessionId,
     timestamp: new Date().toISOString(),
-    cwd: process.cwd(),
+    cwd: params.cwd,
   };
   await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
     encoding: "utf-8",
@@ -109,6 +112,12 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
+  const cfg = loadConfig();
+  const agentId =
+    typeof params.agentId === "string" && params.agentId.trim()
+      ? params.agentId.trim()
+      : resolveDefaultAgentId(cfg);
+  const sessionCwd = resolveAgentWorkspaceDir(cfg, agentId);
 
   let sessionFile: string;
   try {
@@ -129,7 +138,11 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     };
   }
 
-  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+  await ensureSessionHeader({
+    sessionFile,
+    sessionId: entry.sessionId,
+    cwd: sessionCwd,
+  });
 
   const existingMessageId = params.idempotencyKey
     ? await transcriptHasIdempotencyKey(sessionFile, params.idempotencyKey)
