@@ -17,6 +17,7 @@ import { isRecord } from "./shared.js";
 type ProviderLike = {
   apiKey?: unknown;
   headers?: unknown;
+  request?: unknown;
   enabled?: unknown;
 };
 
@@ -52,21 +53,32 @@ function collectModelProviderAssignments(params: {
       },
     });
     const headers = isRecord(provider.headers) ? provider.headers : undefined;
-    if (!headers) {
-      continue;
+    if (headers) {
+      for (const [headerKey, headerValue] of Object.entries(headers)) {
+        collectSecretInputAssignment({
+          value: headerValue,
+          path: `models.providers.${providerId}.headers.${headerKey}`,
+          expected: "string",
+          defaults: params.defaults,
+          context: params.context,
+          active: providerIsActive,
+          inactiveReason: "provider is disabled.",
+          apply: (value) => {
+            headers[headerKey] = value;
+          },
+        });
+      }
     }
-    for (const [headerKey, headerValue] of Object.entries(headers)) {
-      collectSecretInputAssignment({
-        value: headerValue,
-        path: `models.providers.${providerId}.headers.${headerKey}`,
-        expected: "string",
+
+    const request = isRecord(provider.request) ? provider.request : undefined;
+    if (request) {
+      collectProviderRequestAssignments({
+        request,
+        pathPrefix: `models.providers.${providerId}.request`,
         defaults: params.defaults,
         context: params.context,
         active: providerIsActive,
         inactiveReason: "provider is disabled.",
-        apply: (value) => {
-          headers[headerKey] = value;
-        },
       });
     }
   }

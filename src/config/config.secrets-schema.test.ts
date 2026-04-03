@@ -136,6 +136,46 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts model provider request secret refs for auth, headers, and tls material", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            request: {
+              headers: {
+                "X-Tenant": { source: "env", provider: "default", id: "OPENAI_TENANT_HEADER" },
+              },
+              auth: {
+                mode: "authorization-bearer",
+                token: { source: "env", provider: "default", id: "OPENAI_PROVIDER_TOKEN" },
+              },
+              proxy: {
+                mode: "explicit-proxy",
+                url: "http://proxy.example:8080",
+                tls: {
+                  ca: { source: "file", provider: "filemain", id: "/tls/proxy-ca" },
+                },
+              },
+              tls: {
+                cert: { source: "file", provider: "filemain", id: "/tls/provider-cert" },
+                key: { source: "file", provider: "filemain", id: "/tls/provider-key" },
+                passphrase: {
+                  source: "exec",
+                  provider: "vault",
+                  id: "models/openai/request/passphrase",
+                },
+              },
+            },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it('accepts file refs with id "value" for singleValue mode providers', () => {
     const result = validateConfigObjectRaw({
       secrets: {

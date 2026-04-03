@@ -212,6 +212,26 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].headers).toEqual({ "User-Agent": "custom-agent/1.0" });
   });
 
+  it("merges provider request headers into inline models", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      proxy: {
+        baseUrl: "https://proxy.example.com/v1",
+        api: "openai-completions",
+        request: {
+          headers: {
+            "X-Tenant": "acme",
+          },
+        },
+        models: [makeModel("proxy-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({ "X-Tenant": "acme" });
+  });
+
   it("omits headers when neither provider nor model specifies them", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       plain: {

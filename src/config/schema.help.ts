@@ -747,6 +747,30 @@ export const FIELD_HELP: Record<string, string> = {
     "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
   "models.providers.*.authHeader":
     "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
+  "models.providers.*.request":
+    "Optional transport overrides for provider requests (headers, auth, proxy, TLS). Use sparingly for gateways or enterprise routing requirements.",
+  "models.providers.*.request.headers":
+    "Extra headers merged into provider requests after default attribution and auth resolution.",
+  "models.providers.*.request.auth":
+    "Override provider request authentication behavior for this provider.",
+  "models.providers.*.request.auth.mode":
+    'Auth override mode: "provider-default", "authorization-bearer", or "header".',
+  "models.providers.*.request.auth.token":
+    "Bearer token used when auth mode is authorization-bearer.",
+  "models.providers.*.request.auth.headerName":
+    "Custom auth header name used when auth mode is header.",
+  "models.providers.*.request.auth.value":
+    "Custom auth header value used when auth mode is header.",
+  "models.providers.*.request.auth.prefix":
+    "Optional prefix prepended to request.auth.value when auth mode is header.",
+  "models.providers.*.request.proxy":
+    "Proxy routing override for provider requests (env-proxy or explicit-proxy).",
+  "models.providers.*.request.proxy.mode":
+    'Proxy override mode: "env-proxy" uses environment proxy variables, "explicit-proxy" uses request.proxy.url.',
+  "models.providers.*.request.proxy.url":
+    "Explicit proxy URL for provider requests when request.proxy.mode is explicit-proxy.",
+  "models.providers.*.request.proxy.tls": "TLS settings for connecting to the proxy endpoint.",
+  "models.providers.*.request.tls": "TLS settings for the provider connection.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
   "models.bedrockDiscovery":

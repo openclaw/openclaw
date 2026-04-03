@@ -982,6 +982,80 @@ describe("secrets runtime snapshot", () => {
     expect(second?.search.selectedProvider).toBe("gemini");
   });
 
+  it("resolves model provider request secret refs for headers, auth, and tls material", async () => {
+    const config = asConfig({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            request: {
+              headers: {
+                "X-Tenant": { source: "env", provider: "default", id: "OPENAI_PROVIDER_TENANT" },
+              },
+              auth: {
+                mode: "authorization-bearer",
+                token: { source: "env", provider: "default", id: "OPENAI_PROVIDER_TOKEN" },
+              },
+              proxy: {
+                mode: "explicit-proxy",
+                url: "http://proxy.example:8080",
+                tls: {
+                  ca: { source: "env", provider: "default", id: "OPENAI_PROXY_CA" },
+                },
+              },
+              tls: {
+                cert: { source: "env", provider: "default", id: "OPENAI_PROVIDER_CERT" },
+                key: { source: "env", provider: "default", id: "OPENAI_PROVIDER_KEY" },
+                passphrase: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_PROVIDER_PASSPHRASE",
+                },
+              },
+            },
+            models: [],
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {
+        OPENAI_PROVIDER_TENANT: "tenant-acme",
+        OPENAI_PROVIDER_TOKEN: "sk-provider-runtime", // pragma: allowlist secret
+        OPENAI_PROXY_CA: "proxy-ca-pem",
+        OPENAI_PROVIDER_CERT: "provider-cert-pem",
+        OPENAI_PROVIDER_KEY: "provider-key-pem", // pragma: allowlist secret
+        OPENAI_PROVIDER_PASSPHRASE: "provider-passphrase", // pragma: allowlist secret
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.models?.providers?.openai?.request).toEqual({
+      headers: {
+        "X-Tenant": "tenant-acme",
+      },
+      auth: {
+        mode: "authorization-bearer",
+        token: "sk-provider-runtime",
+      },
+      proxy: {
+        mode: "explicit-proxy",
+        url: "http://proxy.example:8080",
+        tls: {
+          ca: "proxy-ca-pem",
+        },
+      },
+      tls: {
+        cert: "provider-cert-pem",
+        key: "provider-key-pem",
+        passphrase: "provider-passphrase",
+      },
+    });
+  });
+
   it("resolves file refs via configured file provider", async () => {
     if (process.platform === "win32") {
       return;
