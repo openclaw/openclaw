@@ -21,8 +21,10 @@ vi.mock("../../plugin-sdk/facade-runtime.js", () => ({
       : null,
 }));
 
-vi.mock("../../plugins/bundled-plugin-metadata.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/bundled-plugin-metadata.js")>();
+vi.mock("../../plugins/bundled-plugin-metadata.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/bundled-plugin-metadata.js")>(
+    "../../plugins/bundled-plugin-metadata.js",
+  );
   return {
     ...actual,
     resolveBundledPluginPublicSurfacePath: ({ dirName }: { dirName: string }) =>

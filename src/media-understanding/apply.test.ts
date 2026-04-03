@@ -263,8 +263,9 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
-    vi.doMock("./provider-registry.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./provider-registry.js")>();
+    vi.doMock("./provider-registry.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
       const registryProviders = createRegistryMediaProviders();
       return {
         ...actual,

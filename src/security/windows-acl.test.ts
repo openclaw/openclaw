@@ -3,10 +3,10 @@ import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
 const MOCK_USERNAME = "MockUser";
 
-vi.mock("node:os", async (importOriginal) => {
+vi.mock("node:os", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
   return mockNodeBuiltinModule(
-    importOriginal,
+    () => vi.importActual<typeof import("node:os")>("node:os"),
     { userInfo: () => ({ username: MOCK_USERNAME }) },
     { mirrorToDefault: true },
   );
