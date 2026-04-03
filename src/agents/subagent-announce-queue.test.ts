@@ -204,8 +204,8 @@ describe("subagent-announce-queue", () => {
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalledTimes(2);
     });
-    const firstSent = send.mock.calls[0]?.[0];
-    const secondSent = send.mock.calls[1]?.[0];
+    const firstSent = send.mock.calls[0]![0];
+    const secondSent = send.mock.calls[1]![0];
     expect(firstSent).toBeDefined();
     expect(secondSent).toBeDefined();
     expect(firstSent!.display.text).toBe("first visible");
@@ -306,7 +306,7 @@ describe("subagent-announce-queue", () => {
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalledTimes(1);
     });
-    const overflowSent = send.mock.calls[0]?.[0];
+    const overflowSent = send.mock.calls[0]![0];
     expect(overflowSent).toBeDefined();
     const overflowSummary = overflowSent!.display.text ?? "";
     expect(overflowSummary).toContain("[Queue overflow]");
@@ -347,7 +347,7 @@ describe("subagent-announce-queue", () => {
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalledTimes(1);
     });
-    const overflowSent = send.mock.calls[0]?.[0];
+    const overflowSent = send.mock.calls[0]![0];
     expect(overflowSent).toBeDefined();
     const overflowSummary = overflowSent!.display.text ?? "";
     expect(overflowSummary).toContain("[Queue overflow]");
