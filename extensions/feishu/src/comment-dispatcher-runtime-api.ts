@@ -3,4 +3,4 @@ export {
   type ClawdbotConfig,
   type ReplyPayload,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk/feishu";
+} from "../runtime-api.js";
