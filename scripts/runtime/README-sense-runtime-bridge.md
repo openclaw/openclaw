@@ -424,8 +424,14 @@ Current deterministic manager action matrix:
   - `manager_action = configure_provider`
   - `next_step = check_model_config`
 - `provider_not_ready`
-  - `manager_action = configure_provider`
-  - `next_step = check_provider_config`
+  - API key oriented provider diff
+    - `manager_action = configure_provider`
+    - `next_step = check_api_key_config`
+  - provider recognition diff
+    - `manager_action = configure_provider`
+    - `next_step = check_provider_config`
+  - runtime capability diff
+    - `manager_action = start_nim_runtime` or `configure_gpu_runtime`
 - `selected_model_not_ready` + `retry_decision = recheck_runtime_status_once`
   - `manager_action = retry_once`
 - `selected_model_not_ready` + `retry_allowed = false`
@@ -499,6 +505,30 @@ Current selected-model mismatch split is intentionally minimal and uses manager-
 - `provider_runtime_recognized`
 
 This keeps the routing evaluator unchanged while letting manager policy distinguish provider-side mismatch, model-name mismatch, and runtime-confirmation mismatch.
+
+`provider_not_ready` is now split the same way with manager-visible structured signals:
+
+- API key signals
+  - `provider_status.api_key_required`
+  - `provider_status.api_key_present`
+  - `provider_status.missing_api_keys`
+  - `provider_status.missing_requirements`
+- provider recognition signals
+  - `provider_status.provider_config_present`
+  - `provider_status.provider_runtime_recognized`
+  - `provider_status.missing_requirements`
+- runtime capability signals
+  - `gpu_status.gpu_ready`
+  - `nim_status_info.nim_ready`
+  - `provider_status.missing_requirements`
+
+Priority order is intentionally:
+
+- API key remediation
+- provider recognition remediation
+- runtime capability remediation
+
+If none of those signals are present, the manager still falls back to the existing `provider_not_ready -> configure_provider` behavior, and unknown states continue to use `manual_review`.
 
 Routing loop can now stop more specifically as:
 

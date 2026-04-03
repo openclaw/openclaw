@@ -81,6 +81,73 @@ def main() -> int:
         if 'provider' in policy_input
         else payload.get('provider')
     )
+    provider_status = (
+        policy_input.get('provider_status')
+        if isinstance(policy_input.get('provider_status'), dict)
+        else payload.get('provider_status')
+    )
+    if not isinstance(provider_status, dict):
+        provider_status = {}
+    gpu_status = (
+        policy_input.get('gpu_status')
+        if isinstance(policy_input.get('gpu_status'), dict)
+        else payload.get('gpu_status')
+    )
+    if not isinstance(gpu_status, dict):
+        gpu_status = {}
+    nim_status_info = (
+        policy_input.get('nim_status_info')
+        if isinstance(policy_input.get('nim_status_info'), dict)
+        else payload.get('nim_status_info')
+    )
+    if not isinstance(nim_status_info, dict):
+        nim_status_info = {}
+    provider_missing_requirements = provider_status.get('missing_requirements')
+    if not isinstance(provider_missing_requirements, list):
+        provider_missing_requirements = []
+    provider_missing_api_keys = provider_status.get('missing_api_keys')
+    if not isinstance(provider_missing_api_keys, list):
+        provider_missing_api_keys = []
+    provider_api_required = provider_status.get('api_key_required')
+    provider_api_present = provider_status.get('api_key_present')
+    provider_config_present = provider_status.get('provider_config_present')
+    provider_runtime_recognized_nested = provider_status.get('provider_runtime_recognized')
+    gpu_ready = gpu_status.get('gpu_ready')
+    nim_ready = nim_status_info.get('nim_ready')
+    has_provider_api_signal = (
+        provider_api_required is True and provider_api_present is False
+    ) or bool(provider_missing_api_keys) or any(
+        isinstance(item, str) and (
+            item.startswith('API key missing:')
+            or item == 'API key missing'
+            or item == 'API key may be required'
+        )
+        for item in provider_missing_requirements
+    )
+    has_provider_recognition_signal = (
+        provider_config_present is True and provider_runtime_recognized_nested is False
+    ) or any(
+        isinstance(item, str) and (
+            item == 'provider runtime not recognizing configured provider'
+            or item == 'provider configuration missing'
+            or item == 'provider source unknown'
+        )
+        for item in provider_missing_requirements
+    )
+    has_runtime_capability_signal = (
+        gpu_ready is False
+        or nim_ready is False
+        or any(
+            isinstance(item, str) and item in {
+                'nim is not running',
+                'gpu runtime not enabled',
+                'nvidia policy missing',
+                'runtime not connected',
+                'sandbox not ready',
+            }
+            for item in provider_missing_requirements
+        )
+    )
 
     if final_state == 'provider_api_key_missing':
         output = build_policy_output(
@@ -137,6 +204,81 @@ def main() -> int:
         return 0
 
     if final_state == 'provider_not_ready':
+        if has_provider_api_signal:
+            output = build_policy_output(
+                manager_action='configure_provider',
+                manager_reason='provider readiness is blocked by missing API key requirements, so provider credential remediation should continue first',
+                next_step='check_api_key_config',
+                retry_decision=retry_decision,
+                policy_input=policy_input,
+                policy_trace={
+                    'rule_id': 'provider_not_ready_check_api_key_config',
+                    'matched_on': {
+                        'final_state': final_state,
+                        'api_key_required': provider_api_required,
+                        'api_key_present': provider_api_present,
+                        'missing_api_keys': provider_missing_api_keys,
+                        'missing_requirements': provider_missing_requirements,
+                    },
+                    'selected_action': 'configure_provider',
+                },
+            )
+            print(json.dumps(output, ensure_ascii=False, indent=2))
+            return 0
+
+        if has_provider_recognition_signal:
+            output = build_policy_output(
+                manager_action='configure_provider',
+                manager_reason='provider is configured but runtime is not yet recognizing it, so provider recognition remediation should continue',
+                next_step='check_provider_config',
+                retry_decision=retry_decision,
+                policy_input=policy_input,
+                policy_trace={
+                    'rule_id': 'provider_not_ready_check_provider_config',
+                    'matched_on': {
+                        'final_state': final_state,
+                        'provider_config_present': provider_config_present,
+                        'provider_runtime_recognized': provider_runtime_recognized_nested,
+                        'missing_requirements': provider_missing_requirements,
+                    },
+                    'selected_action': 'configure_provider',
+                },
+            )
+            print(json.dumps(output, ensure_ascii=False, indent=2))
+            return 0
+
+        if has_runtime_capability_signal:
+            selected_action = 'configure_gpu_runtime'
+            selected_next_step = 'configure_gpu_runtime'
+            selected_reason = 'provider readiness is blocked by runtime capability issues, so GPU/runtime remediation should continue first'
+            selected_rule_id = 'provider_not_ready_runtime_capability_remediation'
+            if nim_ready is False or any(
+                isinstance(item, str) and item == 'nim is not running'
+                for item in provider_missing_requirements
+            ):
+                selected_action = 'start_nim_runtime'
+                selected_next_step = 'start_nim_runtime'
+                selected_reason = 'provider readiness is blocked by NIM runtime availability, so NIM remediation should continue first'
+            output = build_policy_output(
+                manager_action=selected_action,
+                manager_reason=selected_reason,
+                next_step=selected_next_step,
+                retry_decision=retry_decision,
+                policy_input=policy_input,
+                policy_trace={
+                    'rule_id': selected_rule_id,
+                    'matched_on': {
+                        'final_state': final_state,
+                        'gpu_ready': gpu_ready,
+                        'nim_ready': nim_ready,
+                        'missing_requirements': provider_missing_requirements,
+                    },
+                    'selected_action': selected_action,
+                },
+            )
+            print(json.dumps(output, ensure_ascii=False, indent=2))
+            return 0
+
         output = build_policy_output(
             manager_action='configure_provider',
             manager_reason='provider is configured but runtime is not yet recognizing it, so provider remediation should continue',
