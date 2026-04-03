@@ -109,4 +109,12 @@ describe("queued announce delivery execution boundary", () => {
       __testing.setDepsForTest();
     }
   });
+
+  it("keeps triggerMessage out of queued user-visible display when no summaryLine is provided", () => {
+    expect(
+      __testing.buildQueuedAnnounceDisplayForTest({
+        triggerMessage: "internal trigger payload",
+      }),
+    ).toEqual({ visibility: "summary-only" });
+  });
 });

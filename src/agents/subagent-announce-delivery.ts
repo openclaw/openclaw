@@ -455,8 +455,7 @@ async function maybeQueueSubagentAnnounce(params: {
               summaryLine: params.summaryLine,
             }
           : {
-              visibility: "user-visible",
-              text: params.triggerMessage,
+              visibility: "summary-only",
             },
         internalEvents: params.internalEvents,
         enqueuedAt: Date.now(),
@@ -657,6 +656,15 @@ export async function deliverSubagentAnnouncement(params: {
 export const __testing = {
   async sendAnnounceForTest(item: AnnounceQueueItem) {
     await sendAnnounce(item);
+  },
+  buildQueuedAnnounceDisplayForTest(params: { triggerMessage: string; summaryLine?: string }) {
+    return params.summaryLine?.trim()
+      ? {
+          visibility: "user-visible" as const,
+          text: params.summaryLine,
+          summaryLine: params.summaryLine,
+        }
+      : ({ visibility: "summary-only" } as const);
   },
   setDepsForTest(overrides?: Partial<SubagentAnnounceDeliveryDeps>) {
     subagentAnnounceDeliveryDeps = overrides

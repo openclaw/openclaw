@@ -213,6 +213,61 @@ describe("subagent-announce-queue", () => {
     expect(secondSent.execution.agentPrompt).toBe("second internal");
   });
 
+  it("keeps individual-drain fallback across retries after collect render failure", async () => {
+    const prompts: string[] = [];
+    let attempts = 0;
+    let resolved = false;
+    let resolveSecondAttempt = () => {};
+    const waitForSecondAttempt = new Promise<void>((resolve) => {
+      resolveSecondAttempt = resolve;
+    });
+
+    const send = vi.fn(
+      async (item: { execution: { agentPrompt: string }; display: { text?: string } }) => {
+        attempts += 1;
+        prompts.push(item.display.text ?? item.execution.agentPrompt);
+        if (attempts >= 3 && !resolved) {
+          resolved = true;
+          resolveSecondAttempt();
+        }
+        if (attempts === 2) {
+          throw new Error("transient send failure after collect fallback");
+        }
+      },
+    );
+
+    enqueueAnnounce({
+      key: "announce:test:collect-invalid-display-retry",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "first internal" },
+        display: { visibility: "user-visible", text: "first visible" },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "collect", debounceMs: 0 },
+      send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:collect-invalid-display-retry",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "second internal" },
+        display: { visibility: "summary-only" },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "collect", debounceMs: 0 },
+      send,
+    });
+
+    await waitForSecondAttempt;
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(prompts[0]).toBe("first visible");
+    expect(prompts[1]).toBe("second internal");
+    expect(prompts[2]).toBe("second internal");
+    expect(prompts.join("\n")).not.toContain("Queued #1");
+    expect(prompts.join("\n")).not.toContain("Queued #2");
+  });
+
   it("uses a safe placeholder when summarizing dropped summary-only announce items without summaryLine", async () => {
     const send = vi.fn(async () => {});
 
