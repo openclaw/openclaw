@@ -19,7 +19,7 @@ const URL_REDACTION_PATTERN = /\bhttps?:\/\/[^\s"']+/giu;
 const BEARER_REDACTION_PATTERN = /Bearer\s+[A-Za-z0-9._~+/=-]+/giu;
 const RAW_TOKEN_REDACTION_PATTERN = /\bdapi[a-z0-9._-]{8,}\b/giu;
 
-function redactToken(value: string): string {
+export function redactToken(value: string): string {
   const trimmed = value.trim();
   if (trimmed.length <= 8) {
     return "***";

@@ -44,6 +44,7 @@ const PARSER_KEYWORDS = new Set([
   "LEFT",
   "RIGHT",
   "FULL",
+  "OUTER",
   "INNER",
   "CROSS",
   "ON",
@@ -443,7 +444,14 @@ function parseSourceList(
       isKeyword(next, "INNER") ||
       isKeyword(next, "CROSS")
     ) {
+      const joinModifier = next.value;
       cursor += 1;
+      if (
+        (joinModifier === "LEFT" || joinModifier === "RIGHT" || joinModifier === "FULL") &&
+        isKeyword(tokens[cursor], "OUTER")
+      ) {
+        cursor += 1;
+      }
       if (!isKeyword(tokens[cursor], "JOIN")) {
         return { nextIndex: cursor, ambiguous: true };
       }

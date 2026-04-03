@@ -13,19 +13,21 @@ This package provides:
 Preferred:
 
 ```bash
-openclaw plugins install @openclaw/databricks-plugin
+openclaw plugins install @kansodata/openclaw-databricks-plugin
 ```
 
 Source-specific:
 
 ```bash
-openclaw plugins install clawhub:@openclaw/databricks-plugin
-openclaw plugins install npm:@openclaw/databricks-plugin
+openclaw plugins install clawhub:@kansodata/openclaw-databricks-plugin
+openclaw plugins install npm:@kansodata/openclaw-databricks-plugin
 ```
 
 OpenClaw checks ClawHub first for bare package installs, then falls back to npm.
 
 ## Configure
+
+Plugin key: `plugins.entries.databricks`
 
 ```json
 {

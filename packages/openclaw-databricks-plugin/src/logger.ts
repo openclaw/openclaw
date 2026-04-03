@@ -1,16 +1,5 @@
 import type { PluginLogger } from "openclaw/plugin-sdk/core";
-import { sanitizeDatabricksText } from "./errors.js";
-
-function redactToken(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.length <= 8) {
-    return "***";
-  }
-  return `${trimmed.slice(0, 4)}***${trimmed.slice(-3)}`;
-}
+import { redactToken, sanitizeDatabricksText } from "./errors.js";
 
 function sanitizeString(value: string, token?: string): string {
   let sanitized = sanitizeDatabricksText(value);

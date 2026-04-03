@@ -5,6 +5,7 @@ import {
   DatabricksHttpError,
   isRetryableStatus,
   normalizeDatabricksError,
+  redactToken,
   sanitizeDatabricksText,
 } from "./errors.js";
 
@@ -57,5 +58,9 @@ describe("databricks errors", () => {
     expect(text).not.toContain("dapi1234567890token");
     expect(text).toContain("[redacted-url]");
     expect(text).toContain("Bearer dapi***ken");
+  });
+
+  it("redacts tokens consistently", () => {
+    expect(redactToken("dapi1234567890token")).toBe("dapi***ken");
   });
 });

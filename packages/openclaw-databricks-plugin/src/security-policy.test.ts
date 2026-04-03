@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DatabricksAllowlistError, DatabricksPolicyError } from "./errors.js";
 import { assertAllowlistTarget, assertReadOnlySqlStatement } from "./security-policy.js";
+import { resolveSqlTargets } from "./sql-target-resolution.js";
 
 describe("databricks read-only sql policy", () => {
   it("accepts SELECT", () => {
@@ -24,6 +25,22 @@ describe("databricks read-only sql policy", () => {
   it("rejects non-select statement", () => {
     expect(() => assertReadOnlySqlStatement("SHOW TABLES")).toThrow(
       "Read-only SQL must start with SELECT or WITH ... SELECT",
+    );
+  });
+
+  it("accepts SELECT expression with immediate parenthesis", () => {
+    expect(assertReadOnlySqlStatement("SELECT(1+1)")).toBe("SELECT(1+1)");
+  });
+
+  it("accepts SELECT(column) with FROM clause", () => {
+    expect(assertReadOnlySqlStatement("SELECT(col) FROM main.sales.orders")).toBe(
+      "SELECT(col) FROM main.sales.orders",
+    );
+  });
+
+  it("rejects invalid SELECT-prefixed identifier", () => {
+    expect(() => assertReadOnlySqlStatement("SELECTFOO FROM main.sales.orders")).toThrow(
+      DatabricksPolicyError,
     );
   });
 
@@ -78,5 +95,47 @@ describe("databricks allowlist policy", () => {
         ambiguousTargets: false,
       }),
     ).toThrow('Schema "private" is not in the configured allowlist');
+  });
+
+  it("accepts LEFT OUTER JOIN targets when allowlists match", () => {
+    const resolution = resolveSqlTargets(
+      "SELECT * FROM main.sales.orders LEFT OUTER JOIN main.sales.customers ON orders.id = customers.id",
+    );
+    expect(() =>
+      assertAllowlistTarget({
+        allowedCatalogs: ["main"],
+        allowedSchemas: ["sales"],
+        targets: resolution.targets,
+        ambiguousTargets: resolution.ambiguous,
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts RIGHT OUTER JOIN targets when allowlists match", () => {
+    const resolution = resolveSqlTargets(
+      "SELECT * FROM main.sales.orders RIGHT OUTER JOIN main.sales.customers ON orders.id = customers.id",
+    );
+    expect(() =>
+      assertAllowlistTarget({
+        allowedCatalogs: ["main"],
+        allowedSchemas: ["sales"],
+        targets: resolution.targets,
+        ambiguousTargets: resolution.ambiguous,
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts FULL OUTER JOIN targets when allowlists match", () => {
+    const resolution = resolveSqlTargets(
+      "SELECT * FROM main.sales.orders FULL OUTER JOIN main.sales.customers ON orders.id = customers.id",
+    );
+    expect(() =>
+      assertAllowlistTarget({
+        allowedCatalogs: ["main"],
+        allowedSchemas: ["sales"],
+        targets: resolution.targets,
+        ambiguousTargets: resolution.ambiguous,
+      }),
+    ).not.toThrow();
   });
 });

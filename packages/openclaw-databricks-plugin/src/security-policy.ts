@@ -84,10 +84,10 @@ function assertSingleStatement(sql: string): void {
 
 function assertAllowedStartingClause(sql: string): void {
   const normalized = stripSqlCommentsAndLiterals(sql).trim().replace(/\s+/gu, " ").toUpperCase();
-  if (normalized.startsWith("SELECT ")) {
+  if (/^SELECT\b/u.test(normalized)) {
     return;
   }
-  if (normalized.startsWith("WITH ") && /\bSELECT\b/u.test(normalized)) {
+  if (/^WITH\b/u.test(normalized) && /\bSELECT\b/u.test(normalized)) {
     return;
   }
   throw new DatabricksPolicyError(
