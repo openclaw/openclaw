@@ -131,6 +131,36 @@ describe("handleDiscordMessagingAction", () => {
     expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {});
   });
 
+  it("uses configured defaultAccount when cfg is provided and accountId is omitted", async () => {
+    await handleDiscordMessagingAction(
+      "react",
+      {
+        channelId: "C1",
+        messageId: "M1",
+        emoji: "✅",
+      },
+      enableAllActions,
+      undefined,
+      {
+        channels: {
+          discord: {
+            defaultAccount: "work",
+            accounts: {
+              work: { token: "token-work" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    );
+
+    expect(reactMessageDiscord).toHaveBeenCalledWith(
+      "C1",
+      "M1",
+      "✅",
+      expect.objectContaining({ accountId: "work" }),
+    );
+  });
+
   it("removes reactions on empty emoji", async () => {
     await handleDiscordMessagingAction(
       "react",
