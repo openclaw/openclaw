@@ -308,6 +308,9 @@ jobs:
         run: |
           set -euo pipefail
           case "$TASK" in
+            bundled)
+              pnpm test:bundled
+              ;;
             extensions)
               if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
                 export OPENCLAW_TEST_SHARDS="$SHARD_COUNT"
