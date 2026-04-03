@@ -1,7 +1,7 @@
 # OpenClaw Fly.io deployment configuration
 # See https://fly.io/docs/reference/configuration/
 
-app = "openclaw"
+app = "shrine-openclaw"
 primary_region = "iad" # change to your closest region
 
 [build]

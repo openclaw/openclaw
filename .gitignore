@@ -1,6 +1,7 @@
 node_modules
 **/node_modules/
 .env
+FLY_SETUP.md
 docker-compose.extra.yml
 dist
 pnpm-lock.yaml
