@@ -269,4 +269,38 @@ describe("Feishu webhook signed-request e2e", () => {
       },
     );
   });
+
+  it("accepts unsigned encrypted url_verification challenges (#58905)", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "unsigned-encrypted-challenge",
+        path: "/hook-e2e-unsigned-encrypted-challenge",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = {
+          encrypt: encryptFeishuPayload("encrypt_key", {
+            type: "url_verification",
+            challenge: "unsigned-encrypted-challenge-token",
+          }),
+        };
+        // Feishu's initial URL verification sends encrypted body without
+        // X-Lark-Signature headers (per Feishu official docs).
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          challenge: "unsigned-encrypted-challenge-token",
+        });
+      },
+    );
+  });
 });
