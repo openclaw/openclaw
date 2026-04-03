@@ -1277,6 +1277,18 @@ export async function startGatewayServer(
           }
         }
       },
+      disconnectClientsUsingSharedGatewayAuth: () => {
+        for (const gatewayClient of clients) {
+          if (!gatewayClient.usesSharedGatewayAuth) {
+            continue;
+          }
+          try {
+            gatewayClient.socket.close(4001, "gateway auth changed");
+          } catch {
+            /* ignore */
+          }
+        }
+      },
       nodeRegistry,
       agentRunSeq,
       chatAbortControllers,
