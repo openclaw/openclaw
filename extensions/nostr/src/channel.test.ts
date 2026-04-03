@@ -203,6 +203,34 @@ describe("nostr setup wizard", () => {
     expect(result.cfg.channels?.nostr?.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
     expect(result.cfg.channels?.nostr?.relays).toEqual(TEST_SETUP_RELAY_URLS);
   });
+
+  it("preserves the selected named account label during setup", async () => {
+    const prompter = createTestWizardPrompter({
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Nostr private key (nsec... or hex)") {
+          return TEST_HEX_PRIVATE_KEY;
+        }
+        if (message === "Relay URLs (comma-separated, optional)") {
+          return "";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: nostrConfigure,
+      cfg: {} as OpenClawConfig,
+      prompter,
+      options: {},
+      accountOverrides: {
+        nostr: "work",
+      },
+    });
+
+    expect(result.accountId).toBe("work");
+    expect(result.cfg.channels?.nostr?.defaultAccount).toBe("work");
+    expect(result.cfg.channels?.nostr?.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
+  });
 });
 
 describe("nostr account helpers", () => {
