@@ -181,6 +181,77 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.CommandAuthorized).toBe(false);
   });
 
+  it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: {
+            signal: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15550001111"],
+              contextVisibility: "allowlist",
+            },
+          },
+        },
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15550001111"],
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          quote: { text: "blocked quote", author: "+15550002222" },
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps quote-only group context in allowlist_quote mode", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: {
+            signal: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15550001111"],
+              contextVisibility: "allowlist_quote",
+            },
+          },
+        },
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15550001111"],
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          quote: { text: "quoted context", author: "+15550002222" },
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.BodyForAgent).toBe("quoted context");
+    expect(capture.ctx?.ReplyToBody).toBe("quoted context");
+    expect(capture.ctx?.ReplyToSender).toBe("+15550002222");
+    expect(capture.ctx?.ReplyToIsQuote).toBe(true);
+  });
+
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
