@@ -18,6 +18,7 @@ import {
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { styleHealthChannelLine } from "../terminal/health-style.js";
 import { isRich } from "../terminal/theme.js";
 
@@ -147,7 +148,7 @@ const resolveAgentOrder = (cfg: ReturnType<typeof loadConfig>) => {
 const buildSessionSummary = (storePath: string) => {
   const store = loadSessionStore(storePath);
   const sessions = Object.entries(store)
-    .filter(([key]) => key !== "global" && key !== "unknown")
+    .filter(([key]) => key !== "global" && key !== "unknown" && !isCronRunSessionKey(key))
     .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }))
     .toSorted((a, b) => b.updatedAt - a.updatedAt);
   const recent = sessions.slice(0, 5).map((s) => ({

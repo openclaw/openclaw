@@ -336,6 +336,27 @@ describe("getHealthSnapshot", () => {
     expect(snap.sessions.recent[0]?.key).toBe("foo");
   });
 
+  it("hides cron run alias sessions from health session summaries", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {
+      "agent:main:cron:job-1": { updatedAt: 3000 },
+      "agent:main:cron:job-1:run:run-abc": { updatedAt: 4000 },
+      foo: { updatedAt: 2000 },
+    };
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+
+    const snap = (await getHealthSnapshot({
+      timeoutMs: 10,
+    })) satisfies HealthSummary;
+
+    expect(snap.sessions.count).toBe(2);
+    expect(snap.sessions.recent.map((session) => session.key)).toEqual([
+      "agent:main:cron:job-1",
+      "foo",
+    ]);
+  });
+
   it("probes telegram getMe + webhook info when configured", async () => {
     const { calls, telegram } = await runSuccessfulTelegramProbe({
       channels: { telegram: { botToken: "t-1" } },
