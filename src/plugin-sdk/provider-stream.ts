@@ -1,5 +1,14 @@
 // Public stream-wrapper helpers for provider plugins.
 
+export {
+  applyAnthropicPayloadPolicyToParams,
+  resolveAnthropicPayloadPolicy,
+} from "../agents/anthropic-payload-policy.js";
+export {
+  buildCopilotDynamicHeaders,
+  hasCopilotVisionInput,
+} from "../agents/copilot-dynamic-headers.js";
+export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedded-runner/anthropic-cache-control-payload.js";
 export { createAnthropicToolPayloadCompatibilityWrapper } from "../agents/pi-embedded-runner/anthropic-family-tool-payload-compat.js";
 export {
   createBedrockNoCacheWrapper,

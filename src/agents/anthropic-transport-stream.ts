@@ -2,7 +2,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   calculateCost,
-  createAssistantMessageEventStream,
   getEnvApiKey,
   parseStreamingJson,
   type AnthropicOptions,
@@ -11,10 +10,21 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
+import {
+  applyAnthropicPayloadPolicyToParams,
+  resolveAnthropicPayloadPolicy,
+} from "./anthropic-payload-policy.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
-import { sanitizeTransportPayloadText } from "./openai-transport-stream.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
+import {
+  createEmptyTransportUsage,
+  createWritableTransportEventStream,
+  failTransportStream,
+  finalizeTransportStream,
+  mergeTransportHeaders,
+  sanitizeTransportPayloadText,
+} from "./transport-stream-shared.js";
 
 const CLAUDE_CODE_VERSION = "2.1.75";
 const CLAUDE_CODE_TOOLS = [
@@ -86,10 +96,6 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
-function sanitizeAnthropicText(text: string): string {
-  return sanitizeTransportPayloadText(text);
-}
-
 function supportsAdaptiveThinking(modelId: string): boolean {
   return (
     modelId.includes("opus-4-6") ||
@@ -143,18 +149,6 @@ function adjustMaxTokensForThinking(params: {
   return { maxTokens, thinkingBudget };
 }
 
-function mergeHeaders(
-  ...headerSources: Array<Record<string, string> | undefined>
-): Record<string, string> | undefined {
-  const merged: Record<string, string> = {};
-  for (const headers of headerSources) {
-    if (headers) {
-      Object.assign(merged, headers);
-    }
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
 function isAnthropicOAuthToken(apiKey: string): boolean {
   return apiKey.includes("sk-ant-oat");
 }
@@ -174,22 +168,6 @@ function fromClaudeCodeName(name: string, tools: Context["tools"] | undefined): 
   return name;
 }
 
-function resolveCacheControl(
-  baseUrl: string | undefined,
-  cacheRetention: AnthropicOptions["cacheRetention"],
-): { type: "ephemeral"; ttl?: "1h" } | undefined {
-  const retention =
-    cacheRetention ?? (process.env.PI_CACHE_RETENTION === "long" ? "long" : "short");
-  if (retention === "none") {
-    return undefined;
-  }
-  const ttl =
-    retention === "long" && typeof baseUrl === "string" && baseUrl.includes("api.anthropic.com")
-      ? "1h"
-      : undefined;
-  return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
-}
-
 function convertContentBlocks(
   content: Array<
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
@@ -197,7 +175,7 @@ function convertContentBlocks(
 ) {
   const hasImages = content.some((item) => item.type === "image");
   if (!hasImages) {
-    return sanitizeAnthropicText(
+    return sanitizeTransportPayloadText(
       content.map((item) => ("text" in item ? item.text : "")).join("\n"),
     );
   }
@@ -205,7 +183,7 @@ function convertContentBlocks(
     if (block.type === "text") {
       return {
         type: "text",
-        text: sanitizeAnthropicText(block.text),
+        text: sanitizeTransportPayloadText(block.text),
       };
     }
     return {
@@ -234,7 +212,6 @@ function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
-  cacheControl: { type: "ephemeral"; ttl?: "1h" } | undefined,
 ) {
   const params: Array<Record<string, unknown>> = [];
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
@@ -245,7 +222,7 @@ function convertAnthropicMessages(
         if (msg.content.trim().length > 0) {
           params.push({
             role: "user",
-            content: sanitizeAnthropicText(msg.content),
+            content: sanitizeTransportPayloadText(msg.content),
           });
         }
         continue;
@@ -260,7 +237,7 @@ function convertAnthropicMessages(
         item.type === "text"
           ? {
               type: "text",
-              text: sanitizeAnthropicText(item.text),
+              text: sanitizeTransportPayloadText(item.text),
             }
           : {
               type: "image",
@@ -293,7 +270,7 @@ function convertAnthropicMessages(
           if (block.text.trim().length > 0) {
             blocks.push({
               type: "text",
-              text: sanitizeAnthropicText(block.text),
+              text: sanitizeTransportPayloadText(block.text),
             });
           }
           continue;
@@ -312,12 +289,12 @@ function convertAnthropicMessages(
           if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
             blocks.push({
               type: "text",
-              text: sanitizeAnthropicText(block.thinking),
+              text: sanitizeTransportPayloadText(block.thinking),
             });
           } else {
             blocks.push({
               type: "thinking",
-              thinking: sanitizeAnthropicText(block.thinking),
+              thinking: sanitizeTransportPayloadText(block.thinking),
               signature: block.thinkingSignature,
             });
           }
@@ -369,33 +346,6 @@ function convertAnthropicMessages(
         role: "user",
         content: toolResults,
       });
-    }
-  }
-  if (cacheControl && params.length > 0) {
-    const lastMessage = params[params.length - 1];
-    if (lastMessage.role === "user") {
-      const content = lastMessage.content;
-      if (Array.isArray(content)) {
-        const lastBlock = content[content.length - 1];
-        if (
-          lastBlock &&
-          typeof lastBlock === "object" &&
-          "type" in lastBlock &&
-          (lastBlock.type === "text" ||
-            lastBlock.type === "image" ||
-            lastBlock.type === "tool_result")
-        ) {
-          (lastBlock as Record<string, unknown>).cache_control = cacheControl;
-        }
-      } else if (typeof content === "string") {
-        lastMessage.content = [
-          {
-            type: "text",
-            text: content,
-            cache_control: cacheControl,
-          },
-        ];
-      }
     }
   }
   return params;
@@ -454,7 +404,7 @@ function createAnthropicTransportClient(params: {
         authToken: apiKey,
         baseURL: model.baseUrl,
         dangerouslyAllowBrowser: true,
-        defaultHeaders: mergeHeaders(
+        defaultHeaders: mergeTransportHeaders(
           {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
@@ -483,7 +433,7 @@ function createAnthropicTransportClient(params: {
         authToken: apiKey,
         baseURL: model.baseUrl,
         dangerouslyAllowBrowser: true,
-        defaultHeaders: mergeHeaders(
+        defaultHeaders: mergeTransportHeaders(
           {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
@@ -504,7 +454,7 @@ function createAnthropicTransportClient(params: {
       apiKey,
       baseURL: model.baseUrl,
       dangerouslyAllowBrowser: true,
-      defaultHeaders: mergeHeaders(
+      defaultHeaders: mergeTransportHeaders(
         {
           accept: "application/json",
           "anthropic-dangerous-direct-browser-access": "true",
@@ -525,11 +475,17 @@ function buildAnthropicParams(
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
 ) {
-  const cacheControl = resolveCacheControl(model.baseUrl, options?.cacheRetention);
+  const payloadPolicy = resolveAnthropicPayloadPolicy({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    cacheRetention: options?.cacheRetention,
+    enableCacheControl: true,
+  });
   const defaultMaxTokens = Math.min(model.maxTokens, 32_000);
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertAnthropicMessages(context.messages, model, isOAuthToken, cacheControl),
+    messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
     max_tokens: options?.maxTokens || defaultMaxTokens,
     stream: true,
   };
@@ -538,14 +494,12 @@ function buildAnthropicParams(
       {
         type: "text",
         text: "You are Claude Code, Anthropic's official CLI for Claude.",
-        ...(cacheControl ? { cache_control: cacheControl } : {}),
       },
       ...(context.systemPrompt
         ? [
             {
               type: "text",
-              text: sanitizeAnthropicText(context.systemPrompt),
-              ...(cacheControl ? { cache_control: cacheControl } : {}),
+              text: sanitizeTransportPayloadText(context.systemPrompt),
             },
           ]
         : []),
@@ -554,8 +508,7 @@ function buildAnthropicParams(
     params.system = [
       {
         type: "text",
-        text: sanitizeAnthropicText(context.systemPrompt),
-        ...(cacheControl ? { cache_control: cacheControl } : {}),
+        text: sanitizeTransportPayloadText(context.systemPrompt),
       },
     ];
   }
@@ -589,6 +542,7 @@ function buildAnthropicParams(
     params.tool_choice =
       typeof options.toolChoice === "string" ? { type: options.toolChoice } : options.toolChoice;
   }
+  applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
   return params;
 }
 
@@ -639,7 +593,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as AnthropicTransportModel;
     const options = rawOptions as AnthropicTransportOptions | undefined;
-    const stream = createAssistantMessageEventStream();
+    const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
       const output: MutableAssistantOutput = {
         role: "assistant",
@@ -647,14 +601,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         api: "anthropic-messages",
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createEmptyTransportUsage(),
         stopReason: "stop",
         timestamp: Date.now(),
       };
@@ -895,24 +842,21 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             calculateCost(model, output.usage);
           }
         }
-        if (transportOptions.signal?.aborted) {
-          throw new Error("Request was aborted");
-        }
-        if (output.stopReason === "aborted" || output.stopReason === "error") {
-          throw new Error("An unknown error occurred");
-        }
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
-        stream.end();
+        finalizeTransportStream({ stream, output, signal: transportOptions.signal });
       } catch (error) {
-        for (const block of output.content) {
-          delete block.index;
-        }
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
-        stream.end();
+        failTransportStream({
+          stream,
+          output,
+          signal: options?.signal,
+          error,
+          cleanup: () => {
+            for (const block of output.content) {
+              delete block.index;
+            }
+          },
+        });
       }
     })();
-    return stream as ReturnType<StreamFn>;
+    return eventStream as ReturnType<StreamFn>;
   };
 }

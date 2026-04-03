@@ -163,6 +163,7 @@ function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
 }
 
 function hasBoundConversationForSession(params: {
+  cfg: OpenClawConfig;
   sessionKey: string;
   channelRaw: string | undefined;
   accountIdRaw: string | undefined;
@@ -173,10 +174,14 @@ function hasBoundConversationForSession(params: {
   if (!channel) {
     return false;
   }
-  const accountId = String(params.accountIdRaw ?? "")
-    .trim()
-    .toLowerCase();
-  const normalizedAccountId = accountId || "default";
+  const accountId = String(params.accountIdRaw ?? "").trim().toLowerCase();
+  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
+  const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
+  const normalizedAccountId =
+    accountId ||
+    (typeof configuredDefaultAccountId === "string" && configuredDefaultAccountId.trim()
+      ? configuredDefaultAccountId.trim().toLowerCase()
+      : "default");
   const bindingService = getSessionBindingService();
   const bindings = bindingService.listBySession(params.sessionKey);
   return bindings.some((binding) => {
@@ -193,6 +198,28 @@ function hasBoundConversationForSession(params: {
       conversationId.length > 0
     );
   });
+}
+
+function resolveDispatchAccountId(params: {
+  cfg: OpenClawConfig;
+  channelRaw: string | undefined;
+  accountIdRaw: string | undefined;
+}): string | undefined {
+  const channel = String(params.channelRaw ?? "")
+    .trim()
+    .toLowerCase();
+  if (!channel) {
+    return params.accountIdRaw?.trim() || undefined;
+  }
+  const explicit = params.accountIdRaw?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
+  const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
+  return typeof configuredDefaultAccountId === "string" && configuredDefaultAccountId.trim()
+    ? configuredDefaultAccountId.trim()
+    : undefined;
 }
 
 export type AcpDispatchAttemptResult = {
@@ -375,6 +402,7 @@ export async function tryDispatchAcpReply(params: {
     identityPendingBeforeTurn &&
     (Boolean(params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim()) ||
       hasBoundConversationForSession({
+        cfg: params.cfg,
         sessionKey: canonicalSessionKey,
         channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
         accountIdRaw: params.ctx.AccountId,
@@ -388,12 +416,17 @@ export async function tryDispatchAcpReply(params: {
           resolveAgentIdFromSessionKey(canonicalSessionKey)
         ).trim()
       : resolveAgentIdFromSessionKey(canonicalSessionKey);
+  const effectiveDispatchAccountId = resolveDispatchAccountId({
+    cfg: params.cfg,
+    channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+    accountIdRaw: params.ctx.AccountId,
+  });
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     deliver: delivery.deliver,
     provider: params.ctx.Surface ?? params.ctx.Provider,
-    accountId: params.ctx.AccountId,
+    accountId: effectiveDispatchAccountId,
   });
 
   const acpDispatchStartedAt = Date.now();

@@ -211,6 +211,28 @@ describe("googlechat setup", () => {
     expect(status.configured).toBe(false);
   });
 
+  it("reports configured state for the configured defaultAccount instead of any account", async () => {
+    const status = await googlechatStatus({
+      cfg: {
+        channels: {
+          googlechat: {
+            defaultAccount: "alerts",
+            accounts: {
+              default: {
+                serviceAccount: { client_email: "default@example.com" },
+              },
+              alerts: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+      options: {},
+    });
+
+    expect(status.configured).toBe(false);
+  });
+
   it("reports account-scoped config keys for named accounts", () => {
     expect(googlechatPlugin.setupWizard?.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
       policyKey: "channels.googlechat.accounts.alerts.dm.policy",
@@ -488,5 +510,25 @@ describe("resolveGoogleChatAccount", () => {
     const resolved = resolveGoogleChatAccount({ cfg, accountId: "andy" });
     expect(resolved.config.dangerouslyAllowNameMatching).toBeUndefined();
     expect(resolved.config.audienceType).toBe("app-url");
+  });
+
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          defaultAccount: "alerts",
+          accounts: {
+            alerts: {
+              serviceAccountFile: "/tmp/alerts-sa.json",
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg });
+    expect(resolved.accountId).toBe("alerts");
+    expect(resolved.credentialSource).toBe("file");
+    expect(resolved.credentialsFile).toBe("/tmp/alerts-sa.json");
   });
 });

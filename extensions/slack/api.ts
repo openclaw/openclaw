@@ -8,6 +8,10 @@ export * from "./src/channel-type.js";
 export * from "./src/client.js";
 export * from "./src/directory-config.js";
 export * from "./src/http/index.js";
+export type {
+  SlackInteractiveHandlerContext,
+  SlackInteractiveHandlerRegistration,
+} from "./src/interactive-dispatch.js";
 export * from "./src/interactive-replies.js";
 export * from "./src/message-actions.js";
 export * from "./src/group-policy.js";

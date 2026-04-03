@@ -39,7 +39,7 @@ export function resolveTelegramExecApprovalConfig(params: {
   }
   return {
     ...config,
-    enabled: account.enabled && account.tokenSource !== "none" && config.enabled === true,
+    enabled: account.enabled && account.tokenSource !== "none" ? config.enabled : false,
   };
 }
 

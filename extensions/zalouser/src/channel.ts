@@ -180,10 +180,12 @@ const resolveZalouserDmPolicy = createScopedDmSecurityResolver<ResolvedZalouserA
 });
 
 const zalouserMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
-    const accounts = listZalouserAccountIds(cfg)
-      .map((accountId) => resolveZalouserAccountSync({ cfg, accountId }))
-      .filter((account) => account.enabled);
+  describeMessageTool: ({ cfg, accountId }) => {
+    const accounts = accountId
+      ? [resolveZalouserAccountSync({ cfg, accountId })].filter((account) => account.enabled)
+      : listZalouserAccountIds(cfg)
+          .map((resolvedAccountId) => resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId }))
+          .filter((account) => account.enabled);
     if (accounts.length === 0) {
       return null;
     }
@@ -347,7 +349,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
             try {
               const account = resolveZalouserAccountSync({
                 cfg: cfg,
-                accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+                accountId: accountId ?? resolveDefaultZalouserAccountId(cfg),
               });
               if (kind === "user") {
                 const friends = await listZaloFriendsMatching(account.profile, trimmed);
@@ -384,7 +386,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
         login: async ({ cfg, accountId, runtime }) => {
           const account = resolveZalouserAccountSync({
             cfg: cfg,
-            accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+            accountId: accountId ?? resolveDefaultZalouserAccountId(cfg),
           });
 
           runtime.log(

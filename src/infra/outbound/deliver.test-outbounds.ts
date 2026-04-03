@@ -154,7 +154,7 @@ type WhatsAppSendFn = (
 function resolveWhatsAppSender(deps: OutboundSendDeps | undefined): WhatsAppSendFn {
   const sender = resolveOutboundSendDep<WhatsAppSendFn>(deps, "whatsapp");
   if (!sender) {
-    throw new Error("missing sendWhatsApp dep");
+    throw new Error("missing whatsapp dep");
   }
   return sender;
 }
@@ -218,7 +218,7 @@ function resolveIMessageSender(deps: OutboundSendDeps | undefined) {
     ) => Promise<{ messageId: string; chatId?: string }>
   >(deps, "imessage");
   if (!sender) {
-    throw new Error("missing sendIMessage dep");
+    throw new Error("missing imessage dep");
   }
   return sender;
 }

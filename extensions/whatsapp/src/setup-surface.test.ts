@@ -10,7 +10,9 @@ import { whatsappSetupPlugin } from "./channel.setup.js";
 import { whatsappSetupWizard } from "./setup-surface.js";
 
 const hoisted = vi.hoisted(() => ({
-  detectWhatsAppLinked: vi.fn(async () => false),
+  detectWhatsAppLinked: vi.fn<(cfg: OpenClawConfig, accountId: string) => Promise<boolean>>(
+    async () => false,
+  ),
   loginWeb: vi.fn(async () => {}),
   pathExists: vi.fn(async () => false),
   resolveWhatsAppAuthDir: vi.fn(() => ({
@@ -182,10 +184,7 @@ describe("whatsapp setup wizard", () => {
     expect(named.cfg.channels?.whatsapp?.dmPolicy).toBe("disabled");
     expect(named.cfg.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
     expect(named.cfg.channels?.whatsapp?.accounts?.work?.dmPolicy).toBe("open");
-    expect(named.cfg.channels?.whatsapp?.accounts?.work?.allowFrom).toEqual([
-      "*",
-      "+15555550123",
-    ]);
+    expect(named.cfg.channels?.whatsapp?.accounts?.work?.allowFrom).toEqual(["*", "+15555550123"]);
     expect(harness.note).toHaveBeenCalledWith(
       expect.stringContaining(
         "`channels.whatsapp.accounts.work.dmPolicy` + `channels.whatsapp.accounts.work.allowFrom`",
@@ -214,6 +213,78 @@ describe("whatsapp setup wizard", () => {
 
     expect(status.configured).toBe(false);
     expect(status.statusLines).toEqual(["WhatsApp (work): not linked"]);
+  });
+
+  it("uses configured defaultAccount for omitted-account setup status", async () => {
+    hoisted.detectWhatsAppLinked.mockImplementation(
+      async (_cfg: OpenClawConfig, accountId: string) => accountId === "work",
+    );
+
+    const status = await whatsappGetStatus({
+      cfg: {
+        channels: {
+          whatsapp: {
+            defaultAccount: "work",
+            accounts: {
+              default: {
+                authDir: "/tmp/default",
+              },
+              work: {
+                authDir: "/tmp/work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+    expect(status.statusLines).toEqual(["WhatsApp (work): linked"]);
+    expect(hoisted.detectWhatsAppLinked).toHaveBeenCalledWith(expect.any(Object), "work");
+    expect(hoisted.detectWhatsAppLinked).not.toHaveBeenCalledWith(
+      expect.any(Object),
+      DEFAULT_ACCOUNT_ID,
+    );
+  });
+
+  it("uses configured defaultAccount for omitted-account finalize writes", async () => {
+    hoisted.pathExists.mockResolvedValue(true);
+    const harness = createSeparatePhoneHarness({
+      selectValues: ["separate", "open"],
+    });
+
+    const result = expectFinalizeResult(
+      await runFinalizeWithHarness({
+        harness,
+        accountId: "",
+        cfg: {
+          channels: {
+            whatsapp: {
+              defaultAccount: "work",
+              dmPolicy: "disabled",
+              allowFrom: ["+15555550123"],
+              accounts: {
+                work: {
+                  authDir: "/tmp/work",
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.cfg.channels?.whatsapp?.dmPolicy).toBe("disabled");
+    expect(result.cfg.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
+    expect(result.cfg.channels?.whatsapp?.accounts?.work?.dmPolicy).toBe("open");
+    expect(result.cfg.channels?.whatsapp?.accounts?.work?.allowFrom).toEqual(["*", "+15555550123"]);
+    expect(harness.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "`channels.whatsapp.accounts.work.dmPolicy` + `channels.whatsapp.accounts.work.allowFrom`",
+      ),
+      "WhatsApp DM access",
+    );
   });
 
   it("normalizes allowFrom entries when list mode is selected", async () => {

@@ -299,4 +299,45 @@ describe("buildWorkspaceSkillsPrompt", () => {
     });
     expect(emptyPrompt).toBe("");
   });
+
+  it("syncs remote-eligible filtered skills into the target workspace", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "remote-only"),
+      name: "remote-only",
+      description: "Sandbox-only bin",
+      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
+    });
+
+    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
+      syncSkillsToWorkspace({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        agentId: "alpha",
+        config: {
+          agents: {
+            defaults: {
+              skills: ["remote-only"],
+            },
+            list: [{ id: "alpha" }],
+          },
+        },
+        eligibility: {
+          remote: {
+            platforms: ["linux"],
+            hasBin: () => false,
+            hasAnyBin: (bins: string[]) => bins.includes("sandboxbin"),
+            note: "sandbox",
+          },
+        },
+        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+      }),
+    );
+
+    expect(await pathExists(path.join(targetWorkspace, "skills", "remote-only", "SKILL.md"))).toBe(
+      true,
+    );
+  });
 });

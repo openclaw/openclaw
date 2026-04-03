@@ -1,6 +1,28 @@
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 
-export function createDiscordOutboundHoisted() {
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+
+type DiscordOutboundHoisted = {
+  sendMessageDiscordMock: AsyncUnknownMock;
+  sendDiscordComponentMessageMock: AsyncUnknownMock;
+  sendPollDiscordMock: AsyncUnknownMock;
+  sendWebhookMessageDiscordMock: AsyncUnknownMock;
+  getThreadBindingManagerMock: UnknownMock;
+};
+
+type DiscordSendModule = typeof import("./send.js");
+type DiscordSendComponentsModule = typeof import("./send.components.js");
+type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
+
+function invokeMock<TArgs extends unknown[], TResult>(
+  mock: (...args: unknown[]) => unknown,
+  ...args: TArgs
+): TResult {
+  return mock(...args) as TResult;
+}
+
+export function createDiscordOutboundHoisted(): DiscordOutboundHoisted {
   const sendMessageDiscordMock = vi.fn();
   const sendDiscordComponentMessageMock = vi.fn();
   const sendPollDiscordMock = vi.fn();
@@ -21,28 +43,94 @@ export const DEFAULT_DISCORD_SEND_RESULT = {
   channelId: "ch-1",
 } as const;
 
-type DiscordOutboundHoisted = ReturnType<typeof createDiscordOutboundHoisted>;
+export async function createDiscordSendModuleMock(
+  hoisted: DiscordOutboundHoisted,
+  loadActual: () => Promise<DiscordSendModule>,
+): Promise<DiscordSendModule> {
+  const actual = await loadActual();
+  return {
+    ...actual,
+    sendMessageDiscord: (...args: Parameters<DiscordSendModule["sendMessageDiscord"]>) =>
+      invokeMock<
+        Parameters<DiscordSendModule["sendMessageDiscord"]>,
+        ReturnType<DiscordSendModule["sendMessageDiscord"]>
+      >(hoisted.sendMessageDiscordMock, ...args),
+    sendPollDiscord: (...args: Parameters<DiscordSendModule["sendPollDiscord"]>) =>
+      invokeMock<
+        Parameters<DiscordSendModule["sendPollDiscord"]>,
+        ReturnType<DiscordSendModule["sendPollDiscord"]>
+      >(hoisted.sendPollDiscordMock, ...args),
+    sendWebhookMessageDiscord: (
+      ...args: Parameters<DiscordSendModule["sendWebhookMessageDiscord"]>
+    ) =>
+      invokeMock<
+        Parameters<DiscordSendModule["sendWebhookMessageDiscord"]>,
+        ReturnType<DiscordSendModule["sendWebhookMessageDiscord"]>
+      >(hoisted.sendWebhookMessageDiscordMock, ...args),
+  };
+}
+
+export async function createDiscordSendComponentsModuleMock(
+  hoisted: DiscordOutboundHoisted,
+  loadActual: () => Promise<DiscordSendComponentsModule>,
+): Promise<DiscordSendComponentsModule> {
+  const actual = await loadActual();
+  return {
+    ...actual,
+    sendDiscordComponentMessage: (
+      ...args: Parameters<DiscordSendComponentsModule["sendDiscordComponentMessage"]>
+    ) =>
+      invokeMock<
+        Parameters<DiscordSendComponentsModule["sendDiscordComponentMessage"]>,
+        ReturnType<DiscordSendComponentsModule["sendDiscordComponentMessage"]>
+      >(hoisted.sendDiscordComponentMessageMock, ...args),
+  };
+}
+
+export async function createDiscordThreadBindingsModuleMock(
+  hoisted: DiscordOutboundHoisted,
+  loadActual: () => Promise<DiscordThreadBindingsModule>,
+): Promise<DiscordThreadBindingsModule> {
+  const actual = await loadActual();
+  return {
+    ...actual,
+    getThreadBindingManager: (
+      ...args: Parameters<DiscordThreadBindingsModule["getThreadBindingManager"]>
+    ) =>
+      invokeMock<
+        Parameters<DiscordThreadBindingsModule["getThreadBindingManager"]>,
+        ReturnType<DiscordThreadBindingsModule["getThreadBindingManager"]>
+      >(hoisted.getThreadBindingManagerMock, ...args),
+  };
+}
 
 export async function installDiscordOutboundModuleSpies(hoisted: DiscordOutboundHoisted) {
   const sendModule = await import("./send.js");
-  vi.spyOn(sendModule, "sendMessageDiscord").mockImplementation((...args: unknown[]) =>
-    hoisted.sendMessageDiscordMock(...args),
+  const mockedSendModule = await createDiscordSendModuleMock(hoisted, async () => sendModule);
+  vi.spyOn(sendModule, "sendMessageDiscord").mockImplementation(
+    mockedSendModule.sendMessageDiscord,
   );
-  vi.spyOn(sendModule, "sendPollDiscord").mockImplementation((...args: unknown[]) =>
-    hoisted.sendPollDiscordMock(...args),
-  );
-  vi.spyOn(sendModule, "sendWebhookMessageDiscord").mockImplementation((...args: unknown[]) =>
-    hoisted.sendWebhookMessageDiscordMock(...args),
+  vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(mockedSendModule.sendPollDiscord);
+  vi.spyOn(sendModule, "sendWebhookMessageDiscord").mockImplementation(
+    mockedSendModule.sendWebhookMessageDiscord,
   );
 
   const sendComponentsModule = await import("./send.components.js");
+  const mockedSendComponentsModule = await createDiscordSendComponentsModuleMock(
+    hoisted,
+    async () => sendComponentsModule,
+  );
   vi.spyOn(sendComponentsModule, "sendDiscordComponentMessage").mockImplementation(
-    (...args: unknown[]) => hoisted.sendDiscordComponentMessageMock(...args),
+    mockedSendComponentsModule.sendDiscordComponentMessage,
   );
 
   const threadBindingsModule = await import("./monitor/thread-bindings.js");
+  const mockedThreadBindingsModule = await createDiscordThreadBindingsModuleMock(
+    hoisted,
+    async () => threadBindingsModule,
+  );
   vi.spyOn(threadBindingsModule, "getThreadBindingManager").mockImplementation(
-    (...args: unknown[]) => hoisted.getThreadBindingManagerMock(...args),
+    mockedThreadBindingsModule.getThreadBindingManager,
   );
 }
 

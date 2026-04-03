@@ -36,8 +36,8 @@ const retryAsyncMock = vi.hoisted(() =>
   ),
 );
 
-vi.mock("../send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.js")>();
+vi.mock("../send.js", async () => {
+  const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
   return {
     ...actual,
     sendMessageDiscord: (...args: unknown[]) => sendMessageDiscordMock(...args),
@@ -50,8 +50,10 @@ vi.mock("../send.shared.js", () => ({
   sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/retry-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/retry-runtime")>();
+vi.mock("openclaw/plugin-sdk/retry-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/retry-runtime")>(
+    "openclaw/plugin-sdk/retry-runtime",
+  );
   return {
     ...actual,
     retryAsync: retryAsyncMock,

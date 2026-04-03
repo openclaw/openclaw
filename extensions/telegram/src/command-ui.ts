@@ -1,4 +1,4 @@
-import type { ReplyPayload } from "openclaw/plugin-sdk";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildBrowseProvidersButton,
   buildModelsKeyboard,

@@ -167,10 +167,7 @@ export function createSlackSetupWizardBase(handlers: {
       configuredScore: 2,
       unconfiguredScore: 1,
       resolveConfigured: ({ cfg, accountId }) =>
-        (accountId ? [accountId] : listSlackAccountIds(cfg)).some((resolvedAccountId) => {
-          const account = inspectSlackAccount({ cfg, accountId: resolvedAccountId });
-          return account.configured;
-        }),
+        inspectSlackAccount({ cfg, accountId }).configured,
     }),
     introNote: {
       title: "Slack socket mode tokens",

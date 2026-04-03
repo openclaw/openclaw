@@ -1,11 +1,14 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
+  formatWhatsAppConfigAllowFromEntries,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createDelegatedSetupWizardProxy,
   type ChannelSetupWizard,
@@ -19,15 +22,11 @@ import {
 } from "./accounts.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
+import { resolveWhatsAppGroupIntroHint } from "./group-intro.js";
 import {
-  formatWhatsAppConfigAllowFromEntries,
-  getChatChannelMeta,
-  normalizeE164,
-  resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-  type ChannelPlugin,
-} from "./runtime-api.js";
+} from "./group-policy.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
 

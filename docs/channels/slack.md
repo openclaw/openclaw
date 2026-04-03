@@ -392,7 +392,7 @@ Notes:
 ## Manifest and scope checklist
 
 <AccordionGroup>
-  <Accordion title="Slack app manifest example">
+  <Accordion title="Slack app manifest example" defaultOpen>
 
 ```json
 {
@@ -403,7 +403,7 @@ Notes:
   "features": {
     "bot_user": {
       "display_name": "OpenClaw",
-      "always_online": false
+      "always_online": true
     },
     "app_home": {
       "messages_tab_enabled": true,

@@ -4,7 +4,6 @@ import {
   formatDocsLink,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
-  patchChannelConfigForAccount,
   patchTopLevelChannelConfigSection,
   promptSingleChannelSecretInput,
   splitSetupEntries,
@@ -33,11 +32,10 @@ function normalizeString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function getScopedFeishuConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): FeishuConfig | FeishuAccountConfig {
-  const feishuCfg = ((cfg.channels?.feishu as FeishuConfig | undefined) ?? {}) as FeishuConfig;
+type ScopedFeishuConfig = Partial<FeishuConfig> & Partial<FeishuAccountConfig>;
+
+function getScopedFeishuConfig(cfg: OpenClawConfig, accountId: string): ScopedFeishuConfig {
+  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return feishuCfg ?? {};
   }
@@ -49,11 +47,30 @@ function patchFeishuConfig(
   accountId: string,
   patch: Record<string, unknown>,
 ): OpenClawConfig {
-  return patchChannelConfigForAccount({
+  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return patchTopLevelChannelConfigSection({
+      cfg,
+      channel,
+      enabled: true,
+      patch,
+    });
+  }
+  const nextAccountPatch = {
+    ...((feishuCfg?.accounts?.[accountId] as Record<string, unknown> | undefined) ?? {}),
+    enabled: true,
+    ...patch,
+  };
+  return patchTopLevelChannelConfigSection({
     cfg,
     channel,
-    accountId,
-    patch,
+    enabled: true,
+    patch: {
+      accounts: {
+        ...(feishuCfg?.accounts ?? {}),
+        [accountId]: nextAccountPatch,
+      },
+    },
   });
 }
 
@@ -81,8 +98,9 @@ function setFeishuGroupAllowFrom(
   return patchFeishuConfig(cfg, accountId, { groupAllowFrom });
 }
 
-function isFeishuConfigured(cfg: OpenClawConfig): boolean {
+function isFeishuConfigured(cfg: OpenClawConfig, accountId?: string | null): boolean {
   const feishuCfg = ((cfg.channels?.feishu as FeishuConfig | undefined) ?? {}) as FeishuConfig;
+  const resolvedAccountId = normalizeString(accountId) ?? resolveDefaultFeishuAccountId(cfg);
 
   const isAppIdConfigured = (value: unknown): boolean => {
     const asString = normalizeString(value);
@@ -105,22 +123,25 @@ function isFeishuConfigured(cfg: OpenClawConfig): boolean {
     isAppIdConfigured(feishuCfg?.appId) && hasConfiguredSecretInput(feishuCfg?.appSecret),
   );
 
-  const accountConfigured = Object.values(feishuCfg.accounts ?? {}).some((account) => {
-    if (!account || typeof account !== "object") {
-      return false;
-    }
-    const hasOwnAppId = Object.prototype.hasOwnProperty.call(account, "appId");
-    const hasOwnAppSecret = Object.prototype.hasOwnProperty.call(account, "appSecret");
-    const accountAppIdConfigured = hasOwnAppId
-      ? isAppIdConfigured((account as Record<string, unknown>).appId)
-      : isAppIdConfigured(feishuCfg?.appId);
-    const accountSecretConfigured = hasOwnAppSecret
-      ? hasConfiguredSecretInput((account as Record<string, unknown>).appSecret)
-      : hasConfiguredSecretInput(feishuCfg?.appSecret);
-    return Boolean(accountAppIdConfigured && accountSecretConfigured);
-  });
+  if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
+    return topLevelConfigured;
+  }
 
-  return topLevelConfigured || accountConfigured;
+  const account = feishuCfg.accounts?.[resolvedAccountId];
+  if (!account || typeof account !== "object") {
+    return topLevelConfigured;
+  }
+
+  const hasOwnAppId = Object.prototype.hasOwnProperty.call(account, "appId");
+  const hasOwnAppSecret = Object.prototype.hasOwnProperty.call(account, "appSecret");
+  const accountAppIdConfigured = hasOwnAppId
+    ? isAppIdConfigured((account as Record<string, unknown>).appId)
+    : isAppIdConfigured(feishuCfg?.appId);
+  const accountSecretConfigured = hasOwnAppSecret
+    ? hasConfiguredSecretInput((account as Record<string, unknown>).appSecret)
+    : hasConfiguredSecretInput(feishuCfg?.appSecret);
+
+  return Boolean(accountAppIdConfigured && accountSecretConfigured);
 }
 
 async function promptFeishuAllowFrom(params: {
@@ -241,8 +262,7 @@ export const feishuSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "needs app creds",
     configuredScore: 2,
     unconfiguredScore: 0,
-    resolveConfigured: ({ cfg, accountId }) =>
-      accountId ? resolveFeishuAccount({ cfg, accountId }).configured : isFeishuConfigured(cfg),
+    resolveConfigured: ({ cfg, accountId }) => isFeishuConfigured(cfg, accountId),
     resolveStatusLines: async ({ cfg, accountId, configured }) => {
       const resolvedCredentials = accountId
         ? (() => {

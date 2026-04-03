@@ -77,13 +77,18 @@ See [Memory](/concepts/memory).
 
 ### 4) Web search tool
 
-`web_search` uses API keys and may incur usage charges depending on your provider:
+`web_search` may incur usage charges depending on your provider:
 
 - **Brave Search API**: `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
+- **Exa**: `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`
+- **Firecrawl**: `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
 - **Gemini (Google Search)**: `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
 - **Grok (xAI)**: `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
 - **Kimi (Moonshot)**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `plugins.entries.moonshot.config.webSearch.apiKey`
+- **Ollama Web Search**: key-free, but requires a reachable Ollama host plus `ollama signin`
 - **Perplexity Search API**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
+- **Tavily**: `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
+- **DuckDuckGo**: key-free fallback (no API billing, but unofficial and HTML-based)
 
 Legacy `tools.web.search.*` provider paths still load through the temporary compatibility shim, but they are no longer the recommended config surface.
 

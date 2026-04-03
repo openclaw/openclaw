@@ -4,8 +4,10 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+vi.mock("../infra/net/fetch-guard.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+    "../infra/net/fetch-guard.js",
+  );
   return {
     ...actual,
     fetchWithSsrFGuard: fetchWithSsrFGuardMock,

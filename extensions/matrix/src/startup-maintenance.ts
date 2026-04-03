@@ -5,7 +5,7 @@ import {
   hasActionableMatrixMigration,
   hasPendingMatrixMigration,
   maybeCreateMatrixMigrationSnapshot,
-} from "openclaw/plugin-sdk/matrix-runtime-heavy";
+} from "./matrix-migration.runtime.js";
 
 type MatrixStartupLogger = {
   info?: (message: string) => void;

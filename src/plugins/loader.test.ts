@@ -1262,7 +1262,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     expect(active.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
-    expect(getPluginCommandSpecs("telegram")).toEqual([
+    expect(getPluginCommandSpecs()).toEqual([
       {
         name: "pair",
         description: "Pair device",

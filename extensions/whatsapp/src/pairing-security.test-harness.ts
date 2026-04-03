@@ -3,7 +3,7 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
 export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {
   (...args: TArgs): Promise<TResult>;
@@ -11,8 +11,9 @@ export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = 
   mockResolvedValue: (value: TResult) => AsyncMock<TArgs, TResult>;
   mockResolvedValueOnce: (value: TResult) => AsyncMock<TArgs, TResult>;
 };
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
-export const loadConfigMock = vi.fn();
+export const loadConfigMock: UnknownMock = vi.fn();
 export const readAllowFromStoreMock = vi.fn() as AsyncMock;
 export const upsertPairingRequestMock = vi.fn() as AsyncMock;
 

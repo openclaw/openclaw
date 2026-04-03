@@ -317,6 +317,10 @@ describe("task-executor", () => {
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Inspect PR batch",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
       });
       const child = createRunningTaskRun({
         runtime: "acp",

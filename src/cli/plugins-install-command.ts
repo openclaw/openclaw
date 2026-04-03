@@ -38,6 +38,10 @@ import {
 } from "./plugins-command-helpers.js";
 import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
 
+function resolveInstallMode(force?: boolean): "install" | "update" {
+  return force ? "update" : "install";
+}
+
 async function installBundledPluginSource(params: {
   config: OpenClawConfig;
   rawSpec: string;
@@ -71,6 +75,7 @@ async function installBundledPluginSource(params: {
 async function tryInstallHookPackFromLocalPath(params: {
   config: OpenClawConfig;
   resolvedPath: string;
+  installMode: "install" | "update";
   link?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (params.link) {
@@ -122,6 +127,7 @@ async function tryInstallHookPackFromLocalPath(params: {
 
   const result = await installHooksFromPath({
     path: params.resolvedPath,
+    mode: params.installMode,
     logger: createHookPackInstallLogger(),
   });
   if (!result.ok) {
@@ -145,11 +151,13 @@ async function tryInstallHookPackFromLocalPath(params: {
 
 async function tryInstallHookPackFromNpmSpec(params: {
   config: OpenClawConfig;
+  installMode: "install" | "update";
   spec: string;
   pin?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const result = await installHooksFromNpmSpec({
     spec: params.spec,
+    mode: params.installMode,
     logger: createHookPackInstallLogger(),
   });
   if (!result.ok) {
@@ -245,6 +253,7 @@ export async function loadConfigForInstall(
 export async function runPluginInstallCommand(params: {
   raw: string;
   opts: InstallSafetyOverrides & {
+    force?: boolean;
     link?: boolean;
     pin?: boolean;
     marketplace?: string;
@@ -274,6 +283,10 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
   }
+  if (opts.link && opts.force) {
+    defaultRuntime.error("`--force` is not supported with `--link`.");
+    return defaultRuntime.exit(1);
+  }
   const requestResolution = resolvePluginInstallRequestContext({
     rawSpec: raw,
     marketplace: opts.marketplace,
@@ -290,11 +303,13 @@ export async function runPluginInstallCommand(params: {
   if (!cfg) {
     return defaultRuntime.exit(1);
   }
+  const installMode = resolveInstallMode(opts.force);
 
   if (opts.marketplace) {
     const result = await installPluginFromMarketplace({
       dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
       marketplace: opts.marketplace,
+      mode: installMode,
       plugin: raw,
       logger: createPluginInstallLogger(),
     });
@@ -329,6 +344,7 @@ export async function runPluginInstallCommand(params: {
       if (!probe.ok) {
         const hookFallback = await tryInstallHookPackFromLocalPath({
           config: cfg,
+          installMode,
           resolvedPath: resolved,
           link: true,
         });
@@ -366,12 +382,14 @@ export async function runPluginInstallCommand(params: {
 
     const result = await installPluginFromPath({
       dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+      mode: installMode,
       path: resolved,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
       const hookFallback = await tryInstallHookPackFromLocalPath({
         config: cfg,
+        installMode,
         resolvedPath: resolved,
       });
       if (hookFallback.ok) {
@@ -437,6 +455,7 @@ export async function runPluginInstallCommand(params: {
   if (clawhubSpec) {
     const result = await installPluginFromClawHub({
       dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+      mode: installMode,
       spec: raw,
       logger: createPluginInstallLogger(),
     });
@@ -472,6 +491,7 @@ export async function runPluginInstallCommand(params: {
   if (preferredClawHubSpec) {
     const clawhubResult = await installPluginFromClawHub({
       dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+      mode: installMode,
       spec: preferredClawHubSpec,
       logger: createPluginInstallLogger(),
     });
@@ -506,6 +526,7 @@ export async function runPluginInstallCommand(params: {
 
   const result = await installPluginFromNpmSpec({
     dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+    mode: installMode,
     spec: raw,
     logger: createPluginInstallLogger(),
   });
@@ -518,6 +539,7 @@ export async function runPluginInstallCommand(params: {
     if (!bundledFallbackPlan) {
       const hookFallback = await tryInstallHookPackFromNpmSpec({
         config: cfg,
+        installMode,
         spec: raw,
         pin: opts.pin,
       });

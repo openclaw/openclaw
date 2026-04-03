@@ -34,6 +34,7 @@ import {
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import {
   formatDiscordUserTag,
   resolveDiscordSystemLocation,
@@ -386,7 +387,7 @@ export async function preflightDiscordMessage(
 
   const dmPolicy = params.discordConfig?.dmPolicy ?? params.discordConfig?.dm?.policy ?? "pairing";
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-  const resolvedAccountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
   let commandAuthorized = true;
   if (isDirectMessage) {

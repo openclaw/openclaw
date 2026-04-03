@@ -4,11 +4,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async (importOriginal) => {
+vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
-  return mockNodeBuiltinModule(importOriginal, {
-    execFile: execFileMock,
-  });
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      execFile: Object.assign(execFileMock, {
+        __promisify__: vi.fn(),
+      }) as typeof import("node:child_process").execFile,
+    },
+  );
 });
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";

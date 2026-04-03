@@ -5,6 +5,7 @@ import {
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
+  runSetupWizardFinalize,
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 
@@ -66,6 +67,28 @@ describe("feishu setup wizard", () => {
       feishuPlugin.setup?.resolveAccountId?.({
         cfg: {} as never,
         accountId: "work",
+        input: {},
+      } as never),
+    ).toBe("work");
+  });
+
+  it("setup adapter uses configured defaultAccount when accountId is omitted", () => {
+    expect(
+      feishuPlugin.setup?.resolveAccountId?.({
+        cfg: {
+          channels: {
+            feishu: {
+              defaultAccount: "work",
+              accounts: {
+                work: {
+                  appId: "work-app",
+                  appSecret: "work-secret", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        } as never,
+        accountId: undefined,
         input: {},
       } as never),
     ).toBe("work");
@@ -186,7 +209,12 @@ describe("feishu setup wizard", () => {
       note: vi.fn(async () => {}),
     });
 
-    const result = await feishuPlugin.setupWizard?.finalize?.({
+    const setupWizard = feishuPlugin.setupWizard;
+    if (!setupWizard || !("finalize" in setupWizard) || !setupWizard.finalize) {
+      throw new Error("feishu setupWizard.finalize unavailable");
+    }
+
+    const result = await setupWizard.finalize({
       cfg: {
         channels: {
           feishu: {
@@ -201,15 +229,21 @@ describe("feishu setup wizard", () => {
           },
         },
       } as never,
-      accountId: undefined as never,
+      accountId: "work",
+      credentialValues: {},
+      forceAllowFrom: false,
       prompter,
       runtime: createNonExitingTypedRuntimeEnv<FeishuConfigureRuntime>(),
       options: {},
     });
 
-    expect(result?.cfg.channels?.feishu?.appId).toBe("top-level-app");
-    expect(result?.cfg.channels?.feishu?.appSecret).toBe("top-level-secret");
-    expect(result?.cfg.channels?.feishu?.accounts?.work).toMatchObject({
+    expect(result && typeof result === "object" && "cfg" in result).toBe(true);
+    const nextCfg =
+      result && typeof result === "object" && "cfg" in result ? result.cfg : undefined;
+    expect(nextCfg?.channels?.feishu).toBeDefined();
+    expect(nextCfg?.channels?.feishu?.appId).toBe("top-level-app");
+    expect(nextCfg?.channels?.feishu?.appSecret).toBe("top-level-secret");
+    expect(nextCfg?.channels?.feishu?.accounts?.work).toMatchObject({
       enabled: true,
       appId: "work-app",
       appSecret: "work-secret",
@@ -278,6 +312,34 @@ describe("feishu setup wizard status", () => {
       accountOverrides: {
         feishu: "work",
       },
+    });
+
+    expect(status.configured).toBe(false);
+    expect(status.statusLines).toEqual(["Feishu: needs app credentials"]);
+  });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const status = await feishuGetStatus({
+      cfg: {
+        channels: {
+          feishu: {
+            defaultAccount: "work",
+            appId: "top_level_app",
+            appSecret: "top-level-secret", // pragma: allowlist secret
+            accounts: {
+              alerts: {
+                appId: "alerts-app",
+                appSecret: "alerts-secret", // pragma: allowlist secret
+              },
+              work: {
+                appId: "",
+                appSecret: "work-secret", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
     });
 
     expect(status.configured).toBe(false);

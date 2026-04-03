@@ -342,7 +342,12 @@ export async function dispatchReplyFromConfig(params: {
     inboundClaimContext.conversationId && inboundClaimContext.channelId
       ? resolveConversationBindingRecord({
           channel: inboundClaimContext.channelId,
-          accountId: inboundClaimContext.accountId ?? "default",
+          accountId:
+            inboundClaimContext.accountId ??
+            ((cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined)?.[
+              inboundClaimContext.channelId
+            ]?.defaultAccount as string | undefined) ??
+            "default",
           conversationId: inboundClaimContext.conversationId,
           parentConversationId: inboundClaimContext.parentConversationId,
         })

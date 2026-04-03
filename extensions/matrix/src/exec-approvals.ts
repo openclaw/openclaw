@@ -33,11 +33,11 @@ function resolveMatrixExecApprovalConfig(params: {
   const account = resolveMatrixAccount(params);
   const config = account.config.execApprovals;
   if (!config) {
-    return { enabled: false } as const;
+    return undefined;
   }
   return {
     ...config,
-    enabled: account.enabled && account.configured && config.enabled === true,
+    enabled: account.enabled && account.configured ? config.enabled : false,
   };
 }
 
@@ -46,7 +46,7 @@ function countMatrixExecApprovalEligibleAccounts(params: {
   request: ApprovalRequest;
 }): number {
   return listMatrixAccountIds(params.cfg).filter((accountId) => {
-    const account = resolveMatrixAccount({ cfg, accountId });
+    const account = resolveMatrixAccount({ cfg: params.cfg, accountId });
     if (!account.enabled || !account.configured) {
       return false;
     }
@@ -54,15 +54,24 @@ function countMatrixExecApprovalEligibleAccounts(params: {
       cfg: params.cfg,
       accountId,
     });
+    const filters = config?.enabled
+      ? {
+          agentFilter: config.agentFilter,
+          sessionFilter: config.sessionFilter,
+        }
+      : {
+          agentFilter: undefined,
+          sessionFilter: undefined,
+        };
     return (
       isChannelExecApprovalClientEnabledFromConfig({
-        enabled: config.enabled,
+        enabled: config?.enabled,
         approverCount: getMatrixExecApprovalApprovers({ cfg: params.cfg, accountId }).length,
       }) &&
       matchesApprovalRequestFilters({
         request: params.request.request,
-        agentFilter: config.agentFilter,
-        sessionFilter: config.sessionFilter,
+        agentFilter: filters.agentFilter,
+        sessionFilter: filters.sessionFilter,
       })
     );
   }).length;

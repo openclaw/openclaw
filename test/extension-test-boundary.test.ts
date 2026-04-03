@@ -158,7 +158,6 @@ describe("non-extension test boundaries", () => {
       "src/auto-reply/reply.triggers.trigger-handling.test-harness.ts",
       "src/channels/plugins/contracts/slack-outbound-harness.ts",
       "src/commands/channel-test-registry.ts",
-      "src/gateway/test-helpers.mocks.ts",
       "src/plugin-sdk/testing.ts",
     ]);
     const files = walkCode(path.join(repoRoot, "src"));

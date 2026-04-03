@@ -19,7 +19,7 @@ import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-bus.js";
-import { resolveNostrAccount } from "./types.js";
+import { resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
 
 const channel = "nostr" as const;
 
@@ -77,7 +77,7 @@ function parseNostrAllowFrom(raw: string): { entries: string[]; error?: string }
 
 const promptNostrAllowFrom = createTopLevelChannelParsedAllowFromPrompt({
   channel,
-  defaultAccountId: DEFAULT_ACCOUNT_ID,
+  defaultAccountId: resolveDefaultNostrAccountId,
   noteTitle: "Nostr allowlist",
   noteLines: NOSTR_ALLOW_FROM_HELP_LINES,
   message: "Nostr allowFrom",
@@ -96,7 +96,7 @@ const nostrDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
 });
 
 export const nostrSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => accountId?.trim() || DEFAULT_ACCOUNT_ID,
+  resolveAccountId: ({ cfg, accountId }) => accountId?.trim() || resolveDefaultNostrAccountId(cfg),
   applyAccountName: ({ cfg, accountId, name }) =>
     patchTopLevelChannelConfigSection({
       cfg,

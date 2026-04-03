@@ -688,6 +688,7 @@ export function loadWorkspaceSkillEntries(
     bundledSkillsDir?: string;
     skillFilter?: string[];
     agentId?: string;
+    eligibility?: SkillEligibilityContext;
   },
 ): SkillEntry[] {
   const entries = loadSkillEntries(workspaceDir, opts);
@@ -695,7 +696,7 @@ export function loadWorkspaceSkillEntries(
   if (effectiveSkillFilter === undefined) {
     return entries;
   }
-  return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, undefined);
+  return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
 }
 
 export function loadVisibleWorkspaceSkillEntries(
@@ -759,6 +760,7 @@ export async function syncSkillsToWorkspace(params: {
   config?: OpenClawConfig;
   skillFilter?: string[];
   agentId?: string;
+  eligibility?: SkillEligibilityContext;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
 }) {
@@ -775,6 +777,7 @@ export async function syncSkillsToWorkspace(params: {
       config: params.config,
       skillFilter: params.skillFilter,
       agentId: params.agentId,
+      eligibility: params.eligibility,
       managedSkillsDir: params.managedSkillsDir,
       bundledSkillsDir: params.bundledSkillsDir,
     });

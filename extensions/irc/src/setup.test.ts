@@ -138,6 +138,32 @@ describe("irc setup", () => {
     expect(status.statusLines).toEqual(["IRC: needs host + nick"]);
   });
 
+  it("setup status honors the configured default account", async () => {
+    const status = await ircStatus({
+      cfg: {
+        channels: {
+          irc: {
+            defaultAccount: "work",
+            accounts: {
+              ops: {
+                host: "irc.example.com",
+                nick: "ops-bot",
+              },
+              work: {
+                host: "irc.example.com",
+                nick: "",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(false);
+    expect(status.statusLines).toEqual(["IRC: needs host + nick"]);
+  });
+
   it("stores nickserv and account config patches on the scoped account", () => {
     const cfg: CoreConfig = { channels: { irc: {} } };
 

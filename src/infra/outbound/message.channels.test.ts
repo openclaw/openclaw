@@ -130,14 +130,14 @@ describe("sendMessage channel normalization", () => {
         to: "conversation:demo-target",
         channel: "workspace-chat",
         deps: {
-          sendDemoAliasChannel: vi.fn(async () => ({
+          "demo-alias-channel": vi.fn(async () => ({
             messageId: "m1",
             conversationId: "c1",
           })),
         },
       },
-      assertDeps: (deps: { sendDemoAliasChannel?: ReturnType<typeof vi.fn> }) => {
-        expect(deps.sendDemoAliasChannel).toHaveBeenCalledWith("conversation:demo-target", "hi");
+      assertDeps: (deps: { "demo-alias-channel"?: ReturnType<typeof vi.fn> }) => {
+        expect(deps["demo-alias-channel"]).toHaveBeenCalledWith("conversation:demo-target", "hi");
       },
       expectedChannel: "demo-alias-channel",
     },
@@ -154,15 +154,11 @@ describe("sendMessage channel normalization", () => {
         to: "someone@example.com",
         channel: "imsg",
         deps: {
-          sendIMessage: vi.fn(async () => ({ messageId: "i1" })),
+          imessage: vi.fn(async () => ({ messageId: "i1" })),
         },
       },
-      assertDeps: (deps: { sendIMessage?: ReturnType<typeof vi.fn> }) => {
-        expect(deps.sendIMessage).toHaveBeenCalledWith(
-          "someone@example.com",
-          "hi",
-          expect.any(Object),
-        );
+      assertDeps: (deps: { imessage?: ReturnType<typeof vi.fn> }) => {
+        expect(deps.imessage).toHaveBeenCalledWith("someone@example.com", "hi", expect.any(Object));
       },
       expectedChannel: "imessage",
     },
@@ -357,11 +353,11 @@ const createIMessageAliasPlugin = (): ChannelPlugin => ({
   outbound: {
     deliveryMode: "direct",
     sendText: async ({ deps, to, text }) => {
-      const send = deps?.sendIMessage as
+      const send = deps?.imessage as
         | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
         | undefined;
       if (!send) {
-        throw new Error("sendIMessage missing");
+        throw new Error("imessage missing");
       }
       const result = await send(to, text, {});
       return { channel: "imessage", ...result };
@@ -372,21 +368,21 @@ const createIMessageAliasPlugin = (): ChannelPlugin => ({
 const createDemoAliasOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
   sendText: async ({ deps, to, text }) => {
-    const send = deps?.sendDemoAliasChannel as
+    const send = deps?.["demo-alias-channel"] as
       | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
       | undefined;
     if (!send) {
-      throw new Error("sendDemoAliasChannel missing");
+      throw new Error("demo-alias-channel missing");
     }
     const result = await send(to, text);
     return { channel: "demo-alias-channel", ...result };
   },
   sendMedia: async ({ deps, to, text, mediaUrl }) => {
-    const send = deps?.sendDemoAliasChannel as
+    const send = deps?.["demo-alias-channel"] as
       | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
       | undefined;
     if (!send) {
-      throw new Error("sendDemoAliasChannel missing");
+      throw new Error("demo-alias-channel missing");
     }
     const result = await send(to, text, { mediaUrl });
     return { channel: "demo-alias-channel", ...result };

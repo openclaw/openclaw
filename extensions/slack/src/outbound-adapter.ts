@@ -17,6 +17,7 @@ import {
   sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { resolveSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
 import { compileSlackInteractiveReplies } from "./interactive-replies.js";
@@ -50,6 +51,7 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
 }
 
 async function applySlackMessageSendingHooks(params: {
+  cfg: NonNullable<NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"]>;
   to: string;
   text: string;
   threadTs?: string;
@@ -60,6 +62,10 @@ async function applySlackMessageSendingHooks(params: {
   if (!hookRunner?.hasHooks("message_sending")) {
     return { cancelled: false, text: params.text };
   }
+  const account = resolveSlackAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const hookResult = await hookRunner.runMessageSending(
     {
       to: params.to,
@@ -70,7 +76,7 @@ async function applySlackMessageSendingHooks(params: {
         ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
       },
     },
-    { channelId: "slack", accountId: params.accountId ?? undefined },
+    { channelId: "slack", accountId: account.accountId },
   );
   if (hookResult?.cancel) {
     return { cancelled: true, text: params.text };
@@ -79,7 +85,7 @@ async function applySlackMessageSendingHooks(params: {
 }
 
 async function sendSlackOutboundMessage(params: {
-  cfg: NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"];
+  cfg: NonNullable<NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"]>;
   to: string;
   text: string;
   mediaUrl?: string;
@@ -101,6 +107,7 @@ async function sendSlackOutboundMessage(params: {
   const threadTs =
     params.replyToId ?? (params.threadId != null ? String(params.threadId) : undefined);
   const hookResult = await applySlackMessageSendingHooks({
+    cfg: params.cfg,
     to: params.to,
     text: params.text,
     threadTs,

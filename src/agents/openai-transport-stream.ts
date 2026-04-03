@@ -20,9 +20,14 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "./openai-completions-compat.js";
+import {
+  applyOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesPayloadPolicy,
+} from "./openai-responses-payload-policy.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
+import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
 
@@ -81,12 +86,7 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
-export function sanitizeTransportPayloadText(text: string): string {
-  return text.replace(
-    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
-    "",
-  );
-}
+export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 function stringifyUnknown(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
@@ -678,13 +678,15 @@ export function buildOpenAIResponsesParams(
     { supportsDeveloperRole },
   );
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
+    storeMode: "disable",
+  });
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
-    store: false,
   };
   if (options?.maxTokens) {
     params.max_output_tokens = options.maxTokens;
@@ -692,7 +694,7 @@ export function buildOpenAIResponsesParams(
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
   }
-  if (options?.serviceTier !== undefined) {
+  if (options?.serviceTier !== undefined && payloadPolicy.allowsServiceTier) {
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
@@ -709,6 +711,7 @@ export function buildOpenAIResponsesParams(
       params.reasoning = { effort: "none" };
     }
   }
+  applyOpenAIResponsesPayloadPolicy(params as Record<string, unknown>, payloadPolicy);
   return params;
 }
 

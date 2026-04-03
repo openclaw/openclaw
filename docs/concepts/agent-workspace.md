@@ -111,7 +111,8 @@ See [Memory](/concepts/memory) for the workflow and automatic memory flush.
 
 - `skills/` (optional)
   - Workspace-specific skills.
-  - Overrides managed/bundled skills when names collide.
+  - Highest-precedence skill location for that workspace.
+  - Overrides project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
 
 - `canvas/` (optional)
   - Canvas UI files for node displays (for example `canvas/index.html`).

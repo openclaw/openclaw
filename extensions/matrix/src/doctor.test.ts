@@ -11,8 +11,10 @@ import {
   runMatrixDoctorSequence,
 } from "./doctor.js";
 
-vi.mock("./runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime-api.js")>();
+vi.mock("./matrix-migration.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./matrix-migration.runtime.js")>(
+    "./matrix-migration.runtime.js",
+  );
   return {
     ...actual,
     hasActionableMatrixMigration: vi.fn(() => false),
@@ -89,7 +91,7 @@ describe("matrix doctor", () => {
   });
 
   it("surfaces matrix sequence warnings and repair changes", async () => {
-    const runtimeApi = await import("./runtime-api.js");
+    const runtimeApi = await import("./matrix-migration.runtime.js");
     vi.mocked(runtimeApi.hasActionableMatrixMigration).mockReturnValue(true);
     vi.mocked(runtimeApi.maybeCreateMatrixMigrationSnapshot).mockResolvedValue({
       archivePath: "/tmp/matrix-backup.tgz",
@@ -107,11 +109,17 @@ describe("matrix doctor", () => {
       warnings: [],
     });
 
-    const repair = await applyMatrixDoctorRepair({ cfg: {}, env: process.env });
+    const cfg = {
+      channels: {
+        matrix: {},
+      },
+    } as never;
+
+    const repair = await applyMatrixDoctorRepair({ cfg, env: process.env });
     expect(repair.changes.join("\n")).toContain("Matrix migration snapshot");
 
     const sequence = await runMatrixDoctorSequence({
-      cfg: {},
+      cfg,
       env: process.env,
       shouldRepair: true,
     });

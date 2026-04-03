@@ -13,8 +13,9 @@ const { normalizeMessageContent, downloadMediaMessage } = vi.hoisted(() => ({
   downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
 }));
 
-vi.mock("@whiskeysockets/baileys", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@whiskeysockets/baileys")>();
+vi.mock("@whiskeysockets/baileys", async () => {
+  const actual =
+    await vi.importActual<typeof import("@whiskeysockets/baileys")>("@whiskeysockets/baileys");
   return {
     ...actual,
     DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },

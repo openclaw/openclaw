@@ -1,6 +1,6 @@
 import os from "node:os";
 import { defineConfig } from "vitest/config";
-import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "./scripts/lib/bundled-plugin-paths.mjs";
+import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "./vitest.bundled-plugin-paths.ts";
 import baseConfig from "./vitest.config.ts";
 
 const base = baseConfig as unknown as Record<string, unknown>;
@@ -15,8 +15,14 @@ const e2eWorkers =
     : defaultWorkers;
 const verboseE2E = process.env.OPENCLAW_E2E_VERBOSE === "1";
 
-const baseTest =
-  (baseConfig as { test?: { exclude?: string[]; setupFiles?: string[] } }).test ?? {};
+const baseTestWithProjects =
+  (baseConfig as { test?: { exclude?: string[]; projects?: string[]; setupFiles?: string[] } })
+    .test ?? {};
+const { projects: _projects, ...baseTest } = baseTestWithProjects as {
+  exclude?: string[];
+  projects?: string[];
+  setupFiles?: string[];
+};
 const exclude = (baseTest.exclude ?? []).filter((p) => p !== "**/*.e2e.test.ts");
 
 export default defineConfig({

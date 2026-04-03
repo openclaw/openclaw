@@ -379,8 +379,9 @@ async function expectResolutionDoesNotWait(params: {
 describe("plugin conversation binding approvals", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.doMock("../infra/home-dir.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
+    vi.doMock("../infra/home-dir.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("../infra/home-dir.js")>("../infra/home-dir.js");
       return {
         ...actual,
         expandHomePrefix: (value: string) => {
