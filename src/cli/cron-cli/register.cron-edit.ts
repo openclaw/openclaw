@@ -292,6 +292,9 @@ export function registerCronEditCommand(cron: Command) {
             }
             if (typeof opts.to === "string" || hasThreadId) {
               const threadId = typeof opts.threadId === "string" ? opts.threadId.trim() : "";
+              if (hasThreadId && !threadId) {
+                throw new Error("--thread-id must be a non-empty numeric value");
+              }
               if (threadId && !/^\d+$/.test(threadId)) {
                 throw new Error("--thread-id must be a numeric value");
               }
@@ -332,6 +335,11 @@ export function registerCronEditCommand(cron: Command) {
                   }
                 }
                 if (!toRaw) {
+                  if (existingMode === "webhook") {
+                    throw new Error(
+                      "--thread-id requires --to when re-targeting from webhook delivery",
+                    );
+                  }
                   if (existingChannel.toLowerCase() !== "telegram") {
                     throw new Error(
                       "--thread-id requires --to when existing target is not Telegram",

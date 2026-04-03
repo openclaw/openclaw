@@ -444,6 +444,27 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects empty --thread-id on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid-empty-thread-id",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--channel",
+      "telegram",
+      "--to",
+      "-1001234567890",
+      "--thread-id",
+      "   ",
+    ]);
+  });
+
   it("rejects --thread-id on systemEvent cron add jobs", async () => {
     await expectCronCommandExit([
       "cron",
@@ -626,6 +647,20 @@ describe("cron cli", () => {
     await expectCronCommandExit(["cron", "edit", "job-1", "--no-deliver", "--thread-id", "48"]);
   });
 
+  it("rejects empty --thread-id on cron edit", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "edit",
+      "job-1",
+      "--channel",
+      "telegram",
+      "--to",
+      "-1001234567890",
+      "--thread-id",
+      "   ",
+    ]);
+  });
+
   it("resolves --thread-id existing target from page-2 cron.list lookup on edit", async () => {
     resetGatewayMock();
     mockCronEditPagedJobLookup({
@@ -709,6 +744,21 @@ describe("cron cli", () => {
     const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
     expect(patch?.patch?.delivery?.mode).toBe("announce");
     expect(patch?.patch?.delivery?.to).toBe("-1001234567890:topic:48");
+  });
+
+  it("rejects --thread-id when re-targeting webhook job with --announce but without --to", async () => {
+    resetGatewayMock();
+    mockCronEditPagedJobLookup({
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      delivery: { mode: "webhook", channel: "telegram", to: "https://example.com/hook" },
+    });
+    const program = buildProgram();
+    await expect(
+      program.parseAsync(
+        ["cron", "edit", "job-1", "--announce", "--channel", "telegram", "--thread-id", "48"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
   });
 
   it("supports --no-deliver on cron edit", async () => {

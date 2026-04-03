@@ -217,7 +217,11 @@ export function registerCronAddCommand(cron: Command) {
                   : "announce"
               : undefined;
 
-          const threadIdRaw = typeof opts.threadId === "string" ? opts.threadId.trim() : "";
+          const hasThreadIdOption = typeof opts.threadId === "string";
+          const threadIdRaw = hasThreadIdOption ? String(opts.threadId).trim() : "";
+          if (hasThreadIdOption && !threadIdRaw) {
+            throw new Error("--thread-id must be a non-empty numeric value");
+          }
           if (threadIdRaw && (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")) {
             throw new Error("--thread-id is only supported for non-main agentTurn jobs");
           }
