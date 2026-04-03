@@ -118,11 +118,26 @@ export function listAccountIds(cfg: OpenClawConfig): string[] {
   });
 }
 
+export function resolveDefaultTwitchAccountId(cfg: OpenClawConfig): string {
+  const preferred =
+    typeof cfg.channels?.twitch?.defaultAccount === "string"
+      ? cfg.channels.twitch.defaultAccount.trim()
+      : "";
+  const ids = listAccountIds(cfg);
+  if (preferred && ids.includes(preferred)) {
+    return preferred;
+  }
+  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  return ids[0] ?? DEFAULT_ACCOUNT_ID;
+}
+
 export function resolveTwitchAccountContext(
   cfg: OpenClawConfig,
   accountId?: string | null,
 ): ResolvedTwitchAccountContext {
-  const resolvedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId = accountId?.trim() || resolveDefaultTwitchAccountId(cfg);
   const account = getAccountConfig(cfg, resolvedAccountId);
   const tokenResolution = resolveTwitchToken(cfg, { accountId: resolvedAccountId });
   return {
