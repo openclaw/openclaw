@@ -36,8 +36,9 @@ export const whatsappSetupWizard: ChannelSetupWizard = {
           })),
         )
       ).find((entry) => entry.linked)?.accountId;
-      const label = linkedAccountId
-        ? `WhatsApp (${linkedAccountId === DEFAULT_ACCOUNT_ID ? "default" : linkedAccountId})`
+      const labelAccountId = accountId ?? linkedAccountId;
+      const label = labelAccountId
+        ? `WhatsApp (${labelAccountId === DEFAULT_ACCOUNT_ID ? "default" : labelAccountId})`
         : "WhatsApp";
       return [`${label}: ${configured ? "linked" : "not linked"}`];
     },
