@@ -114,10 +114,17 @@ export class ContextArchive {
 
   /**
    * Validate that a path is inside the archive directory
+   * Uses realpath to prevent symlink bypass attacks
    */
   private validateArchivePath(requestedPath: string): string {
-    const resolved = path.resolve(requestedPath);
-    const archiveRoot = path.resolve(this.config.archiveDir);
+    // Ensure archive directory exists and get its real path
+    if (!fs.existsSync(this.config.archiveDir)) {
+      throw new Error("Archive directory does not exist");
+    }
+    const archiveRoot = fs.realpathSync(this.config.archiveDir);
+
+    // Get real path of requested file (will throw if file doesn't exist)
+    const resolved = fs.realpathSync(requestedPath);
 
     if (!resolved.startsWith(archiveRoot + path.sep)) {
       throw new Error("Archive path is outside the allowed archive directory");
@@ -263,10 +270,17 @@ ${decisionsSection}---
           const tokensMatch = frontmatter.match(/tokens_saved:\s*(\d+)/);
           const idMatch = file.match(/archive_([^_]+)_/);
 
+          const sessionIdMatch = frontmatter.match(/session_id:\s*(.+)/);
           const topic = topicMatch ? topicMatch[1].trim() : "Unknown";
           const createdAt = createdAtMatch ? createdAtMatch[1].trim() : "";
           const tokensSaved = tokensMatch ? parseInt(tokensMatch[1], 10) : 0;
+          const archiveSessionId = sessionIdMatch ? sessionIdMatch[1].trim() : "";
           const id = idMatch ? idMatch[1] : file;
+
+          // Filter by session ID for data isolation
+          if (archiveSessionId !== this.sessionId) {
+            continue;
+          }
 
           if (topic_keyword && !topic.toLowerCase().includes(topic_keyword.toLowerCase())) {
             continue;
