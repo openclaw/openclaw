@@ -85,16 +85,6 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   };
 });
 
-// agent-components.ts can bind the core dispatcher via reply-runtime re-exports,
-// so keep this direct mock to avoid hitting real embedded-agent dispatch in tests.
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
@@ -701,16 +691,14 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    await vi.waitFor(() => {
-      expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ctx: expect.objectContaining({
-            conversationId: "channel:group-dm-1",
-            senderId: "123456789",
-          }),
+    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          conversationId: "channel:group-dm-1",
+          senderId: "123456789",
         }),
-      );
-    });
+      }),
+    );
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 

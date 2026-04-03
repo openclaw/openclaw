@@ -11,23 +11,21 @@ import {
 import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth";
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
 import { logError } from "openclaw/plugin-sdk/text-runtime";
 import {
-  createDiscordFormModal,
   parseDiscordComponentCustomId,
   parseDiscordModalCustomId,
-  type DiscordComponentEntry,
-  type DiscordModalEntry,
-} from "../components.js";
+} from "../component-custom-id.js";
+import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
 import {
   type DiscordGuildEntryResolved,
   isDiscordGroupAllowedByPolicy,

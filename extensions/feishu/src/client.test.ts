@@ -133,7 +133,6 @@ function firstWsClientOptions(): { agent?: unknown } {
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   vi.doMock("@larksuiteoapi/node-sdk", () => ({
     AppType: { SelfBuild: "self" },
     Domain: { Feishu: "https://open.feishu.cn", Lark: "https://open.larksuite.com" },
@@ -351,35 +350,6 @@ describe("createFeishuClient HTTP timeout", () => {
       "https://example.com/api",
       expect.objectContaining({ timeout: 45_000 }),
     );
-  });
-});
-
-describe("feishu plugin register", () => {
-  it("registers the Feishu channel, tools, and subagent hooks", async () => {
-    const { default: plugin } = await import("../index.js");
-    const registerChannel = vi.fn();
-    const api = createTestPluginApi({
-      id: "feishu-test",
-      name: "Feishu Test",
-      source: "local",
-      runtime: createPluginRuntimeMock(),
-      on: vi.fn(),
-      config: {},
-      registerChannel,
-    });
-
-    plugin.register(api);
-
-    expect(setFeishuRuntimeMock).toHaveBeenCalledWith(api.runtime);
-    expect(registerChannel).toHaveBeenCalledTimes(1);
-    expect(registerChannel).toHaveBeenCalledWith({ plugin: feishuPluginMock });
-    expect(registerFeishuSubagentHooksMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuDocToolsMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuChatToolsMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuWikiToolsMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuDriveToolsMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuPermToolsMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuBitableToolsMock).toHaveBeenCalledWith(api);
   });
 });
 

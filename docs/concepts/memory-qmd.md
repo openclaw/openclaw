@@ -150,6 +150,12 @@ Set to `120000` for slower hardware.
 **Empty results in group chats?** Check `memory.qmd.scope` -- the default only
 allows DM sessions.
 
+**Workspace-visible temp repos causing `ENAMETOOLONG` or broken indexing?**
+QMD traversal currently follows the underlying QMD scanner behavior rather than
+OpenClaw's builtin symlink rules. Keep temporary monorepo checkouts under
+hidden directories like `.tmp/` or outside indexed QMD roots until QMD exposes
+cycle-safe traversal or explicit exclusion controls.
+
 ## Configuration
 
 For the full config surface (`memory.qmd.*`), search modes, update intervals,

@@ -1,7 +1,26 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
+
+vi.mock("../../../../src/infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: async (params: {
+    url: string;
+    init?: RequestInit;
+    fetchImpl?: typeof fetch;
+  }) => {
+    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+    if (!fetchImpl) {
+      throw new Error("fetch is not available");
+    }
+    const response = await fetchImpl(params.url, params.init);
+    return {
+      response,
+      finalUrl: params.url,
+      release: async () => {},
+    };
+  },
+}));
 
 const createFetchMock = () =>
   vi.fn(async (_input?: unknown, _init?: unknown) => ({
@@ -17,6 +36,10 @@ const createGeminiFetchMock = () =>
     json: async () => ({ embedding: { values: [1, 2, 3] } }),
   }));
 
+function installFetchMock(fetchMock: typeof globalThis.fetch) {
+  vi.stubGlobal("fetch", fetchMock);
+}
+
 function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
   const [url, init] = fetchMock.mock.calls[0] ?? [];
   return { url, init: init as RequestInit | undefined };
@@ -31,13 +54,17 @@ let nodeLlamaModule: typeof import("./node-llama.js");
 let createEmbeddingProvider: EmbeddingsModule["createEmbeddingProvider"];
 let DEFAULT_LOCAL_MODEL: EmbeddingsModule["DEFAULT_LOCAL_MODEL"];
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
   authModule = await import("../../../../src/agents/model-auth.js");
   nodeLlamaModule = await import("./node-llama.js");
   vi.spyOn(authModule, "resolveApiKeyForProvider");
   vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp");
   ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
+});
+
+beforeEach(() => {
+  vi.useRealTimers();
 });
 
 afterEach(() => {
@@ -99,7 +126,7 @@ function createAutoProvider(model = "") {
 describe("embedding provider remote overrides", () => {
   it("uses remote baseUrl/apiKey and merges headers", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -149,7 +176,7 @@ describe("embedding provider remote overrides", () => {
 
   it("falls back to resolved api key when remote apiKey is blank", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -185,7 +212,7 @@ describe("embedding provider remote overrides", () => {
 
   it("builds Gemini embeddings requests with api key header", async () => {
     const fetchMock = createGeminiFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -237,7 +264,7 @@ describe("embedding provider remote overrides", () => {
 
   it("uses GEMINI_API_KEY env indirection for Gemini remote apiKey", async () => {
     const fetchMock = createGeminiFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     vi.stubEnv("GEMINI_API_KEY", "env-gemini-key");
 
@@ -261,7 +288,7 @@ describe("embedding provider remote overrides", () => {
 
   it("builds Mistral embeddings requests with bearer auth", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -304,7 +331,7 @@ describe("embedding provider auto selection", () => {
       status: 200,
       json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
     }));
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
@@ -392,7 +419,7 @@ describe("embedding provider auto selection", () => {
       vi.resetAllMocks();
       vi.unstubAllGlobals();
       const fetchMock = testCase.fetchMockFactory();
-      vi.stubGlobal("fetch", fetchMock);
+      installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
       mockPublicPinnedHostname();
       vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) =>
         testCase.resolveApiKey(provider),
@@ -412,7 +439,7 @@ describe("embedding provider local fallback", () => {
     mockMissingLocalEmbeddingDependency();
 
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
 
     mockResolvedProviderKey("provider-key");
 
@@ -552,11 +579,6 @@ describe("local embedding ensureContext concurrency", () => {
     vi.doUnmock("./node-llama.js");
   });
 
-  afterEach(() => {
-    vi.resetModules();
-    vi.doUnmock("./node-llama.js");
-  });
-
   async function setupLocalProviderWithMockedInit(params?: {
     initializationDelayMs?: number;
     failFirstGetLlama?: boolean;
@@ -685,6 +707,7 @@ describe("FTS-only fallback when no provider available", () => {
   beforeEach(async () => {
     authModule = await import("../../../../src/agents/model-auth.js");
     ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
+    vi.spyOn(authModule, "resolveApiKeyForProvider");
   });
 
   it("returns null provider when all requested auth paths fail", async () => {

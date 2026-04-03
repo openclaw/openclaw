@@ -8,18 +8,18 @@ import {
   type SessionBindingCapabilities,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
-import { createDiscordThreadBindingManager } from "../../../plugin-sdk/discord.js";
+import { createThreadBindingManager as createDiscordThreadBindingManager } from "../../../plugin-sdk/discord-thread-bindings.js";
 import { createFeishuThreadBindingManager } from "../../../plugin-sdk/feishu.js";
 import {
   listLineAccountIds,
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../../../plugin-sdk/line.js";
+import { setMatrixRuntime } from "../../../plugin-sdk/matrix-runtime-surface.js";
 import {
   createMatrixThreadBindingManager,
   resetMatrixThreadBindingsForTests,
-  setMatrixRuntime,
-} from "../../../plugin-sdk/matrix.js";
+} from "../../../plugin-sdk/matrix-surface.js";
 import { loadBundledPluginTestApiSync } from "../../../test-utils/bundled-plugin-public-surface.js";
 import {
   listBundledChannelPlugins,
@@ -928,7 +928,7 @@ const sessionBindingContractEntries: Record<
       adapterAvailable: true,
       bindSupported: true,
       unbindSupported: true,
-      placements: ["current"],
+      placements: ["current", "child"],
     },
     getCapabilities: () => {
       void createChannelConversationBindingManager({

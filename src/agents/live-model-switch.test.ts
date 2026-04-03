@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
 const state = vi.hoisted(() => ({
@@ -40,7 +40,6 @@ async function loadModule() {
 
 describe("live model switch", () => {
   beforeEach(() => {
-    vi.resetModules();
     state.abortEmbeddedPiRunMock.mockReset().mockReturnValue(false);
     state.requestEmbeddedRunModelSwitchMock.mockReset();
     state.consumeEmbeddedRunModelSwitchMock.mockReset();
@@ -50,11 +49,6 @@ describe("live model switch", () => {
     state.loadSessionStoreMock.mockReset().mockReturnValue({});
     state.resolveStorePathMock.mockReset().mockReturnValue("/tmp/session-store.json");
   });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
   it("resolves persisted session overrides ahead of agent defaults", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {

@@ -114,6 +114,50 @@ describe("TelegramExecApprovalHandler", () => {
     );
   });
 
+  it("hides allow-always actions when ask=always", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["8460800771"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested({
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        ask: "always",
+      },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "-1003841603622",
+      expect.not.stringContaining("allow-always"),
+      expect.objectContaining({
+        buttons: [
+          [
+            {
+              text: "Allow Once",
+              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once",
+              style: "success",
+            },
+            {
+              text: "Deny",
+              callback_data: "/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 deny",
+              style: "danger",
+            },
+          ],
+        ],
+      }),
+    );
+  });
+
   it("falls back to approver DMs when channel routing is unavailable", async () => {
     const cfg = {
       channels: {
@@ -141,6 +185,40 @@ describe("TelegramExecApprovalHandler", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
     expect(sendMessage.mock.calls.map((call) => call[0])).toEqual(["111", "222"]);
+  });
+
+  it("does not double-send in direct chats when the origin chat is the approver DM", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["8460800771"],
+            target: "dm",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested({
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        sessionKey: "agent:main:telegram:direct:8460800771",
+        turnSourceTo: "telegram:8460800771",
+        turnSourceThreadId: undefined,
+      },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "8460800771",
+      expect.stringContaining("/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once"),
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
   });
 
   it("clears buttons from tracked approval messages when resolved", async () => {
@@ -207,6 +285,34 @@ describe("TelegramExecApprovalHandler", () => {
         ]),
       }),
     );
+  });
+
+  it("delivers plugin approvals when the agent only exists in the Telegram session key", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["8460800771"],
+            agentFilter: ["main"],
+            target: "dm",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested({
+      ...pluginRequest,
+      request: {
+        ...pluginRequest.request,
+        agentId: undefined,
+      },
+    });
+
+    const [chatId, text] = sendMessage.mock.calls[0] ?? [];
+    expect(chatId).toBe("8460800771");
+    expect(text).toContain("Plugin approval required");
   });
 
   it("does not deliver plugin approvals for a different Telegram account", async () => {
@@ -303,6 +409,64 @@ describe("TelegramExecApprovalHandler", () => {
           messageThreadId: 928,
         }),
       );
+    } finally {
+      await fs.rm(sessionStoreDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the explicit Telegram turn-source account over stale session account state", async () => {
+    const sessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tg-approvals-"));
+    const storePath = path.join(sessionStoreDir, "sessions.json");
+    try {
+      await updateSessionStore(storePath, (store) => {
+        store[baseRequest.request.sessionKey] = {
+          sessionId: "session-secondary",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "-1003841603622",
+            accountId: "secondary",
+            threadId: 928,
+          },
+        };
+      });
+
+      const cfg = {
+        session: { store: storePath },
+        channels: {
+          telegram: {
+            execApprovals: {
+              enabled: true,
+              approvers: ["8460800771"],
+              target: "channel",
+            },
+            accounts: {
+              secondary: {
+                execApprovals: {
+                  enabled: true,
+                  approvers: ["999"],
+                  target: "channel",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const defaultHandler = createHandler(cfg, "default");
+      const secondaryHandler = createHandler(cfg, "secondary");
+
+      await defaultHandler.handler.handleRequested(baseRequest);
+      await secondaryHandler.handler.handleRequested(baseRequest);
+
+      expect(defaultHandler.sendMessage).toHaveBeenCalledWith(
+        "-1003841603622",
+        expect.stringContaining("/approve 9f1c7d5d-b1fb-46ef-ac45-662723b65bb7 allow-once"),
+        expect.objectContaining({
+          accountId: "default",
+          messageThreadId: 928,
+        }),
+      );
+      expect(secondaryHandler.sendMessage).not.toHaveBeenCalled();
     } finally {
       await fs.rm(sessionStoreDir, { recursive: true, force: true });
     }

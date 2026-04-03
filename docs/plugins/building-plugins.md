@@ -273,3 +273,11 @@ internal imports — never import your own plugin through its SDK path.
     Full manifest schema reference
   </Card>
 </CardGroup>
+
+## Related
+
+- [Plugin Architecture](/plugins/architecture) — internal architecture deep dive
+- [SDK Overview](/plugins/sdk-overview) — Plugin SDK reference
+- [Manifest](/plugins/manifest) — plugin manifest format
+- [Channel Plugins](/plugins/sdk-channel-plugins) — building channel plugins
+- [Provider Plugins](/plugins/sdk-provider-plugins) — building provider plugins

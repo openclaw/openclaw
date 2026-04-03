@@ -149,7 +149,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
     expect(budget.deferredRunConcurrency).toBe(1);
   });
 
-  it("backs off isolated workers and enlarges unit batches on saturated high-memory locals", () => {
+  it("backs off isolated workers and shrinks unit batches on saturated high-memory locals", () => {
     const runtime = resolveRuntimeCapabilities(
       {
         RUNNER_OS: "macOS",
@@ -167,7 +167,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
     expect(runtime.memoryBand).toBe("high");
     expect(runtime.loadBand).toBe("saturated");
     expect(budget.unitIsolatedWorkers).toBe(1);
-    expect(budget.unitFastBatchTargetMs).toBe(90_000);
+    expect(budget.unitFastBatchTargetMs).toBe(22_500);
   });
 
   it("keeps CI windows policy constrained independently of host load", () => {

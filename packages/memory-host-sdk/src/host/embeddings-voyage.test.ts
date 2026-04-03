@@ -1,6 +1,26 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as authModule from "../../../../src/agents/model-auth.js";
 import { type FetchMock, withFetchPreconnect } from "../../../../src/test-utils/fetch-mock.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
+
+vi.mock("../../../../src/infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: async (params: {
+    url: string;
+    init?: RequestInit;
+    fetchImpl?: typeof fetch;
+  }) => {
+    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+    if (!fetchImpl) {
+      throw new Error("fetch is not available");
+    }
+    const response = await fetchImpl(params.url, params.init);
+    return {
+      response,
+      finalUrl: params.url,
+      release: async () => {},
+    };
+  },
+}));
 
 vi.mock("../../../../src/agents/model-auth.js", async () => {
   const { createModelAuthMockModule } =
@@ -19,17 +39,21 @@ const createFetchMock = () => {
   return withFetchPreconnect(fetchMock);
 };
 
-let authModule: typeof import("../../../../src/agents/model-auth.js");
+function installFetchMock(fetchMock: typeof globalThis.fetch) {
+  vi.stubGlobal("fetch", fetchMock);
+}
+
 let createVoyageEmbeddingProvider: typeof import("./embeddings-voyage.js").createVoyageEmbeddingProvider;
 let normalizeVoyageModel: typeof import("./embeddings-voyage.js").normalizeVoyageModel;
 
-beforeEach(async () => {
-  vi.useRealTimers();
-  vi.doUnmock("undici");
-  vi.resetModules();
-  authModule = await import("../../../../src/agents/model-auth.js");
+beforeAll(async () => {
   ({ createVoyageEmbeddingProvider, normalizeVoyageModel } =
     await import("./embeddings-voyage.js"));
+});
+
+beforeEach(() => {
+  vi.useRealTimers();
+  vi.doUnmock("undici");
 });
 
 function mockVoyageApiKey() {
@@ -44,7 +68,7 @@ async function createDefaultVoyageProvider(
   model: string,
   fetchMock: ReturnType<typeof createFetchMock>,
 ) {
-  vi.stubGlobal("fetch", fetchMock);
+  installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
   mockPublicPinnedHostname();
   mockVoyageApiKey();
   return createVoyageEmbeddingProvider({
@@ -91,7 +115,7 @@ describe("voyage embedding provider", () => {
 
   it("respects remote overrides for baseUrl and apiKey", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
 
     const result = await createVoyageEmbeddingProvider({

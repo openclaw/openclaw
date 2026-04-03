@@ -450,6 +450,9 @@ export const OpenClawSchema = z
             billingBackoffHoursByProvider: z.record(z.string(), z.number().positive()).optional(),
             billingMaxHours: z.number().positive().optional(),
             failureWindowHours: z.number().positive().optional(),
+            overloadedProfileRotations: z.number().int().nonnegative().optional(),
+            overloadedBackoffMs: z.number().int().nonnegative().optional(),
+            rateLimitedProfileRotations: z.number().int().nonnegative().optional(),
           })
           .strict()
           .optional(),
@@ -723,6 +726,12 @@ export const OpenClawSchema = z
           .object({
             deny: z.array(z.string()).optional(),
             allow: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
+        webchat: z
+          .object({
+            chatHistoryMaxChars: z.number().int().positive().max(500_000).optional(),
           })
           .strict()
           .optional(),

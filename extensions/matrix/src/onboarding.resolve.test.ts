@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -13,9 +13,11 @@ vi.mock("./resolve-targets.js", () => ({
 let runMatrixAddAccountAllowlistConfigure: typeof import("./onboarding.test-harness.js").runMatrixAddAccountAllowlistConfigure;
 
 describe("matrix onboarding account-scoped resolution", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ runMatrixAddAccountAllowlistConfigure } = await import("./onboarding.test-harness.js"));
+  });
+
+  beforeEach(() => {
     installMatrixTestRuntime();
     resolveMatrixTargetsMock.mockClear();
   });

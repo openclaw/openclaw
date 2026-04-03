@@ -26,6 +26,7 @@ export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-l
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { fetchRemoteMedia } from "../media/fetch.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { loadWebMedia } from "./web-media.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export {

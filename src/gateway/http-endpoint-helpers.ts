@@ -20,6 +20,10 @@ export async function handleGatewayPostJsonEndpoint(
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
     requiredOperatorMethod?: "chat.send" | (string & Record<never, never>);
+    resolveOperatorScopes?: (
+      req: IncomingMessage,
+      requestAuth: AuthorizedGatewayHttpRequest,
+    ) => string[];
   },
 ): Promise<false | { body: unknown; requestAuth: AuthorizedGatewayHttpRequest } | undefined> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
@@ -45,7 +49,9 @@ export async function handleGatewayPostJsonEndpoint(
   }
 
   if (opts.requiredOperatorMethod) {
-    const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
+    const requestedScopes =
+      opts.resolveOperatorScopes?.(req, requestAuth) ??
+      resolveTrustedHttpOperatorScopes(req, requestAuth);
     const scopeAuth = authorizeOperatorScopesForMethod(
       opts.requiredOperatorMethod,
       requestedScopes,

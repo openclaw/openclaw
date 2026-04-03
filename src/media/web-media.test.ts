@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createJpegBufferWithDimensions, createPngBufferWithDimensions } from "./test-helpers.js";
 
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
 
@@ -10,13 +11,19 @@ const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
 let fixtureRoot = "";
+let oversizedJpegFile = "";
 let tinyPngFile = "";
 
 beforeAll(async () => {
   ({ loadWebMedia } = await import("./web-media.js"));
   fixtureRoot = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "web-media-core-"));
   tinyPngFile = path.join(fixtureRoot, "tiny.png");
+  oversizedJpegFile = path.join(fixtureRoot, "oversized.jpg");
   await fs.writeFile(tinyPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
+  await fs.writeFile(
+    oversizedJpegFile,
+    createJpegBufferWithDimensions({ width: 6_000, height: 5_000 }),
+  );
 });
 
 afterAll(async () => {
@@ -88,6 +95,24 @@ describe("loadWebMedia", () => {
     await expectLoadedWebMediaCase(createUrl());
   });
 
+  it("rejects oversized pixel-count images before decode/resize backends run", async () => {
+    const oversizedPngFile = path.join(fixtureRoot, "oversized.png");
+    await fs.writeFile(
+      oversizedPngFile,
+      createPngBufferWithDimensions({ width: 8_000, height: 4_000 }),
+    );
+
+    await expect(loadWebMedia(oversizedPngFile, createLocalWebMediaOptions())).rejects.toThrow(
+      /pixel input limit/i,
+    );
+  });
+
+  it("preserves pixel-limit errors for oversized JPEG optimization", async () => {
+    await expect(loadWebMedia(oversizedJpegFile, createLocalWebMediaOptions())).rejects.toThrow(
+      /pixel input limit/i,
+    );
+  });
+
   it.each([
     {
       name: "rejects remote-host file URLs before filesystem checks",
@@ -107,5 +132,43 @@ describe("loadWebMedia", () => {
     },
   ] as const)("$name", async (testCase) => {
     await expectRejectedWebMediaWithoutFilesystemAccess(testCase);
+  });
+
+  describe("workspaceDir relative path resolution", () => {
+    it("resolves a bare filename against workspaceDir", async () => {
+      const result = await loadWebMedia("tiny.png", {
+        ...createLocalWebMediaOptions(),
+        workspaceDir: fixtureRoot,
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    });
+
+    it("resolves a dot-relative path against workspaceDir", async () => {
+      const result = await loadWebMedia("./tiny.png", {
+        ...createLocalWebMediaOptions(),
+        workspaceDir: fixtureRoot,
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    });
+
+    it("resolves a MEDIA:-prefixed relative path against workspaceDir", async () => {
+      const result = await loadWebMedia("MEDIA:tiny.png", {
+        ...createLocalWebMediaOptions(),
+        workspaceDir: fixtureRoot,
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    });
+
+    it("leaves absolute paths unchanged when workspaceDir is set", async () => {
+      const result = await loadWebMedia(tinyPngFile, {
+        ...createLocalWebMediaOptions(),
+        workspaceDir: "/some/other/dir",
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    });
   });
 });

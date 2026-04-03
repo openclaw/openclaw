@@ -31,7 +31,6 @@ import {
   resolveConfigIncludes,
 } from "./includes.js";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
-import { normalizeLegacyWebSearchConfig } from "./legacy-web-search.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import {
   asResolvedSourceConfig,
@@ -1721,7 +1720,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
       for (const w of readResolution.envWarnings) {
         deps.logger.warn(
-          `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} — feature using this value will be unavailable`,
+          `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} - feature using this value will be unavailable`,
         );
       }
       warnOnConfigMiskeys(effectiveConfigRaw, deps.logger);
@@ -1971,7 +1970,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       // sections reference unset env vars (e.g. optional provider API keys).
       const envVarWarnings = readResolution.envWarnings.map((w) => ({
         path: w.configPath,
-        message: `Missing env var "${w.varName}" — feature using this value will be unavailable`,
+        message: `Missing env var "${w.varName}" - feature using this value will be unavailable`,
       }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
@@ -2021,7 +2020,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const nodeErr = err as NodeJS.ErrnoException;
       let message: string;
       if (nodeErr?.code === "EACCES") {
-        // Permission denied — common in Docker/container deployments where the
+        // Permission denied - common in Docker/container deployments where the
         // config file is owned by root but the gateway runs as a non-root user.
         const uid = process.getuid?.();
         const uidHint = typeof uid === "number" ? String(uid) : "$(id -u)";
@@ -2123,7 +2122,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
     // Restore ${VAR} env var references that were resolved during config loading.
     // Read the current file (pre-substitution) and restore any references whose
-    // resolved values match the incoming config — so we don't overwrite
+    // resolved values match the incoming config - so we don't overwrite
     // "${ANTHROPIC_API_KEY}" with "sk-ant-..." when the caller didn't change it.
     //
     // We use only the root file's parsed content (no $include resolution) to avoid
@@ -2134,7 +2133,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     // persisted to disk (issue #56772).
     // Apply legacy web-search normalization so that migration results are still
     // persisted even though we bypass validated.config.
-    let cfgToWrite = normalizeLegacyWebSearchConfig(persistCandidate) as OpenClawConfig;
+    let cfgToWrite = persistCandidate as OpenClawConfig;
     try {
       if (deps.fs.existsSync(configPath)) {
         const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");
@@ -2179,7 +2178,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         }
       }
     }
-    // Do NOT apply runtime defaults when writing — user config should only contain
+    // Do NOT apply runtime defaults when writing - user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(outputConfig);
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");

@@ -17,7 +17,7 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
-import { ADMIN_SCOPE } from "./method-scopes.js";
+import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
@@ -49,6 +49,19 @@ export type AuthorizedGatewayHttpRequest = {
   trustDeclaredOperatorScopes: boolean;
 };
 
+export function resolveHttpBrowserOriginPolicy(
+  req: IncomingMessage,
+  cfg = loadConfig(),
+): NonNullable<Parameters<typeof authorizeHttpGatewayConnect>[0]["browserOriginPolicy"]> {
+  return {
+    requestHost: getHeader(req, "host"),
+    origin: getHeader(req, "origin"),
+    allowedOrigins: cfg.gateway?.controlUi?.allowedOrigins,
+    allowHostHeaderOriginFallback:
+      cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+  };
+}
+
 function usesSharedSecretHttpAuth(auth: SharedSecretGatewayAuth | undefined): boolean {
   return auth?.mode === "token" || auth?.mode === "password";
 }
@@ -79,6 +92,7 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
   rateLimiter?: AuthRateLimiter;
 }): Promise<AuthorizedGatewayHttpRequest | null> {
   const token = getBearerToken(params.req);
+  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req);
   const authResult = await authorizeHttpGatewayConnect({
     auth: params.auth,
     connectAuth: token ? { token, password: token } : null,
@@ -86,6 +100,7 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
     rateLimiter: params.rateLimiter,
+    browserOriginPolicy,
   });
   if (!authResult.ok) {
     sendGatewayAuthFailure(params.res, authResult);
@@ -93,6 +108,10 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
   }
   return {
     authMethod: authResult.method,
+    // Shared-secret bearer auth proves possession of the gateway secret, but it
+    // does not prove a narrower per-request operator identity. HTTP endpoints
+    // must opt in explicitly if they want to treat that shared-secret path as a
+    // full trusted-operator surface.
     trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
   };
 }
@@ -116,7 +135,13 @@ export function resolveTrustedHttpOperatorScopes(
     return [];
   }
 
-  const raw = getHeader(req, "x-openclaw-scopes")?.trim();
+  const headerValue = getHeader(req, "x-openclaw-scopes");
+  if (headerValue === undefined) {
+    // No scope header present — trusted clients without an explicit header
+    // get the default operator scopes (matching pre-#57783 behavior).
+    return [...CLI_DEFAULT_OPERATOR_SCOPES];
+  }
+  const raw = headerValue.trim();
   if (!raw) {
     return [];
   }
@@ -126,6 +151,20 @@ export function resolveTrustedHttpOperatorScopes(
     .filter((scope) => scope.length > 0);
 }
 
+export function resolveOpenAiCompatibleHttpOperatorScopes(
+  req: IncomingMessage,
+  requestAuth: AuthorizedGatewayHttpRequest,
+): string[] {
+  if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
+    // Shared-secret HTTP bearer auth is a documented trusted-operator surface
+    // for the compat APIs and direct /tools/invoke. This is designed-as-is:
+    // token/password auth proves possession of the gateway operator secret, not
+    // a narrower per-request scope identity, so restore the normal defaults.
+    return [...CLI_DEFAULT_OPERATOR_SCOPES];
+  }
+  return resolveTrustedHttpOperatorScopes(req, requestAuth);
+}
+
 export function resolveHttpSenderIsOwner(
   req: IncomingMessage,
   authOrRequest?:
@@ -133,6 +172,20 @@ export function resolveHttpSenderIsOwner(
     | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">,
 ): boolean {
   return resolveTrustedHttpOperatorScopes(req, authOrRequest).includes(ADMIN_SCOPE);
+}
+
+export function resolveOpenAiCompatibleHttpSenderIsOwner(
+  req: IncomingMessage,
+  requestAuth: AuthorizedGatewayHttpRequest,
+): boolean {
+  if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
+    // Shared-secret HTTP bearer auth also carries owner semantics on the compat
+    // APIs and direct /tools/invoke. This is intentional: there is no separate
+    // per-request owner primitive on that shared-secret path, so owner-only
+    // tool policy follows the documented trusted-operator contract.
+    return true;
+  }
+  return resolveHttpSenderIsOwner(req, requestAuth);
 }
 
 export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {

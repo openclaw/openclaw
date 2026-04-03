@@ -21,7 +21,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -229,7 +229,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -529,7 +529,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -884,14 +884,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         allowFrom: {
           type: "array",
           items: {
-            anyOf: [
-              {
-                type: "string",
-              },
-              {
-                type: "number",
-              },
-            ],
+            type: "string",
           },
         },
         defaultTo: {
@@ -910,14 +903,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             allowFrom: {
               type: "array",
               items: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "number",
-                  },
-                ],
+                type: "string",
               },
             },
             groupEnabled: {
@@ -926,14 +912,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             groupChannels: {
               type: "array",
               items: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "number",
-                  },
-                ],
+                type: "string",
               },
             },
           },
@@ -1017,27 +996,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               users: {
                 type: "array",
                 items: {
-                  anyOf: [
-                    {
-                      type: "string",
-                    },
-                    {
-                      type: "number",
-                    },
-                  ],
+                  type: "string",
                 },
               },
               roles: {
                 type: "array",
                 items: {
-                  anyOf: [
-                    {
-                      type: "string",
-                    },
-                    {
-                      type: "number",
-                    },
-                  ],
+                  type: "string",
                 },
               },
               channels: {
@@ -1123,27 +1088,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     users: {
                       type: "array",
                       items: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "number",
-                          },
-                        ],
+                        type: "string",
                       },
                     },
                     roles: {
                       type: "array",
                       items: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "number",
-                          },
-                        ],
+                        type: "string",
                       },
                     },
                     systemPrompt: {
@@ -1224,14 +1175,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             approvers: {
               type: "array",
               items: {
-                anyOf: [
-                  {
-                    type: "string",
-                  },
-                  {
-                    type: "number",
-                  },
-                ],
+                type: "string",
               },
             },
             agentFilter: {
@@ -1737,7 +1681,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -2092,14 +2036,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               allowFrom: {
                 type: "array",
                 items: {
-                  anyOf: [
-                    {
-                      type: "string",
-                    },
-                    {
-                      type: "number",
-                    },
-                  ],
+                  type: "string",
                 },
               },
               defaultTo: {
@@ -2118,14 +2055,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   allowFrom: {
                     type: "array",
                     items: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "number",
-                        },
-                      ],
+                      type: "string",
                     },
                   },
                   groupEnabled: {
@@ -2134,14 +2064,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   groupChannels: {
                     type: "array",
                     items: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "number",
-                        },
-                      ],
+                      type: "string",
                     },
                   },
                 },
@@ -2225,27 +2148,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     users: {
                       type: "array",
                       items: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "number",
-                          },
-                        ],
+                        type: "string",
                       },
                     },
                     roles: {
                       type: "array",
                       items: {
-                        anyOf: [
-                          {
-                            type: "string",
-                          },
-                          {
-                            type: "number",
-                          },
-                        ],
+                        type: "string",
                       },
                     },
                     channels: {
@@ -2331,27 +2240,13 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                           users: {
                             type: "array",
                             items: {
-                              anyOf: [
-                                {
-                                  type: "string",
-                                },
-                                {
-                                  type: "number",
-                                },
-                              ],
+                              type: "string",
                             },
                           },
                           roles: {
                             type: "array",
                             items: {
-                              anyOf: [
-                                {
-                                  type: "string",
-                                },
-                                {
-                                  type: "number",
-                                },
-                              ],
+                              type: "string",
                             },
                           },
                           systemPrompt: {
@@ -2432,14 +2327,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   approvers: {
                     type: "array",
                     items: {
-                      anyOf: [
-                        {
-                          type: "string",
-                        },
-                        {
-                          type: "number",
-                        },
-                      ],
+                      type: "string",
                     },
                   },
                   agentFilter: {
@@ -3127,6 +3015,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       token: {
         label: "Discord Bot Token",
         help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
+        sensitive: true,
       },
     },
   },
@@ -5044,7 +4933,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -5320,7 +5209,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -5820,7 +5709,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -6106,7 +5995,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -6537,7 +6426,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -6547,6 +6436,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         allowPrivateNetwork: {
           type: "boolean",
+        },
+        proxy: {
+          type: "string",
         },
         userId: {
           type: "string",
@@ -6716,6 +6608,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
           enum: ["open", "disabled", "allowlist"],
         },
+        blockStreaming: {
+          type: "boolean",
+        },
         streaming: {
           anyOf: [
             {
@@ -6847,6 +6742,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 ],
               },
             },
+            threadReplies: {
+              type: "string",
+              enum: ["off", "inbound", "always"],
+            },
           },
           additionalProperties: false,
         },
@@ -6856,6 +6755,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           additionalProperties: {
             type: "object",
             properties: {
+              account: {
+                type: "string",
+              },
               enabled: {
                 type: "boolean",
               },
@@ -6935,6 +6837,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           additionalProperties: {
             type: "object",
             properties: {
+              account: {
+                type: "string",
+              },
               enabled: {
                 type: "boolean",
               },
@@ -7065,7 +6970,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -7346,7 +7251,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -7641,7 +7546,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -8077,7 +7982,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -8408,7 +8313,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -8756,13 +8661,76 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
         },
         privateKey: {
-          type: "string",
+          anyOf: [
+            {
+              type: "string",
+            },
+            {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "env",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "file",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "exec",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          ],
         },
         relays: {
           type: "array",
@@ -8828,6 +8796,362 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
     },
   },
   {
+    pluginId: "qqbot",
+    channelId: "qqbot",
+    label: "QQ Bot",
+    description:
+      "connect to QQ via official QQ Bot API with group chat and direct message support.",
+    schema: {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        enabled: {
+          type: "boolean",
+        },
+        name: {
+          type: "string",
+        },
+        appId: {
+          type: "string",
+        },
+        clientSecret: {
+          anyOf: [
+            {
+              type: "string",
+            },
+            {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "env",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "file",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "exec",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          ],
+        },
+        clientSecretFile: {
+          type: "string",
+        },
+        allowFrom: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
+        systemPrompt: {
+          type: "string",
+        },
+        markdownSupport: {
+          type: "boolean",
+        },
+        voiceDirectUploadFormats: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        audioFormatPolicy: {
+          type: "object",
+          properties: {
+            sttDirectFormats: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            uploadDirectFormats: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            transcodeEnabled: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
+        },
+        urlDirectUpload: {
+          type: "boolean",
+        },
+        upgradeUrl: {
+          type: "string",
+        },
+        upgradeMode: {
+          type: "string",
+          enum: ["doc", "hot-reload"],
+        },
+        tts: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            provider: {
+              type: "string",
+            },
+            baseUrl: {
+              type: "string",
+            },
+            apiKey: {
+              type: "string",
+            },
+            model: {
+              type: "string",
+            },
+            voice: {
+              type: "string",
+            },
+            authStyle: {
+              type: "string",
+              enum: ["bearer", "api-key"],
+            },
+            queryParams: {
+              type: "object",
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {
+                type: "string",
+              },
+            },
+            speed: {
+              type: "number",
+            },
+          },
+          additionalProperties: false,
+        },
+        stt: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            provider: {
+              type: "string",
+            },
+            baseUrl: {
+              type: "string",
+            },
+            apiKey: {
+              type: "string",
+            },
+            model: {
+              type: "string",
+            },
+          },
+          additionalProperties: false,
+        },
+        accounts: {
+          type: "object",
+          properties: {},
+          additionalProperties: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              name: {
+                type: "string",
+              },
+              appId: {
+                type: "string",
+              },
+              clientSecret: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              clientSecretFile: {
+                type: "string",
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              systemPrompt: {
+                type: "string",
+              },
+              markdownSupport: {
+                type: "boolean",
+              },
+              voiceDirectUploadFormats: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              audioFormatPolicy: {
+                type: "object",
+                properties: {
+                  sttDirectFormats: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  uploadDirectFormats: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  transcodeEnabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              urlDirectUpload: {
+                type: "boolean",
+              },
+              upgradeUrl: {
+                type: "string",
+              },
+              upgradeMode: {
+                type: "string",
+                enum: ["doc", "hot-reload"],
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        defaultAccount: {
+          type: "string",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     pluginId: "signal",
     channelId: "signal",
     label: "Signal",
@@ -8850,7 +9174,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -9162,7 +9486,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -9589,12 +9913,50 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
+        execApprovals: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+            },
+            approvers: {
+              type: "array",
+              items: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "number",
+                  },
+                ],
+              },
+            },
+            agentFilter: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            sessionFilter: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            target: {
+              type: "string",
+              enum: ["dm", "channel", "both"],
+            },
+          },
+          additionalProperties: false,
+        },
         markdown: {
           type: "object",
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -10398,12 +10760,50 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
+              execApprovals: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  approvers: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                  agentFilter: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  sessionFilter: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  target: {
+                    type: "string",
+                    enum: ["dm", "channel", "both"],
+                  },
+                },
+                additionalProperties: false,
+              },
               markdown: {
                 type: "object",
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -11164,6 +11564,30 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Slack Interactive Replies",
         help: "Enable agent-authored Slack interactive reply directives (`[[slack_buttons: ...]]`, `[[slack_select: ...]]`). Default: false.",
       },
+      execApprovals: {
+        label: "Slack Exec Approvals",
+        help: "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this workspace account.",
+      },
+      "execApprovals.enabled": {
+        label: "Slack Exec Approvals Enabled",
+        help: 'Controls Slack native exec approvals for this account: unset or "auto" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.',
+      },
+      "execApprovals.approvers": {
+        label: "Slack Exec Approval Approvers",
+        help: "Slack user IDs allowed to approve exec requests for this workspace account. Use Slack user IDs or user targets such as `U123`, `user:U123`, or `<@U123>`. If you leave this unset, OpenClaw falls back to commands.ownerAllowFrom when possible.",
+      },
+      "execApprovals.agentFilter": {
+        label: "Slack Exec Approval Agent Filter",
+        help: 'Optional allowlist of agent IDs eligible for Slack exec approvals, for example `["main", "ops-agent"]`. Use this to keep approval prompts scoped to the agents you actually operate from Slack.',
+      },
+      "execApprovals.sessionFilter": {
+        label: "Slack Exec Approval Session Filter",
+        help: "Optional session-key filters matched as substring or regex-style patterns before Slack approval routing is used. Use narrow patterns so Slack approvals only appear for intended sessions.",
+      },
+      "execApprovals.target": {
+        label: "Slack Exec Approval Target",
+        help: 'Controls where Slack approval prompts are sent: "dm" sends to approver DMs (default), "channel" sends to the originating Slack chat/thread, and "both" sends to both. Channel delivery exposes the command text to the chat, so only use it in trusted channels.',
+      },
       streaming: {
         label: "Slack Streaming Mode",
         help: 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
@@ -11284,7 +11708,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -11572,9 +11996,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     agentId: {
                       type: "string",
                     },
+                    errorPolicy: {
+                      type: "string",
+                      enum: ["always", "once", "silent"],
+                    },
+                    errorCooldownMs: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
                   },
                   additionalProperties: false,
                 },
+              },
+              errorPolicy: {
+                type: "string",
+                enum: ["always", "once", "silent"],
+              },
+              errorCooldownMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
               },
             },
             additionalProperties: false,
@@ -11785,9 +12227,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     agentId: {
                       type: "string",
                     },
+                    errorPolicy: {
+                      type: "string",
+                      enum: ["always", "once", "silent"],
+                    },
+                    errorCooldownMs: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
                   },
                   additionalProperties: false,
                 },
+              },
+              errorPolicy: {
+                type: "string",
+                enum: ["always", "once", "silent"],
+              },
+              errorCooldownMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
               },
               requireTopic: {
                 type: "boolean",
@@ -12138,6 +12598,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         ackReaction: {
           type: "string",
         },
+        errorPolicy: {
+          type: "string",
+          enum: ["always", "once", "silent"],
+        },
+        errorCooldownMs: {
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
         apiRoot: {
           type: "string",
           format: "uri",
@@ -12235,7 +12704,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -12523,9 +12992,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                           agentId: {
                             type: "string",
                           },
+                          errorPolicy: {
+                            type: "string",
+                            enum: ["always", "once", "silent"],
+                          },
+                          errorCooldownMs: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
                         },
                         additionalProperties: false,
                       },
+                    },
+                    errorPolicy: {
+                      type: "string",
+                      enum: ["always", "once", "silent"],
+                    },
+                    errorCooldownMs: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
                     },
                   },
                   additionalProperties: false,
@@ -12736,9 +13223,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                           agentId: {
                             type: "string",
                           },
+                          errorPolicy: {
+                            type: "string",
+                            enum: ["always", "once", "silent"],
+                          },
+                          errorCooldownMs: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
                         },
                         additionalProperties: false,
                       },
+                    },
+                    errorPolicy: {
+                      type: "string",
+                      enum: ["always", "once", "silent"],
+                    },
+                    errorCooldownMs: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
                     },
                     requireTopic: {
                       type: "boolean",
@@ -13089,6 +13594,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               ackReaction: {
                 type: "string",
               },
+              errorPolicy: {
+                type: "string",
+                enum: ["always", "once", "silent"],
+              },
+              errorCooldownMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
               apiRoot: {
                 type: "string",
                 format: "uri",
@@ -13207,15 +13721,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       execApprovals: {
         label: "Telegram Exec Approvals",
-        help: "Telegram-native exec approval routing and approver authorization. Enable this only when Telegram should act as an explicit exec-approval client for the selected bot account.",
+        help: "Telegram-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for the selected bot account.",
       },
       "execApprovals.enabled": {
         label: "Telegram Exec Approvals Enabled",
-        help: "Enable Telegram exec approvals for this account. When false or unset, Telegram messages/buttons cannot approve exec requests.",
+        help: 'Controls Telegram native exec approvals for this account: unset or "auto" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.',
       },
       "execApprovals.approvers": {
         label: "Telegram Exec Approval Approvers",
-        help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs; prompts are only delivered to these approvers when target includes dm.",
+        help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs. If you leave this unset, OpenClaw falls back to numeric owner IDs inferred from channels.telegram.allowFrom and direct-message defaultTo when possible.",
       },
       "execApprovals.agentFilter": {
         label: "Telegram Exec Approval Agent Filter",
@@ -13440,7 +13954,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   properties: {
                     tables: {
                       type: "string",
-                      enum: ["off", "bullets", "code"],
+                      enum: ["off", "bullets", "code", "block"],
                     },
                   },
                   additionalProperties: false,
@@ -13527,7 +14041,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   properties: {
                     tables: {
                       type: "string",
-                      enum: ["off", "bullets", "code"],
+                      enum: ["off", "bullets", "code", "block"],
                     },
                   },
                   additionalProperties: false,
@@ -13637,7 +14151,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -13830,6 +14344,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           required: ["direct", "group"],
           additionalProperties: false,
         },
+        reactionLevel: {
+          type: "string",
+          enum: ["off", "ack", "minimal", "extensive"],
+        },
         debounceMs: {
           default: 0,
           type: "integer",
@@ -13882,7 +14400,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -14075,6 +14593,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 required: ["direct", "group"],
                 additionalProperties: false,
               },
+              reactionLevel: {
+                type: "string",
+                enum: ["off", "ack", "minimal", "extensive"],
+              },
               debounceMs: {
                 default: 0,
                 type: "integer",
@@ -14192,7 +14714,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -14398,7 +14920,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,
@@ -14618,7 +15140,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           properties: {
             tables: {
               type: "string",
-              enum: ["off", "bullets", "code"],
+              enum: ["off", "bullets", "code", "block"],
             },
           },
           additionalProperties: false,
@@ -14735,7 +15257,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 properties: {
                   tables: {
                     type: "string",
-                    enum: ["off", "bullets", "code"],
+                    enum: ["off", "bullets", "code", "block"],
                   },
                 },
                 additionalProperties: false,

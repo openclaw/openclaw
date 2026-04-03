@@ -515,6 +515,8 @@ export async function finalizeSetupWizard(
     );
   }
 
+  const { describeCodexNativeWebSearch } = await import("../agents/codex-native-web-search.js");
+  const codexNativeSummary = describeCodexNativeWebSearch(nextConfig);
   const webSearchProvider = nextConfig.tools?.web?.search?.provider;
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
   const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
@@ -594,6 +596,15 @@ export async function finalizeSetupWizard(
         ].join("\n"),
         "Web search",
       );
+    } else if (codexNativeSummary) {
+      await prompter.note(
+        [
+          "Managed web search provider was skipped.",
+          codexNativeSummary,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
     } else {
       await prompter.note(
         [
@@ -605,6 +616,17 @@ export async function finalizeSetupWizard(
         "Web search",
       );
     }
+  }
+
+  if (codexNativeSummary) {
+    await prompter.note(
+      [
+        codexNativeSummary,
+        "Used only for Codex-capable models.",
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
+      "Codex native search",
+    );
   }
 
   await prompter.note(

@@ -841,6 +841,30 @@ describe("redactConfigSnapshot", () => {
     expectGatewayAuthFieldValue(result, "password", REDACTED_SENTINEL);
   });
 
+  it("redacts privateKey paths even when absent from uiHints (defense in depth)", () => {
+    const hints: ConfigUiHints = {
+      "some.other.path": { sensitive: true },
+    };
+    const snapshot = makeSnapshot({
+      channels: {
+        nostr: {
+          privateKey: "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
+          relays: ["wss://relay.example.com"],
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.nostr.privateKey).toBe(REDACTED_SENTINEL);
+    expect(channels.nostr.relays).toEqual(["wss://relay.example.com"]);
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.channels.nostr.privateKey).toBe(
+      "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
+    );
+  });
+
   it("redacts and restores dynamic env catchall secrets when uiHints miss the path", () => {
     const hints: ConfigUiHints = {
       "some.other.path": { sensitive: true },

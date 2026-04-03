@@ -154,6 +154,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Session behavior
   session: {
     scope: "per-sender",
+    dmScope: "per-channel-peer", // recommended for multi-user inboxes
     reset: {
       mode: "daily",
       atHour: 4,
@@ -288,7 +289,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       },
       sandbox: {
         mode: "non-main",
-        perSession: true,
+        scope: "session", // preferred over legacy perSession: true
         workspaceRoot: "~/.openclaw/sandboxes",
         docker: {
           image: "openclaw-sandbox:bookworm-slim",

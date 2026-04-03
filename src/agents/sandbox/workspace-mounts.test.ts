@@ -58,9 +58,6 @@ describe("appendWorkspaceMountArgs", () => {
     });
 
     const mounts = args.filter((arg) => arg.startsWith("/tmp/"));
-    expect(mounts).toEqual([
-      "/tmp/workspace:/workspace:ro,z",
-      "/tmp/agent-workspace:/agent:ro,z",
-    ]);
+    expect(mounts).toEqual(["/tmp/workspace:/workspace:ro,z", "/tmp/agent-workspace:/agent:ro,z"]);
   });
 });

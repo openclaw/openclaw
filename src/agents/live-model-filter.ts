@@ -7,16 +7,29 @@ export type ModelRef = {
 };
 
 function isHighSignalClaudeModelId(id: string): boolean {
-  if (!/\bclaude\b/i.test(id)) {
+  const normalized = id.replace(/[_.]/g, "-");
+  if (!/\bclaude\b/i.test(normalized)) {
     return true;
   }
-  if (/\bhaiku\b/i.test(id)) {
+  if (/\bhaiku\b/i.test(normalized)) {
     return false;
   }
-  if (/\bclaude-3(?:[-.]5|[-.]7)\b/i.test(id)) {
+  if (/\bclaude-3(?:[-.]5|[-.]7)\b/i.test(normalized)) {
     return false;
   }
-  return true;
+  const versionMatch = normalized.match(/\bclaude-[a-z0-9-]*?-(\d+)(?:-(\d+))?(?:\b|[-])/i);
+  if (!versionMatch) {
+    return false;
+  }
+  const major = Number.parseInt(versionMatch[1] ?? "0", 10);
+  const minor = Number.parseInt(versionMatch[2] ?? "0", 10);
+  if (major > 4) {
+    return true;
+  }
+  if (major < 4) {
+    return false;
+  }
+  return minor >= 6;
 }
 
 export function isModernModelRef(ref: ModelRef): boolean {

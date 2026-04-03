@@ -1,12 +1,12 @@
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
-import { approveNodePairing, getPairedNode, requestNodePairing } from "../infra/node-pairing.js";
+import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   issueOperatorToken,
   loadDeviceIdentity,
   openTrackedWs,
+  pairDeviceIdentity,
 } from "./device-authz.test-helpers.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
@@ -18,39 +18,25 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-async function connectNodeClientWithPairing(params: {
+async function connectNodeClient(params: {
   port: number;
   deviceIdentity: ReturnType<typeof loadDeviceIdentity>["identity"];
   commands: string[];
 }) {
-  const connect = async () =>
-    await connectGatewayClient({
-      url: `ws://127.0.0.1:${params.port}`,
-      token: "secret",
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      clientDisplayName: "node-command-pin",
-      clientVersion: "1.0.0",
-      platform: "darwin",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      commands: params.commands,
-      deviceIdentity: params.deviceIdentity,
-      timeoutMessage: "timeout waiting for paired node to connect",
-    });
-
-  try {
-    return await connect();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes("pairing required")) {
-      throw error;
-    }
-    const pairing = await listDevicePairing();
-    for (const pending of pairing.pending) {
-      await approveDevicePairing(pending.requestId);
-    }
-    return await connect();
-  }
+  return await connectGatewayClient({
+    url: `ws://127.0.0.1:${params.port}`,
+    token: "secret",
+    role: "node",
+    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    clientDisplayName: "node-command-pin",
+    clientVersion: "1.0.0",
+    platform: "darwin",
+    mode: GATEWAY_CLIENT_MODES.NODE,
+    scopes: [],
+    commands: params.commands,
+    deviceIdentity: params.deviceIdentity,
+    timeoutMessage: "timeout waiting for paired node to connect",
+  });
 }
 
 describe("gateway node pairing authorization", () => {
@@ -86,7 +72,9 @@ describe("gateway node pairing authorization", () => {
       expect(approve.ok).toBe(false);
       expect(approve.error?.message).toBe("missing scope: operator.write");
 
-      await expect(getPairedNode("node-approve-target")).resolves.toBeNull();
+      await expect(
+        import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
+      ).resolves.toBeNull();
     } finally {
       pairingWs?.close();
       started.ws.close();
@@ -127,7 +115,9 @@ describe("gateway node pairing authorization", () => {
       expect(approve.ok).toBe(false);
       expect(approve.error?.message).toBe("missing scope: operator.admin");
 
-      await expect(getPairedNode("node-approve-target")).resolves.toBeNull();
+      await expect(
+        import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
+      ).resolves.toBeNull();
     } finally {
       pairingWs?.close();
       started.ws.close();
@@ -136,9 +126,15 @@ describe("gateway node pairing authorization", () => {
     }
   });
 
-  test("pins connected node commands to the approved pairing record", async () => {
+  test("does not pin connected node commands to the approved pairing record", async () => {
     const started = await startServerWithClient("secret");
-    const pairedNode = loadDeviceIdentity("node-command-pin");
+    const pairedNode = await pairDeviceIdentity({
+      name: "node-command-pin",
+      role: "node",
+      scopes: [],
+      clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientMode: GATEWAY_CLIENT_MODES.NODE,
+    });
 
     let controlWs: WebSocket | undefined;
     let firstClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
@@ -147,7 +143,7 @@ describe("gateway node pairing authorization", () => {
       controlWs = await openTrackedWs(started.port);
       await connectOk(controlWs, { token: "secret" });
 
-      firstClient = await connectNodeClientWithPairing({
+      firstClient = await connectNodeClient({
         port: started.port,
         deviceIdentity: pairedNode.identity,
         commands: ["canvas.snapshot"],
@@ -161,7 +157,7 @@ describe("gateway node pairing authorization", () => {
       });
       await approveNodePairing(request.request.requestId);
 
-      nodeClient = await connectNodeClientWithPairing({
+      nodeClient = await connectNodeClient({
         port: started.port,
         deviceIdentity: pairedNode.identity,
         commands: ["canvas.snapshot", "system.run"],
@@ -178,27 +174,19 @@ describe("gateway node pairing authorization", () => {
           (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
         );
         if (
-          JSON.stringify(node?.commands?.toSorted() ?? []) === JSON.stringify(["canvas.snapshot"])
+          JSON.stringify(node?.commands?.toSorted() ?? []) ===
+          JSON.stringify(["canvas.snapshot", "system.run"])
         ) {
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
-      const connectedNode = lastNodes.find(
-        (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
-      );
-      expect(connectedNode?.commands?.toSorted(), JSON.stringify(lastNodes)).toEqual([
-        "canvas.snapshot",
-      ]);
-
-      const invoke = await rpcReq(controlWs, "node.invoke", {
-        nodeId: pairedNode.identity.deviceId,
-        command: "system.run",
-        params: { command: "echo blocked" },
-        idempotencyKey: "node-command-pin",
-      });
-      expect(invoke.ok).toBe(false);
-      expect(invoke.error?.message ?? "").toContain("node command not allowed");
+      expect(
+        lastNodes
+          .find((entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected)
+          ?.commands?.toSorted(),
+        JSON.stringify(lastNodes),
+      ).toEqual(["canvas.snapshot", "system.run"]);
     } finally {
       controlWs?.close();
       await firstClient?.stopAndWait();
@@ -209,31 +197,29 @@ describe("gateway node pairing authorization", () => {
     }
   });
 
-  test("treats paired nodes without stored commands as having no approved commands", async () => {
+  test("does not request repair pairing when a paired node reconnects with more commands", async () => {
     const started = await startServerWithClient("secret");
-    const pairedNode = loadDeviceIdentity("node-command-empty");
+    const pairedNode = await pairDeviceIdentity({
+      name: "node-command-empty",
+      role: "node",
+      scopes: [],
+      clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientMode: GATEWAY_CLIENT_MODES.NODE,
+    });
 
     let controlWs: WebSocket | undefined;
-    let firstClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let nodeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     try {
       controlWs = await openTrackedWs(started.port);
       await connectOk(controlWs, { token: "secret" });
 
-      firstClient = await connectNodeClientWithPairing({
-        port: started.port,
-        deviceIdentity: pairedNode.identity,
-        commands: ["canvas.snapshot"],
-      });
-      await firstClient.stopAndWait();
-
-      const request = await requestNodePairing({
+      const initialApproval = await requestNodePairing({
         nodeId: pairedNode.identity.deviceId,
         platform: "darwin",
       });
-      await approveNodePairing(request.request.requestId);
+      await approveNodePairing(initialApproval.request.requestId);
 
-      nodeClient = await connectNodeClientWithPairing({
+      nodeClient = await connectNodeClient({
         port: started.port,
         deviceIdentity: pairedNode.identity,
         commands: ["canvas.snapshot", "system.run"],
@@ -249,18 +235,29 @@ describe("gateway node pairing authorization", () => {
         const node = lastNodes.find(
           (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
         );
-        if ((node?.commands?.length ?? 0) === 0) {
+        if (
+          JSON.stringify(node?.commands?.toSorted() ?? []) ===
+          JSON.stringify(["canvas.snapshot", "system.run"])
+        ) {
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
-      const connectedNode = lastNodes.find(
+      const repairedNode = lastNodes.find(
         (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
       );
-      expect(connectedNode?.commands ?? [], JSON.stringify(lastNodes)).toEqual([]);
+      expect(repairedNode?.commands?.toSorted(), JSON.stringify(lastNodes)).toEqual([
+        "canvas.snapshot",
+        "system.run",
+      ]);
+
+      await expect(listNodePairing()).resolves.toEqual(
+        expect.objectContaining({
+          pending: [],
+        }),
+      );
     } finally {
       controlWs?.close();
-      await firstClient?.stopAndWait();
       await nodeClient?.stopAndWait();
       started.ws.close();
       await started.server.close();

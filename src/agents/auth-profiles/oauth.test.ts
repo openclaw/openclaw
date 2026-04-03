@@ -364,6 +364,26 @@ describe("resolveApiKeyForProfile secret refs", () => {
     });
   });
 
+  it("hard-fails when oauth mode is combined with token SecretRef input", async () => {
+    const profileId = "anthropic:oauth-secretref-token";
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "anthropic", "oauth"),
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "token",
+              provider: "anthropic",
+              tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
+            },
+          },
+        },
+        profileId,
+      }),
+    ).rejects.toThrow(/mode is "oauth"/i);
+  });
+
   it("resolves inline ${ENV} api_key values", async () => {
     const profileId = "openai:inline-env";
     const previous = process.env.OPENAI_API_KEY;

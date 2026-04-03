@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "../../runtime-api.js";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { getMatrixRuntime } from "../../runtime.js";
 import { resolveMatrixStoragePaths } from "../client/storage.js";
 import type { MatrixAuth } from "../client/types.js";

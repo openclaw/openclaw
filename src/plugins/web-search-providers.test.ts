@@ -11,6 +11,7 @@ const EXPECTED_BUNDLED_WEB_SEARCH_PROVIDER_KEYS = [
   "xai:grok",
   "moonshot:kimi",
   "perplexity:perplexity",
+  "searxng:searxng",
   "tavily:tavily",
 ] as const;
 const EXPECTED_BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = [
@@ -22,6 +23,7 @@ const EXPECTED_BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = [
   "xai",
   "moonshot",
   "perplexity",
+  "searxng",
   "tavily",
 ] as const;
 const EXPECTED_BUNDLED_WEB_SEARCH_CREDENTIAL_PATHS = [
@@ -33,6 +35,7 @@ const EXPECTED_BUNDLED_WEB_SEARCH_CREDENTIAL_PATHS = [
   "plugins.entries.xai.config.webSearch.apiKey",
   "plugins.entries.moonshot.config.webSearch.apiKey",
   "plugins.entries.perplexity.config.webSearch.apiKey",
+  "plugins.entries.searxng.config.webSearch.baseUrl",
   "plugins.entries.tavily.config.webSearch.apiKey",
 ] as const;
 

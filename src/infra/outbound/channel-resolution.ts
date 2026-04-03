@@ -53,12 +53,14 @@ function maybeBootstrapChannelPlugin(params: {
   }
   bootstrapAttempts.add(attemptKey);
 
-  const autoEnabled = applyPluginAutoEnable({ config: cfg }).config;
-  const defaultAgentId = resolveDefaultAgentId(autoEnabled);
-  const workspaceDir = resolveAgentWorkspaceDir(autoEnabled, defaultAgentId);
+  const autoEnabled = applyPluginAutoEnable({ config: cfg });
+  const defaultAgentId = resolveDefaultAgentId(autoEnabled.config);
+  const workspaceDir = resolveAgentWorkspaceDir(autoEnabled.config, defaultAgentId);
   try {
     resolveRuntimePluginRegistry({
-      config: autoEnabled,
+      config: autoEnabled.config,
+      activationSourceConfig: cfg,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
       workspaceDir,
       runtimeOptions: {
         allowGatewaySubagentBinding: true,

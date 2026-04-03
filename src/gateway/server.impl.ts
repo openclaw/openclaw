@@ -53,7 +53,10 @@ import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { resolveBundledPluginInstallCommandHint } from "../plugins/bundled-sources.js";
-import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
+import {
+  resolveConfiguredDeferredChannelPluginIds,
+  resolveGatewayStartupPluginIds,
+} from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -502,6 +505,7 @@ export async function startGatewayServer(
     });
 
   let cfgAtStart: OpenClawConfig;
+  let startupInternalWriteHash: string | null = null;
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
   const authBootstrap = await prepareGatewayStartupConfig({
     configSnapshot,
@@ -536,11 +540,16 @@ export async function startGatewayServer(
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
-  cfgAtStart = await maybeSeedControlUiAllowedOriginsAtStartup({
+  const controlUiSeed = await maybeSeedControlUiAllowedOriginsAtStartup({
     config: cfgAtStart,
     writeConfig: writeConfigFile,
     log,
   });
+  cfgAtStart = controlUiSeed.config;
+  if (authBootstrap.persistedGeneratedToken || controlUiSeed.persistedAllowedOriginsSeed) {
+    const startupSnapshot = await readConfigFileSnapshot();
+    startupInternalWriteHash = startupSnapshot.hash ?? null;
+  }
   await runStartupMatrixMigration({
     cfg: cfgAtStart,
     env: process.env,
@@ -585,19 +594,29 @@ export async function startGatewayServer(
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
       });
+  const startupPluginIds = minimalTestGateway
+    ? []
+    : resolveGatewayStartupPluginIds({
+        config: gatewayPluginConfigAtStart,
+        workspaceDir: defaultWorkspaceDir,
+        env: process.env,
+      });
   const baseMethods = listGatewayMethods();
   const emptyPluginRegistry = createEmptyPluginRegistry();
   let pluginRegistry = emptyPluginRegistry;
   let baseGatewayMethods = baseMethods;
   if (!minimalTestGateway) {
+    log.info("loading plugins...");
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayStartupPlugins({
       cfg: gatewayPluginConfigAtStart,
       workspaceDir: defaultWorkspaceDir,
       log,
       coreGatewayHandlers,
       baseMethods,
+      pluginIds: startupPluginIds,
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
     }));
+    log.info(`plugins loaded (${pluginRegistry.plugins.length} plugins)`);
   } else {
     setActivePluginRegistry(emptyPluginRegistry);
   }
@@ -709,6 +728,7 @@ export async function startGatewayServer(
     channelManager,
     startedAt: serverStartedAt,
   });
+  log.info("starting HTTP server...");
   const {
     canvasHost,
     releasePluginRouteRegistry,
@@ -1352,9 +1372,11 @@ export async function startGatewayServer(
           log,
           coreGatewayHandlers,
           baseMethods,
+          pluginIds: startupPluginIds,
           logDiagnostics: false,
         }));
       }
+      log.info("starting channels and sidecars...");
       ({ pluginServices } = await startGatewaySidecars({
         cfg: gatewayPluginConfigAtStart,
         pluginRegistry,
@@ -1424,6 +1446,7 @@ export async function startGatewayServer(
 
           return startGatewayConfigReloader({
             initialConfig: cfgAtStart,
+            initialInternalWriteHash: startupInternalWriteHash,
             readSnapshot: readConfigFileSnapshot,
             subscribeToWrites: registerConfigWriteListener,
             onHotReload: async (plan, nextConfig) => {

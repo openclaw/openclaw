@@ -77,6 +77,89 @@ describe("legacy migrate mention routing", () => {
     expect(res.changes).toEqual([]);
     expect(res.config).toBeNull();
   });
+
+  it("moves channels.telegram.groupMentionsOnly into groups.*.requireMention", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
+    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(true);
+    expect(
+      (res.config?.channels?.telegram as { groupMentionsOnly?: unknown } | undefined)
+        ?.groupMentionsOnly,
+    ).toBeUndefined();
+  });
+
+  it('keeps explicit channels.telegram.groups."*".requireMention when migrating groupMentionsOnly', () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: {
+            "*": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*" already set).',
+    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
+    expect(
+      (res.config?.channels?.telegram as { groupMentionsOnly?: unknown } | undefined)
+        ?.groupMentionsOnly,
+    ).toBeUndefined();
+  });
+
+  it("does not overwrite invalid channels.telegram.groups when migrating groupMentionsOnly", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: [],
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
+    );
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
+
+  it('does not overwrite invalid channels.telegram.groups."*" when migrating groupMentionsOnly', () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: {
+            "*": false,
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
+    );
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
 });
 
 describe("legacy migrate tts provider shape", () => {
@@ -200,6 +283,38 @@ describe("legacy migrate tts provider shape", () => {
 
     expect(res.changes).toEqual([]);
     expect(res.config).toBeNull();
+  });
+});
+
+describe("legacy migrate x_search auth", () => {
+  it("moves only legacy x_search auth into plugin-owned xai config", () => {
+    const res = migrateLegacyConfig({
+      tools: {
+        web: {
+          x_search: {
+            apiKey: "xai-legacy-key",
+            enabled: true,
+            model: "grok-4-1-fast",
+          },
+        },
+      },
+    });
+
+    expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(res.config?.plugins?.entries?.xai).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "xai-legacy-key",
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
+    ]);
   });
 });
 

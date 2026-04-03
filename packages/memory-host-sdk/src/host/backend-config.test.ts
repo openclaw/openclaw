@@ -113,6 +113,55 @@ describe("resolveMemoryBackendConfig", () => {
     expect(devNames.has("workspace-dev")).toBe(true);
   });
 
+  it("merges default and per-agent qmd extra collections", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/workspace/root",
+          memorySearch: {
+            qmd: {
+              extraCollections: [
+                {
+                  path: "/shared/team-notes",
+                  name: "team-notes",
+                  pattern: "**/*.md",
+                },
+              ],
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            workspace: "/workspace/root",
+            memorySearch: {
+              qmd: {
+                extraCollections: [
+                  {
+                    path: "notes",
+                    name: "notes",
+                    pattern: "**/*.md",
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const names = new Set((resolved.qmd?.collections ?? []).map((collection) => collection.name));
+    expect(names.has("team-notes")).toBe(true);
+    expect(names.has("notes-main")).toBe(true);
+  });
+
   it("preserves explicit custom collection names for paths outside the workspace", () => {
     const cfg = {
       agents: {
