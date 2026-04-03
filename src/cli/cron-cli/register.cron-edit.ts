@@ -34,6 +34,8 @@ async function findCronJobById(params: {
       includeDisabled: true,
       limit: pageSize,
       offset,
+      sortBy: "name",
+      sortDir: "asc",
     })) as {
       jobs?: CronJob[];
       hasMore?: boolean;

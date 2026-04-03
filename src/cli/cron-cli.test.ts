@@ -676,6 +676,8 @@ describe("cron cli", () => {
     expect(listCalls).toHaveLength(2);
     expect((listCalls[0][2] as { offset?: number }).offset).toBe(0);
     expect((listCalls[1][2] as { offset?: number }).offset).toBe(200);
+    expect((listCalls[0][2] as { sortBy?: string }).sortBy).toBe("name");
+    expect((listCalls[0][2] as { sortDir?: string }).sortDir).toBe("asc");
   });
 
   it("rejects --thread-id without --to when existing target is non-telegram", async () => {
@@ -1044,6 +1046,8 @@ describe("cron cli", () => {
     expect(listCalls).toHaveLength(2);
     expect((listCalls[0][2] as { offset?: number }).offset).toBe(0);
     expect((listCalls[1][2] as { offset?: number }).offset).toBe(200);
+    expect((listCalls[0][2] as { sortBy?: string }).sortBy).toBe("name");
+    expect((listCalls[0][2] as { sortDir?: string }).sortDir).toBe("asc");
   });
 
   it("uses a single paged lookup traversal for --exact + --thread-id on edit", async () => {
