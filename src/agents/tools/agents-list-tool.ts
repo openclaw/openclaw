@@ -27,7 +27,7 @@ export function createAgentsListTool(opts?: {
     label: "Agents",
     name: "agents_list",
     description:
-      'List OpenClaw agent ids you can target with `sessions_spawn` when `runtime="subagent"` (based on subagent allowlists).',
+      'List OpenClaw agent ids you can target with `sessions_spawn` when `runtime="subagent"` (based on subagent allowlists). This does not list ACP harness ids like `codex`/`claude`/`gemini`.',
     parameters: AgentsListToolSchema,
     execute: async () => {
       const cfg = loadConfig();
@@ -91,6 +91,8 @@ export function createAgentsListTool(opts?: {
       return jsonResult({
         requester: requesterAgentId,
         allowAny,
+        scope: "subagent",
+        note: 'Use `sessions_spawn` with `runtime="acp"` for ACP harness ids such as `codex`, `claude`, or `gemini`.',
         agents,
       });
     },

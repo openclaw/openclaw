@@ -636,6 +636,21 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("elevated");
   });
 
+  it("shows the queue arbitrator provider when enabled", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-5" },
+      sessionEntry: { sessionId: "arb-1", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      queue: {
+        mode: "collect",
+        depth: 0,
+        arbitratorProvider: "ollama",
+      },
+    });
+
+    expect(normalizeTestText(text)).toContain("Queue: collect (depth 0 · arb ollama)");
+  });
+
   it("includes media understanding decisions when present", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-5" },

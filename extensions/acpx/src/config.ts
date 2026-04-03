@@ -1,9 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
-import { z } from "openclaw/plugin-sdk/zod";
-import type { OpenClawPluginConfigSchema } from "../runtime-api.js";
+import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/acpx";
 
 export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
@@ -11,64 +9,53 @@ export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
+export const ACPX_PINNED_VERSION = "0.3.0";
+export const ACPX_CODEX_ACP_PINNED_VERSION = "0.9.5";
 export const ACPX_VERSION_ANY = "any";
-export const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
-const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
+export const ACPX_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function isAcpxPluginRoot(dir: string): boolean {
-  return (
-    fs.existsSync(path.join(dir, "openclaw.plugin.json")) &&
-    fs.existsSync(path.join(dir, "package.json"))
+function hasPluginMarkers(dir: string): boolean {
+  return ["package.json", "openclaw.plugin.json"].every((file) =>
+    fs.existsSync(path.join(dir, file)),
   );
 }
 
-function resolveNearestAcpxPluginRoot(moduleUrl: string): string {
-  let cursor = path.dirname(fileURLToPath(moduleUrl));
-  for (let i = 0; i < 3; i += 1) {
-    // Bundled entries live at the plugin root while source files still live under src/.
-    if (isAcpxPluginRoot(cursor)) {
-      return cursor;
+export function resolveAcpxPluginRoot(moduleUrl: string): string {
+  const modulePath = fileURLToPath(moduleUrl);
+  const moduleDir = path.dirname(modulePath);
+
+  const candidates = [moduleDir, path.resolve(moduleDir, ".."), path.resolve(moduleDir, "../..")];
+
+  for (const candidate of candidates) {
+    if (!hasPluginMarkers(candidate)) {
+      continue;
     }
-    const parent = path.dirname(cursor);
-    if (parent === cursor) {
-      break;
+    const workspaceCandidate = path.resolve(candidate, "../../../extensions/acpx");
+    if (
+      candidate.endsWith(`${path.sep}dist${path.sep}extensions${path.sep}acpx`) &&
+      hasPluginMarkers(workspaceCandidate)
+    ) {
+      return workspaceCandidate;
     }
-    cursor = parent;
+    return candidate;
   }
-  return path.resolve(path.dirname(fileURLToPath(moduleUrl)), "..");
+
+  return path.resolve(moduleDir, "..");
 }
 
-function resolveWorkspaceAcpxPluginRoot(currentRoot: string): string | null {
-  if (
-    path.basename(currentRoot) !== "acpx" ||
-    path.basename(path.dirname(currentRoot)) !== "extensions" ||
-    path.basename(path.dirname(path.dirname(currentRoot))) !== "dist"
-  ) {
-    return null;
-  }
-  const workspaceRoot = path.resolve(currentRoot, "..", "..", "..", "extensions", "acpx");
-  return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
-}
-
-export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
-  const resolvedRoot = resolveNearestAcpxPluginRoot(moduleUrl);
-  // In a live repo checkout, dist/ can be rebuilt out from under the running gateway.
-  // Prefer the stable source plugin root when a built extension is running beside it.
-  return resolveWorkspaceAcpxPluginRoot(resolvedRoot) ?? resolvedRoot;
-}
-
-export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
-const pluginPkg = JSON.parse(fs.readFileSync(path.join(ACPX_PLUGIN_ROOT, "package.json"), "utf8"));
-const acpxVersion: unknown = pluginPkg?.dependencies?.acpx;
-if (typeof acpxVersion !== "string" || acpxVersion.trim() === "") {
-  throw new Error(
-    `Could not read acpx version from ${path.join(ACPX_PLUGIN_ROOT, "package.json")} — expected a non-empty string at dependencies.acpx`,
+function resolveBundledBin(binName: string): string {
+  return path.join(
+    ACPX_PLUGIN_ROOT,
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? `${binName}.cmd` : binName,
   );
 }
-export const ACPX_PINNED_VERSION: string = acpxVersion.replace(/^[^0-9]*/, "");
-export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
+
+export const ACPX_BUNDLED_BIN = resolveBundledBin("acpx");
+export const ACPX_CODEX_ACP_BUNDLED_BIN = resolveBundledBin("codex-acp");
 export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
-  return `npm install --omit=dev --no-save --package-lock=false acpx@${version}`;
+  return `npm install --omit=dev --no-save acpx@${version}`;
 }
 export const ACPX_LOCAL_INSTALL_COMMAND = buildAcpxLocalInstallCommand();
 

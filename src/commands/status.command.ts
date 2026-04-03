@@ -1,7 +1,19 @@
 import { withProgress } from "../cli/progress.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
-import type { Tone } from "../plugin-sdk/memory-core-host-status.js";
+import { formatGitInstallLabel } from "../infra/update-check.js";
+import {
+  resolveMemoryCacheSummary,
+  resolveMemoryFtsState,
+  resolveMemoryVectorState,
+  type Tone,
+} from "../memory/status-format.js";
+import {
+  buildPluginRuntimeNotices,
+  buildPluginRuntimeSummaries,
+  formatPluginCompatibilityNotice,
+  summarizePluginCompatibility,
+} from "../plugins/status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
@@ -210,6 +222,7 @@ export async function statusCommand(
   });
 
   if (opts.json) {
+    const pluginRuntime = buildPluginRuntimeSummaries({ config: cfg, pluginIds: ["openviking"] });
     const [daemon, nodeDaemon] = await Promise.all([
       getDaemonStatusSummary(),
       getNodeDaemonStatusSummary(),
@@ -242,6 +255,7 @@ export async function statusCommand(
         count: pluginCompatibility.length,
         warnings: pluginCompatibility,
       },
+      pluginRuntime,
       ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
     });
     return;
@@ -485,12 +499,34 @@ export async function statusCommand(
   const channelLabel = channelInfo.label;
   const gitLabel = formatGitInstallLabel(update);
   const pluginCompatibilitySummary = summarizePluginCompatibility(pluginCompatibility);
+  const pluginRuntime = buildPluginRuntimeSummaries({ config: cfg, pluginIds: ["openviking"] });
+  const pluginRuntimeNotices = buildPluginRuntimeNotices({
+    config: cfg,
+    pluginIds: ["openviking"],
+  });
   const pluginCompatibilityValue =
     pluginCompatibilitySummary.noticeCount === 0
       ? ok("none")
       : warn(
           `${pluginCompatibilitySummary.noticeCount} notice${pluginCompatibilitySummary.noticeCount === 1 ? "" : "s"} · ${pluginCompatibilitySummary.pluginCount} plugin${pluginCompatibilitySummary.pluginCount === 1 ? "" : "s"}`,
         );
+  const pluginRuntimeValue =
+    pluginRuntime.length === 0
+      ? muted("none")
+      : pluginRuntime[0]?.health === "error"
+        ? warn(
+            `${pluginRuntime[0].pluginId} issues · ${pluginRuntime[0].snapshot.summary.find((line) => line.startsWith("Results:")) ?? "runtime snapshot"}`,
+          )
+        : pluginRuntime[0]?.health === "warn"
+          ? warn(
+              `${pluginRuntime[0].pluginId} warning · ${pluginRuntime[0].snapshot.summary.find((line) => line.startsWith("Results:")) ?? "runtime snapshot"}`,
+            )
+          : ok(
+              `${pluginRuntime[0]?.pluginId} ok · ${
+                pluginRuntime[0]?.snapshot.summary.find((line) => line.startsWith("Results:")) ??
+                "runtime snapshot"
+              }`,
+            );
 
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
@@ -519,6 +555,7 @@ export async function statusCommand(
     { Item: "Agents", Value: agentsValue },
     { Item: "Memory", Value: memoryValue },
     { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
+    { Item: "Plugin runtime", Value: pluginRuntimeValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
     { Item: "Tasks", Value: tasksValue },
@@ -559,6 +596,35 @@ export async function statusCommand(
     }
     if (pluginCompatibility.length > 8) {
       runtime.log(theme.muted(`  … +${pluginCompatibility.length - 8} more`));
+    }
+  }
+
+  if (pluginRuntime.length > 0) {
+    runtime.log("");
+    runtime.log(theme.heading("Plugin runtime"));
+    for (const entry of pluginRuntime) {
+      const label =
+        entry.health === "error"
+          ? theme.error("ERROR")
+          : entry.health === "warn"
+            ? theme.warn("WARN")
+            : theme.success("OK");
+      runtime.log(`  ${label} ${entry.pluginId}`);
+      for (const line of entry.snapshot.summary) {
+        runtime.log(`    ${line}`);
+      }
+    }
+    for (const notice of pluginRuntimeNotices.slice(0, 8)) {
+      const label =
+        notice.severity === "error"
+          ? theme.error("ERROR")
+          : notice.severity === "warn"
+            ? theme.warn("WARN")
+            : theme.muted("INFO");
+      runtime.log(`  ${label} ${notice.pluginId} ${notice.message}`);
+    }
+    if (pluginRuntimeNotices.length > 8) {
+      runtime.log(theme.muted(`  … +${pluginRuntimeNotices.length - 8} more`));
     }
   }
 

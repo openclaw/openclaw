@@ -50,6 +50,7 @@ export interface ProcessSession {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exited: boolean;
+  status?: ProcessStatus;
   truncated: boolean;
   backgrounded: boolean;
   /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
@@ -152,8 +153,23 @@ export function markExited(
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
+  session.status = status;
   session.tail = tail(session.aggregated, 2000);
   moveToFinished(session, status);
+}
+
+export function resolveTerminalStatus(
+  session:
+    | Pick<ProcessSession, "exited" | "status" | "exitCode" | "exitSignal">
+    | Pick<FinishedSession, "status" | "exitCode" | "exitSignal">,
+): ProcessStatus {
+  if ("status" in session && typeof session.status === "string" && session.status.length > 0) {
+    return session.status;
+  }
+  if ("exited" in session && !session.exited) {
+    return "running";
+  }
+  return session.exitCode === 0 && session.exitSignal == null ? "completed" : "failed";
 }
 
 export function markBackgrounded(session: ProcessSession) {

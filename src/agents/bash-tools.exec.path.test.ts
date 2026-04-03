@@ -98,16 +98,20 @@ const normalizePathEntries = (value?: string) =>
     .map((entry) => entry.trim())
     .filter(Boolean);
 
+function expectOrderedPathSubset(entries: string[], expectedSubset: string[]) {
+  let cursor = 0;
+  for (const expected of expectedSubset) {
+    const index = entries.indexOf(expected, cursor);
+    expect(index).toBeGreaterThanOrEqual(cursor);
+    cursor = index + 1;
+  }
+}
+
 describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
-  beforeEach(async () => {
-    envSnapshot = captureEnv(["PATH", "SHELL"]);
-    shellEnvMocks.getShellPathFromLoginShell.mockReset();
-    shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
-    shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
-    shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReturnValue(1234);
-    ({ createExecTool } = await loadFreshBashExecPathModulesForTest());
+  beforeEach(() => {
+    envSnapshot = captureEnv(["PATH", "SHELL", "OPENCLAW_CLI_PATH"]);
   });
 
   afterEach(() => {
@@ -128,8 +132,30 @@ describe("exec PATH login shell merge", () => {
     const result = await tool.execute("call1", { command: "echo $PATH" });
     const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
-    expect(entries).toEqual(["/custom/bin", "/opt/bin", "/usr/bin"]);
+    expectOrderedPathSubset(entries, ["/custom/bin", "/opt/bin", "/usr/bin"]);
+    expect(entries).toEqual(
+      expect.arrayContaining(["/usr/local/bin", "/usr/local/sbin", "/usr/sbin", "/sbin", "/bin"]),
+    );
     expect(shellPathMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps macOS system bins available even when service PATH is narrow", async () => {
+    if (isWin) {
+      return;
+    }
+    process.env.PATH = "/usr/local/bin";
+
+    const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+    shellPathMock.mockClear();
+    shellPathMock.mockReturnValue(null);
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-system-bins", {
+      command: "command -v system_profiler",
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("/usr/sbin/system_profiler");
   });
 
   it("sets OPENCLAW_SHELL for host=gateway commands", async () => {
@@ -144,6 +170,33 @@ describe("exec PATH login shell merge", () => {
     const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
     expect(value).toBe("exec");
+  });
+
+  it("rewrites bare openclaw commands to the current repo CLI when available", async () => {
+    if (isWin) {
+      return;
+    }
+
+    process.env.PATH = "/usr/bin";
+    const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-shim-"));
+    const cliPath = path.join(cliDir, "openclaw-test.mjs");
+    fs.writeFileSync(cliPath, 'console.log(process.argv.slice(2).join(" "))\n', {
+      encoding: "utf8",
+    });
+    process.env.OPENCLAW_CLI_PATH = cliPath;
+
+    try {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call-openclaw-cli", {
+        command: "openclaw status --json",
+      });
+      const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+      expect(value).toBe("status --json");
+    } finally {
+      delete process.env.OPENCLAW_CLI_PATH;
+      fs.rmSync(cliDir, { recursive: true, force: true });
+    }
   });
 
   it("throws security violation when env.PATH is provided", async () => {
@@ -207,7 +260,10 @@ describe("exec PATH login shell merge", () => {
       const result = await tool.execute("call1", { command: "echo $PATH" });
       const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
-      expect(entries).toEqual(["/usr/bin"]);
+      expect(entries[0]).toBe("/usr/bin");
+      expect(entries).toEqual(
+        expect.arrayContaining(["/usr/local/bin", "/usr/local/sbin", "/usr/sbin", "/sbin", "/bin"]),
+      );
       expect(shellPathMock).toHaveBeenCalledTimes(1);
       expect(shellPathMock).toHaveBeenCalledWith(
         expect.objectContaining({

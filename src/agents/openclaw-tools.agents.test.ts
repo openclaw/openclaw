@@ -60,9 +60,19 @@ describe("agents_list", () => {
     expect(result.details).toMatchObject({
       requester: "main",
       allowAny: false,
+      scope: "subagent",
     });
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main"]);
+  });
+
+  it("includes a note that ACP harness ids are not listed here", async () => {
+    const tool = requireAgentsListTool();
+    const result = await tool.execute("call-acp-note", {});
+
+    expect(result.details).toMatchObject({
+      note: expect.stringContaining('runtime="acp"'),
+    });
   });
 
   it("includes allowlisted targets plus requester", async () => {

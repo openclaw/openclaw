@@ -1,21 +1,14 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ACPX_CODEX_ACP_BUNDLED_BIN } from "../config.js";
 import { spawnAndCollect, type SpawnCommandOptions } from "./process.js";
 
 // Keep this mirror aligned with openclaw/acpx src/agent-registry.ts built-ins.
 const ACPX_BUILTIN_AGENT_COMMANDS: Record<string, string> = {
-  pi: "npx -y pi-acp@0.0.22",
-  openclaw: "openclaw acp",
-  codex: "npx -y @zed-industries/codex-acp@0.9.5",
-  claude: "npx -y @zed-industries/claude-agent-acp@0.21.0",
-  gemini: "gemini --acp",
-  cursor: "cursor-agent acp",
-  copilot: "copilot --acp --stdio",
-  droid: "droid exec --output-format acp",
-  iflow: "iflow --experimental-acp",
-  kilocode: "npx -y @kilocode/cli acp",
-  kimi: "kimi acp",
-  kiro: "kiro-cli acp",
+  // Keep Codex ACP adapter plugin-local so ACP harness startup does not depend on npx/package fetches.
+  codex: ACPX_CODEX_ACP_BUNDLED_BIN,
+  claude: "npx -y @zed-industries/claude-agent-acp",
+  gemini: "gemini",
   opencode: "npx -y opencode-ai acp",
   qwen: "qwen --acp",
 };
@@ -53,6 +46,29 @@ export const __testing = {
 
 function toCommandLine(parts: string[]): string {
   return parts.map(quoteCommandPart).join(" ");
+}
+
+export function formatRawAgentCommandForCli(targetCommand: string): string {
+  const trimmed = targetCommand.trim();
+  if (!/\s/.test(trimmed)) {
+    return trimmed;
+  }
+
+  // ACPX accepts `--agent` as a command line string. Quote bare path-like
+  // commands so bundled plugin-local binaries remain launchable when the
+  // plugin directory includes spaces. If the override also includes trailing
+  // flags, keep those arguments separate from the executable token.
+  if (/^(?:\.{1,2}[\\/]|\/|[A-Za-z]:[\\/])/.test(trimmed)) {
+    const argSeparator = trimmed.search(/\s--?[A-Za-z0-9]/);
+    if (argSeparator === -1) {
+      return toCommandLine([trimmed]);
+    }
+    const executable = trimmed.slice(0, argSeparator).trimEnd();
+    const args = trimmed.slice(argSeparator + 1).trimStart();
+    return `${toCommandLine([executable])} ${args}`;
+  }
+
+  return trimmed;
 }
 
 function readConfiguredAgentOverrides(value: unknown): Record<string, string> {

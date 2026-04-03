@@ -24,6 +24,51 @@ export type TypingPolicy =
   | "internal_webchat"
   | "heartbeat";
 
+export type TurnLatencyStage =
+  | "dispatch_started"
+  | "queue_arbitrated"
+  | "first_visible_scheduled"
+  | "run_started"
+  | "run_first_output"
+  | "first_visible_emitted"
+  | "final_dispatched"
+  | "completed"
+  | "context_skills_env_completed"
+  | "context_bootstrap_completed"
+  | "context_tools_completed"
+  | "context_bundle_mcp_completed"
+  | "context_bundle_lsp_completed"
+  | "context_system_prompt_completed"
+  | "context_system_prompt_report_completed"
+  | "context_assembly_completed"
+  | "context_engine_assemble_completed"
+  | "model_first_token"
+  | "model_completion_completed"
+  | "context_engine_finalize_completed"
+  | "outbound_reply_enqueued"
+  | "acp_ensure_session_started"
+  | "acp_ensure_session_completed"
+  | "acp_run_started"
+  | "acp_first_event"
+  | "acp_first_visible_output"
+  | "acp_error_visible"
+  | "acp_reset_tail_started"
+  | "acp_reset_tail_completed"
+  | "fallback_started";
+
+export type TurnLatencyStageInfo = {
+  stage: TurnLatencyStage;
+  durationMs?: number;
+  queueModeConfigured?: string;
+  queueModeFinal?: string;
+  supervisorAction?: string;
+  supervisorRelation?: string;
+  firstVisibleKind?: "tool" | "block" | "status" | "final";
+  provider?: string;
+  model?: string;
+  backend?: string;
+};
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -56,11 +101,11 @@ export type GetReplyOptions = {
   onReasoningEnd?: () => Promise<void> | void;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
   onAssistantMessageStart?: () => Promise<void> | void;
-  /** Called synchronously when a block reply is logically emitted, before async
-   * delivery drains. Useful for channels that need to rotate preview state at
-   * block boundaries without waiting for transport acks. */
-  onBlockReplyQueued?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
-  onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  onBlockReply?: (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+  ) => Promise<boolean | void> | boolean | void;
+  onStatusReply?: (payload: ReplyPayload) => Promise<boolean | void> | boolean | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
@@ -71,6 +116,7 @@ export type GetReplyOptions = {
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
+  onLatencyStage?: (info: TurnLatencyStageInfo) => void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

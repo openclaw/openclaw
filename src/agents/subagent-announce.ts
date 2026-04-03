@@ -137,6 +137,7 @@ export function buildSubagentSystemPrompt(params: {
             "Do not use `exec` (`openclaw ...`, `acpx ...`) to spawn ACP sessions.",
             'Use `subagents` only for OpenClaw subagents (`runtime: "subagent"`).',
             "Subagent results auto-announce back to you; ACP sessions continue in their bound thread.",
+            "If the requested ACP harness fails or is unavailable, report that failure to the parent agent and wait for user-confirmed fallback instructions. Do not silently replace the requested harness with ordinary subagents, local model work, exec, or web research.",
             "Avoid polling loops; spawn, orchestrate, and synthesize results.",
           ]
         : []),

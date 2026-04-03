@@ -61,6 +61,7 @@ type QueueStatus = {
   debounceMs?: number;
   cap?: number;
   dropPolicy?: string;
+  arbitratorProvider?: string;
   showDetails?: boolean;
 };
 
@@ -92,6 +93,26 @@ type StatusArgs = {
   includeTranscriptUsage?: boolean;
   now?: number;
 };
+
+export function buildQueueStatus(params: {
+  mode?: string;
+  depth?: number;
+  debounceMs?: number;
+  cap?: number;
+  dropPolicy?: string;
+  arbitratorProvider?: string;
+  showDetails?: boolean;
+}): QueueStatus {
+  return {
+    mode: params.mode,
+    depth: params.depth,
+    debounceMs: params.debounceMs,
+    cap: params.cap,
+    dropPolicy: params.dropPolicy,
+    arbitratorProvider: params.arbitratorProvider,
+    showDetails: params.showDetails,
+  };
+}
 
 type NormalizedAuthMode = "api-key" | "oauth" | "token" | "aws-sdk" | "mixed" | "unknown";
 
@@ -208,12 +229,20 @@ const formatQueueDetails = (queue?: QueueStatus) => {
     return "";
   }
   const depth = typeof queue.depth === "number" ? `depth ${queue.depth}` : null;
+  const arbitrator =
+    typeof queue.arbitratorProvider === "string" && queue.arbitratorProvider.trim()
+      ? `arb ${queue.arbitratorProvider.trim()}`
+      : null;
   if (!queue.showDetails) {
-    return depth ? ` (${depth})` : "";
+    const compactParts = [depth, arbitrator].filter(Boolean);
+    return compactParts.length ? ` (${compactParts.join(" · ")})` : "";
   }
   const detailParts: string[] = [];
   if (depth) {
     detailParts.push(depth);
+  }
+  if (arbitrator) {
+    detailParts.push(arbitrator);
   }
   if (typeof queue.debounceMs === "number") {
     const ms = Math.max(0, Math.round(queue.debounceMs));

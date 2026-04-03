@@ -1,11 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
+  type MockConfig = ReturnType<(typeof import("../../config/config.js"))["loadConfig"]>;
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
+  const state = {
+    config: {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+    } as MockConfig,
+  };
   return {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
+    state,
+  };
+});
+
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => hoisted.state.config,
   };
 });
 
@@ -37,7 +55,13 @@ async function loadFreshSessionsSpawnToolModuleForTest() {
 }
 
 describe("sessions_spawn tool", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
+    hoisted.state.config = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+    };
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:1",
@@ -153,6 +177,68 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
+  it("defaults Codex harness requests to runtime=acp when runtime is omitted", async () => {
+    hoisted.state.config = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      acp: {
+        enabled: true,
+      },
+      agents: {
+        list: [{ id: "main", subagents: { allowAgents: ["research"] } }],
+      },
+    };
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-2-default-acp", {
+      task: "investigate the failing CI run",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:1",
+      runId: "run-acp",
+    });
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledOnce();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-upgrade to ACP when a configured subagent shadows the harness id", async () => {
+    hoisted.state.config = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      acp: {
+        enabled: true,
+      },
+      agents: {
+        list: [{ id: "codex" }],
+      },
+    };
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-2-shadowed", {
+      task: "investigate the failing CI run",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:1",
+      runId: "run-subagent",
+    });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledOnce();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("forwards ACP sandbox options and requester sandbox context", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:subagent:parent",
@@ -213,6 +299,31 @@ describe("sessions_spawn tool", () => {
     expect(JSON.stringify(result)).toContain("resumeSessionId is only supported for runtime=acp");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("marks ACP spawn failures as requiring explicit user-confirmed fallback", async () => {
+    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      status: "error",
+      error: "ACP backend unavailable",
+    });
+
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-2c", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      backendIntent: "acp_harness",
+      fallbackRequiresUserConfirmation: true,
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("ask the user before using another backend");
   });
 
   it("rejects attachments for ACP runtime", async () => {

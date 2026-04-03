@@ -1,6 +1,6 @@
 import * as crypto from "crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
+import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import {
@@ -10,7 +10,6 @@ import {
   type FeishuBotAddedEvent,
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
-import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { createEventDispatcher } from "./client.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import {
@@ -28,7 +27,6 @@ import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
-import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
@@ -43,20 +41,16 @@ export type FeishuReactionCreatedEvent = {
   action_time?: string;
 };
 
-export type FeishuReactionDeletedEvent = FeishuReactionCreatedEvent & {
-  reaction_id?: string;
-};
-
 type ResolveReactionSyntheticEventParams = {
   cfg: ClawdbotConfig;
   accountId: string;
   event: FeishuReactionCreatedEvent;
+  action?: "created" | "deleted";
   botOpenId?: string;
   fetchMessage?: typeof getMessageFeishu;
   verificationTimeoutMs?: number;
   logger?: (message: string) => void;
   uuid?: () => string;
-  action?: "created" | "deleted";
 };
 
 export async function resolveReactionSyntheticEvent(
@@ -66,12 +60,12 @@ export async function resolveReactionSyntheticEvent(
     cfg,
     accountId,
     event,
+    action = "created",
     botOpenId,
     fetchMessage = getMessageFeishu,
     verificationTimeoutMs = FEISHU_REACTION_VERIFY_TIMEOUT_MS,
     logger,
     uuid = () => crypto.randomUUID(),
-    action = "created",
   } = params;
 
   const emoji = event.reaction_type?.emoji_type;
@@ -159,6 +153,7 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  statusSink?: (patch: { connected?: boolean; lastEventAt?: number | null }) => void;
 };
 
 type FeishuBotMenuEvent = {
@@ -403,21 +398,9 @@ function registerEventHandlers(
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const enqueue = createChatQueue();
-  const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
-    if (fireAndForget) {
-      void params.task().catch((err) => {
-        error(`${params.errorMessage}: ${String(err)}`);
-      });
-      return;
-    }
-    try {
-      await params.task();
-    } catch (err) {
-      error(`${params.errorMessage}: ${String(err)}`);
-    }
-  };
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
+    context.statusSink?.({ connected: true, lastEventAt: Date.now() });
     const task = () =>
       handleFeishuMessage({
         cfg,
@@ -655,144 +638,52 @@ function registerEventHandlers(
       });
     },
     "im.message.reaction.created_v1": async (data) => {
-      await runFeishuHandler({
-        errorMessage: `feishu[${accountId}]: error handling reaction event`,
-        task: async () => {
-          const event = data as FeishuReactionCreatedEvent;
-          const myBotId = botOpenIds.get(accountId);
-          const syntheticEvent = await resolveReactionSyntheticEvent({
-            cfg,
-            accountId,
-            event,
-            botOpenId: myBotId,
-            logger: log,
-          });
-          if (!syntheticEvent) {
-            return;
-          }
-          const promise = handleFeishuMessage({
-            cfg,
-            event: syntheticEvent,
-            botOpenId: myBotId,
-            botName: botNames.get(accountId),
-            runtime,
-            chatHistories,
-            accountId,
-          });
-          await promise;
-        },
-      });
-    },
-    "im.message.reaction.deleted_v1": async (data) => {
-      await runFeishuHandler({
-        errorMessage: `feishu[${accountId}]: error handling reaction removal event`,
-        task: async () => {
-          const event = data as FeishuReactionDeletedEvent;
-          const myBotId = botOpenIds.get(accountId);
-          const syntheticEvent = await resolveReactionSyntheticEvent({
-            cfg,
-            accountId,
-            event,
-            botOpenId: myBotId,
-            logger: log,
-            action: "deleted",
-          });
-          if (!syntheticEvent) {
-            return;
-          }
-          const promise = handleFeishuMessage({
-            cfg,
-            event: syntheticEvent,
-            botOpenId: myBotId,
-            botName: botNames.get(accountId),
-            runtime,
-            chatHistories,
-            accountId,
-          });
-          await promise;
-        },
-      });
-    },
-    "application.bot.menu_v6": async (data) => {
-      try {
-        const event = parseFeishuBotMenuEvent(data);
-        if (!event) {
-          return;
-        }
-        const operatorOpenId = event.operator?.operator_id?.open_id?.trim();
-        const eventKey = event.event_key?.trim();
-        if (!operatorOpenId || !eventKey) {
-          return;
-        }
-        const syntheticEvent: FeishuMessageEvent = {
-          sender: {
-            sender_id: {
-              open_id: operatorOpenId,
-              user_id: event.operator?.operator_id?.user_id,
-              union_id: event.operator?.operator_id?.union_id,
-            },
-            sender_type: "user",
-          },
-          message: {
-            message_id: `bot-menu:${eventKey}:${event.timestamp ?? Date.now()}`,
-            chat_id: `p2p:${operatorOpenId}`,
-            chat_type: "p2p",
-            message_type: "text",
-            content: JSON.stringify({
-              text: `/menu ${eventKey}`,
-            }),
-          },
-        };
-        const syntheticMessageId = syntheticEvent.message.message_id;
-        if (await hasProcessedFeishuMessage(syntheticMessageId, accountId, log)) {
-          log(`feishu[${accountId}]: dropping duplicate bot-menu event for ${syntheticMessageId}`);
-          return;
-        }
-        if (!tryBeginFeishuMessageProcessing(syntheticMessageId, accountId)) {
-          log(`feishu[${accountId}]: dropping in-flight bot-menu event for ${syntheticMessageId}`);
-          return;
-        }
-        const handleLegacyMenu = () =>
-          handleFeishuMessage({
-            cfg,
-            event: syntheticEvent,
-            botOpenId: botOpenIds.get(accountId),
-            botName: botNames.get(accountId),
-            runtime,
-            chatHistories,
-            accountId,
-            processingClaimHeld: true,
-          });
-
-        const promise = maybeHandleFeishuQuickActionMenu({
+      const processReaction = async () => {
+        const event = data as FeishuReactionCreatedEvent;
+        const myBotId = botOpenIds.get(accountId);
+        const syntheticEvent = await resolveReactionSyntheticEvent({
           cfg,
-          eventKey,
-          operatorOpenId,
-          runtime,
           accountId,
-        })
-          .then(async (handledMenu) => {
-            if (handledMenu) {
-              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
-              releaseFeishuMessageProcessing(syntheticMessageId, accountId);
-              return;
-            }
-            return await handleLegacyMenu();
-          })
-          .catch((err) => {
-            releaseFeishuMessageProcessing(syntheticMessageId, accountId);
-            throw err;
-          });
+          event,
+          botOpenId: myBotId,
+          logger: log,
+        });
+        if (!syntheticEvent) {
+          return;
+        }
+        const promise = handleFeishuMessage({
+          cfg,
+          event: syntheticEvent,
+          botOpenId: myBotId,
+          botName: botNames.get(accountId),
+          runtime,
+          chatHistories,
+          accountId,
+        });
         if (fireAndForget) {
           promise.catch((err) => {
-            error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);
+            error(`feishu[${accountId}]: error handling reaction: ${String(err)}`);
           });
           return;
         }
         await promise;
-      } catch (err) {
-        error(`feishu[${accountId}]: error handling bot menu event: ${String(err)}`);
+      };
+
+      if (fireAndForget) {
+        void processReaction().catch((err) => {
+          error(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
+        });
+        return;
       }
+
+      try {
+        await processReaction();
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
+      }
+    },
+    "im.message.reaction.deleted_v1": async () => {
+      // Ignore reaction removals
     },
     "card.action.trigger": async (data: unknown) => {
       try {
@@ -832,6 +723,17 @@ export type MonitorSingleAccountParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
+  statusSink?: (patch: {
+    connected?: boolean;
+    reconnectAttempts?: number;
+    lastConnectedAt?: number | null;
+    lastDisconnect?: {
+      at: number;
+      error?: string;
+    } | null;
+    lastError?: string | null;
+    lastEventAt?: number | null;
+  }) => void;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
@@ -864,25 +766,34 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from disk`);
   }
 
-  let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null = null;
-  try {
-    const eventDispatcher = createEventDispatcher(account);
-    const chatHistories = new Map<string, HistoryEntry[]>();
-    threadBindingManager = createFeishuThreadBindingManager({ accountId, cfg });
+  const eventDispatcher = createEventDispatcher(account);
+  const chatHistories = new Map<string, HistoryEntry[]>();
 
-    registerEventHandlers(eventDispatcher, {
-      cfg,
+  registerEventHandlers(eventDispatcher, {
+    cfg,
+    accountId,
+    runtime,
+    chatHistories,
+    fireAndForget: true,
+    statusSink: params.statusSink,
+  });
+
+  if (connectionMode === "webhook") {
+    return monitorWebhook({
+      account,
       accountId,
       runtime,
-      chatHistories,
-      fireAndForget: true,
+      abortSignal,
+      eventDispatcher,
+      statusSink: params.statusSink,
     });
-
-    if (connectionMode === "webhook") {
-      return await monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
-    }
-    return await monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
-  } finally {
-    threadBindingManager?.stop();
   }
+  return monitorWebSocket({
+    account,
+    accountId,
+    runtime,
+    abortSignal,
+    eventDispatcher,
+    statusSink: params.statusSink,
+  });
 }

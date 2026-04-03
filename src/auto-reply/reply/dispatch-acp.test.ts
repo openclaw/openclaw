@@ -65,12 +65,13 @@ let tryDispatchAcpReply: typeof import("./dispatch-acp.js").tryDispatchAcpReply;
 
 function createDispatcher(): {
   dispatcher: ReplyDispatcher;
-  counts: Record<"tool" | "block" | "final", number>;
+  counts: Record<"tool" | "block" | "status" | "final", number>;
 } {
-  const counts = { tool: 0, block: 0, final: 0 };
+  const counts = { tool: 0, block: 0, status: 0, final: 0 };
   const dispatcher: ReplyDispatcher = {
     sendToolResult: vi.fn(() => true),
     sendBlockReply: vi.fn(() => true),
+    sendStatusReply: vi.fn(() => true),
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => counts),
@@ -108,6 +109,7 @@ async function runDispatch(params: {
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
   onReplyStart?: () => void;
+  onLatencyStage?: (info: { stage: string; durationMs?: number; backend?: string }) => void;
   ctxOverrides?: Record<string, unknown>;
   sessionKeyOverride?: string;
 }) {
@@ -131,6 +133,7 @@ async function runDispatch(params: {
     shouldSendToolSummaries: true,
     bypassForCommand: false,
     ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
+    ...(params.onLatencyStage ? { onLatencyStage: params.onLatencyStage } : {}),
     recordProcessed: vi.fn(),
     markIdle: vi.fn(),
   });
@@ -403,6 +406,115 @@ describe("tryDispatchAcpReply", () => {
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("forwards ACP lifecycle stages into latency diagnostics", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onLifecycleStage }: { onLifecycleStage?: (info: unknown) => Promise<void> }) => {
+        await onLifecycleStage?.({ stage: "acp_ensure_session_started" });
+        await onLifecycleStage?.({
+          stage: "acp_ensure_session_completed",
+          durationMs: 11,
+          backend: "acpx",
+        });
+        await onLifecycleStage?.({
+          stage: "acp_run_started",
+          durationMs: 19,
+          backend: "acpx",
+        });
+        await onLifecycleStage?.({
+          stage: "acp_first_event",
+          durationMs: 27,
+          backend: "acpx",
+          eventType: "text_delta",
+        });
+      },
+    );
+
+    const onLatencyStage = vi.fn();
+    await runDispatch({
+      bodyForAgent: "latency",
+      onLatencyStage,
+    });
+
+    expect(onLatencyStage.mock.calls.map(([info]) => info.stage)).toEqual([
+      "acp_ensure_session_started",
+      "acp_ensure_session_completed",
+      "acp_run_started",
+      "acp_first_event",
+    ]);
+    expect(onLatencyStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "acp_ensure_session_started",
+        backend: "acp",
+      }),
+    );
+    expect(onLatencyStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "acp_first_event",
+        backend: "acpx",
+        durationMs: 27,
+      }),
+    );
+  });
+
+  it("records ACP first visible output separately from the first runtime event", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({
+        onEvent,
+        onLifecycleStage,
+      }: {
+        onEvent: (event: unknown) => Promise<void>;
+        onLifecycleStage?: (info: unknown) => Promise<void>;
+      }) => {
+        await onLifecycleStage?.({
+          stage: "acp_first_event",
+          durationMs: 12,
+          backend: "acpx",
+          eventType: "text_delta",
+        });
+        await onEvent({ type: "text_delta", text: "hello", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const onLatencyStage = vi.fn();
+    await runDispatch({
+      bodyForAgent: "hello",
+      onLatencyStage,
+    });
+
+    expect(onLatencyStage.mock.calls.map(([info]) => info.stage)).toEqual(
+      expect.arrayContaining(["acp_first_event", "acp_first_visible_output"]),
+    );
+    expect(onLatencyStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "acp_first_visible_output",
+        firstVisibleKind: "block",
+        backend: "acp",
+      }),
+    );
+  });
+
+  it("records a visible ACP error stage when the backend fails before completion", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockRejectedValueOnce(new Error("runtime exploded"));
+
+    const onLatencyStage = vi.fn();
+    await runDispatch({
+      bodyForAgent: "boom",
+      onLatencyStage,
+    });
+
+    expect(onLatencyStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "acp_error_visible",
+        firstVisibleKind: "final",
+        backend: "acp",
+      }),
+    );
   });
 
   it("forwards normalized image attachments into ACP turns", async () => {

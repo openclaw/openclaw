@@ -505,6 +505,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
   "diagnostics.stuckSessionWarnMs":
     "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+  "diagnostics.firstVisibleWarnMs":
+    "Silence threshold in milliseconds before diagnostics flag a turn with no user-visible output yet. Increase to avoid noise on intentionally quiet turns; decrease when you want earlier visibility-latency warnings.",
   "diagnostics.otel.enabled":
     "Enables OpenTelemetry export pipeline for traces, metrics, and logs based on configured endpoint/protocol settings. Keep disabled unless your collector endpoint and auth are fully configured.",
   "diagnostics.otel.endpoint":

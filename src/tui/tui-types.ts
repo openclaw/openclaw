@@ -76,6 +76,35 @@ export type GatewayStatusSummary = {
       every?: string;
       everyMs?: number | null;
     }>;
+    diagnostics?: {
+      latency?: {
+        dominant?: Array<{
+          segment?: string;
+          count?: number;
+        }>;
+        earlyStatusPriority?: {
+          level?: string;
+          reason?: string;
+        };
+      };
+      earlyStatus?: {
+        guidance?: {
+          focus?: string;
+          reason?: string;
+        };
+        phase2Supplements?: {
+          sampleCount?: number;
+          eligibleCount?: number;
+          hitRatePct?: number;
+          topSkipReasons?: Array<{
+            reason?: string;
+            count?: number;
+          }>;
+          statusFirstVisibleAvgMs?: number;
+          statusFirstVisibleP95Ms?: number;
+        };
+      };
+    };
   };
   providerSummary?: string[];
   queuedSystemEvents?: string[];

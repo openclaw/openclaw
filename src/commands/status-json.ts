@@ -1,5 +1,6 @@
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
+import { buildPluginRuntimeSummaries } from "../plugins/status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 import { scanStatusJsonFast } from "./status.scan.fast-json.js";
@@ -82,6 +83,10 @@ export async function statusJsonCommand(
     gitTag: scan.update.git?.tag ?? null,
     gitBranch: scan.update.git?.branch ?? null,
   });
+  const pluginRuntime = buildPluginRuntimeSummaries({
+    config: scan.cfg,
+    pluginIds: ["openviking"],
+  });
 
   writeRuntimeJson(runtime, {
     ...scan.summary,
@@ -91,6 +96,7 @@ export async function statusJsonCommand(
     updateChannelSource: channelInfo.source,
     memory: scan.memory,
     memoryPlugin: scan.memoryPlugin,
+    pluginRuntime,
     gateway: {
       mode: scan.gatewayMode,
       url: scan.gatewayConnection.url,

@@ -207,6 +207,8 @@ export type DiagnosticsConfig = {
   flags?: string[];
   /** Threshold in ms before a processing session logs "stuck session" diagnostics. */
   stuckSessionWarnMs?: number;
+  /** Threshold in ms before diagnostics flag a turn with no visible output yet. */
+  firstVisibleWarnMs?: number;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };

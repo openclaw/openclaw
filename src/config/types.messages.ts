@@ -18,6 +18,22 @@ export type QueueConfig = {
   debounceMsByChannel?: InboundDebounceByProvider;
   cap?: number;
   drop?: QueueDropPolicy;
+  arbitrator?: QueueArbitratorConfig;
+};
+
+export type QueueArbitratorConfig = {
+  /** Enable model-assisted arbitration for ambiguous updates in active sessions. */
+  enabled?: boolean;
+  /** Local provider to query when rule-based arbitration defers. Defaults to lmstudio. */
+  provider?: "lmstudio" | "ollama";
+  /** Model name to use with the selected provider. */
+  model?: string;
+  /** Provider base URL. Defaults to the local LM Studio or Ollama endpoint. */
+  baseUrl?: string;
+  /** Request timeout in milliseconds. Defaults to 900ms to keep routing snappy. */
+  timeoutMs?: number;
+  /** Sampling temperature for the arbitrator model. Defaults to 0. */
+  temperature?: number;
 };
 
 export type InboundDebounceByProvider = Record<string, number>;

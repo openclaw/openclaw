@@ -75,6 +75,36 @@ check_signing_keys() {
     | grep -Eq '(Developer ID Application|Apple Distribution|Apple Development)'
 }
 
+has_full_xcode() {
+  local developer_dir
+  developer_dir="$(xcode-select -p 2>/dev/null || true)"
+  if [[ -z "${developer_dir}" || "${developer_dir}" == "/Library/Developer/CommandLineTools" ]]; then
+    return 1
+  fi
+  if ! xcodebuild -version >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
+resolve_existing_app_bundle() {
+  if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then
+    return 0
+  fi
+
+  if [[ -d "/Applications/OpenClaw.app" ]]; then
+    APP_BUNDLE="/Applications/OpenClaw.app"
+    return 0
+  fi
+
+  if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
+    APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
+    return 0
+  fi
+
+  return 1
+}
+
 trap cleanup EXIT INT TERM
 
 for arg in "$@"; do
@@ -156,9 +186,18 @@ stop_launch_agent
 # Bundle Gateway-hosted Canvas A2UI assets.
 run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bundle"
 
-# 2) Rebuild into the same path the packager consumes (.build).
-run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
-run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product OpenClaw"
+CAN_BUILD_MAC_APP=0
+if has_full_xcode; then
+  CAN_BUILD_MAC_APP=1
+else
+  log "==> Full Xcode not available; skipping mac app rebuild"
+fi
+
+if [[ "${CAN_BUILD_MAC_APP}" -eq 1 ]]; then
+  # 2) Rebuild into the same path the packager consumes (.build).
+  run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
+  run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product OpenClaw"
+fi
 
 if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
   if check_signing_keys; then
@@ -183,31 +222,24 @@ elif [ "$SIGN" -eq 1 ]; then
   unset SIGN_IDENTITY
 fi
 
-# 3) Package app (no embedded gateway).
-run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} '${ROOT_DIR}/scripts/package-mac-app.sh'"
-
-choose_app_bundle() {
-  if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then
-    return 0
+if [[ "${CAN_BUILD_MAC_APP}" -eq 1 ]]; then
+  # 3) Package app (no embedded gateway).
+  run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} '${ROOT_DIR}/scripts/package-mac-app.sh'"
+  if ! resolve_existing_app_bundle; then
+    fail "App bundle not found after packaging. Set OPENCLAW_APP_BUNDLE to your installed OpenClaw.app"
   fi
-
-  if [[ -d "/Applications/OpenClaw.app" ]]; then
-    APP_BUNDLE="/Applications/OpenClaw.app"
-    return 0
+  if [[ "${APP_BUNDLE}" == "${ROOT_DIR}/dist/OpenClaw.app" && ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
+    fail "dist/OpenClaw.app missing Sparkle after packaging"
   fi
-
-  if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
-    APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
-    if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
-      fail "dist/OpenClaw.app missing Sparkle after packaging"
-    fi
-    return 0
-  fi
-
-  fail "App bundle not found. Set OPENCLAW_APP_BUNDLE to your installed OpenClaw.app"
-}
-
-choose_app_bundle
+elif resolve_existing_app_bundle; then
+  log "==> Using existing app bundle: ${APP_BUNDLE}"
+else
+  log "==> No app bundle found; falling back to gateway-only restart"
+  run_step "restart gateway daemon" bash -lc "cd '${ROOT_DIR}' && node openclaw.mjs daemon restart"
+  run_step "verify gateway daemon" bash -lc "cd '${ROOT_DIR}' && node openclaw.mjs daemon status"
+  log "OK: Gateway restarted without rebuilding the mac app."
+  exit 0
+fi
 
 # When signed, clear any previous launchagent override marker.
 if [[ "$NO_SIGN" -ne 1 && "$ATTACH_ONLY" -ne 1 && -f "${LAUNCHAGENT_DISABLE_MARKER}" ]]; then

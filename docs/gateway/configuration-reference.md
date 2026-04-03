@@ -1708,6 +1708,14 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       debounceMs: 1000,
       cap: 20,
       drop: "summarize", // old | new | summarize
+      arbitrator: {
+        enabled: true,
+        provider: "lmstudio", // lmstudio | ollama
+        model: "qwen3-1.7b-instruct",
+        baseUrl: "http://127.0.0.1:1234",
+        timeoutMs: 900,
+        temperature: 0,
+      },
       byChannel: {
         whatsapp: "collect",
         telegram: "collect",
@@ -1751,6 +1759,19 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - `removeAckAfterReply`: removes ack after reply (Slack/Discord/Telegram/Google Chat only).
 
 ### Inbound debounce
+
+### Queue arbitrator
+
+Optional low-latency tie-breaker for ambiguous active-session updates.
+
+- `enabled`: turn model-assisted arbitration on or off.
+- `provider`: local backend to query. Supported values: `lmstudio`, `ollama`. Default: `lmstudio`.
+- `model`: model name for the chosen backend.
+- `baseUrl`: override the local backend endpoint. Defaults to `http://127.0.0.1:1234` for LM Studio and `http://127.0.0.1:11434` for Ollama.
+- `timeoutMs`: arbitration timeout in milliseconds. Default: `900`.
+- `temperature`: sampling temperature. Default: `0`.
+
+This model is only queried when heuristic rules cannot confidently choose `interrupt`, `steer`, or `collect`. For ambiguous streaming updates with no arbitrator decision, OpenClaw still falls back conservatively to `interrupt`.
 
 Batches rapid text-only messages from the same sender into a single agent turn. Media/attachments flush immediately. Control commands bypass debouncing.
 

@@ -4,7 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { runAcpRuntimeAdapterContract } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { resolveAcpxPluginConfig } from "./config.js";
+import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
+import { ACPX_CODEX_ACP_BUNDLED_BIN } from "./config.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
@@ -255,204 +256,20 @@ describe("AcpxRuntime", () => {
     expect(resumeArgs[resumeFlagIndex + 1]).toBe(resumeSessionId);
   });
 
-  it("repairs dead named sessions when status only reports queue owner unavailable", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:dead-session",
-      env: {
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
-      },
-      expectNewAfterStatus: true,
-      expectedResumeSessionId: "sid-agent:codex:acp:dead-session",
+  it("passes the bundled plugin-local codex-acp command to acpx by default", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:local-command",
+      agent: "codex",
+      mode: "persistent",
     });
-  });
 
-  it("replaces dead named sessions when status indicates an unrecoverable failure", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:dead-session-unrecoverable",
-      env: {
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "agent process exited",
-      },
-      expectNewAfterStatus: true,
-    });
-  });
-
-  it("reuses a live named session when sessions ensure exits before returning identifiers", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:ensure-fallback-alive",
-      env: {
-        MOCK_ACPX_ENSURE_EXIT_1: "1",
-        MOCK_ACPX_STATUS_STATUS: "alive",
-      },
-      expectNewAfterStatus: false,
-      expectedRecordId: "rec-agent:codex:acp:ensure-fallback-alive",
-    });
-  });
-
-  it("repairs the named session after ensure failure when status only reports queue owner unavailable", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:ensure-fallback-dead",
-      env: {
-        MOCK_ACPX_ENSURE_EXIT_1: "1",
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
-      },
-      expectNewAfterStatus: true,
-      expectedRecordId: "rec-agent:codex:acp:ensure-fallback-dead",
-      expectedResumeSessionId: "sid-agent:codex:acp:ensure-fallback-dead",
-    });
-  });
-
-  it("falls back to a fresh named session when queue owner recovery has no resumable id", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:dead-session-no-ids",
-      env: {
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
-        MOCK_ACPX_STATUS_NO_IDS: "1",
-      },
-      expectNewAfterStatus: true,
-      expectedResumeSessionId: null,
-    });
-  });
-
-  it("falls back to a fresh named session when queue owner resume repair uses a stale session id", async () => {
-    const previousResumeFailure = process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME;
-    const previousStatus = process.env.MOCK_ACPX_STATUS_STATUS;
-    const previousSummary = process.env.MOCK_ACPX_STATUS_SUMMARY;
-    process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME = "1";
-    process.env.MOCK_ACPX_STATUS_STATUS = "dead";
-    process.env.MOCK_ACPX_STATUS_SUMMARY = "queue owner unavailable";
-
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
-      const handle = await runtime.ensureSession({
-        sessionKey: "agent:codex:acp:dead-session-stale-resume",
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      expect(handle.backend).toBe("acpx");
-
-      const logs = await readMockRuntimeLogEntries(logPath);
-      const newEntries = logs.filter((entry) => entry.kind === "new");
-      expect(newEntries).toHaveLength(2);
-      const firstArgs = ((newEntries[0]?.args as string[]) ?? []).slice();
-      const secondArgs = ((newEntries[1]?.args as string[]) ?? []).slice();
-      const firstResumeFlagIndex = firstArgs.indexOf("--resume-session");
-      expect(firstResumeFlagIndex).toBeGreaterThanOrEqual(0);
-      expect(firstArgs[firstResumeFlagIndex + 1]).toBe(
-        "sid-agent:codex:acp:dead-session-stale-resume",
-      );
-      expect(secondArgs.indexOf("--resume-session")).toBe(-1);
-    } finally {
-      if (previousResumeFailure === undefined) {
-        delete process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME;
-      } else {
-        process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME = previousResumeFailure;
-      }
-      if (previousStatus === undefined) {
-        delete process.env.MOCK_ACPX_STATUS_STATUS;
-      } else {
-        process.env.MOCK_ACPX_STATUS_STATUS = previousStatus;
-      }
-      if (previousSummary === undefined) {
-        delete process.env.MOCK_ACPX_STATUS_SUMMARY;
-      } else {
-        process.env.MOCK_ACPX_STATUS_SUMMARY = previousSummary;
-      }
-    }
-  });
-
-  it("creates a fresh named session after ensure failure when status indicates an unrecoverable failure", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:ensure-fallback-dead-unrecoverable",
-      env: {
-        MOCK_ACPX_ENSURE_EXIT_1: "1",
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "agent process exited",
-      },
-      expectNewAfterStatus: true,
-    });
-  });
-
-  it("surfaces structured control-command errors from sessions ensure", async () => {
-    const previousEnsureExit = process.env.MOCK_ACPX_ENSURE_EXIT_1;
-    const previousStatusSignal = process.env.MOCK_ACPX_STATUS_SIGNAL;
-    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
-    process.env.MOCK_ACPX_STATUS_SIGNAL = "SIGTERM";
-
-    try {
-      const { runtime } = await createMockRuntimeFixture();
-      await expect(
-        runtime.ensureSession({
-          sessionKey: "agent:codex:acp:ensure-structured-error",
-          agent: "codex",
-          mode: "persistent",
-        }),
-      ).rejects.toMatchObject({
-        code: "ACP_SESSION_INIT_FAILED",
-        message: "-32603: mock ensure failure",
-      });
-    } finally {
-      if (previousEnsureExit === undefined) {
-        delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
-      } else {
-        process.env.MOCK_ACPX_ENSURE_EXIT_1 = previousEnsureExit;
-      }
-      if (previousStatusSignal === undefined) {
-        delete process.env.MOCK_ACPX_STATUS_SIGNAL;
-      } else {
-        process.env.MOCK_ACPX_STATUS_SIGNAL = previousStatusSignal;
-      }
-    }
-  });
-
-  it("appends stderr details when control-command errors are generic", async () => {
-    const previousEnsureExit = process.env.MOCK_ACPX_ENSURE_EXIT_1;
-    const previousEnsureMessage = process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE;
-    const previousEnsureStderr = process.env.MOCK_ACPX_ENSURE_STDERR;
-    const previousStatusSignal = process.env.MOCK_ACPX_STATUS_SIGNAL;
-    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
-    process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE = "Internal error";
-    process.env.MOCK_ACPX_ENSURE_STDERR = "usage limit exceeded";
-    process.env.MOCK_ACPX_STATUS_SIGNAL = "SIGTERM";
-
-    try {
-      const { runtime } = await createMockRuntimeFixture();
-      await expect(
-        runtime.ensureSession({
-          sessionKey: "agent:codex:acp:ensure-generic-error",
-          agent: "codex",
-          mode: "persistent",
-        }),
-      ).rejects.toMatchObject({
-        code: "ACP_SESSION_INIT_FAILED",
-        message: "-32603: Internal error | usage limit exceeded",
-      });
-    } finally {
-      if (previousEnsureExit === undefined) {
-        delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
-      } else {
-        process.env.MOCK_ACPX_ENSURE_EXIT_1 = previousEnsureExit;
-      }
-      if (previousEnsureMessage === undefined) {
-        delete process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE;
-      } else {
-        process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE = previousEnsureMessage;
-      }
-      if (previousEnsureStderr === undefined) {
-        delete process.env.MOCK_ACPX_ENSURE_STDERR;
-      } else {
-        process.env.MOCK_ACPX_ENSURE_STDERR = previousEnsureStderr;
-      }
-      if (previousStatusSignal === undefined) {
-        delete process.env.MOCK_ACPX_STATUS_SIGNAL;
-      } else {
-        process.env.MOCK_ACPX_STATUS_SIGNAL = previousStatusSignal;
-      }
-    }
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+    const agentFlagIndex = ensureArgs.indexOf("--agent");
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(ensureArgs[agentFlagIndex + 1]).toBe(ACPX_CODEX_ACP_BUNDLED_BIN);
   });
 
   it("serializes text plus image attachments into ACP prompt blocks", async () => {
@@ -699,7 +516,7 @@ describe("AcpxRuntime", () => {
     await runtime.setConfigOption({
       handle,
       key: "model",
-      value: "openai-codex/gpt-5.4",
+      value: "openai-codex/gpt-5.3-codex",
     });
     const status = await runtime.getStatus({ handle });
     const ensuredSessionName = "agent:codex:acp:controls";
@@ -795,95 +612,61 @@ describe("AcpxRuntime", () => {
     }
   });
 
-  it("routes ACPX commands through the built-in plugin-tools bridge only when explicitly enabled", async () => {
-    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
-      codex: {
-        command: "npx custom-codex-acp",
-      },
-    });
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acpx-plugin-tools-"));
-    const pluginRoot = path.join(repoRoot, "extensions", "acpx");
-    const distEntry = path.join(repoRoot, "dist", "mcp", "plugin-tools-serve.js");
-    try {
-      fs.mkdirSync(path.join(pluginRoot, "src"), { recursive: true });
-      fs.mkdirSync(path.dirname(distEntry), { recursive: true });
-      fs.writeFileSync(path.join(pluginRoot, "package.json"), "{}\n", "utf8");
-      fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "{}\n", "utf8");
-      fs.writeFileSync(path.join(pluginRoot, "src", "config.ts"), "// test\n", "utf8");
-      fs.writeFileSync(distEntry, "// built entry\n", "utf8");
-
-      const fixture = await createMockRuntimeFixture();
-      const runtime = new AcpxRuntime(
-        resolveAcpxPluginConfig({
-          rawConfig: {
-            command: fixture.config.command,
-            pluginToolsMcpBridge: true,
-          },
-          workspaceDir: repoRoot,
-          moduleUrl: pathToFileURL(path.join(pluginRoot, "src", "config.ts")).href,
-        }),
-        { logger: NOOP_LOGGER },
-      );
-
-      await runtime.ensureSession({
-        sessionKey: "agent:codex:acp:plugin-tools-bridge",
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      const logs = await readMockRuntimeLogEntries(fixture.logPath);
-      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
-      const agentFlagIndex = ensureArgs.indexOf("--agent");
-      expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
-      const rawAgentCommand = ensureArgs[agentFlagIndex + 1];
-      expect(rawAgentCommand).toContain("mcp-proxy.mjs");
-      const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
-      expect(payloadMatch?.[1]).toBeDefined();
-      const payload = JSON.parse(
-        Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
-      ) as {
-        targetCommand: string;
-        mcpServers: Array<{ name: string; command: string; args: string[] }>;
-      };
-      expect(payload.targetCommand).toContain("custom-codex-acp");
-      expect(payload.mcpServers).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            name: "openclaw-plugin-tools",
-            command: process.execPath,
-            args: [distEntry],
-          }),
-        ]),
-      );
-    } finally {
-      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
-      fs.rmSync(repoRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("does not pass unknown agent ids through acpx --agent when MCP servers are configured", async () => {
+  it("keeps MCP proxying for unresolved agent ids when MCP servers are configured", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture({
       mcpServers: {
         canva: {
           command: "npx",
           args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
-          env: {
-            CANVA_TOKEN: "secret", // pragma: allowlist secret
-          },
         },
       },
     });
 
     await runtime.ensureSession({
-      sessionKey: "agent:sh:acp:mcp",
-      agent: "sh -c whoami",
+      sessionKey: "agent:custom-agent:acp:mcp",
+      agent: "custom-agent",
       mode: "persistent",
     });
 
     const logs = await readMockRuntimeLogEntries(logPath);
     const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
-    expect(ensureArgs).not.toContain("--agent");
-    expect(ensureArgs).toContain("sh -c whoami");
+    const agentFlagIndex = ensureArgs.indexOf("--agent");
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    const rawAgentCommand = ensureArgs[agentFlagIndex + 1];
+    expect(rawAgentCommand).toContain("mcp-proxy.mjs");
+    const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+    expect(payloadMatch?.[1]).toBeDefined();
+    const payload = JSON.parse(
+      Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+    ) as {
+      targetCommand: string;
+    };
+    expect(payload.targetCommand).toBe("custom-agent");
+  });
+
+  it("quotes plugin-local agent command paths that include spaces", async () => {
+    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+      codex: {
+        command: "/tmp/dir with spaces/codex-acp",
+      },
+    });
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:quoted-command",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+      const agentFlagIndex = ensureArgs.indexOf("--agent");
+      expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+      expect(ensureArgs[agentFlagIndex + 1]).toBe('"/tmp/dir with spaces/codex-acp"');
+    } finally {
+      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+    }
   });
 
   it("skips prompt execution when runTurn starts with an already-aborted signal", async () => {

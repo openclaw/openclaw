@@ -168,7 +168,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     loadConfig.mockReturnValue({});
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
+      counts: { block: 0, final: 0, status: 0, tool: 0 },
     });
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});

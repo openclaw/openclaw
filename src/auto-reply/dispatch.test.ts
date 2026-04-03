@@ -12,9 +12,9 @@ function createDispatcher(record: string[]): ReplyDispatcher {
   return {
     sendToolResult: () => true,
     sendBlockReply: () => true,
+    sendStatusReply: () => true,
     sendFinalReply: () => true,
-    getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-    getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+    getQueuedCounts: () => ({ tool: 0, block: 0, status: 0, final: 0 }),
     markComplete: () => {
       record.push("markComplete");
     },
@@ -71,12 +71,12 @@ describe("withReplyDispatcher", () => {
     const dispatcher = {
       sendToolResult: () => true,
       sendBlockReply: () => true,
+      sendStatusReply: () => true,
       sendFinalReply: () => {
         order.push("sendFinalReply");
         return true;
       },
-      getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-      getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      getQueuedCounts: () => ({ tool: 0, block: 0, status: 0, final: 0 }),
       markComplete: () => {
         order.push("markComplete");
       },
@@ -92,7 +92,7 @@ describe("withReplyDispatcher", () => {
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+    expect(order).toEqual(["sendFinalReply", "waitForIdle", "markComplete", "waitForIdle"]);
   });
 
   it("dispatchInboundMessageWithBufferedDispatcher cleans up typing after a resolver starts it", async () => {

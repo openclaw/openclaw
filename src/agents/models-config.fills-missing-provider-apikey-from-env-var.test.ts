@@ -414,18 +414,18 @@ describe("models-config", () => {
     });
   });
 
-  it("preserves non-empty agent apiKey but lets explicit config baseUrl win in merge mode", async () => {
+  it("prefers explicit config apiKey while letting explicit config baseUrl win in merge mode", async () => {
     await expectCustomProviderMergeResult({
-      expectedApiKey: "AGENT_KEY",
+      expectedApiKey: "CONFIG_KEY",
       expectedBaseUrl: "https://config.example/v1",
     });
   });
 
-  it("lets explicit config baseUrl win in merge mode when the config provider key is normalized", async () => {
+  it("uses explicit config apiKey when the config provider key is normalized", async () => {
     await expectCustomProviderMergeResult({
       existingProviderKey: "custom",
       configProviderKey: " custom ",
-      expectedApiKey: "AGENT_KEY",
+      expectedApiKey: "CONFIG_KEY",
       expectedBaseUrl: "https://config.example/v1",
     });
   });
@@ -433,7 +433,7 @@ describe("models-config", () => {
   it("replaces stale merged baseUrl when the provider api changes", async () => {
     await expectCustomProviderMergeResult({
       seedProvider: createAgentSeedProvider({ api: "openai-completions" }),
-      expectedApiKey: "AGENT_KEY",
+      expectedApiKey: "CONFIG_KEY",
       expectedBaseUrl: "https://config.example/v1",
     });
   });
@@ -455,7 +455,7 @@ describe("models-config", () => {
           ],
         },
       });
-      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
+      expect(parsed.providers.custom?.apiKey).toBe("CONFIG_KEY");
       expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
     });
   });
@@ -516,6 +516,56 @@ describe("models-config", () => {
         providers: Record<string, { apiKey?: string }>;
       }>();
       expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY"); // pragma: allowlist secret
+    });
+  });
+
+  it("drops stale merged apiKey when current config explicitly omits the provider key", async () => {
+    await withTempHome(async () => {
+      await writeAgentModelsJson({
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
+            api: "openai-responses",
+            models: [{ id: "gpt-5.4", name: "GPT-5.4", input: ["text"] }],
+          },
+        },
+      });
+
+      const validated = validateConfigObject({
+        models: {
+          mode: "merge",
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT-5.4",
+                  input: ["text"],
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 16384,
+                },
+              ],
+            },
+          },
+        },
+      });
+      expect(validated.ok).toBe(true);
+      if (!validated.ok) {
+        throw new Error("expected config to validate");
+      }
+
+      await ensureOpenClawModelsJson(validated.config);
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string; baseUrl?: string }>;
+      }>();
+      expect(parsed.providers.openai?.apiKey).toBeUndefined();
+      expect(parsed.providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
     });
   });
 

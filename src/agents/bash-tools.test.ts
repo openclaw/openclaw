@@ -491,16 +491,10 @@ describe("exec tool backgrounding", () => {
 describe("exec exit codes", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 
-  it("treats non-zero exits as completed and appends exit code", async () => {
+  it("surfaces non-zero exits as failed tool calls", async () => {
     const command = joinCommands([shellEcho(OUTPUT_NOPE), COMMAND_EXIT_WITH_ERROR]);
-    const result = await executeExecCommand(execTool, command);
-    const resultDetails = result.details as { status?: string; exitCode?: number | null };
-    expect(readProcessStatus(resultDetails)).toBe(PROCESS_STATUS_COMPLETED);
-    expect(resultDetails.exitCode).toBe(1);
 
-    const text = readNormalizedTextContent(result.content);
-    expect(text).toContain(OUTPUT_NOPE);
-    expect(text).toContain(OUTPUT_EXIT_CODE_1);
+    await expect(executeExecCommand(execTool, command)).rejects.toThrow(OUTPUT_EXIT_CODE_1);
   });
 });
 

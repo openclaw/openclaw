@@ -1,11 +1,8 @@
 import { Type } from "@sinclair/typebox";
-import { buildStatusText } from "../../auto-reply/reply/commands-status.js";
-import type {
-  ElevatedLevel,
-  ReasoningLevel,
-  ThinkLevel,
-  VerboseLevel,
-} from "../../auto-reply/thinking.js";
+import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
+import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
+import { resolveQueueArbitratorProvider } from "../../auto-reply/reply/queue/model-arbitrator.js";
+import { buildQueueStatus, buildStatusMessage } from "../../auto-reply/status.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -477,28 +474,26 @@ export function createSessionStatusTool(opts?: {
         cfg,
         sessionEntry: statusSessionEntry,
         sessionKey: resolved.key,
-        parentSessionKey: statusSessionEntry.parentSessionKey,
-        sessionScope: cfg.session?.scope,
-        storePath,
-        statusChannel:
-          statusSessionEntry.channel ??
-          statusSessionEntry.lastChannel ??
-          statusSessionEntry.origin?.provider ??
-          "unknown",
-        provider: providerForCard,
-        model: defaultModelForCard,
-        resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
-        resolvedFastMode: statusSessionEntry.fastMode,
-        resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
-        resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
-        resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
-        resolveDefaultThinkingLevel: async () => cfg.agents?.defaults?.thinkingDefault,
-        isGroup,
-        defaultGroupActivation: () => "mention",
-        taskLineOverride: taskLine,
-        skipDefaultTaskLookup: true,
-        primaryModelLabelOverride: primaryModelLabel,
-        ...(providerForCard ? {} : { modelAuthOverride: undefined }),
+        sessionStorePath: storePath,
+        groupActivation,
+        modelAuth: resolveModelAuthLabel({
+          provider: providerForCard,
+          cfg,
+          sessionEntry: resolved.entry,
+          agentDir,
+        }),
+        usageLine,
+        timeLine,
+        queue: buildQueueStatus({
+          mode: queueSettings.mode,
+          depth: queueDepth,
+          debounceMs: queueSettings.debounceMs,
+          cap: queueSettings.cap,
+          dropPolicy: queueSettings.dropPolicy,
+          arbitratorProvider: resolveQueueArbitratorProvider(cfg),
+          showDetails: queueOverrides,
+        }),
+        includeTranscriptUsage: true,
       });
       const fullStatusText =
         taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;

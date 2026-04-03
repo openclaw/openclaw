@@ -29,6 +29,7 @@ import {
   shouldHandleTextCommands,
 } from "../commands-registry.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import type { TurnLatencyStageInfo } from "../types.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
   createAcpDispatchDeliveryCoordinator,
@@ -334,6 +335,7 @@ export async function tryDispatchAcpReply(params: {
   shouldSendToolSummaries: boolean;
   bypassForCommand: boolean;
   onReplyStart?: () => Promise<void> | void;
+  onLatencyStage?: (info: TurnLatencyStageInfo) => void;
   recordProcessed: DispatchProcessedRecorder;
   markIdle: (reason: string) => void;
 }): Promise<AcpDispatchAttemptResult | null> {
@@ -353,6 +355,7 @@ export async function tryDispatchAcpReply(params: {
   const canonicalSessionKey = acpResolution.sessionKey;
 
   let queuedFinal = false;
+  const acpDispatchStartedAt = Date.now();
   const delivery = createAcpDispatchDeliveryCoordinator({
     cfg: params.cfg,
     ctx: params.ctx,
@@ -365,6 +368,14 @@ export async function tryDispatchAcpReply(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     onReplyStart: params.onReplyStart,
+    onFirstVisibleOutput: (info) => {
+      params.onLatencyStage?.({
+        stage: "acp_first_visible_output",
+        durationMs: Math.max(0, Date.now() - acpDispatchStartedAt),
+        firstVisibleKind: info.kind,
+        backend: "acp",
+      });
+    },
   });
 
   const identityPendingBeforeTurn = isSessionIdentityPending(
@@ -395,8 +406,6 @@ export async function tryDispatchAcpReply(params: {
     provider: params.ctx.Surface ?? params.ctx.Provider,
     accountId: params.ctx.AccountId,
   });
-
-  const acpDispatchStartedAt = Date.now();
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
@@ -467,6 +476,13 @@ export async function tryDispatchAcpReply(params: {
       requestId: resolveAcpRequestId(params.ctx),
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       onEvent: async (event) => await projector.onEvent(event),
+      onLifecycleStage: async (info) => {
+        params.onLatencyStage?.({
+          stage: info.stage,
+          durationMs: "durationMs" in info ? info.durationMs : undefined,
+          backend: "backend" in info ? (info.backend ?? "acp") : "acp",
+        });
+      },
     });
 
     await projector.flush(true);
@@ -518,6 +534,14 @@ export async function tryDispatchAcpReply(params: {
       isError: true,
     });
     queuedFinal = queuedFinal || delivered;
+    if (delivered) {
+      params.onLatencyStage?.({
+        stage: "acp_error_visible",
+        durationMs: Math.max(0, Date.now() - acpDispatchStartedAt),
+        firstVisibleKind: "final",
+        backend: "acp",
+      });
+    }
     const counts = params.dispatcher.getQueuedCounts();
     delivery.applyRoutedCounts(counts);
     const acpStats = acpManager.getObservabilitySnapshot(params.cfg);

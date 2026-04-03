@@ -119,6 +119,7 @@ describe("models-config merge helpers", () => {
       },
       secretRefManagedProviders: new Set<string>(),
       explicitBaseUrlProviders: new Set<string>(),
+      explicitProviders: new Set<string>(),
     });
 
     expect(merged.custom).toEqual(
@@ -145,8 +146,39 @@ describe("models-config merge helpers", () => {
       },
       secretRefManagedProviders: new Set<string>(),
       explicitBaseUrlProviders: new Set<string>(),
+      explicitProviders: new Set<string>(),
     });
 
     expect(merged.custom?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+  });
+
+  it("drops stale plaintext apiKey for providers explicitly managed by current config", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-responses",
+          models: [{ id: "gpt-5.4" }],
+        } as ProviderConfig,
+      },
+      existingProviders: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: preservedApiKey,
+          api: "openai-responses",
+          models: [{ id: "gpt-5.4" }],
+        } as ExistingProviderConfig,
+      },
+      secretRefManagedProviders: new Set<string>(),
+      explicitBaseUrlProviders: new Set<string>(["openai"]),
+      explicitProviders: new Set<string>(["openai"]),
+    });
+
+    expect(merged.openai).toEqual(
+      expect.objectContaining({
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    );
+    expect(merged.openai?.apiKey).toBeUndefined();
   });
 });

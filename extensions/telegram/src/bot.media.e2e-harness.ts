@@ -138,7 +138,7 @@ const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
     }
     return {
       queuedFinal: payloads.length > 0,
-      counts: { block: 0, final: payloads.length, tool: 0 },
+      counts: { block: 0, final: payloads.length, status: 0, tool: 0 },
     };
   }),
 );

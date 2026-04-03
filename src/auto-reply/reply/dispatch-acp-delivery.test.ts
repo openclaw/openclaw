@@ -19,10 +19,10 @@ function createDispatcher(): ReplyDispatcher {
   return {
     sendToolResult: vi.fn(() => true),
     sendBlockReply: vi.fn(() => true),
+    sendStatusReply: vi.fn(() => true),
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, status: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }

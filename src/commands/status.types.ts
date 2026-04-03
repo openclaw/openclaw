@@ -47,6 +47,55 @@ export type StatusSummary = {
   heartbeat: {
     defaultAgentId: string;
     agents: HeartbeatStatus[];
+    diagnostics?: {
+      latency?: {
+        dominant?: Array<{
+          segment:
+            | "dispatchToQueue"
+            | "queueToRun"
+            | "acpEnsureToRun"
+            | "runToFirstEvent"
+            | "firstEventToFirstVisible"
+            | "runToFirstVisible"
+            | "firstVisibleToFinal"
+            | "endToEnd";
+          count: number;
+        }>;
+        earlyStatusPriority?: {
+          level: "prioritize" | "observe" | "deprioritize";
+          reason: string;
+        };
+      };
+      earlyStatus?: {
+        sampleCount: number;
+        eligibleCount: number;
+        semanticGateCount: number;
+        latencyGateCount: number;
+        topReasons?: Array<{
+          reason: string;
+          count: number;
+        }>;
+        guidance?: {
+          focus:
+            | "expand_active_run_status"
+            | "tighten_semantic_contract"
+            | "optimize_other_bottlenecks"
+            | "observe_more_samples";
+          reason: string;
+        };
+        phase2Supplements?: {
+          sampleCount: number;
+          eligibleCount: number;
+          hitRatePct: number;
+          topSkipReasons?: Array<{
+            reason: string;
+            count: number;
+          }>;
+          statusFirstVisibleAvgMs?: number;
+          statusFirstVisibleP95Ms?: number;
+        };
+      };
+    };
   };
   channelSummary: string[];
   queuedSystemEvents: string[];

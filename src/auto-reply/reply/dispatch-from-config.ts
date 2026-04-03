@@ -24,9 +24,11 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
+  logMessageFirstVisible,
   logMessageProcessed,
   logMessageQueued,
   logSessionStateChange,
+  logTurnLatencyStage,
 } from "../../logging/diagnostic.js";
 import {
   buildPluginBindingDeclinedText,
@@ -170,6 +172,9 @@ export async function dispatchReplyFromConfig(params: {
   const sessionKey = ctx.SessionKey;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
+  const turnLatencyId = diagnosticsEnabled
+    ? `${channel}:${String(messageId ?? "unknown")}:${startTime}`
+    : undefined;
 
   const recordProcessed = (
     outcome: "completed" | "skipped" | "error",
@@ -256,18 +261,66 @@ export async function dispatchReplyFromConfig(params: {
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
   const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry);
   const routeReplyRuntime = await loadRouteReplyRuntime();
-  const { originatingChannel, currentSurface, shouldRouteToOriginating, shouldSuppressTyping } =
-    resolveReplyRoutingDecision({
-      provider: ctx.Provider,
-      surface: ctx.Surface,
-      explicitDeliverRoute: ctx.ExplicitDeliverRoute,
+  const shouldRouteToOriginating = Boolean(
+    !isInternalWebchatTurn &&
+    routeReplyRuntime.isRoutableChannel(originatingChannel) &&
+    originatingTo &&
+    originatingChannel !== currentSurface,
+  );
+  const emitLatencyStage = (
+    info: Parameters<NonNullable<GetReplyOptions["onLatencyStage"]>>[0],
+  ) => {
+    params.replyOptions?.onLatencyStage?.(info);
+    if (!turnLatencyId) {
+      return;
+    }
+    logTurnLatencyStage({
+      turnLatencyId,
+      channel,
+      messageId,
+      chatId,
+      sessionId: sessionStoreEntry.entry?.sessionId,
+      sessionKey,
       originatingChannel: ctx.OriginatingChannel,
-      originatingTo: ctx.OriginatingTo,
-      suppressDirectUserDelivery: suppressAcpChildUserDelivery,
-      isRoutableChannel: routeReplyRuntime.isRoutableChannel,
+      routed: shouldRouteToOriginating,
+      durationMs: info.durationMs,
+      stage: info.stage,
+      queueModeConfigured: info.queueModeConfigured,
+      queueModeFinal: info.queueModeFinal,
+      supervisorAction: info.supervisorAction,
+      supervisorRelation: info.supervisorRelation,
+      firstVisibleKind: info.firstVisibleKind,
+      provider: info.provider,
+      model: info.model,
+      backend: info.backend,
     });
-  const originatingTo = ctx.OriginatingTo;
+  };
+  if (diagnosticsEnabled) {
+    emitLatencyStage({ stage: "dispatch_started", durationMs: 0 });
+  }
+  const shouldSuppressTyping =
+    shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
+
+  if (diagnosticsEnabled && dispatcher.setFirstVisibleHandler) {
+    dispatcher.setFirstVisibleHandler((info) => {
+      const dispatchToFirstVisibleMs = Math.max(0, Date.now() - startTime);
+      logMessageFirstVisible({
+        channel,
+        chatId,
+        messageId,
+        sessionId: sessionStoreEntry.entry?.sessionId,
+        sessionKey,
+        kind: info.kind,
+        dispatchToFirstVisibleMs,
+      });
+      emitLatencyStage({
+        stage: "first_visible_emitted",
+        durationMs: dispatchToFirstVisibleMs,
+        firstVisibleKind: info.kind,
+      });
+    });
+  }
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -668,6 +721,7 @@ export async function dispatchReplyFromConfig(params: {
         ...params.replyOptions,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
+        onLatencyStage: emitLatencyStage,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
@@ -684,8 +738,19 @@ export async function dispatchReplyFromConfig(params: {
             }
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(deliveryPayload, undefined, false);
+              emitLatencyStage({
+                stage: "outbound_reply_enqueued",
+                durationMs: Math.max(0, Date.now() - startTime),
+                firstVisibleKind: "tool",
+              });
             } else {
-              dispatcher.sendToolResult(deliveryPayload);
+              if (dispatcher.sendToolResult(deliveryPayload)) {
+                emitLatencyStage({
+                  stage: "outbound_reply_enqueued",
+                  durationMs: Math.max(0, Date.now() - startTime),
+                  firstVisibleKind: "tool",
+                });
+              }
             }
           };
           return run();
@@ -730,8 +795,19 @@ export async function dispatchReplyFromConfig(params: {
             });
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
+              emitLatencyStage({
+                stage: "outbound_reply_enqueued",
+                durationMs: Math.max(0, Date.now() - startTime),
+                firstVisibleKind: "block",
+              });
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              if (dispatcher.sendBlockReply(ttsPayload)) {
+                emitLatencyStage({
+                  stage: "outbound_reply_enqueued",
+                  durationMs: Math.max(0, Date.now() - startTime),
+                  firstVisibleKind: "block",
+                });
+              }
             }
           };
           return run();
@@ -778,9 +854,52 @@ export async function dispatchReplyFromConfig(params: {
       if (reply.isReasoning === true) {
         continue;
       }
-      const finalReply = await sendFinalPayload(reply);
-      queuedFinal = finalReply.queuedFinal || queuedFinal;
-      routedFinalCount += finalReply.routedFinalCount;
+      const ttsReply = await maybeApplyTtsToPayload({
+        payload: reply,
+        cfg,
+        channel: ttsChannel,
+        kind: "final",
+        inboundAudio,
+        ttsAuto: sessionTtsAuto,
+      });
+      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        // Route final reply to originating channel.
+        const result = await routeReplyRuntime.routeReply({
+          payload: ttsReply,
+          channel: originatingChannel,
+          to: originatingTo,
+          sessionKey: ctx.SessionKey,
+          accountId: ctx.AccountId,
+          threadId: routeThreadId,
+          cfg,
+          isGroup,
+          groupId,
+        });
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+        queuedFinal = result.ok || queuedFinal;
+        if (result.ok) {
+          routedFinalCount += 1;
+          emitLatencyStage({
+            stage: "outbound_reply_enqueued",
+            durationMs: Math.max(0, Date.now() - startTime),
+            firstVisibleKind: "final",
+          });
+        }
+      } else {
+        const didQueueFinal = dispatcher.sendFinalReply(ttsReply);
+        queuedFinal = didQueueFinal || queuedFinal;
+        if (didQueueFinal) {
+          emitLatencyStage({
+            stage: "outbound_reply_enqueued",
+            durationMs: Math.max(0, Date.now() - startTime),
+            firstVisibleKind: "final",
+          });
+        }
+      }
     }
 
     const ttsMode = resolveConfiguredTtsMode(cfg);
@@ -824,6 +943,11 @@ export async function dispatchReplyFromConfig(params: {
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {
               routedFinalCount += 1;
+              emitLatencyStage({
+                stage: "outbound_reply_enqueued",
+                durationMs: Math.max(0, Date.now() - startTime),
+                firstVisibleKind: "final",
+              });
             }
             if (!result.ok) {
               logVerbose(
@@ -833,6 +957,13 @@ export async function dispatchReplyFromConfig(params: {
           } else {
             const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
             queuedFinal = didQueue || queuedFinal;
+            if (didQueue) {
+              emitLatencyStage({
+                stage: "outbound_reply_enqueued",
+                durationMs: Math.max(0, Date.now() - startTime),
+                firstVisibleKind: "final",
+              });
+            }
           }
         }
       } catch (err) {
@@ -848,6 +979,12 @@ export async function dispatchReplyFromConfig(params: {
       "completed",
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
+    if (diagnosticsEnabled) {
+      emitLatencyStage({
+        stage: "completed",
+        durationMs: Math.max(0, Date.now() - startTime),
+      });
+    }
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {

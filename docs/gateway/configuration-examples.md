@@ -105,10 +105,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     responsePrefix: ">",
     ackReaction: "👀",
     ackReactionScope: "group-mentions",
-  },
-
-  // Routing + queue
-  routing: {
     groupChat: {
       mentionPatterns: ["@openclaw", "openclaw"],
       historyLimit: 50,
@@ -118,6 +114,13 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       debounceMs: 1000,
       cap: 20,
       drop: "summarize",
+      arbitrator: {
+        enabled: true,
+        provider: "lmstudio",
+        model: "qwen3-1.7b-instruct",
+        timeoutMs: 900,
+        temperature: 0,
+      },
       byChannel: {
         whatsapp: "collect",
         telegram: "collect",

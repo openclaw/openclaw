@@ -251,13 +251,9 @@
       "types": "./dist/plugin-sdk/temp-path.d.ts",
       "default": "./dist/plugin-sdk/temp-path.js"
     },
-    "./plugin-sdk/logging-core": {
-      "types": "./dist/plugin-sdk/logging-core.d.ts",
-      "default": "./dist/plugin-sdk/logging-core.js"
-    },
-    "./plugin-sdk/markdown-table-runtime": {
-      "types": "./dist/plugin-sdk/markdown-table-runtime.d.ts",
-      "default": "./dist/plugin-sdk/markdown-table-runtime.js"
+    "./plugin-sdk/acpx": {
+      "types": "./dist/plugin-sdk/acpx.d.ts",
+      "default": "./dist/plugin-sdk/acpx.js"
     },
     "./plugin-sdk/account-helpers": {
       "types": "./dist/plugin-sdk/account-helpers.d.ts",
@@ -474,6 +470,10 @@
     "./plugin-sdk/channel-targets": {
       "types": "./dist/plugin-sdk/channel-targets.d.ts",
       "default": "./dist/plugin-sdk/channel-targets.js"
+    },
+    "./plugin-sdk/context-engine": {
+      "types": "./dist/plugin-sdk/context-engine.d.ts",
+      "default": "./dist/plugin-sdk/context-engine.js"
     },
     "./plugin-sdk/feishu": {
       "types": "./dist/plugin-sdk/feishu.d.ts",

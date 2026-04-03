@@ -25,6 +25,10 @@ vi.mock("./doctor-memory-search.js", () => ({
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./doctor-openviking.js", () => ({
+  noteOpenVikingHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("./doctor-platform-notes.js", () => ({
   noteStartupOptimizationHints: vi.fn(),
   noteMacLaunchAgentOverrides: vi.fn().mockResolvedValue(undefined),

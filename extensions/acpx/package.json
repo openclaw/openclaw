@@ -1,10 +1,11 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.4.1-beta.1",
+  "version": "2026.3.13",
   "description": "OpenClaw ACP runtime backend via acpx",
   "type": "module",
   "dependencies": {
-    "acpx": "0.4.0"
+    "@zed-industries/codex-acp": "0.9.5",
+    "acpx": "0.3.0"
   },
   "openclaw": {
     "extensions": [

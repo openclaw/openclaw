@@ -1,0 +1,241 @@
+{
+  "version": "1",
+  "events": [
+    {
+      "id": "user_message",
+      "category": "user",
+      "description": "A new inbound user message that may affect the foreground task.",
+      "defaultUrgency": "normal",
+      "defaultScope": "foreground",
+      "likelyRelations": [
+        "same_task_supplement",
+        "same_task_correction",
+        "same_task_control",
+        "new_task_replace",
+        "new_task_parallel",
+        "background_relevant",
+        "unrelated"
+      ]
+    },
+    {
+      "id": "session_superseded",
+      "category": "system",
+      "description": "A later event has superseded the current session generation.",
+      "defaultUrgency": "high",
+      "defaultScope": "global",
+      "likelyRelations": ["same_task_control"]
+    },
+    {
+      "id": "timer_fired",
+      "category": "time",
+      "description": "A scheduled reminder or follow-up timer fired.",
+      "defaultUrgency": "low",
+      "defaultScope": "background",
+      "likelyRelations": ["background_relevant", "new_task_parallel"]
+    }
+  ],
+  "phases": [
+    {
+      "id": "idle",
+      "summary": "No active foreground task.",
+      "interruptibility": "interruptible"
+    },
+    {
+      "id": "planning",
+      "summary": "Reasoning, decomposition, and next-step selection.",
+      "interruptibility": "mostly_interruptible"
+    },
+    {
+      "id": "acting",
+      "summary": "Tool use or iterative task execution.",
+      "interruptibility": "mostly_avoid"
+    },
+    {
+      "id": "committing",
+      "summary": "Short atomic phase for persisting or finalizing state.",
+      "interruptibility": "atomic"
+    },
+    {
+      "id": "waiting",
+      "summary": "Waiting on the user, a tool, or a timer.",
+      "interruptibility": "interruptible"
+    }
+  ],
+  "interruptPreferences": [
+    {
+      "id": "free",
+      "summary": "Easy to divert or replace."
+    },
+    {
+      "id": "avoid",
+      "summary": "Default task posture; do not disturb unless a stronger signal arrives."
+    },
+    {
+      "id": "critical",
+      "summary": "Prefer to finish or stabilize the current phase before switching."
+    }
+  ],
+  "relations": [
+    {
+      "id": "same_task_supplement",
+      "summary": "Adds information to the current task without changing the goal.",
+      "meaning": "The event contributes constraints, context, or materials to the foreground task while preserving task identity.",
+      "positiveSignals": [
+        "adds a new constraint",
+        "supplies missing parameter",
+        "provides extra source material"
+      ],
+      "negativeSignals": [
+        "changes task scope",
+        "changes output format",
+        "introduces a clearly independent goal"
+      ],
+      "examples": ["Budget cap is 3000.", "One more constraint: it must work offline."],
+      "commonConfusions": ["same_task_correction"],
+      "defaultActionCandidates": ["append"]
+    },
+    {
+      "id": "same_task_correction",
+      "summary": "Redirects the current task without replacing it.",
+      "meaning": "The event keeps the same foreground task but corrects interpretation, emphasis, scope, or output shape.",
+      "positiveSignals": [
+        "corrects prior understanding",
+        "changes requested emphasis",
+        "changes requested output style"
+      ],
+      "negativeSignals": ["introduces a brand-new priority", "only adds more background context"],
+      "examples": [
+        "Not the full summary, only the last three days.",
+        "Do not use a table; write it as three paragraphs."
+      ],
+      "commonConfusions": ["same_task_supplement", "new_task_replace"],
+      "defaultActionCandidates": ["steer"]
+    },
+    {
+      "id": "same_task_control",
+      "summary": "Controls lifecycle or permission of the current task.",
+      "meaning": "The event is about pausing, resuming, cancelling, approving, rejecting, or retrying the active task rather than changing task content.",
+      "positiveSignals": [
+        "explicit stop or continue",
+        "approval or rejection",
+        "retry or cancel request"
+      ],
+      "negativeSignals": ["adds new context", "changes substantive task scope"],
+      "examples": ["Stop for now.", "Continue.", "Approve this operation."],
+      "commonConfusions": ["same_task_correction"],
+      "defaultActionCandidates": ["continue", "abort_and_replace", "defer"]
+    },
+    {
+      "id": "new_task_replace",
+      "summary": "Replaces the current foreground task with a stronger new goal.",
+      "meaning": "The event introduces a new foreground objective that should take over working-memory priority from the current task.",
+      "positiveSignals": [
+        "explicit topic switch",
+        "higher-priority replacement request",
+        "clear abandonment of current task"
+      ],
+      "negativeSignals": ["preserves current task identity", "asks for a small side task only"],
+      "examples": [
+        "Leave this for now and check the production error.",
+        "Different question: I want to ask about..."
+      ],
+      "commonConfusions": ["same_task_correction", "new_task_parallel"],
+      "defaultActionCandidates": ["abort_and_replace"]
+    },
+    {
+      "id": "new_task_parallel",
+      "summary": "Creates a new task while preserving the current one for later.",
+      "meaning": "The event introduces a separate task that deserves handling, but the current foreground task should remain resumable.",
+      "positiveSignals": [
+        "independent side question",
+        "small inserted task",
+        "future reminder-worthy request"
+      ],
+      "negativeSignals": [
+        "clearly abandons the current task",
+        "only needs lightweight background retention"
+      ],
+      "examples": [
+        "Also check who owns this domain.",
+        "Open a small side task and translate this paragraph."
+      ],
+      "commonConfusions": ["new_task_replace", "background_relevant"],
+      "defaultActionCandidates": ["pause_and_fork"]
+    },
+    {
+      "id": "background_relevant",
+      "summary": "Relevant to the broader context but not worth immediate foregrounding.",
+      "meaning": "The event should be retained for later task control or reminder handling without immediately taking the foreground.",
+      "positiveSignals": ["future reminder", "weakly related follow-up", "keep for later request"],
+      "negativeSignals": ["needs immediate attention", "clearly changes the current task"],
+      "examples": ["After this, remind me to contact them.", "Keep this link for later."],
+      "commonConfusions": ["new_task_parallel", "unrelated"],
+      "defaultActionCandidates": ["defer"]
+    },
+    {
+      "id": "unrelated",
+      "summary": "Not meaningfully connected to the current task or current task system state.",
+      "meaning": "The event does not justify foreground switching or future task retention in the current context.",
+      "positiveSignals": [
+        "low-signal aside",
+        "no clear task value",
+        "no meaningful relation to current work"
+      ],
+      "negativeSignals": ["creates follow-up value", "changes current task direction"],
+      "examples": ["A random aside with no implied action."],
+      "commonConfusions": ["background_relevant"],
+      "defaultActionCandidates": ["continue"]
+    }
+  ],
+  "actions": [
+    {
+      "id": "continue",
+      "summary": "Keep the current foreground task unchanged.",
+      "description": "The event does not justify changing the current task trajectory.",
+      "typicalTriggers": ["unrelated event", "non-actionable system update"],
+      "runtimeEffects": ["leave current active run intact", "do not create a new task"]
+    },
+    {
+      "id": "append",
+      "summary": "Merge new information into the current task.",
+      "description": "The event adds usable context without redirecting the task.",
+      "typicalTriggers": ["same_task_supplement"],
+      "runtimeEffects": [
+        "append context to current task state",
+        "preserve current foreground task identity"
+      ]
+    },
+    {
+      "id": "steer",
+      "summary": "Redirect the current task without replacing it.",
+      "description": "The event adjusts task interpretation, scope, or output while keeping the task active.",
+      "typicalTriggers": ["same_task_correction"],
+      "runtimeEffects": ["modify current run direction", "preserve current task identity"]
+    },
+    {
+      "id": "pause_and_fork",
+      "summary": "Pause the current task and open a new foreground task.",
+      "description": "The event introduces a separate task worth foregrounding without discarding the current task.",
+      "typicalTriggers": ["new_task_parallel"],
+      "runtimeEffects": ["mark current task resumable", "create a new foreground task"]
+    },
+    {
+      "id": "abort_and_replace",
+      "summary": "Terminate the current foreground task and replace it.",
+      "description": "The new event introduces a stronger foreground objective that should take over.",
+      "typicalTriggers": ["new_task_replace", "explicit stop or replace control"],
+      "runtimeEffects": [
+        "abort current active run",
+        "clear incompatible queued work",
+        "start a new foreground task"
+      ]
+    },
+    {
+      "id": "defer",
+      "summary": "Retain the event for later without foregrounding it now.",
+      "description": "The event is useful but should not disturb the current foreground task yet.",
+      "typicalTriggers": ["background_relevant", "low-priority reminder-like event"],
+      "runtimeEffects": ["store for later follow-up", "leave current foreground task in place"]
+    }
+  ]
+}

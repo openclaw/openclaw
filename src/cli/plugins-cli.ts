@@ -554,6 +554,25 @@ export function registerPluginsCli(program: Command) {
           inspect.diagnostics.map((entry) => `${entry.level.toUpperCase()}: ${entry.message}`),
         ),
       );
+      lines.push(
+        ...formatInspectSection(
+          "Runtime snapshot",
+          inspect.runtimeSnapshot
+            ? [
+                `Source: ${shortenHomePath(inspect.runtimeSnapshot.source)}`,
+                ...inspect.runtimeSnapshot.summary,
+              ]
+            : [],
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Runtime notices",
+          inspect.runtimeSnapshot?.notices.map(
+            (entry) => `${entry.severity.toUpperCase()}: ${entry.message}`,
+          ) ?? [],
+        ),
+      );
       lines.push(...formatInspectSection("Install", formatInstallLines(install)));
       if (inspect.plugin.error) {
         lines.push("", `${theme.error("Error:")} ${inspect.plugin.error}`);
@@ -801,12 +820,25 @@ export function registerPluginsCli(program: Command) {
     .command("doctor")
     .description("Report plugin load issues")
     .action(() => {
-      const report = buildPluginDiagnosticsReport();
+      const report = buildPluginStatusReport();
+      const inspectReports = buildAllPluginInspectReports({ report });
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
       const compatibility = buildPluginCompatibilityNotices({ report });
+      const runtimeNotices = inspectReports.flatMap((inspect) =>
+        (inspect.runtimeSnapshot?.notices ?? []).map((notice) => ({
+          pluginId: inspect.plugin.id,
+          source: inspect.runtimeSnapshot?.source,
+          ...notice,
+        })),
+      );
 
-      if (errors.length === 0 && diags.length === 0 && compatibility.length === 0) {
+      if (
+        errors.length === 0 &&
+        diags.length === 0 &&
+        compatibility.length === 0 &&
+        runtimeNotices.length === 0
+      ) {
         defaultRuntime.log("No plugin issues detected.");
         return;
       }
@@ -836,6 +868,22 @@ export function registerPluginsCli(program: Command) {
         for (const notice of compatibility) {
           const marker = notice.severity === "warn" ? theme.warn("warn") : theme.muted("info");
           lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
+        }
+      }
+      if (runtimeNotices.length > 0) {
+        if (lines.length > 0) {
+          lines.push("");
+        }
+        lines.push(theme.warn("Runtime:"));
+        for (const notice of runtimeNotices) {
+          const marker =
+            notice.severity === "error"
+              ? theme.error("error")
+              : notice.severity === "warn"
+                ? theme.warn("warn")
+                : theme.muted("info");
+          const source = notice.source ? ` (${shortenHomePath(notice.source)})` : "";
+          lines.push(`- ${notice.pluginId}: ${notice.message}${source} [${marker}]`);
         }
       }
       const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");

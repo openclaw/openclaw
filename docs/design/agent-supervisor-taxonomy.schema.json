@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ai/schemas/agent-supervisor-taxonomy.schema.json",
+  "title": "Agent Supervisor Taxonomy",
+  "description": "Structured semantic taxonomy for agent supervisor events, relations, phases, preferences, and actions.",
+  "type": "object",
+  "required": ["version", "events", "phases", "interruptPreferences", "relations", "actions"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/phase"
+      }
+    },
+    "interruptPreferences": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/interruptPreference"
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relation"
+      }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/action"
+      }
+    }
+  },
+  "$defs": {
+    "stringList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "event": {
+      "type": "object",
+      "required": [
+        "id",
+        "category",
+        "description",
+        "defaultUrgency",
+        "defaultScope",
+        "likelyRelations"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "category": {
+          "type": "string",
+          "enum": ["user", "task", "tool", "time", "system"]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "defaultUrgency": {
+          "type": "string",
+          "enum": ["low", "normal", "high"]
+        },
+        "defaultScope": {
+          "type": "string",
+          "enum": ["foreground", "background", "global"]
+        },
+        "likelyRelations": {
+          "$ref": "#/$defs/stringList"
+        }
+      }
+    },
+    "phase": {
+      "type": "object",
+      "required": ["id", "summary", "interruptibility"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "interruptibility": {
+          "type": "string",
+          "enum": ["interruptible", "atomic", "mostly_interruptible", "mostly_avoid"]
+        }
+      }
+    },
+    "interruptPreference": {
+      "type": "object",
+      "required": ["id", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "enum": ["free", "avoid", "critical"]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "required": [
+        "id",
+        "summary",
+        "meaning",
+        "positiveSignals",
+        "negativeSignals",
+        "examples",
+        "commonConfusions",
+        "defaultActionCandidates"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "meaning": {
+          "type": "string",
+          "minLength": 1
+        },
+        "positiveSignals": {
+          "$ref": "#/$defs/stringList"
+        },
+        "negativeSignals": {
+          "$ref": "#/$defs/stringList"
+        },
+        "examples": {
+          "$ref": "#/$defs/stringList"
+        },
+        "commonConfusions": {
+          "$ref": "#/$defs/stringList"
+        },
+        "defaultActionCandidates": {
+          "$ref": "#/$defs/stringList"
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["id", "summary", "description", "typicalTriggers", "runtimeEffects"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "typicalTriggers": {
+          "$ref": "#/$defs/stringList"
+        },
+        "runtimeEffects": {
+          "$ref": "#/$defs/stringList"
+        }
+      }
+    }
+  }
+}

@@ -18,6 +18,17 @@ export type MonitorFeishuOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   accountId?: string;
+  statusSink?: (patch: {
+    connected?: boolean;
+    reconnectAttempts?: number;
+    lastConnectedAt?: number | null;
+    lastDisconnect?: {
+      at: number;
+      error?: string;
+    } | null;
+    lastError?: string | null;
+    lastEventAt?: number | null;
+  }) => void;
 };
 
 export {
@@ -49,6 +60,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       account,
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
+      statusSink: opts.statusSink,
     });
   }
 
@@ -85,6 +97,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
         account,
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
+        statusSink: opts.statusSink,
         botOpenIdSource: { kind: "prefetched", botOpenId, botName },
       }),
     );

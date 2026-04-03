@@ -1,9 +1,15 @@
 import { Type } from "@sinclair/typebox";
+import { isAcpEnabledByPolicy } from "../../acp/policy.js";
 import { loadConfig } from "../../config/config.js";
-import { callGateway } from "../../gateway/call.js";
-import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { spawnAcpDirect } from "../acp-spawn.js";
+import {
+  ACP_SPAWN_MODES,
+  ACP_SPAWN_STREAM_TARGETS,
+  spawnAcpDirect,
+  type SpawnAcpMode,
+  type SpawnAcpResult,
+} from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
@@ -30,6 +36,11 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
+const ACP_HARNESS_AGENT_IDS = new Set(
+  ["codex", "claude", "claude-code", "gemini", "opencode", "pi"].map((value) =>
+    normalizeAgentId(value),
+  ),
+);
 
 function summarizeError(err: unknown): string {
   if (err instanceof Error) {
@@ -128,14 +139,33 @@ export function createSessionsSpawnTool(
     requesterAgentIdOverride?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool {
+  function annotateAcpSpawnFailure(result: {
+    status: SpawnAcpResult["status"];
+    error?: string;
+    childSessionKey?: string;
+    runId?: string;
+    mode?: SpawnAcpMode;
+    streamLogPath?: string;
+    note?: string;
+  }) {
+    const failureMessage = result.error?.trim() || "ACP harness session failed to start.";
+    return {
+      ...result,
+      error: `${failureMessage} Requested ACP harness could not be started; report the failure and ask the user before using another backend or ordinary tools instead.`,
+      backendIntent: "acp_harness",
+      fallbackRequiresUserConfirmation: true,
+    };
+  }
+
   return {
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
+      'Spawn an isolated session (runtime="subagent" or runtime="acp"). ACP harness ids like `codex`/`claude`/`gemini` are targeted here, not via `agents_list`. mode="run" is one-shot and mode="session" is persistent/thread-bound. ACP one-shot runs default to parent-session progress relay when spawned from another session. Subagents inherit the parent workspace directory automatically.',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const cfg = loadConfig();
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
         Object.hasOwn(params, key),
       );
@@ -146,9 +176,26 @@ export function createSessionsSpawnTool(
       }
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
-      const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
       const resumeSessionId = readStringParam(params, "resumeSessionId");
+      const normalizedRequestedAgentId = requestedAgentId
+        ? normalizeAgentId(requestedAgentId)
+        : undefined;
+      const hasConfiguredSubagent =
+        normalizedRequestedAgentId != null &&
+        Array.isArray(cfg.agents?.list) &&
+        cfg.agents.list.some((entry) => normalizeAgentId(entry.id) === normalizedRequestedAgentId);
+      const runtime =
+        params.runtime === "acp"
+          ? "acp"
+          : params.runtime === "subagent"
+            ? "subagent"
+            : normalizedRequestedAgentId &&
+                ACP_HARNESS_AGENT_IDS.has(normalizedRequestedAgentId) &&
+                !hasConfiguredSubagent &&
+                isAcpEnabledByPolicy(cfg)
+              ? "acp"
+              : "subagent";
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cwd = readStringParam(params, "cwd");
@@ -222,64 +269,8 @@ export function createSessionsSpawnTool(
             sandboxed: opts?.sandboxed,
           },
         );
-        const childSessionKey = result.childSessionKey?.trim();
-        const childRunId = result.runId?.trim();
-        const shouldTrackViaRegistry =
-          result.status === "accepted" &&
-          Boolean(childSessionKey) &&
-          Boolean(childRunId) &&
-          streamTo !== "parent";
-        if (shouldTrackViaRegistry && childSessionKey && childRunId) {
-          const cfg = loadConfig();
-          const trackedSpawnMode = resolveTrackedSpawnMode({
-            requestedMode: result.mode,
-            threadRequested: thread,
-          });
-          const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
-          const { mainKey, alias } = resolveMainSessionAlias(cfg);
-          const requesterInternalKey = opts?.agentSessionKey
-            ? resolveInternalSessionKey({
-                key: opts.agentSessionKey,
-                alias,
-                mainKey,
-              })
-            : alias;
-          const requesterDisplayKey = resolveDisplaySessionKey({
-            key: requesterInternalKey,
-            alias,
-            mainKey,
-          });
-          const requesterOrigin = normalizeDeliveryContext({
-            channel: opts?.agentChannel,
-            accountId: opts?.agentAccountId,
-            to: opts?.agentTo,
-            threadId: opts?.agentThreadId,
-          });
-          try {
-            registerSubagentRun({
-              runId: childRunId,
-              childSessionKey,
-              requesterSessionKey: requesterInternalKey,
-              requesterOrigin,
-              requesterDisplayKey,
-              task,
-              cleanup: trackedCleanup,
-              label: label || undefined,
-              runTimeoutSeconds,
-              expectsCompletionMessage: true,
-              spawnMode: trackedSpawnMode,
-            });
-          } catch (err) {
-            // Best-effort only: the ACP turn was already started above, so deleting the
-            // child session record here does not guarantee the in-flight run was aborted.
-            await cleanupUntrackedAcpSession(childSessionKey);
-            return jsonResult({
-              status: "error",
-              error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
-              childSessionKey,
-              runId: childRunId,
-            });
-          }
+        if (result.status !== "accepted") {
+          return jsonResult(annotateAcpSpawnFailure(result));
         }
         return jsonResult(result);
       }

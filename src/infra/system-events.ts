@@ -135,6 +135,37 @@ export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
 }
 
+export function requeueSystemEventEntries(sessionKey: string, events: SystemEvent[]) {
+  const key = requireSessionKey(sessionKey);
+  const restored: SystemEvent[] = [];
+  for (const event of events) {
+    const cleaned = event.text.trim();
+    if (!cleaned) {
+      continue;
+    }
+    restored.push({
+      text: cleaned,
+      ts: event.ts,
+      contextKey: normalizeContextKey(event.contextKey),
+    });
+  }
+  if (restored.length === 0) {
+    return;
+  }
+  const entry = queues.get(key) ?? {
+    queue: [],
+    lastText: null,
+    lastContextKey: null,
+  };
+  // Restore drained events ahead of anything that arrived during the failed run
+  // so retries preserve the original arrival order.
+  entry.queue = [...restored, ...entry.queue].slice(0, MAX_EVENTS);
+  const last = entry.queue.at(-1) ?? null;
+  entry.lastText = last?.text ?? null;
+  entry.lastContextKey = last?.contextKey ?? null;
+  queues.set(key, entry);
+}
+
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
   return getSessionQueue(sessionKey)?.queue.map(cloneSystemEvent) ?? [];
 }

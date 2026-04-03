@@ -248,6 +248,40 @@ export function normalizeRuntimeOptions(
   };
 }
 
+function resolveDefaultRuntimeMode(params: {
+  backend?: string;
+  agent?: string;
+}): string | undefined {
+  const backend = normalizeText(params.backend)?.toLowerCase();
+  const agent = normalizeText(params.agent)?.toLowerCase();
+  // Codex ACP sessions default to read-only unless a mode is set explicitly.
+  // Seed "auto" so spawned Codex specialists can execute normal read/write/exec
+  // work in the workspace without hanging on the approval preset screen.
+  if (backend === "acpx" && agent === "codex") {
+    return "auto";
+  }
+  return undefined;
+}
+
+export function applyDefaultRuntimeOptions(params: {
+  backend?: string;
+  agent?: string;
+  options?: AcpSessionRuntimeOptions;
+}): AcpSessionRuntimeOptions {
+  const normalized = normalizeRuntimeOptions(params.options);
+  if (normalized.runtimeMode) {
+    return normalized;
+  }
+  const runtimeMode = resolveDefaultRuntimeMode(params);
+  if (!runtimeMode) {
+    return normalized;
+  }
+  return normalizeRuntimeOptions({
+    ...normalized,
+    runtimeMode,
+  });
+}
+
 export function mergeRuntimeOptions(params: {
   current?: AcpSessionRuntimeOptions;
   patch?: Partial<AcpSessionRuntimeOptions>;

@@ -162,6 +162,10 @@ Then enable it in config:
 }
 ```
 
+If you are using OpenViking as the active engine and want a unified retrieval
+plane across native OpenClaw memory plus an external vault such as Obsidian,
+see [OpenViking Context and Memory](/concepts/openviking-context-memory).
+
 ### The ContextEngine interface
 
 Required members:

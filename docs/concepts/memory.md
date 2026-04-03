@@ -14,7 +14,11 @@ hidden state.
 
 ## How it works
 
-Your agent has two places to store memories:
+If you use OpenViking as the active context engine and want it to be the only
+retrieval layer across native memory plus an external knowledge base, see
+[OpenViking Context and Memory](/concepts/openviking-context-memory).
+
+## Memory files (Markdown)
 
 - **`MEMORY.md`** -- long-term memory. Durable facts, preferences, and
   decisions. Loaded at the start of every DM session.

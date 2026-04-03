@@ -1293,6 +1293,63 @@ describe("AcpSessionManager", () => {
     expect(snapshot.errorsByCode.ACP_TURN_FAILED).toBe(1);
   });
 
+  it("emits ACP lifecycle stages for ensure-session and first runtime event", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.runTurn.mockImplementation(async function* () {
+      yield { type: "text_delta" as const, text: "hello" };
+      yield { type: "done" as const };
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const onLifecycleStage = vi.fn();
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "hello",
+      mode: "prompt",
+      requestId: "run-1",
+      onLifecycleStage,
+    });
+
+    expect(onLifecycleStage.mock.calls.map(([info]) => info.stage)).toEqual([
+      "acp_ensure_session_started",
+      "acp_ensure_session_completed",
+      "acp_run_started",
+      "acp_first_event",
+    ]);
+    expect(onLifecycleStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "acp_ensure_session_completed",
+        backend: "acpx",
+        durationMs: expect.any(Number),
+      }),
+    );
+    expect(onLifecycleStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "acp_run_started",
+        backend: "acpx",
+        durationMs: expect.any(Number),
+      }),
+    );
+    expect(onLifecycleStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "acp_first_event",
+        backend: "acpx",
+        eventType: "text_delta",
+        durationMs: expect.any(Number),
+      }),
+    );
+  });
+
   it("rolls back ensured runtime sessions when metadata persistence fails", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -1598,6 +1655,37 @@ describe("AcpSessionManager", () => {
     );
     expect(options.runtimeMode).toBe("plan");
     expect(extractRuntimeOptionsFromUpserts().some((entry) => entry?.runtimeMode === "plan")).toBe(
+      true,
+    );
+  });
+
+  it("defaults Codex ACP sessions to auto runtime mode on turn execution", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    expect(runtimeState.setMode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "auto",
+      }),
+    );
+    expect(extractRuntimeOptionsFromUpserts().some((entry) => entry?.runtimeMode === "auto")).toBe(
       true,
     );
   });

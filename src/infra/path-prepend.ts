@@ -57,6 +57,26 @@ export function mergePathPrepend(existing: string | undefined, prepend: string[]
   return merged.join(path.delimiter);
 }
 
+export function mergePathAppend(existing: string | undefined, append: string[]) {
+  if (append.length === 0) {
+    return existing;
+  }
+  const partsExisting = (existing ?? "")
+    .split(path.delimiter)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const part of [...partsExisting, ...append]) {
+    if (seen.has(part)) {
+      continue;
+    }
+    seen.add(part);
+    merged.push(part);
+  }
+  return merged.join(path.delimiter);
+}
+
 export function applyPathPrepend(
   env: Record<string, string>,
   prepend: string[] | undefined,
@@ -73,6 +93,24 @@ export function applyPathPrepend(
     return;
   }
   const merged = mergePathPrepend(env[pathKey], prepend);
+  if (merged) {
+    env[pathKey] = merged;
+  }
+}
+
+export function applyPathAppend(
+  env: Record<string, string>,
+  append: string[] | undefined,
+  options?: { requireExisting?: boolean },
+) {
+  if (!Array.isArray(append) || append.length === 0) {
+    return;
+  }
+  const pathKey = findPathKey(env);
+  if (options?.requireExisting && !env[pathKey]) {
+    return;
+  }
+  const merged = mergePathAppend(env[pathKey], append);
   if (merged) {
     env[pathKey] = merged;
   }

@@ -44,6 +44,7 @@ function shouldTreatDeliveredTextAsVisible(params: {
 
 type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
+  firstVisibleOutputEmitted: boolean;
   accumulatedBlockText: string;
   blockCount: number;
   deliveredFinalReply: boolean;
@@ -84,9 +85,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
+  onFirstVisibleOutput?: (info: { kind: ReplyDispatchKind }) => void;
 }): AcpDispatchDeliveryCoordinator {
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
+    firstVisibleOutputEmitted: false,
     accumulatedBlockText: "",
     blockCount: 0,
     deliveredFinalReply: false,
@@ -97,6 +100,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     routedCounts: {
       tool: 0,
       block: 0,
+      status: 0,
       final: 0,
     },
     toolMessageByCallId: new Map(),
@@ -126,6 +130,14 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     }
     state.startedReplyLifecycle = true;
     await params.onReplyStart?.();
+  };
+
+  const markFirstVisibleOutput = (kind: ReplyDispatchKind) => {
+    if (state.firstVisibleOutputEmitted) {
+      return;
+    }
+    state.firstVisibleOutputEmitted = true;
+    params.onFirstVisibleOutput?.({ kind });
   };
 
   const tryEditToolMessage = async (
@@ -248,28 +260,36 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         state.deliveredVisibleText = true;
       }
       state.routedCounts[kind] += 1;
+      markFirstVisibleOutput(kind);
       return true;
     }
 
-    const tracksVisibleText = shouldTreatDeliveredTextAsVisible({
-      channel: directChannel,
-      kind,
-      text: ttsPayload.text,
-    });
-    const delivered =
-      kind === "tool"
-        ? params.dispatcher.sendToolResult(ttsPayload)
-        : kind === "block"
-          ? params.dispatcher.sendBlockReply(ttsPayload)
-          : params.dispatcher.sendFinalReply(ttsPayload);
-    if (kind === "final" && delivered) {
-      state.deliveredFinalReply = true;
+    if (kind === "tool") {
+      const delivered = params.dispatcher.sendToolResult(ttsPayload);
+      if (delivered) {
+        markFirstVisibleOutput(kind);
+      }
+      return delivered;
     }
-    if (delivered && tracksVisibleText) {
-      state.queuedDirectVisibleTextDeliveries += 1;
-      state.settledDirectVisibleText = false;
-    } else if (!delivered && tracksVisibleText) {
-      state.failedVisibleTextDelivery = true;
+    if (kind === "block") {
+      const delivered = params.dispatcher.sendBlockReply(ttsPayload);
+      if (delivered) {
+        markFirstVisibleOutput(kind);
+      }
+      return delivered;
+    }
+    if (kind === "status") {
+      const delivered =
+        params.dispatcher.sendStatusReply?.(ttsPayload) ??
+        params.dispatcher.sendBlockReply(ttsPayload);
+      if (delivered) {
+        markFirstVisibleOutput(kind);
+      }
+      return delivered;
+    }
+    const delivered = params.dispatcher.sendFinalReply(ttsPayload);
+    if (delivered) {
+      markFirstVisibleOutput(kind);
     }
     return delivered;
   };
@@ -287,6 +307,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;
       counts.block += state.routedCounts.block;
+      counts.status += state.routedCounts.status;
       counts.final += state.routedCounts.final;
     },
   };

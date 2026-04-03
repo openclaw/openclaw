@@ -82,6 +82,94 @@ export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
   error?: string;
 };
 
+export type DiagnosticMessageFirstVisibleEvent = DiagnosticBaseEvent & {
+  type: "message.first_visible";
+  channel: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  sessionKey?: string;
+  sessionId?: string;
+  kind: "tool" | "block" | "status" | "final";
+  dispatchToFirstVisibleMs: number;
+};
+
+export type DiagnosticMessageFirstVisibleTimeoutEvent = DiagnosticBaseEvent & {
+  type: "message.first_visible_timeout";
+  channel: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  sessionKey?: string;
+  sessionId?: string;
+  thresholdMs: number;
+};
+
+export type DiagnosticTurnLatencyStageEvent = DiagnosticBaseEvent & {
+  type: "turn.latency.stage";
+  turnLatencyId: string;
+  stage:
+    | "dispatch_started"
+    | "queue_arbitrated"
+    | "first_visible_scheduled"
+    | "run_started"
+    | "run_first_output"
+    | "first_visible_emitted"
+    | "final_dispatched"
+    | "completed"
+    | "context_skills_env_completed"
+    | "context_bootstrap_completed"
+    | "context_tools_completed"
+    | "context_bundle_mcp_completed"
+    | "context_bundle_lsp_completed"
+    | "context_system_prompt_completed"
+    | "context_system_prompt_report_completed"
+    | "context_assembly_completed"
+    | "context_engine_assemble_completed"
+    | "model_first_token"
+    | "model_completion_completed"
+    | "context_engine_finalize_completed"
+    | "outbound_reply_enqueued"
+    | "acp_ensure_session_started"
+    | "acp_ensure_session_completed"
+    | "acp_run_started"
+    | "acp_first_event"
+    | "acp_first_visible_output"
+    | "acp_error_visible"
+    | "acp_reset_tail_started"
+    | "acp_reset_tail_completed"
+    | "fallback_started";
+  channel: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  sessionKey?: string;
+  sessionId?: string;
+  originatingChannel?: string;
+  routed?: boolean;
+  replyGeneration?: number;
+  durationMs?: number;
+  queueModeConfigured?: string;
+  queueModeFinal?: string;
+  supervisorAction?: string;
+  supervisorRelation?: string;
+  firstVisibleKind?: "tool" | "block" | "status" | "final";
+  provider?: string;
+  model?: string;
+  backend?: string;
+};
+
+export type DiagnosticEarlyStatusPolicyEvent = DiagnosticBaseEvent & {
+  type: "early_status.policy";
+  channel: string;
+  sessionKey?: string;
+  sessionId?: string;
+  queueMode: string;
+  decisionShouldEmit: boolean;
+  activationShouldEmit: boolean;
+  decisionReason: string;
+  activationReason: string;
+  recommendationLevel: "prioritize" | "observe" | "deprioritize";
+  recommendationReason: string;
+};
+
 export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   type: "session.state";
   sessionKey?: string;
@@ -132,6 +220,66 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   active: number;
   waiting: number;
   queued: number;
+  firstVisible?: {
+    sampleCount: number;
+    avgMs: number;
+    p95Ms: number;
+    maxMs: number;
+    timeoutCount: number;
+  };
+  latency?: {
+    sampleCount: number;
+    dominant?: Array<{
+      segment:
+        | "dispatchToQueue"
+        | "queueToRun"
+        | "acpEnsureToRun"
+        | "runToFirstEvent"
+        | "firstEventToFirstVisible"
+        | "runToFirstVisible"
+        | "firstVisibleToFinal"
+        | "endToEnd";
+      count: number;
+    }>;
+    segments: Partial<
+      Record<
+        | "dispatchToQueue"
+        | "queueToRun"
+        | "acpEnsureToRun"
+        | "runToFirstEvent"
+        | "firstEventToFirstVisible"
+        | "runToFirstVisible"
+        | "firstVisibleToFinal"
+        | "endToEnd",
+        {
+          avgMs: number;
+          p95Ms: number;
+          maxMs: number;
+        }
+      >
+    >;
+  };
+  earlyStatus?: {
+    sampleCount: number;
+    eligibleCount: number;
+    semanticGateCount: number;
+    latencyGateCount: number;
+    topReasons?: Array<{
+      reason: string;
+      count: number;
+    }>;
+    phase2Supplements?: {
+      sampleCount: number;
+      eligibleCount: number;
+      hitRatePct: number;
+      topSkipReasons?: Array<{
+        reason: string;
+        count: number;
+      }>;
+      statusFirstVisibleAvgMs?: number;
+      statusFirstVisibleP95Ms?: number;
+    };
+  };
 };
 
 export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
@@ -153,7 +301,11 @@ export type DiagnosticEventPayload =
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent
   | DiagnosticMessageQueuedEvent
+  | DiagnosticMessageFirstVisibleEvent
+  | DiagnosticMessageFirstVisibleTimeoutEvent
+  | DiagnosticTurnLatencyStageEvent
   | DiagnosticMessageProcessedEvent
+  | DiagnosticEarlyStatusPolicyEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionStuckEvent
   | DiagnosticLaneEnqueueEvent

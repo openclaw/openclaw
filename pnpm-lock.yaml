@@ -255,9 +255,12 @@ importers:
 
   extensions/acpx:
     dependencies:
+      '@zed-industries/codex-acp':
+        specifier: 0.9.5
+        version: 0.9.5
       acpx:
-        specifier: 0.4.0
-        version: 0.4.0(zod@4.3.6)
+        specifier: 0.3.0
+        version: 0.3.0(zod@4.3.6)
 
   extensions/amazon-bedrock:
     dependencies:
@@ -562,6 +565,12 @@ importers:
   extensions/openrouter: {}
 
   extensions/openshell: {}
+
+  extensions/openviking:
+    dependencies:
+      openclaw:
+        specifier: '>=2026.3.11'
+        version: 2026.3.23(@napi-rs/canvas@0.1.95)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
   extensions/perplexity: {}
 
@@ -3589,6 +3598,46 @@ packages:
     resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
     version: 2.0.1
 
+  '@zed-industries/codex-acp-darwin-arm64@0.9.5':
+    resolution: {integrity: sha512-VZsC/VOxY2/vCXV3/k09bKg1gQzaRnVoYoPgBF8JbZbPLLBiJZVCTGq5uND9wH8O3FAoIAEDm9icFsIL1eUd3g==}
+    cpu: [arm64]
+    os: [darwin]
+    hasBin: true
+
+  '@zed-industries/codex-acp-darwin-x64@0.9.5':
+    resolution: {integrity: sha512-K+HQzbdzfsCEFdjsMDT9mUXPAy/b63Har1Zzy+/bFRv8bVti52Nfv9SYnnHsEVVRSSwzStYbWNP9cXUywO2X1w==}
+    cpu: [x64]
+    os: [darwin]
+    hasBin: true
+
+  '@zed-industries/codex-acp-linux-arm64@0.9.5':
+    resolution: {integrity: sha512-BtgoSxxKkDjZPtovdhmLpLFk2LBS2qY9wVOAAzO8b6PRS8t1ufaGTocJheb/Cb6kb5cHAqXtvo0sexDh8LwiiA==}
+    cpu: [arm64]
+    os: [linux]
+    hasBin: true
+
+  '@zed-industries/codex-acp-linux-x64@0.9.5':
+    resolution: {integrity: sha512-8TGNNP6HAAxy+Y8cBzAySKzKSpb4Sgraz1Yl5b0VzvSV7iYg77hIAyR4zsywymK3fzF1MGUO1ZNYt2JR1ZnPMw==}
+    cpu: [x64]
+    os: [linux]
+    hasBin: true
+
+  '@zed-industries/codex-acp-win32-arm64@0.9.5':
+    resolution: {integrity: sha512-5UVyGMDia0YZi8yf/4ZvuCUy+WA83kXQkfucroCmAnxWDyrp3KKIOpAgTzBb5MHQkEtYGNjR6eA9UkPbwj9fPg==}
+    cpu: [arm64]
+    os: [win32]
+    hasBin: true
+
+  '@zed-industries/codex-acp-win32-x64@0.9.5':
+    resolution: {integrity: sha512-jCzCjmj1wpq78jXC6lVm86bA69dYGm/l3DbeVyiMiUF3uimeNieauNK9sLDXbrWpLGVju3lqsFax8vIposahBQ==}
+    cpu: [x64]
+    os: [win32]
+    hasBin: true
+
+  '@zed-industries/codex-acp@0.9.5':
+    resolution: {integrity: sha512-rS3Mv+N9N2eUpjiGmUT+P3fBO2ZXnDtH1L+efvL9q3Shm9EVG2FByNrDRI1+NxQzmgtsgTpm+xTxg/9jdwXYlA==}
+    hasBin: true
+
   abbrev@1.1.1:
     resolution: {integrity: sha512-nne9/IiQ/hzIhY6pdDnbBtz7DjPTKrY00P/zvPSm5pOFkl6xuGrGnXn/VtTNNfNtAfZ9/1RtehkszU9qcTii0Q==}
 
@@ -3615,8 +3664,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.4.0:
-    resolution: {integrity: sha512-JyMw9+loIEuy+jUyv7Irx+qNDhrL0ToR+wAfX3ucBACrSBfsWKFmGJWewH+c1gr+MuzTG1Jd/0kIM6/+ZL67OA==}
+  acpx@0.3.0:
+    resolution: {integrity: sha512-5F3GRojIqXyMCzWZ6fT3+mgXXS0sRR7Phc6VyAdEUyfjQQTVeJHr81+XQ/Z4jHrP3pbjtqwlRC6E0O5Glc8lOg==}
     engines: {node: '>=22.12.0'}
     hasBin: true
 
@@ -5392,6 +5441,17 @@ packages:
       ws:
         optional: true
       zod:
+        optional: true
+
+  openclaw@2026.3.23:
+    resolution: {integrity: sha512-CSenO9Q+WePEzhzr3vIgx70GLanQVLcwgtItxT7gy1XtE7uiAVLBTqOxn2nc6BGGX3R3u9RqOpUh/vyAPvameA==}
+    engines: {node: '>=22.16.0'}
+    hasBin: true
+    peerDependencies:
+      '@napi-rs/canvas': ^0.1.89
+      node-llama-cpp: 3.16.2
+    peerDependenciesMeta:
+      node-llama-cpp:
         optional: true
 
   openshell@0.1.0:
@@ -9987,6 +10047,33 @@ snapshots:
       curve25519-js: 0.0.4
       protobufjs: 6.8.8
 
+  '@zed-industries/codex-acp-darwin-arm64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp-darwin-x64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp-linux-arm64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp-linux-x64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp-win32-arm64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp-win32-x64@0.9.5':
+    optional: true
+
+  '@zed-industries/codex-acp@0.9.5':
+    optionalDependencies:
+      '@zed-industries/codex-acp-darwin-arm64': 0.9.5
+      '@zed-industries/codex-acp-darwin-x64': 0.9.5
+      '@zed-industries/codex-acp-linux-arm64': 0.9.5
+      '@zed-industries/codex-acp-linux-x64': 0.9.5
+      '@zed-industries/codex-acp-win32-arm64': 0.9.5
+      '@zed-industries/codex-acp-win32-x64': 0.9.5
+
   abbrev@1.1.1:
     optional: true
 
@@ -10007,7 +10094,7 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.4.0(zod@4.3.6):
+  acpx@0.3.0(zod@4.3.6):
     dependencies:
       '@agentclientprotocol/sdk': 0.17.1(zod@4.3.6)
       commander: 14.0.3
@@ -11935,6 +12022,68 @@ snapshots:
     optionalDependencies:
       ws: 8.20.0
       zod: 4.3.6
+
+  openclaw@2026.3.23(@napi-rs/canvas@0.1.95)(node-llama-cpp@3.16.2(typescript@5.9.3)):
+    dependencies:
+      '@agentclientprotocol/sdk': 0.16.1(zod@4.3.6)
+      '@anthropic-ai/vertex-sdk': 0.14.4(zod@4.3.6)
+      '@aws-sdk/client-bedrock': 3.1014.0
+      '@clack/prompts': 1.1.0
+      '@homebridge/ciao': 1.3.5
+      '@line/bot-sdk': 10.6.0
+      '@lydell/node-pty': 1.2.0-beta.3
+      '@mariozechner/pi-agent-core': 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-coding-agent': 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-tui': 0.61.1
+      '@modelcontextprotocol/sdk': 1.27.1(zod@4.3.6)
+      '@mozilla/readability': 0.6.0
+      '@napi-rs/canvas': 0.1.95
+      '@sinclair/typebox': 0.34.48
+      ajv: 8.18.0
+      chalk: 5.6.2
+      chokidar: 5.0.0
+      cli-highlight: 2.1.11
+      commander: 14.0.3
+      croner: 10.0.1
+      dotenv: 17.3.1
+      express: 5.2.1
+      file-type: 21.3.4
+      gaxios: 7.1.4
+      hono: 4.12.8
+      ipaddr.js: 2.3.0
+      jiti: 2.6.1
+      json5: 2.2.3
+      jszip: 3.10.1
+      linkedom: 0.18.12
+      long: 5.3.2
+      markdown-it: 14.1.1
+      node-edge-tts: 1.2.10
+      osc-progress: 0.3.0
+      pdfjs-dist: 5.5.207
+      playwright-core: 1.58.2
+      qrcode-terminal: 0.12.0
+      sharp: 0.34.5
+      sqlite-vec: 0.1.7
+      tar: 7.5.12
+      tslog: 4.10.2
+      undici: 7.24.5
+      uuid: 13.0.0
+      ws: 8.20.0
+      yaml: 2.8.3
+      zod: 4.3.6
+    optionalDependencies:
+      node-llama-cpp: 3.16.2(typescript@5.9.3)
+      openshell: 0.1.0
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - aws-crt
+      - bufferutil
+      - canvas
+      - debug
+      - encoding
+      - supports-color
+      - utf-8-validate
 
   openshell@0.1.0:
     dependencies:

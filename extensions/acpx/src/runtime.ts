@@ -22,6 +22,7 @@ import {
 } from "./runtime-internals/events.js";
 import {
   buildMcpProxyAgentCommand,
+  formatRawAgentCommandForCli,
   resolveAcpxAgentCommand,
 } from "./runtime-internals/mcp-agent-command.js";
 import {
@@ -218,6 +219,7 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly logger?: PluginLogger;
   private readonly queueOwnerTtlSeconds: number;
   private readonly spawnCommandCache: SpawnCommandCache = {};
+  private readonly rawAgentCommandCache = new Map<string, string | null>();
   private readonly mcpProxyAgentCommandCache = new Map<string, string>();
   private readonly spawnCommandOptions: SpawnCommandOptions;
   private readonly loggedSpawnResolutions = new Set<string>();
@@ -1066,12 +1068,9 @@ export class AcpxRuntime implements AcpRuntime {
     agent: string;
     cwd: string;
   }): Promise<string | null> {
-    if (Object.keys(this.config.mcpServers).length === 0) {
-      return null;
-    }
     const cacheKey = `${params.cwd}::${params.agent}`;
-    const cached = this.mcpProxyAgentCommandCache.get(cacheKey);
-    if (cached) {
+    if (this.rawAgentCommandCache.has(cacheKey)) {
+      const cached = this.rawAgentCommandCache.get(cacheKey) ?? null;
       return cached;
     }
     const targetCommand = await resolveAcpxAgentCommand({
@@ -1081,14 +1080,27 @@ export class AcpxRuntime implements AcpRuntime {
       stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
       spawnOptions: this.spawnCommandOptions,
     });
-    if (!targetCommand) {
+    if (targetCommand === params.agent && Object.keys(this.config.mcpServers).length === 0) {
+      this.rawAgentCommandCache.set(cacheKey, null);
       return null;
+    }
+    if (Object.keys(this.config.mcpServers).length === 0) {
+      const formatted = formatRawAgentCommandForCli(targetCommand);
+      this.rawAgentCommandCache.set(cacheKey, formatted);
+      return formatted;
+    }
+    const proxyCacheKey = `${cacheKey}::mcp`;
+    const cachedProxy = this.mcpProxyAgentCommandCache.get(proxyCacheKey);
+    if (cachedProxy) {
+      this.rawAgentCommandCache.set(cacheKey, cachedProxy);
+      return cachedProxy;
     }
     const resolved = buildMcpProxyAgentCommand({
       targetCommand,
       mcpServers: toAcpMcpServers(this.config.mcpServers),
     });
-    this.mcpProxyAgentCommandCache.set(cacheKey, resolved);
+    this.mcpProxyAgentCommandCache.set(proxyCacheKey, resolved);
+    this.rawAgentCommandCache.set(cacheKey, resolved);
     return resolved;
   }
 

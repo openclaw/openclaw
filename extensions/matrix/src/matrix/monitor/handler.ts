@@ -1395,7 +1395,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               });
             }
           },
-          onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
+          onError: (err: unknown, info: { kind: "tool" | "block" | "status" | "final" }) => {
             if (info.kind === "final") {
               finalReplyDeliveryFailed = true;
             } else {

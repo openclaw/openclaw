@@ -155,6 +155,8 @@ export type SessionEntry = {
    * totalTokens as stale/unknown for context-utilization displays.
    */
   totalTokensFresh?: boolean;
+  /** Monotonic reply generation used to suppress stale async delivery. */
+  replyGeneration?: number;
   estimatedCostUsd?: number;
   cacheRead?: number;
   cacheWrite?: number;

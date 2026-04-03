@@ -90,6 +90,10 @@ When queue mode is `followup` or `collect`, inbound messages are held until the
 current turn ends, then a new agent turn starts with the queued payloads. See
 [Queue](/concepts/queue) for mode + debounce/cap behavior.
 
+For active sessions, OpenClaw can also arbitrate ambiguous inbound updates before
+the next turn starts, using heuristics first and an optional low-latency local
+model as a tie-breaker. See [Queue](/concepts/queue).
+
 Block streaming sends completed assistant blocks as soon as they finish; it is
 **off by default** (`agents.defaults.blockStreamingDefault: "off"`).
 Tune the boundary via `agents.defaults.blockStreamingBreak` (`text_end` vs `message_end`; defaults to text_end).

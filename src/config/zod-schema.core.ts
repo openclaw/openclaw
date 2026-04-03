@@ -571,6 +571,17 @@ export const QueueSchema = z
     debounceMsByChannel: DebounceMsBySurfaceSchema,
     cap: z.number().int().positive().optional(),
     drop: QueueDropSchema.optional(),
+    arbitrator: z
+      .object({
+        enabled: z.boolean().optional(),
+        provider: z.union([z.literal("lmstudio"), z.literal("ollama")]).optional(),
+        model: z.string().min(1).optional(),
+        baseUrl: z.string().min(1).optional(),
+        timeoutMs: z.number().int().positive().optional(),
+        temperature: z.number().min(0).max(2).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

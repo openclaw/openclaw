@@ -28,6 +28,7 @@ export function createProcessSessionFixture(params: {
     aggregated: "",
     tail: "",
     exited: false,
+    status: undefined,
     exitCode: undefined,
     exitSignal: undefined,
     truncated: false,

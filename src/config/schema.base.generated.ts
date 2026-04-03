@@ -102,6 +102,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
           },
+          firstVisibleWarnMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+          },
           otel: {
             type: "object",
             properties: {
@@ -7659,6 +7664,45 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 ],
               },
+              arbitrator: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  provider: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "lmstudio",
+                      },
+                      {
+                        type: "string",
+                        const: "ollama",
+                      },
+                    ],
+                  },
+                  model: {
+                    type: "string",
+                    minLength: 1,
+                  },
+                  baseUrl: {
+                    type: "string",
+                    minLength: 1,
+                  },
+                  timeoutMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  temperature: {
+                    type: "number",
+                    minimum: 0,
+                    maximum: 2,
+                  },
+                },
+                additionalProperties: false,
+              },
             },
             additionalProperties: false,
           },
@@ -11487,6 +11531,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Stuck Session Warning Threshold (ms)",
       help: "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
       tags: ["observability", "storage"],
+    },
+    "diagnostics.firstVisibleWarnMs": {
+      label: "First Visible Warning Threshold (ms)",
+      help: "Silence threshold in milliseconds before diagnostics flag a turn with no user-visible output yet. Increase to avoid noise on intentionally quiet turns; decrease when you want earlier visibility-latency warnings.",
+      tags: ["observability"],
     },
     "diagnostics.otel.enabled": {
       label: "OpenTelemetry Enabled",

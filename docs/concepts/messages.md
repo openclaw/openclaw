@@ -115,6 +115,7 @@ current run, or collected for a followup turn.
 
 - Configure via `messages.queue` (and `messages.queue.byChannel`).
 - Modes: `interrupt`, `steer`, `followup`, `collect`, plus backlog variants.
+- Optional `messages.queue.arbitrator` lets a low-latency local model classify ambiguous active-session updates.
 
 Details: [Queueing](/concepts/queue).
 

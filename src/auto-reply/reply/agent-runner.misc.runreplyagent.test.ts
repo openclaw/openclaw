@@ -1037,6 +1037,86 @@ describe("runReplyAgent block streaming", () => {
     expect(sawAbort).toBe(true);
     expect(result).toMatchObject({ text: "Final message" });
   });
+
+  it("returns the final payload when onBlockReply declines delivery", async () => {
+    const onBlockReply = vi.fn(() => false);
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {
+      const block = params.onBlockReply as
+        | ((payload: { text?: string }) => boolean | void | Promise<boolean | void>)
+        | undefined;
+      await block?.({ text: "Chunk" });
+      return {
+        payloads: [{ text: "Final message" }],
+        meta: {},
+      };
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "ou_test",
+      AccountId: "default",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "feishu",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "aliyun",
+        model: "qwen3.5-plus",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "text_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: { onBlockReply },
+      typing,
+      sessionCtx,
+      defaultModel: "aliyun/qwen3.5-plus",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: true,
+      blockReplyChunking: {
+        minChars: 1,
+        maxChars: 200,
+        breakPreference: "paragraph",
+      },
+      resolvedBlockStreamingBreak: "text_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ text: "Final message" });
+  });
 });
 
 describe("runReplyAgent claude-cli routing", () => {

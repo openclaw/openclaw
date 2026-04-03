@@ -4227,6 +4227,36 @@ module.exports = {
     expect(record?.status).toBe("loaded");
   });
 
+  it("loads the OpenViking source plugin through the local runtime shim", () => {
+    useNoBundledPlugins();
+    const pluginDir = path.resolve(process.cwd(), "extensions/openviking");
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: pluginDir,
+      onlyPluginIds: ["openviking"],
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["openviking"],
+          slots: {
+            contextEngine: "openviking",
+          },
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "openviking");
+    expect(record?.status).toBe("loaded");
+    expect(record?.kind).toBe("context-engine");
+    expect(record?.configSchema).toBe(true);
+    expect(record?.configUiHints?.baseUrl).toEqual({
+      label: "Base URL",
+      placeholder: "http://127.0.0.1:1933",
+    });
+    expect(registry.diagnostics.filter((entry) => entry.pluginId === "openviking")).toEqual([]);
+  });
+
   it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
     useNoBundledPlugins();
     const seenKey = "__openclawLegacyRootDiagnosticSeen";

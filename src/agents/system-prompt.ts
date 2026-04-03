@@ -27,6 +27,7 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
     `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
+    "- Use the exact <location> value from the selected skill; do not guess or rewrite the path.",
     "- If multiple could apply: choose the most specific one, then read/follow it.",
     "- If none clearly apply: do not read any SKILL.md.",
     "Constraints: never read more than one skill up front; only read after selecting.",
@@ -449,10 +450,12 @@ export function buildAgentSystemPrompt(params: {
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     ...(acpHarnessSpawnAllowed
       ? [
-          'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
+          'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
+          '`agents_list` only covers `runtime="subagent"` allowlists; do not use it to check whether `codex`/`claude`/`gemini` ACP harnesses are available.',
           'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`) unless the user asks otherwise.',
           "Set `agentId` explicitly unless `acp.defaultAgent` is configured, and do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows.",
           'For ACP harness thread spawns, do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path.',
+          "If the requested ACP harness fails or is unavailable, report that failure directly and ask the user how to proceed. Do not silently substitute ordinary subagents, local model work, exec, or web research unless the user explicitly confirms that fallback.",
         ]
       : []),
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",

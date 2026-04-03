@@ -331,6 +331,9 @@ describe("buildAgentSystemPrompt", () => {
       'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
     );
     expect(prompt).toContain(
+      '`agents_list` only covers `runtime="subagent"` allowlists; do not use it to check whether `codex`/`claude`/`gemini` ACP harnesses are available.',
+    );
+    expect(prompt).toContain(
       'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
     );
     expect(prompt).toContain(
@@ -338,6 +341,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain(
       'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+    );
+    expect(prompt).toContain(
+      "If the requested ACP harness fails or is unavailable, report that failure directly and ask the user how to proceed.",
     );
   });
 
@@ -392,6 +398,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Exec: Run shell commands");
     expect(prompt).toContain(
       "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
+    );
+    expect(prompt).toContain(
+      "- Use the exact <location> value from the selected skill; do not guess or rewrite the path.",
     );
     expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
     expect(prompt).toContain(
@@ -528,6 +537,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain(
       "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
+    );
+    expect(prompt).toContain(
+      "- Use the exact <location> value from the selected skill; do not guess or rewrite the path.",
     );
   });
 
@@ -762,6 +774,9 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Do not ask users to run slash commands or CLI");
     expect(prompt).toContain("Do not use `exec` (`openclaw ...`, `acpx ...`)");
     expect(prompt).toContain("Use `subagents` only for OpenClaw subagents");
+    expect(prompt).toContain(
+      "If the requested ACP harness fails or is unavailable, report that failure to the parent agent and wait for user-confirmed fallback instructions.",
+    );
     expect(prompt).toContain("Subagent results auto-announce back to you");
     expect(prompt).toContain(
       "After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool.",

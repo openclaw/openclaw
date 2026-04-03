@@ -35,48 +35,6 @@ import {
   monitorFeishuProvider,
   stopFeishuMonitor,
 } from "./monitor.js";
-
-async function waitForSlowBodyTimeoutResponse(
-  url: string,
-  timeoutMs: number,
-): Promise<{ body: string; elapsedMs: number }> {
-  return await new Promise<{ body: string; elapsedMs: number }>((resolve, reject) => {
-    const target = new URL(url);
-    const startedAt = Date.now();
-    let response = "";
-    const socket = createConnection(
-      {
-        host: target.hostname,
-        port: Number(target.port),
-      },
-      () => {
-        socket.write(`POST ${target.pathname} HTTP/1.1\r\n`);
-        socket.write(`Host: ${target.hostname}\r\n`);
-        socket.write("Content-Type: application/json\r\n");
-        socket.write("Content-Length: 65536\r\n");
-        socket.write("\r\n");
-        socket.write('{"type":"url_verification"');
-      },
-    );
-
-    socket.setEncoding("utf8");
-    socket.on("error", () => {});
-    socket.on("data", (chunk) => {
-      response += chunk;
-      if (response.includes("Request body timeout")) {
-        clearTimeout(failTimer);
-        socket.destroy();
-        resolve({ body: response, elapsedMs: Date.now() - startedAt });
-      }
-    });
-
-    const failTimer = setTimeout(() => {
-      socket.destroy();
-      reject(new Error(`timeout response did not arrive within ${timeoutMs}ms`));
-    }, timeoutMs);
-  });
-}
-
 afterEach(() => {
   clearFeishuWebhookRateLimitStateForTest();
   stopFeishuMonitor();
@@ -203,6 +161,44 @@ describe("Feishu webhook security hardening", () => {
         expect(saw429).toBe(true);
       },
     );
+  });
+
+  it("marks webhook accounts connected once the server starts listening", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+    const statusSink = vi.fn();
+    const port = await getFreePort();
+    const cfg = buildWebhookConfig({
+      accountId: "webhook-connected",
+      path: "/hook-connected",
+      port,
+      verificationToken: "verify_token",
+      encryptKey: "encrypt_key",
+    });
+    const abortController = new AbortController();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const monitorPromise = monitorFeishuProvider({
+      config: cfg,
+      runtime,
+      abortSignal: abortController.signal,
+      statusSink,
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(statusSink).toHaveBeenCalledWith(
+          expect.objectContaining({
+            connected: true,
+            reconnectAttempts: 0,
+            lastConnectedAt: expect.any(Number),
+            lastDisconnect: null,
+            lastError: null,
+          }),
+        );
+      });
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
   });
 
   it("caps tracked webhook rate-limit keys to prevent unbounded growth", () => {

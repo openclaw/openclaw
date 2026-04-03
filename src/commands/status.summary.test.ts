@@ -59,6 +59,40 @@ vi.mock("../infra/heartbeat-summary.js", () => ({
   })),
 }));
 
+vi.mock("../logging/diagnostic.js", () => ({
+  getRecentDiagnosticEarlyStatusSummary: vi.fn(() => ({
+    sampleCount: 3,
+    eligibleCount: 1,
+    semanticGateCount: 1,
+    latencyGateCount: 1,
+    topReasons: [{ reason: "latency_priority_observe", count: 1 }],
+    phase2Supplements: {
+      sampleCount: 2,
+      eligibleCount: 1,
+      hitRatePct: 50,
+      topSkipReasons: [{ reason: "latency_priority_observe", count: 1 }],
+      statusFirstVisibleAvgMs: 800,
+      statusFirstVisibleP95Ms: 950,
+    },
+  })),
+  getRecentDiagnosticLatencySummary: vi.fn(() => ({
+    sampleCount: 2,
+    dominant: [{ segment: "runToFirstVisible", count: 2 }],
+    segments: {},
+  })),
+}));
+
+vi.mock("../auto-reply/reply/supervisor/truthful-status-policy.js", () => ({
+  buildTruthfulEarlyStatusGuidance: vi.fn(() => ({
+    focus: "expand_active_run_status",
+    reason: "recent_candidates_are_primarily_waiting_on_latency_priority_rather_than_semantics",
+  })),
+  recommendTruthfulEarlyStatusFromLatency: vi.fn(() => ({
+    level: "prioritize",
+    reason: "runtime_started_but_visible_feedback_arrives_late",
+  })),
+}));
+
 vi.mock("../infra/system-events.js", () => ({
   peekSystemEvents: vi.fn(() => []),
 }));
@@ -136,8 +170,32 @@ describe("getStatusSummary", () => {
     expect(summary.runtimeVersion).toBe("2026.3.8");
     expect(summary.heartbeat.defaultAgentId).toBe("main");
     expect(summary.channelSummary).toEqual(["ok"]);
-    expect(summary.tasks.active).toBe(0);
-    expect(summary.taskAudit.warnings).toBe(1);
+    expect(summary.heartbeat.diagnostics?.latency?.dominant).toEqual([
+      { segment: "runToFirstVisible", count: 2 },
+    ]);
+    expect(summary.heartbeat.diagnostics?.latency?.earlyStatusPriority).toEqual({
+      level: "prioritize",
+      reason: "runtime_started_but_visible_feedback_arrives_late",
+    });
+    expect(summary.heartbeat.diagnostics?.earlyStatus).toEqual({
+      sampleCount: 3,
+      eligibleCount: 1,
+      semanticGateCount: 1,
+      latencyGateCount: 1,
+      topReasons: [{ reason: "latency_priority_observe", count: 1 }],
+      guidance: {
+        focus: "expand_active_run_status",
+        reason: "recent_candidates_are_primarily_waiting_on_latency_priority_rather_than_semantics",
+      },
+      phase2Supplements: {
+        sampleCount: 2,
+        eligibleCount: 1,
+        hitRatePct: 50,
+        topSkipReasons: [{ reason: "latency_priority_observe", count: 1 }],
+        statusFirstVisibleAvgMs: 800,
+        statusFirstVisibleP95Ms: 950,
+      },
+    });
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
