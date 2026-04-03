@@ -9,6 +9,7 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
+      - ${OPENCLAW_HOME_VOLUME:-openclaw_home}:/home/node
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     ports:
@@ -38,9 +39,13 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
+      - ${OPENCLAW_HOME_VOLUME:-openclaw_home}:/home/node
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     stdin_open: true
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+volumes:
+  openclaw_home:
