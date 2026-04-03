@@ -1019,6 +1019,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Defines which sessions/channels are eligible for QMD recall using session.sendPolicy-style rules. Keep default direct-only scope unless you intentionally want cross-chat memory sharing.",
   "agents.defaults.memorySearch.cache.maxEntries":
     "Sets a best-effort upper bound on cached embeddings kept in SQLite for memory search. Use this when controlling disk growth matters more than peak reindex speed.",
+  "agents.defaults.memorySearch.llmRecall":
+    "Enables an LLM-based recall pass that reads memory files directly and synthesizes relevant context. Use this when vector search misses conceptual or loosely-worded matches; keep off for latency-sensitive flows.",
+  "agents.defaults.memorySearch.llmRecall.enabled":
+    "Activates the LLM recall layer so memory files are read and summarized by a language model during search. Keep off unless you need semantic recall beyond what vector similarity provides.",
+  "agents.defaults.memorySearch.llmRecall.model":
+    "Selects the language model used for LLM-based memory recall. Defaults to the session model when unset; set explicitly to use a cheaper or faster model for recall without affecting the main session model.",
+  "agents.defaults.memorySearch.llmRecall.baseUrl":
+    "Overrides the API base URL for the LLM recall model, such as a local Ollama endpoint or OpenAI-compatible proxy. Leave unset to use the provider default.",
+  "agents.defaults.memorySearch.llmRecall.apiKey":
+    "Supplies a dedicated API key for the LLM recall model. Use this when recall should authenticate separately from the main session credentials.",
+  "agents.defaults.memorySearch.llmRecall.maxFiles":
+    "Limits how many memory files the LLM recall pass reads per query (default: 20). Lower this to reduce token usage and latency; raise it when recall misses relevant files in large memory corpora.",
+  "agents.defaults.memorySearch.llmRecall.maxTokens":
+    "Caps the total tokens sent to the LLM recall model per query (default: 8000). Increase for richer context at higher cost; decrease to stay within model limits or reduce spend.",
   "agents.defaults.memorySearch.sync.onSessionStart":
     "Triggers a memory index sync when a session starts so early turns see fresh memory content. Keep enabled when startup freshness matters more than initial turn latency.",
   "agents.defaults.memorySearch.sync.onSearch":

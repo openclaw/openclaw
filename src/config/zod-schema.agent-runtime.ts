@@ -751,6 +751,17 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
+    llmRecall: z
+      .object({
+        enabled: z.boolean().optional(),
+        model: z.string().optional(),
+        baseUrl: z.string().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        maxFiles: z.number().int().positive().optional(),
+        maxTokens: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

@@ -4214,6 +4214,97 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     additionalProperties: false,
                   },
+                  llmRecall: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                      },
+                      model: {
+                        type: "string",
+                      },
+                      baseUrl: {
+                        type: "string",
+                      },
+                      apiKey: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            oneOf: [
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "env",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "file",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "exec",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                      maxFiles: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      maxTokens: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                 },
                 additionalProperties: false,
                 title: "Memory Search",
@@ -6011,6 +6102,97 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "boolean",
                         },
                         maxEntries: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    llmRecall: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        model: {
+                          type: "string",
+                        },
+                        baseUrl: {
+                          type: "string",
+                        },
+                        apiKey: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              oneOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "env",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "file",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "exec",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                        maxFiles: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxTokens: {
                           type: "integer",
                           exclusiveMinimum: 0,
                           maximum: 9007199254740991,
@@ -24806,6 +24988,42 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Sets a best-effort upper bound on cached embeddings kept in SQLite for memory search. Use this when controlling disk growth matters more than peak reindex speed.",
       tags: ["performance", "storage"],
     },
+    "agents.defaults.memorySearch.llmRecall": {
+      label: "LLM Memory Recall",
+      help: "Enables an LLM-based recall pass that reads memory files directly and synthesizes relevant context. Use this when vector search misses conceptual or loosely-worded matches; keep off for latency-sensitive flows.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.llmRecall.enabled": {
+      label: "LLM Memory Recall Enabled",
+      help: "Activates the LLM recall layer so memory files are read and summarized by a language model during search. Keep off unless you need semantic recall beyond what vector similarity provides.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.llmRecall.model": {
+      label: "LLM Memory Recall Model",
+      help: "Selects the language model used for LLM-based memory recall. Defaults to the session model when unset; set explicitly to use a cheaper or faster model for recall without affecting the main session model.",
+      tags: ["models"],
+    },
+    "agents.defaults.memorySearch.llmRecall.baseUrl": {
+      label: "LLM Memory Recall Base URL",
+      help: "Overrides the API base URL for the LLM recall model, such as a local Ollama endpoint or OpenAI-compatible proxy. Leave unset to use the provider default.",
+      tags: ["advanced", "url-secret"],
+    },
+    "agents.defaults.memorySearch.llmRecall.apiKey": {
+      label: "LLM Memory Recall API Key",
+      help: "Supplies a dedicated API key for the LLM recall model. Use this when recall should authenticate separately from the main session credentials.",
+      tags: ["security", "auth"],
+      sensitive: true,
+    },
+    "agents.defaults.memorySearch.llmRecall.maxFiles": {
+      label: "LLM Memory Recall Max Files",
+      help: "Limits how many memory files the LLM recall pass reads per query (default: 20). Lower this to reduce token usage and latency; raise it when recall misses relevant files in large memory corpora.",
+      tags: ["performance", "storage"],
+    },
+    "agents.defaults.memorySearch.llmRecall.maxTokens": {
+      label: "LLM Memory Recall Max Tokens",
+      help: "Caps the total tokens sent to the LLM recall model per query (default: 8000). Increase for richer context at higher cost; decrease to stay within model limits or reduce spend.",
+      tags: ["security", "auth", "performance"],
+    },
     memory: {
       label: "Memory",
       help: "Memory backend configuration (global).",
@@ -27211,6 +27429,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["security", "auth"],
     },
     "agents.list[].memorySearch.remote.baseUrl": {
+      tags: ["advanced", "url-secret"],
+    },
+    "agents.list[].memorySearch.llmRecall.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth"],
+    },
+    "agents.list[].memorySearch.llmRecall.baseUrl": {
       tags: ["advanced", "url-secret"],
     },
     "tools.web.fetch.firecrawl.baseUrl": {
