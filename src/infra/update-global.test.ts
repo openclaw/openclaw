@@ -12,6 +12,7 @@ import {
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
+  resolveGlobalManagerCommand,
   globalInstallFallbackArgs,
   isExplicitPackageInstallSpec,
   isMainPackageTarget,
@@ -137,8 +138,17 @@ describe("update global helpers", () => {
   });
 
   it("builds install argv and npm fallback argv", () => {
-    expect(globalInstallArgs("npm", "openclaw@latest")).toEqual([
-      "npm",
+    const npmCommand =
+      process.platform === "win32"
+        ? path.join("C:\\Users\\me\\AppData\\Roaming\\npm", "npm.cmd")
+        : "/opt/homebrew/bin/npm";
+    const npmRoot =
+      process.platform === "win32"
+        ? path.join("C:\\Users\\me\\AppData\\Roaming\\npm", "node_modules")
+        : "/opt/homebrew/lib/node_modules";
+    expect(resolveGlobalManagerCommand("npm", npmRoot)).toBe(npmCommand);
+    expect(globalInstallArgs("npm", "openclaw@latest", npmCommand)).toEqual([
+      npmCommand,
       "i",
       "-g",
       "openclaw@latest",
@@ -159,8 +169,8 @@ describe("update global helpers", () => {
       "openclaw@latest",
     ]);
 
-    expect(globalInstallFallbackArgs("npm", "openclaw@latest")).toEqual([
-      "npm",
+    expect(globalInstallFallbackArgs("npm", "openclaw@latest", npmCommand)).toEqual([
+      npmCommand,
       "i",
       "-g",
       "openclaw@latest",
