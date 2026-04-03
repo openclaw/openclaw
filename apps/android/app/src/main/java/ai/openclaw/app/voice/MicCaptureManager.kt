@@ -14,11 +14,13 @@ import android.speech.SpeechRecognizer
 import androidx.core.content.ContextCompat
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -99,11 +101,21 @@ class MicCaptureManager(
   private var transcriptFlushJob: Job? = null
   private var pendingRunTimeoutJob: Job? = null
   private var stopRequested = false
+  private val ttsPauseLock = Any()
+  private var ttsPauseDepth = 0
+  private var resumeMicAfterTts = false
 
   fun setMicEnabled(enabled: Boolean) {
     if (_micEnabled.value == enabled) return
     _micEnabled.value = enabled
     if (enabled) {
+      if (isPausedForTts()) {
+        synchronized(ttsPauseLock) {
+          resumeMicAfterTts = true
+        }
+        _statusText.value = if (_isSending.value) "Speaking · waiting for reply" else "Speaking…"
+        return
+      }
       start()
       sendQueuedIfIdle()
     } else {
@@ -124,6 +136,58 @@ class MicCaptureManager(
         sendQueuedIfIdle()
       }
     }
+  }
+
+  suspend fun pauseForTts() {
+    val shouldPause =
+      synchronized(ttsPauseLock) {
+        ttsPauseDepth += 1
+        if (ttsPauseDepth > 1) return@synchronized false
+        resumeMicAfterTts = _micEnabled.value
+        val active = resumeMicAfterTts || recognizer != null || _isListening.value
+        if (!active) return@synchronized false
+        stopRequested = true
+        restartJob?.cancel()
+        restartJob = null
+        transcriptFlushJob?.cancel()
+        transcriptFlushJob = null
+        _isListening.value = false
+        _inputLevel.value = 0f
+        _liveTranscript.value = null
+        _statusText.value = if (_isSending.value) "Speaking · waiting for reply" else "Speaking…"
+        true
+      }
+    if (!shouldPause) return
+    withContext(Dispatchers.Main) {
+      recognizer?.cancel()
+      recognizer?.destroy()
+      recognizer = null
+    }
+  }
+
+  suspend fun resumeAfterTts() {
+    val shouldResume =
+      synchronized(ttsPauseLock) {
+        if (ttsPauseDepth == 0) return@synchronized false
+        ttsPauseDepth -= 1
+        if (ttsPauseDepth > 0) return@synchronized false
+        val resume = resumeMicAfterTts && _micEnabled.value
+        resumeMicAfterTts = false
+        if (!resume) {
+          _statusText.value =
+            when {
+              _micEnabled.value && _isSending.value -> "Listening · sending queued voice"
+              _micEnabled.value -> "Listening"
+              _isSending.value -> "Mic off · sending…"
+              else -> "Mic off"
+            }
+        }
+        resume
+      }
+    if (!shouldResume) return
+    stopRequested = false
+    start()
+    sendQueuedIfIdle()
   }
 
   fun onGatewayConnectionChanged(connected: Boolean) {
@@ -210,6 +274,9 @@ class MicCaptureManager(
       }
     }
   }
+
+  private fun isPausedForTts(): Boolean =
+    synchronized(ttsPauseLock) { ttsPauseDepth > 0 }
 
   private fun stop() {
     stopRequested = true
