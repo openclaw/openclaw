@@ -206,6 +206,43 @@ describe("embedding provider remote overrides", () => {
     expect(headers.Authorization).toBe("Bearer provider-key");
   });
 
+  it("uses models.providers.openai.baseUrl when no remote.baseUrl is provided", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey("provider-key");
+
+    // Use a hostname that resolves in DNS so the SSRF guard's pre-flight lookup
+    // succeeds and the stubbed fetch is reached. The important invariant is that
+    // the URL comes from models.providers.openai.baseUrl, NOT the hardcoded default.
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://example.com/v1",
+          },
+        },
+      },
+    };
+
+    const result = await createEmbeddingProvider({
+      config: cfg as never,
+      provider: "openai",
+      remote: {
+        // No remote.baseUrl — must fall through to models.providers.openai.baseUrl
+      },
+      model: "text-embedding-3-small",
+      fallback: "none",
+    });
+
+    const provider = requireProvider(result);
+    await provider.embedQuery("hello");
+
+    const { url } = readFirstFetchRequest(fetchMock);
+    // Must use the provider-configured baseUrl, not the hardcoded DEFAULT_OPENAI_BASE_URL
+    expect(url).toBe("https://example.com/v1/embeddings");
+    expect(url).not.toBe("https://api.openai.com/v1/embeddings");
+  });
+
   it("builds Gemini embeddings requests with api key header", async () => {
     const fetchMock = createGeminiFetchMock();
     installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
