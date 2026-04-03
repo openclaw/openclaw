@@ -1048,7 +1048,7 @@
     "test:auth:compat": "vitest run --config vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
     "test:bundled": "vitest run --config vitest.bundled.config.ts",
-    "test:changed": "pnpm test -- --changed origin/main",
+    "test:changed": "node scripts/test-projects.mjs --changed origin/main",
     "test:changed:max": "OPENCLAW_VITEST_MAX_WORKERS=8 node scripts/test-projects.mjs --changed origin/main",
     "test:channels": "vitest run --config vitest.channels.config.ts",
     "test:contracts": "pnpm test:contracts:channels && pnpm test:contracts:plugins",

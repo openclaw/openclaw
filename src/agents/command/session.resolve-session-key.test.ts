@@ -64,4 +64,35 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionStore).toBe(mainStore);
     expect(result.storePath).toBe("/stores/main.json");
   });
+
+  it("keeps a cross-store structural winner over a newer local fuzzy duplicate", () => {
+    const mainStore = {
+      "agent:main:main": { sessionId: "sid", updatedAt: 20 },
+    } satisfies Record<string, SessionEntry>;
+    const otherStore = {
+      "agent:other:acp:sid": { sessionId: "sid", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    hoisted.loadSessionStoreMock.mockImplementation((storePath) => {
+      if (storePath === "/stores/main.json") {
+        return mainStore;
+      }
+      if (storePath === "/stores/other.json") {
+        return otherStore;
+      }
+      return {};
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+        },
+      } satisfies OpenClawConfig,
+      sessionId: "sid",
+    });
+
+    expect(result.sessionKey).toBe("agent:other:acp:sid");
+    expect(result.sessionStore).toBe(otherStore);
+    expect(result.storePath).toBe("/stores/other.json");
+  });
 });
