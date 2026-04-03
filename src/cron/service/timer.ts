@@ -1156,7 +1156,12 @@ export async function executeJobCore(
     }
     if (hookResult.outcome === "error") {
       state.deps.log.warn(
-        { jobId: job.id, exitCode: hookResult.exitCode, stdout: hookResult.stdout, stderr: hookResult.stderr },
+        {
+          jobId: job.id,
+          exitCode: hookResult.exitCode,
+          stdout: hookResult.stdout,
+          stderr: hookResult.stderr,
+        },
         `cron: pre-hook failed: ${hookResult.message}`,
       );
       return { status: "error", error: `pre-hook: ${hookResult.message}` };
@@ -1227,12 +1232,6 @@ async function executeMainSessionCronJob(
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
-          // Cron-triggered heartbeats should deliver to the last active channel.
-          // Without this override, heartbeat target defaults to "none" (since
-          // e2362d35) and cron main-session responses are silently swallowed.
-          // See: https://github.com/openclaw/openclaw/issues/28508
-          heartbeat: { target: "last" },
-          abortSignal,
         });
         return { status: "ok", summary: text };
       }
