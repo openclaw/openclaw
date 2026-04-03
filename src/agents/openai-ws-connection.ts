@@ -14,7 +14,12 @@
  */
 
 import { EventEmitter } from "node:events";
-import WebSocket from "ws";
+import WebSocket, { type ClientOptions } from "ws";
+import {
+  buildProviderRequestTlsClientOptions,
+  resolveProviderRequestPolicyConfig,
+  type ProviderRequestTransportOverrides,
+} from "./provider-request-config.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WebSocket Event Types (Server → Client)
@@ -37,12 +42,15 @@ export interface UsageInfo {
   total_tokens: number;
 }
 
+export type OpenAIResponsesAssistantPhase = "commentary" | "final_answer";
+
 export type OutputItem =
   | {
       type: "message";
       id: string;
       role: "assistant";
       content: Array<{ type: "output_text"; text: string }>;
+      phase?: OpenAIResponsesAssistantPhase;
       status?: "in_progress" | "completed";
     }
   | {
@@ -54,10 +62,10 @@ export type OutputItem =
       status?: "in_progress" | "completed";
     }
   | {
-      type: "reasoning";
+      type: "reasoning" | `reasoning.${string}`;
       id: string;
       content?: string;
-      summary?: string;
+      summary?: unknown;
     };
 
 export interface ResponseCreatedEvent {
@@ -190,10 +198,17 @@ export type InputItem =
       type: "message";
       role: "system" | "developer" | "user" | "assistant";
       content: string | ContentPart[];
+      phase?: OpenAIResponsesAssistantPhase;
     }
   | { type: "function_call"; id?: string; call_id?: string; name: string; arguments: string }
   | { type: "function_call_output"; call_id: string; output: string }
-  | { type: "reasoning"; content?: string; encrypted_content?: string; summary?: string }
+  | {
+      type: "reasoning";
+      id?: string;
+      content?: string;
+      encrypted_content?: string;
+      summary?: string;
+    }
   | { type: "item_reference"; id: string };
 
 export type ToolChoice =
@@ -204,11 +219,10 @@ export type ToolChoice =
 
 export interface FunctionToolDefinition {
   type: "function";
-  function: {
-    name: string;
-    description?: string;
-    parameters?: Record<string, unknown>;
-  };
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  strict?: boolean;
 }
 
 /** Standard response.create event payload (full turn) */
@@ -228,6 +242,7 @@ export interface ResponseCreateEvent {
   top_p?: number;
   metadata?: Record<string, string>;
   reasoning?: { effort?: "low" | "medium" | "high"; summary?: "auto" | "concise" | "detailed" };
+  text?: { verbosity?: "low" | "medium" | "high"; [key: string]: unknown };
   truncation?: "auto" | "disabled";
   [key: string]: unknown;
 }
@@ -255,6 +270,10 @@ export interface OpenAIWebSocketManagerOptions {
   maxRetries?: number;
   /** Custom backoff delays in ms (default: [1000, 2000, 4000, 8000, 16000]) */
   backoffDelaysMs?: readonly number[];
+  /** Custom socket factory for tests. */
+  socketFactory?: (url: string, options: ClientOptions) => WebSocket;
+  /** Optional transport overrides for provider-owned auth or TLS wiring. */
+  request?: ProviderRequestTransportOverrides;
 }
 
 type InternalEvents = {
@@ -294,12 +313,17 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
   private readonly wsUrl: string;
   private readonly maxRetries: number;
   private readonly backoffDelaysMs: readonly number[];
+  private readonly socketFactory: (url: string, options: ClientOptions) => WebSocket;
+  private readonly request?: ProviderRequestTransportOverrides;
 
   constructor(options: OpenAIWebSocketManagerOptions = {}) {
     super();
     this.wsUrl = options.url ?? OPENAI_WS_URL;
     this.maxRetries = options.maxRetries ?? MAX_RETRIES;
     this.backoffDelaysMs = options.backoffDelaysMs ?? BACKOFF_DELAYS_MS;
+    this.socketFactory =
+      options.socketFactory ?? ((url, socketOptions) => new WebSocket(url, socketOptions));
+    this.request = options.request;
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -363,8 +387,15 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     this._cancelRetryTimer();
     if (this.ws) {
       this.ws.removeAllListeners();
-      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-        this.ws.close(1000, "Client closed");
+      try {
+        if (this.ws.readyState === WebSocket.OPEN) {
+          this.ws.close(1000, "Client closed");
+        } else if (this.ws.readyState === WebSocket.CONNECTING) {
+          // ws can still throw here while the handshake is in-flight.
+          this.ws.terminate();
+        }
+      } catch {
+        // Best-effort close during setup/teardown.
       }
       this.ws = null;
     }
@@ -379,11 +410,22 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
         return;
       }
 
-      const socket = new WebSocket(this.wsUrl, {
-        headers: {
+      const requestConfig = resolveProviderRequestPolicyConfig({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: this.wsUrl,
+        capability: "llm",
+        transport: "websocket",
+        providerHeaders: {
           Authorization: `Bearer ${this.apiKey}`,
           "OpenAI-Beta": "responses-websocket=v1",
         },
+        precedence: "defaults-win",
+        request: this.request,
+      });
+      const socket = this.socketFactory(this.wsUrl, {
+        headers: requestConfig.headers,
+        ...buildProviderRequestTlsClientOptions(requestConfig),
       });
 
       this.ws = socket;

@@ -6,7 +6,7 @@ import {
   createSignedDevice,
   expectHelloOkServerVersion,
   getFreePort,
-  getHandshakeTimeoutMs,
+  getPreauthHandshakeTimeoutMsFromEnv,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   NODE_CLIENT,
@@ -81,7 +81,7 @@ export function registerDefaultAuthTokenSuite(): void {
       process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
       try {
         const ws = await openWs(port);
-        const handshakeTimeoutMs = getHandshakeTimeoutMs();
+        const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
         const closed = await waitForWsClose(ws, handshakeTimeoutMs + 500);
         expect(closed).toBe(true);
       } finally {
@@ -89,6 +89,29 @@ export function registerDefaultAuthTokenSuite(): void {
           delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
         } else {
           process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevHandshakeTimeout;
+        }
+      }
+    });
+
+    test("prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on empty string", () => {
+      const prevHandshakeTimeout = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      const prevTestHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "75";
+      process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
+      try {
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(75);
+        process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "";
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(20);
+      } finally {
+        if (prevHandshakeTimeout === undefined) {
+          delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prevHandshakeTimeout;
+        }
+        if (prevTestHandshakeTimeout === undefined) {
+          delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTestHandshakeTimeout;
         }
       }
     });
@@ -157,10 +180,11 @@ export function registerDefaultAuthTokenSuite(): void {
         expectStatusError?: string;
       }> = [
         {
-          name: "operator + valid shared token => connected with preserved scopes",
+          name: "operator + valid shared token => connected with cleared scopes",
           opts: { role: "operator", token, device: null },
           expectConnectOk: true,
-          expectStatusOk: true,
+          expectStatusOk: false,
+          expectStatusError: "missing scope",
         },
         {
           name: "node + valid shared token => rejected without device",

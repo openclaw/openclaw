@@ -1,3 +1,8 @@
+import {
+  abortEmbeddedPiRun,
+  getActiveEmbeddedRunCount,
+  waitForActiveEmbeddedRuns,
+} from "../../agents/pi-embedded-runner/runs.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
@@ -5,6 +10,7 @@ import {
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
+  scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -14,17 +20,20 @@ import {
   waitForActiveTasks,
 } from "../../process/command-queue.js";
 import { createRestartIterationHook } from "../../process/restart-recovery.js";
-import type { defaultRuntime } from "../../runtime.js";
+import type { RuntimeEnv } from "../../runtime.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
 type GatewayRunSignalAction = "stop" | "restart";
 
 export async function runGatewayLoop(params: {
-  start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
-  runtime: typeof defaultRuntime;
+  start: (params?: {
+    startupStartedAt?: number;
+  }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
+  runtime: RuntimeEnv;
   lockPort?: number;
 }) {
+  let startupStartedAt = Date.now();
   let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
@@ -49,6 +58,7 @@ export async function runGatewayLoop(params: {
   };
   const reacquireLockForInProcessRestart = async (): Promise<boolean> => {
     try {
+      startupStartedAt = Date.now();
       lock = await acquireGatewayLock({ port: params.lockPort });
       return true;
     } catch (err) {
@@ -90,8 +100,9 @@ export async function runGatewayLoop(params: {
     exitProcess(0);
   };
 
-  const DRAIN_TIMEOUT_MS = 30_000;
-  const SHUTDOWN_TIMEOUT_MS = 5_000;
+  const DRAIN_TIMEOUT_MS = 90_000;
+  const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
+  const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
     if (shuttingDown) {
@@ -106,10 +117,10 @@ export async function runGatewayLoop(params: {
     const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
-      // Exit non-zero on restart timeout so launchd/systemd treats it as a
-      // failure and triggers a clean process restart instead of assuming the
-      // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
-      exitProcess(isRestart ? 1 : 0);
+      // Keep the in-process watchdog below the supervisor stop budget so this
+      // path wins before launchd/systemd escalates to a hard kill. Exit
+      // non-zero on any timeout so supervised installs restart cleanly.
+      exitProcess(1);
     }, forceExitMs);
 
     void (async () => {
@@ -121,15 +132,33 @@ export async function runGatewayLoop(params: {
           // sessions get an explicit restart error instead of silent task loss.
           markGatewayDraining();
           const activeTasks = getActiveTaskCount();
-          if (activeTasks > 0) {
+          const activeRuns = getActiveEmbeddedRunCount();
+
+          // Best-effort abort for compacting runs so long compaction operations
+          // don't hold session write locks across restart boundaries.
+          if (activeRuns > 0) {
+            abortEmbeddedPiRun(undefined, { mode: "compacting" });
+          }
+
+          if (activeTasks > 0 || activeRuns > 0) {
             gatewayLog.info(
-              `draining ${activeTasks} active task(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
+              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
             );
-            const { drained } = await waitForActiveTasks(DRAIN_TIMEOUT_MS);
-            if (drained) {
-              gatewayLog.info("all active tasks drained");
+            const [tasksDrain, runsDrain] = await Promise.all([
+              activeTasks > 0
+                ? waitForActiveTasks(DRAIN_TIMEOUT_MS)
+                : Promise.resolve({ drained: true }),
+              activeRuns > 0
+                ? waitForActiveEmbeddedRuns(DRAIN_TIMEOUT_MS)
+                : Promise.resolve({ drained: true }),
+            ]);
+            if (tasksDrain.drained && runsDrain.drained) {
+              gatewayLog.info("all active work drained");
             } else {
               gatewayLog.warn("drain timeout reached; proceeding with restart");
+              // Final best-effort abort to avoid carrying active runs into the
+              // next lifecycle when drain time budget is exhausted.
+              abortEmbeddedPiRun(undefined, { mode: "all" });
             }
           }
         }
@@ -163,10 +192,20 @@ export async function runGatewayLoop(params: {
   const onSigusr1 = () => {
     gatewayLog.info("signal SIGUSR1 received");
     const authorized = consumeGatewaySigusr1RestartAuthorization();
-    if (!authorized && !isGatewaySigusr1RestartExternallyAllowed()) {
-      gatewayLog.warn(
-        "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
-      );
+    if (!authorized) {
+      if (!isGatewaySigusr1RestartExternallyAllowed()) {
+        gatewayLog.warn(
+          "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
+        );
+        return;
+      }
+      if (shuttingDown) {
+        gatewayLog.info("received SIGUSR1 during shutdown; ignoring");
+        return;
+      }
+      // External SIGUSR1 requests should still reuse the in-process restart
+      // scheduler so idle drain and restart coalescing stay consistent.
+      scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
       return;
     }
     markGatewaySigusr1RestartHandled();
@@ -191,11 +230,10 @@ export async function runGatewayLoop(params: {
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstStart = true;
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
+    for (;;) {
       onIteration();
       try {
-        server = await params.start();
+        server = await params.start({ startupStartedAt });
         isFirstStart = false;
       } catch (err) {
         // On initial startup, let the error propagate so the outer handler

@@ -4,13 +4,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   loadConfigMock as loadConfig,
-  pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
-  pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
+  resolveConfigPathMock as resolveConfigPath,
   resolveGatewayPortMock as resolveGatewayPort,
+  resolveStateDirMock as resolveStateDir,
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
-const { resolveGatewayConnection } = await import("./gateway-chat.js");
+const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -86,14 +86,24 @@ describe("resolveGatewayConnection", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
-    loadConfig.mockClear();
-    resolveGatewayPort.mockClear();
-    pickPrimaryTailnetIPv4.mockClear();
-    pickPrimaryLanIPv4.mockClear();
+    envSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_URL",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+    ]);
+    loadConfig.mockReset();
+    resolveGatewayPort.mockReset();
+    resolveStateDir.mockReset();
+    resolveConfigPath.mockReset();
     resolveGatewayPort.mockReturnValue(18789);
-    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
-    pickPrimaryLanIPv4.mockReturnValue(undefined);
+    resolveStateDir.mockImplementation(
+      (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw",
+    );
+    resolveConfigPath.mockImplementation(
+      (env: NodeJS.ProcessEnv, stateDir: string) =>
+        env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
+    );
+    delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   });
@@ -132,32 +142,9 @@ describe("resolveGatewayConnection", () => {
     expect(result).toEqual({
       url: "wss://override.example/ws",
       ...expected,
+      allowInsecureLocalOperatorUi: false,
     });
   });
-
-  it.each([
-    {
-      label: "tailnet",
-      bind: "tailnet",
-      setup: () => pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1"),
-    },
-    {
-      label: "lan",
-      bind: "lan",
-      setup: () => pickPrimaryLanIPv4.mockReturnValue("192.168.1.42"),
-    },
-  ])("uses loopback host when local bind is $label", async ({ bind, setup }) => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind } });
-    resolveGatewayPort.mockReturnValue(18800);
-    setup();
-
-    const result = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
-      return await resolveGatewayConnection({});
-    });
-
-    expect(result.url).toBe("ws://127.0.0.1:18800");
-  });
-
   it("uses config auth token for local mode when both config and env tokens are set", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", auth: { token: "config-token" } } });
 
@@ -373,5 +360,68 @@ describe("resolveGatewayConnection", () => {
         expect(await fileExists(passwordMarker)).toBe(true);
       },
     );
+  });
+
+  it("marks loopback local connections for insecure operator ui auth when enabled", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        controlUi: {
+          allowInsecureAuth: true,
+        },
+        auth: {
+          mode: "token",
+          token: "config-token",
+        },
+      },
+    });
+
+    const result = await resolveGatewayConnection({});
+    expect(result.allowInsecureLocalOperatorUi).toBe(true);
+  });
+
+  it("preserves insecure local operator ui auth when a loopback url override is provided", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        controlUi: {
+          allowInsecureAuth: true,
+        },
+        auth: {
+          mode: "token",
+          token: "config-token",
+        },
+      },
+    });
+
+    const result = await resolveGatewayConnection({
+      url: "ws://127.0.0.1:18791",
+      token: "override-token",
+    });
+    expect(result.allowInsecureLocalOperatorUi).toBe(true);
+    expect(result.token).toBe("override-token");
+  });
+});
+
+describe("GatewayChatClient", () => {
+  it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+
+    expect(
+      (client as unknown as { client: { opts: { clientName?: string; mode?: string } } }).client
+        .opts.clientName,
+    ).toBe("openclaw-tui");
+    expect(
+      (client as unknown as { client: { opts: { clientName?: string; mode?: string } } }).client
+        .opts.mode,
+    ).toBe("ui");
+    expect(
+      (client as unknown as { client: { opts: { deviceIdentity?: unknown } } }).client.opts
+        .deviceIdentity,
+    ).toBeUndefined();
   });
 });

@@ -108,7 +108,7 @@ export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
     await loadSkills(state);
     setSkillMessage(state, skillKey, {
       kind: "success",
-      message: "API key saved",
+      message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
     });
   } catch (err) {
     const message = getErrorMessage(err);
@@ -127,6 +127,7 @@ export async function installSkill(
   skillKey: string,
   name: string,
   installId: string,
+  dangerouslyForceUnsafeInstall = false,
 ) {
   if (!state.client || !state.connected) {
     return;
@@ -137,6 +138,7 @@ export async function installSkill(
     const result = await state.client.request<{ message?: string }>("skills.install", {
       name,
       installId,
+      dangerouslyForceUnsafeInstall,
       timeoutMs: 120000,
     });
     await loadSkills(state);

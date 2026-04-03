@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
-import { renderTable } from "../../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { shortenHomeInString } from "../../utils.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
@@ -73,6 +73,15 @@ function formatPathEnv(raw?: string): string | null {
   return shortenHomeInString(display);
 }
 
+function formatClientLabel(node: { clientId?: string; clientMode?: string }): string | null {
+  const clientId = node.clientId?.trim();
+  const clientMode = node.clientMode?.trim();
+  if (clientId && clientMode) {
+    return `${clientId}/${clientMode}`;
+  }
+  return clientId || clientMode || null;
+}
+
 function parseSinceMs(raw: unknown, label: string): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
@@ -112,7 +121,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const obj: Record<string, unknown> =
             typeof result === "object" && result !== null ? result : {};
           const { ok, warn, muted } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const nodes = parseNodeList(result);
           const lastConnectedById =
@@ -147,7 +156,7 @@ export function registerNodesStatusCommands(nodes: Command) {
 
           if (opts.json) {
             const ts = typeof obj.ts === "number" ? obj.ts : Date.now();
-            defaultRuntime.log(JSON.stringify({ ...obj, ts, nodes: filtered }, null, 2));
+            defaultRuntime.writeJson({ ...obj, ts, nodes: filtered });
             return;
           }
 
@@ -166,7 +175,9 @@ export function registerNodesStatusCommands(nodes: Command) {
             const perms = formatPermissions(n.permissions);
             const versions = formatNodeVersions(n);
             const pathEnv = formatPathEnv(n.pathEnv);
+            const client = formatClientLabel(n);
             const detailParts = [
+              client ? `client: ${client}` : null,
               n.deviceFamily ? `device: ${n.deviceFamily}` : null,
               n.modelIdentifier ? `hw: ${n.modelIdentifier}` : null,
               perms ? `perms: ${perms}` : null,
@@ -223,7 +234,7 @@ export function registerNodesStatusCommands(nodes: Command) {
             nodeId,
           });
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+            defaultRuntime.writeJson(result);
             return;
           }
 
@@ -241,6 +252,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const perms = formatPermissions(obj.permissions);
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
           const model = typeof obj.modelIdentifier === "string" ? obj.modelIdentifier : null;
+          const client = formatClientLabel(obj as { clientId?: string; clientMode?: string });
           const ip = typeof obj.remoteIp === "string" ? obj.remoteIp : null;
           const pathEnv = typeof obj.pathEnv === "string" ? obj.pathEnv : null;
           const versions = formatNodeVersions(
@@ -256,10 +268,11 @@ export function registerNodesStatusCommands(nodes: Command) {
           const status = `${paired ? ok("paired") : warn("unpaired")} · ${
             connected ? ok("connected") : muted("disconnected")
           }`;
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const rows = [
             { Field: "ID", Value: nodeId },
             displayName ? { Field: "Name", Value: displayName } : null,
+            client ? { Field: "Client", Value: client } : null,
             ip ? { Field: "IP", Value: ip } : null,
             family ? { Field: "Device", Value: family } : null,
             model ? { Field: "Model", Value: model } : null,
@@ -307,7 +320,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
           const { heading, muted, warn } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
@@ -350,9 +363,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           );
 
           if (opts.json) {
-            defaultRuntime.log(
-              JSON.stringify({ pending: pendingRows, paired: filteredPaired }, null, 2),
-            );
+            defaultRuntime.writeJson({ pending: pendingRows, paired: filteredPaired });
             return;
           }
 

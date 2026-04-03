@@ -6,6 +6,7 @@ import {
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
 } from "./failover-error.js";
+import { classifyFailoverSignal } from "./pi-embedded-helpers/errors.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -67,9 +68,12 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ status: 410 })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ status: 499 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
-    // Keep the status-only path behavior-preserving and conservative.
-    expect(resolveFailoverReasonFromError({ status: 500 })).toBeNull();
+    expect(resolveFailoverReasonFromError({ status: 422 })).toBe("format");
+    // Transient server errors (500/502/503/504) should trigger failover as timeout.
+    expect(resolveFailoverReasonFromError({ status: 500 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
@@ -78,6 +82,46 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
+  });
+
+  it("treats session-specific HTTP 410s differently from generic 410s", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "session not found",
+      }),
+    ).toBe("session_expired");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "HTTP 410: No body",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "HTTP 410: conversation expired",
+      }),
+    ).toBe("session_expired");
+  });
+
+  it("preserves explicit auth and billing signals on HTTP 410", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "invalid_api_key",
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "authentication failed",
+      }),
+    ).toBe("auth");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "insufficient credits",
+      }),
+    ).toBe("billing");
   });
 
   it("classifies documented provider error shapes at the error boundary", () => {
@@ -90,6 +134,12 @@ describe("failover-error", () => {
     expect(
       resolveFailoverReasonFromError({
         status: 529,
+        message: ANTHROPIC_OVERLOADED_PAYLOAD,
+      }),
+    ).toBe("overloaded");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 499,
         message: ANTHROPIC_OVERLOADED_PAYLOAD,
       }),
     ).toBe("overloaded");
@@ -155,6 +205,76 @@ describe("failover-error", () => {
     ).toBe("billing");
   });
 
+  it("lets structured HTTP 400 payloads reuse provider-specific message classification", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "ThrottlingException: Too many concurrent requests",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("does not misclassify structured HTTP 400 context overflow payloads as format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps context overflow first-class in the shared signal classifier", () => {
+    expect(
+      classifyFailoverSignal({
+        status: 400,
+        message: "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      }),
+    ).toEqual({ kind: "context_overflow" });
+    expect(
+      classifyFailoverSignal({
+        message: "prompt is too long: 150000 tokens > 128000 maximum",
+      }),
+    ).toEqual({ kind: "context_overflow" });
+  });
+
+  it("treats HTTP 422 as format error", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "check open ai req parameter error",
+      }),
+    ).toBe("format");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "Unprocessable Entity",
+      }),
+    ).toBe("format");
+  });
+
+  it("treats 422 with billing message as billing instead of format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "insufficient credits",
+      }),
+    ).toBe("billing");
+  });
+
+  it("classifies OpenRouter 'requires more credits' text as billing", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "This model requires more credits to use",
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "This model require more credits",
+      }),
+    ).toBe("billing");
+  });
+
   it("treats zhipuai weekly/monthly limit exhausted as rate_limit", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -195,6 +315,13 @@ describe("failover-error", () => {
       resolveFailoverReasonFromError({
         status: 402,
         message: "Workspace spend limit reached. Contact your admin.",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message:
+          "You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access. Learn more: https://zenmux.ai/docs/guide/subscription.html",
       }),
     ).toBe("rate_limit");
     expect(
@@ -267,6 +394,14 @@ describe("failover-error", () => {
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EHOSTDOWN" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
+  });
+
+  it("infers rate-limit and overload from symbolic error codes", () => {
+    expect(resolveFailoverReasonFromError({ code: "RESOURCE_EXHAUSTED" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ code: "THROTTLING_EXCEPTION" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ code: "OVERLOADED_ERROR" })).toBe("overloaded");
   });
 
   it("infers timeout from abort/error stop-reason messages", () => {
@@ -280,6 +415,9 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({ message: "Unhandled stop reason: network_error" }),
+    ).toBe("timeout");
   });
 
   it("infers timeout from connection/network error messages", () => {
@@ -304,6 +442,32 @@ describe("failover-error", () => {
       reason: "reason: abort",
     });
     expect(isTimeoutError(err)).toBe(true);
+  });
+
+  it("classifies abort-wrapped RESOURCE_EXHAUSTED as rate_limit", () => {
+    const err = Object.assign(new Error("request aborted"), {
+      name: "AbortError",
+      cause: {
+        error: {
+          code: 429,
+          message: GEMINI_RESOURCE_EXHAUSTED_MESSAGE,
+          status: "RESOURCE_EXHAUSTED",
+        },
+      },
+    });
+
+    expect(resolveFailoverReasonFromError(err)).toBe("rate_limit");
+    expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
+    expect(coerceToFailoverError(err)?.status).toBe(429);
+  });
+
+  it("lets wrapped causes override parent context-overflow classifications", () => {
+    const err = new Error("INVALID_ARGUMENT: input exceeds the maximum number of tokens", {
+      cause: { code: "RESOURCE_EXHAUSTED" },
+    });
+
+    expect(resolveFailoverReasonFromError(err)).toBe("rate_limit");
+    expect(coerceToFailoverError(err)?.reason).toBe("rate_limit");
   });
 
   it("coerces failover-worthy errors into FailoverError with metadata", () => {

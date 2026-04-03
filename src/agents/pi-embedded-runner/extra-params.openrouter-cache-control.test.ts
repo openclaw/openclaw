@@ -1,8 +1,6 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { applyExtraParamsToAgent } from "./extra-params.js";
+import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 type StreamPayload = {
   messages: Array<{
@@ -12,22 +10,23 @@ type StreamPayload = {
 };
 
 function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
-    options?.onPayload?.(payload, model);
-    return createAssistantMessageEventStream();
-  };
-  const agent = { streamFn: baseStreamFn };
-
-  applyExtraParamsToAgent(agent, undefined, "openrouter", modelId);
-
-  const model = {
-    api: "openai-completions",
-    provider: "openrouter",
-    id: modelId,
-  } as Model<"openai-completions">;
-  const context: Context = { messages: [] };
-
-  void agent.streamFn?.(model, context, {});
+  runExtraParamsCase({
+    cfg: {
+      plugins: {
+        entries: {
+          openrouter: {
+            enabled: true,
+          },
+        },
+      },
+    },
+    model: {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: modelId,
+    } as Model<"openai-completions">,
+    payload,
+  });
 }
 
 describe("extra-params: OpenRouter Anthropic cache_control", () => {
@@ -89,5 +88,52 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
     expect(payload.messages[0].content).toBe("Hello");
+  });
+
+  it("does not inject cache_control into thinking blocks", () => {
+    const payload = {
+      messages: [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "Part 1" },
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(payload.messages[0].content).toEqual([
+      { type: "text", text: "Part 1" },
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+    ]);
+  });
+
+  it("removes pre-existing cache_control from assistant thinking blocks", () => {
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal",
+              thinkingSignature: "sig_1",
+              cache_control: { type: "ephemeral" },
+            },
+            { type: "text", text: "visible" },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(payload.messages[0].content).toEqual([
+      { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+      { type: "text", text: "visible" },
+    ]);
   });
 });

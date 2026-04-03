@@ -1,30 +1,56 @@
 import { defineConfig } from "vitest/config";
 import baseConfig from "./vitest.config.ts";
+import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
+import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
+import {
+  unitTestAdditionalExcludePatterns,
+  unitTestIncludePatterns,
+} from "./vitest.unit-paths.mjs";
 
 const base = baseConfig as unknown as Record<string, unknown>;
 const baseTest = (baseConfig as { test?: { include?: string[]; exclude?: string[] } }).test ?? {};
-const include = (
-  baseTest.include ?? ["src/**/*.test.ts", "extensions/**/*.test.ts", "test/format-error.test.ts"]
-).filter((pattern) => !pattern.includes("extensions/"));
 const exclude = baseTest.exclude ?? [];
 
-export default defineConfig({
-  ...base,
-  test: {
-    ...baseTest,
-    include,
-    exclude: [
-      ...exclude,
-      "src/gateway/**",
-      "extensions/**",
-      "src/telegram/**",
-      "src/discord/**",
-      "src/web/**",
-      "src/browser/**",
-      "src/line/**",
-      "src/agents/**",
-      "src/auto-reply/**",
-      "src/commands/**",
-    ],
-  },
-});
+export function loadIncludePatternsFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): string[] | null {
+  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+}
+
+export function loadExtraExcludePatternsFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  return loadPatternListFromEnv("OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE", env) ?? [];
+}
+
+export function createUnitVitestConfigWithOptions(
+  env: Record<string, string | undefined> = process.env,
+  options: {
+    includePatterns?: string[];
+    extraExcludePatterns?: string[];
+  } = {},
+) {
+  return defineConfig({
+    ...base,
+    test: {
+      ...baseTest,
+      isolate: resolveVitestIsolation(env),
+      runner: "./test/non-isolated-runner.ts",
+      include:
+        loadIncludePatternsFromEnv(env) ?? options.includePatterns ?? unitTestIncludePatterns,
+      exclude: [
+        ...new Set([
+          ...exclude,
+          ...(options.extraExcludePatterns ?? unitTestAdditionalExcludePatterns),
+          ...loadExtraExcludePatternsFromEnv(env),
+        ]),
+      ],
+    },
+  });
+}
+
+export function createUnitVitestConfig(env: Record<string, string | undefined> = process.env) {
+  return createUnitVitestConfigWithOptions(env);
+}
+
+export default createUnitVitestConfigWithOptions();

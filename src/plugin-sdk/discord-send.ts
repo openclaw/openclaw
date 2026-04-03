@@ -1,4 +1,6 @@
-import type { DiscordSendResult } from "../discord/send.types.js";
+import type { DiscordSendResult } from "../../extensions/discord/api.js";
+import type { OutboundMediaAccess } from "../media/load-options.js";
+import { attachChannelToResult } from "./channel-send-result.js";
 
 type DiscordSendOptionInput = {
   replyToId?: string | null;
@@ -8,9 +10,12 @@ type DiscordSendOptionInput = {
 
 type DiscordSendMediaOptionInput = DiscordSendOptionInput & {
   mediaUrl?: string;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
+/** Build the common Discord send options from SDK-level reply payload fields. */
 export function buildDiscordSendOptions(input: DiscordSendOptionInput) {
   return {
     verbose: false,
@@ -20,14 +25,18 @@ export function buildDiscordSendOptions(input: DiscordSendOptionInput) {
   };
 }
 
+/** Extend the base Discord send options with media-specific fields. */
 export function buildDiscordSendMediaOptions(input: DiscordSendMediaOptionInput) {
   return {
     ...buildDiscordSendOptions(input),
     mediaUrl: input.mediaUrl,
+    mediaAccess: input.mediaAccess,
     mediaLocalRoots: input.mediaLocalRoots,
+    mediaReadFile: input.mediaReadFile,
   };
 }
 
+/** Stamp raw Discord send results with the channel id expected by shared outbound flows. */
 export function tagDiscordChannelResult(result: DiscordSendResult) {
-  return { channel: "discord" as const, ...result };
+  return attachChannelToResult("discord", result);
 }

@@ -4,9 +4,15 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
+import { withSessionStoreLockForTest } from "../config/sessions/store.js";
+import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
+import { performGatewaySessionReset } from "./session-reset-service.js";
+import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   connectOk,
   embeddedRunMock,
@@ -18,6 +24,10 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 
+async function getSessionsHandlers() {
+  return (await import("./server-methods/sessions.js")).sessionsHandlers;
+}
+
 const sessionCleanupMocks = vi.hoisted(() => ({
   clearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
@@ -28,11 +38,30 @@ const bootstrapCacheMocks = vi.hoisted(() => ({
 }));
 
 const sessionHookMocks = vi.hoisted(() => ({
-  triggerInternalHook: vi.fn(async () => {}),
+  hasInternalHookListeners: vi.fn(() => true),
+  triggerInternalHook: vi.fn(async (_event: unknown) => {}),
+}));
+
+const beforeResetHookMocks = vi.hoisted(() => ({
+  runBeforeReset: vi.fn(async () => {}),
+}));
+
+const sessionLifecycleHookMocks = vi.hoisted(() => ({
+  runSessionEnd: vi.fn(async () => {}),
+  runSessionStart: vi.fn(async () => {}),
 }));
 
 const subagentLifecycleHookMocks = vi.hoisted(() => ({
   runSubagentEnded: vi.fn(async () => {}),
+}));
+
+const beforeResetHookState = vi.hoisted(() => ({
+  hasBeforeResetHook: false,
+}));
+
+const sessionLifecycleHookState = vi.hoisted(() => ({
+  hasSessionEndHook: true,
+  hasSessionStartHook: true,
 }));
 
 const subagentLifecycleHookState = vi.hoisted(() => ({
@@ -47,6 +76,10 @@ const acpRuntimeMocks = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
   getAcpRuntimeBackend: vi.fn(),
   requireAcpRuntimeBackend: vi.fn(),
+}));
+const acpManagerMocks = vi.hoisted(() => ({
+  cancelSession: vi.fn(async () => {}),
+  closeSession: vi.fn(async () => {}),
 }));
 const browserSessionTabMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
@@ -86,6 +119,7 @@ vi.mock("../hooks/internal-hooks.js", async () => {
   );
   return {
     ...actual,
+    hasInternalHookListeners: sessionHookMocks.hasInternalHookListeners,
     triggerInternalHook: sessionHookMocks.triggerInternalHook,
   };
 });
@@ -96,18 +130,33 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
     ...actual,
     getGlobalHookRunner: vi.fn(() => ({
       hasHooks: (hookName: string) =>
-        hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook,
+        (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
+        (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
+        (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
+        (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
+      runBeforeReset: beforeResetHookMocks.runBeforeReset,
+      runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
+      runSessionStart: sessionLifecycleHookMocks.runSessionStart,
       runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
     })),
   };
 });
 
-vi.mock("../discord/monitor/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../discord/monitor/thread-bindings.js")>();
+vi.mock("../plugins/runtime/runtime-discord.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/runtime/runtime-discord.js")>();
   return {
     ...actual,
-    unbindThreadBindingsBySessionKey: (params: unknown) =>
-      threadBindingMocks.unbindThreadBindingsBySessionKey(params),
+    createRuntimeDiscord: () => {
+      const runtime = actual.createRuntimeDiscord();
+      return {
+        ...runtime,
+        threadBindings: {
+          ...runtime.threadBindings,
+          unbindBySessionKey: (params: unknown) =>
+            threadBindingMocks.unbindThreadBindingsBySessionKey(params),
+        },
+      };
+    },
   };
 });
 
@@ -126,13 +175,17 @@ vi.mock("../acp/runtime/registry.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../browser/session-tab-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../browser/session-tab-registry.js")>();
-  return {
-    ...actual,
-    closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
-  };
-});
+vi.mock("../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    cancelSession: acpManagerMocks.cancelSession,
+    closeSession: acpManagerMocks.closeSession,
+  }),
+}));
+
+vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
+  closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
+  movePathToTrash: vi.fn(async () => {}),
+}));
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -212,12 +265,37 @@ async function getMainPreviewEntry(ws: import("ws").WebSocket) {
   return entry;
 }
 
+function isInternalHookEvent(value: unknown): value is InternalHookEvent {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.type === "string" &&
+    typeof candidate.action === "string" &&
+    typeof candidate.sessionKey === "string" &&
+    Array.isArray(candidate.messages) &&
+    typeof candidate.context === "object" &&
+    candidate.context !== null
+  );
+}
+
 describe("gateway server sessions", () => {
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
+    sessionHookMocks.hasInternalHookListeners.mockReset();
+    sessionHookMocks.hasInternalHookListeners.mockReturnValue(true);
     sessionHookMocks.triggerInternalHook.mockClear();
+    beforeResetHookMocks.runBeforeReset.mockClear();
+    beforeResetHookState.hasBeforeResetHook = false;
+    sessionLifecycleHookMocks.runSessionEnd.mockClear();
+    sessionLifecycleHookMocks.runSessionStart.mockClear();
+    sessionLifecycleHookState.hasSessionEndHook = true;
+    sessionLifecycleHookState.hasSessionStartHook = true;
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
     threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
@@ -229,8 +307,574 @@ describe("gateway server sessions", () => {
     acpRuntimeMocks.requireAcpRuntimeBackend.mockImplementation((backendId?: string) =>
       acpRuntimeMocks.getAcpRuntimeBackend(backendId),
     );
+    acpManagerMocks.cancelSession.mockClear();
+    acpManagerMocks.closeSession.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
+  });
+
+  test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
+    const { dir, storePath } = await createSessionStoreDir();
+    piSdkMock.enabled = true;
+    piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-parent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    const { ws } = await openClient();
+
+    const created = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        label?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        parentSessionKey?: string;
+        sessionFile?: string;
+      };
+    }>(ws, "sessions.create", {
+      agentId: "ops",
+      label: "Dashboard Chat",
+      model: "openai/gpt-test-a",
+      parentSessionKey: "main",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+    expect(created.payload?.entry?.label).toBe("Dashboard Chat");
+    expect(created.payload?.entry?.providerOverride).toBe("openai");
+    expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
+    expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+    expect(created.payload?.entry?.sessionFile).toBeTruthy();
+    expect(created.payload?.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+
+    const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        sessionId?: string;
+        label?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        parentSessionKey?: string;
+        sessionFile?: string;
+      }
+    >;
+    const key = created.payload?.key as string;
+    expect(rawStore[key]).toMatchObject({
+      sessionId: created.payload?.sessionId,
+      label: "Dashboard Chat",
+      providerOverride: "openai",
+      modelOverride: "gpt-test-a",
+      parentSessionKey: "agent:main:main",
+    });
+    expect(created.payload?.entry?.sessionFile).toBe(rawStore[key]?.sessionFile);
+
+    const transcriptPath = path.join(dir, `${created.payload?.sessionId}.jsonl`);
+    const transcript = await fs.readFile(transcriptPath, "utf-8");
+    const [headerLine] = transcript.trim().split(/\r?\n/, 1);
+    expect(JSON.parse(headerLine) as { type?: string; id?: string }).toMatchObject({
+      type: "session",
+      id: created.payload?.sessionId,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
+    await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const key = "agent:ops-agent:dashboard:direct:subagent-orchestrator";
+    const created = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        label?: string;
+      };
+    }>(ws, "sessions.create", {
+      key,
+      label: "Dashboard Orchestrator",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toBe(key);
+    expect(created.payload?.entry?.label).toBe("Dashboard Orchestrator");
+    expect(created.payload?.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+
+    ws.close();
+  });
+
+  test("sessions.create scopes the main alias to the requested agent", async () => {
+    const { storePath } = await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const created = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        sessionFile?: string;
+      };
+    }>(ws, "sessions.create", {
+      key: "main",
+      agentId: "longmemeval",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toBe("agent:longmemeval:main");
+    expect(created.payload?.entry?.sessionFile).toBeTruthy();
+
+    const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        sessionId?: string;
+      }
+    >;
+    expect(rawStore["agent:longmemeval:main"]?.sessionId).toBe(created.payload?.sessionId);
+    expect(rawStore["agent:main:main"]).toBeUndefined();
+
+    ws.close();
+  });
+
+  test("sessions.create preserves global and unknown sentinel keys", async () => {
+    const { storePath } = await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const globalCreated = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        sessionFile?: string;
+      };
+    }>(ws, "sessions.create", {
+      key: "global",
+      agentId: "longmemeval",
+    });
+
+    expect(globalCreated.ok).toBe(true);
+    expect(globalCreated.payload?.key).toBe("global");
+    expect(globalCreated.payload?.entry?.sessionFile).toBeTruthy();
+
+    const unknownCreated = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        sessionFile?: string;
+      };
+    }>(ws, "sessions.create", {
+      key: "unknown",
+      agentId: "longmemeval",
+    });
+
+    expect(unknownCreated.ok).toBe(true);
+    expect(unknownCreated.payload?.key).toBe("unknown");
+    expect(unknownCreated.payload?.entry?.sessionFile).toBeTruthy();
+
+    const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        sessionId?: string;
+      }
+    >;
+    expect(rawStore.global?.sessionId).toBe(globalCreated.payload?.sessionId);
+    expect(rawStore.unknown?.sessionId).toBe(unknownCreated.payload?.sessionId);
+    expect(rawStore["agent:longmemeval:global"]).toBeUndefined();
+    expect(rawStore["agent:longmemeval:unknown"]).toBeUndefined();
+
+    ws.close();
+  });
+
+  test("sessions.create rejects unknown parentSessionKey", async () => {
+    await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const created = await rpcReq(ws, "sessions.create", {
+      agentId: "ops",
+      parentSessionKey: "agent:main:missing",
+    });
+
+    expect(created.ok).toBe(false);
+    expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
+      "unknown parent session",
+    );
+
+    ws.close();
+  });
+
+  test("sessions.create can start the first agent turn from an initial task", async () => {
+    await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const created = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      runStarted?: boolean;
+      runId?: string;
+      messageSeq?: number;
+    }>(ws, "sessions.create", {
+      agentId: "ops",
+      label: "Dashboard Chat",
+      task: "hello from create",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+    expect(created.payload?.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(created.payload?.runStarted).toBe(true);
+    expect(created.payload?.runId).toBeTruthy();
+    expect(created.payload?.messageSeq).toBe(1);
+
+    ws.close();
+  });
+
+  test("sessions.list surfaces transcript usage and model fallbacks from the transcript", async () => {
+    const { dir } = await createSessionStoreDir();
+    testState.agentConfig = {
+      models: {
+        "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
+      },
+    };
+    await fs.writeFile(
+      path.join(dir, "sess-parent.jsonl"),
+      `${JSON.stringify({ type: "session", version: 1, id: "sess-parent" })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(dir, "sess-child.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 2_000,
+              output: 500,
+              cacheRead: 1_000,
+              cost: { total: 0.0042 },
+            },
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "openclaw",
+            model: "delivery-mirror",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-parent",
+          updatedAt: Date.now(),
+        },
+        "dashboard:child": {
+          sessionId: "sess-child",
+          updatedAt: Date.now() - 1_000,
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-5",
+          parentSessionKey: "agent:main:main",
+          totalTokens: 0,
+          totalTokensFresh: false,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const listed = await rpcReq<{
+      sessions: Array<{
+        key: string;
+        parentSessionKey?: string;
+        childSessions?: string[];
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+        contextTokens?: number;
+        estimatedCostUsd?: number;
+        modelProvider?: string;
+        model?: string;
+      }>;
+    }>(ws, "sessions.list", {});
+
+    expect(listed.ok).toBe(true);
+    const parent = listed.payload?.sessions.find((session) => session.key === "agent:main:main");
+    const child = listed.payload?.sessions.find(
+      (session) => session.key === "agent:main:dashboard:child",
+    );
+    expect(parent?.childSessions).toEqual(["agent:main:dashboard:child"]);
+    expect(child?.parentSessionKey).toBe("agent:main:main");
+    expect(child?.totalTokens).toBe(3_000);
+    expect(child?.totalTokensFresh).toBe(true);
+    expect(child?.contextTokens).toBe(1_048_576);
+    expect(child?.estimatedCostUsd).toBe(0.0042);
+    expect(child?.modelProvider).toBe("anthropic");
+    expect(child?.model).toBe("claude-sonnet-4-6");
+
+    ws.close();
+  });
+
+  test("sessions.changed mutation events include live usage metadata", async () => {
+    const { dir } = await createSessionStoreDir();
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          id: "msg-usage-zero",
+          message: {
+            role: "assistant",
+            provider: "openai-codex",
+            model: "gpt-5.3-codex-spark",
+            usage: {
+              input: 5_107,
+              output: 1_827,
+              cacheRead: 1_536,
+              cacheWrite: 0,
+              cost: { total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "openai-codex",
+          model: "gpt-5.3-codex-spark",
+          contextTokens: 123_456,
+          totalTokens: 0,
+          totalTokensFresh: false,
+        },
+      },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    await sessionsHandlers["sessions.patch"]({
+      req: {} as never,
+      params: {
+        key: "main",
+        label: "Renamed",
+      },
+      respond,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        loadGatewayModelCatalog: async () => ({ providers: [] }),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, key: "agent:main:main" }),
+      undefined,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        reason: "patch",
+        totalTokens: 6_643,
+        totalTokensFresh: true,
+        contextTokens: 123_456,
+        estimatedCostUsd: 0,
+        modelProvider: "openai-codex",
+        model: "gpt-5.3-codex-spark",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  test("sessions.changed mutation events include live session setting metadata", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          verboseLevel: "on",
+          responseUsage: "full",
+          fastMode: true,
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
+        },
+      },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    await sessionsHandlers["sessions.patch"]({
+      req: {} as never,
+      params: {
+        key: "main",
+        verboseLevel: "on",
+      },
+      respond,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        loadGatewayModelCatalog: async () => ({ providers: [] }),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, key: "agent:main:main" }),
+      undefined,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        reason: "patch",
+        verboseLevel: "on",
+        responseUsage: "full",
+        fastMode: true,
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  test("sessions.changed mutation events include sendPolicy metadata", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          sendPolicy: "deny",
+        },
+      },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    await sessionsHandlers["sessions.patch"]({
+      req: {} as never,
+      params: {
+        key: "main",
+        sendPolicy: "deny",
+      },
+      respond,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        loadGatewayModelCatalog: async () => ({ providers: [] }),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, key: "agent:main:main" }),
+      undefined,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        reason: "patch",
+        sendPolicy: "deny",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  test("sessions.changed mutation events include subagent ownership metadata", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        "subagent:child": {
+          sessionId: "sess-child",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+          forkedFromParent: true,
+          spawnDepth: 2,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+        },
+      },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    await sessionsHandlers["sessions.patch"]({
+      req: {} as never,
+      params: {
+        key: "subagent:child",
+        label: "Child",
+      },
+      respond,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        loadGatewayModelCatalog: async () => ({ providers: [] }),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, key: "agent:main:subagent:child" }),
+      undefined,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:child",
+        reason: "patch",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
   });
 
   test("lists and patches session store via sessions.* RPC", async () => {
@@ -266,6 +910,7 @@ describe("gateway server sessions", () => {
           lastChannel: "whatsapp",
           lastTo: "+1555",
           lastAccountId: "work",
+          lastThreadId: "1737500000.123456",
         },
         "discord:group:dev": {
           sessionId: "sess-group",
@@ -336,6 +981,7 @@ describe("gateway server sessions", () => {
       channel: "whatsapp",
       to: "+1555",
       accountId: "work",
+      threadId: "1737500000.123456",
     });
 
     const active = await rpcReq<{
@@ -463,6 +1109,18 @@ describe("gateway server sessions", () => {
     expect(spawnedPatched.ok).toBe(true);
     expect(spawnedPatched.payload?.entry.spawnedBy).toBe("agent:main:main");
 
+    const acpPatched = await rpcReq<{
+      ok: true;
+      entry: { spawnedBy?: string; spawnDepth?: number };
+    }>(ws, "sessions.patch", {
+      key: "agent:main:acp:child",
+      spawnedBy: "agent:main:main",
+      spawnDepth: 1,
+    });
+    expect(acpPatched.ok).toBe(true);
+    expect(acpPatched.payload?.entry.spawnedBy).toBe("agent:main:main");
+    expect(acpPatched.payload?.entry.spawnDepth).toBe(1);
+
     const spawnedPatchedInvalidKey = await rpcReq(ws, "sessions.patch", {
       key: "agent:main:main",
       spawnedBy: "agent:main:main",
@@ -533,13 +1191,27 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { sessionId: string; modelProvider?: string; model?: string };
+      entry: {
+        sessionId: string;
+        modelProvider?: string;
+        model?: string;
+        lastAccountId?: string;
+        lastThreadId?: string | number;
+      };
     }>(ws, "sessions.reset", { key: "agent:main:main" });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
     expect(reset.payload?.entry.modelProvider).toBe("openai");
     expect(reset.payload?.entry.model).toBe("gpt-test-a");
+    expect(reset.payload?.entry.lastAccountId).toBe("work");
+    expect(reset.payload?.entry.lastThreadId).toBe("1737500000.123456");
+    const storeAfterReset = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { lastAccountId?: string; lastThreadId?: string | number }
+    >;
+    expect(storeAfterReset["agent:main:main"]?.lastAccountId).toBe("work");
+    expect(storeAfterReset["agent:main:main"]?.lastThreadId).toBe("1737500000.123456");
     const filesAfterReset = await fs.readdir(dir);
     expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 
@@ -579,6 +1251,340 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset recomputes model from defaults instead of stale runtime model", async () => {
+    await createSessionStoreDir();
+    testState.agentConfig = {
+      model: {
+        primary: "openai/gpt-test-a",
+      },
+    };
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-stale-model",
+          updatedAt: Date.now(),
+          modelProvider: "qwencode",
+          model: "qwen3.5-plus-2026-02-15",
+          contextTokens: 123456,
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: {
+        sessionId: string;
+        sessionFile?: string;
+        modelProvider?: string;
+        model?: string;
+        contextTokens?: number;
+      };
+    }>(ws, "sessions.reset", { key: "main" });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.key).toBe("agent:main:main");
+    expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-model");
+    expect(reset.payload?.entry.sessionFile).toBeTruthy();
+    expect(reset.payload?.entry.modelProvider).toBe("openai");
+    expect(reset.payload?.entry.model).toBe("gpt-test-a");
+    expect(reset.payload?.entry.contextTokens).toBeUndefined();
+    await expect(fs.stat(reset.payload?.entry.sessionFile as string)).resolves.toBeTruthy();
+
+    ws.close();
+  });
+
+  test("sessions.reset preserves spawned session ownership metadata", async () => {
+    const { storePath } = await createSessionStoreDir();
+    const customSessionFile = path.join(
+      await fs.realpath(path.dirname(storePath)),
+      "custom-owned-child-transcript.jsonl",
+    );
+    await writeSessionStore({
+      entries: {
+        "subagent:child": {
+          sessionId: "sess-owned-child",
+          sessionFile: customSessionFile,
+          updatedAt: Date.now(),
+          chatType: "group",
+          channel: "discord",
+          groupId: "group-1",
+          subject: "Ops Thread",
+          groupChannel: "dev",
+          space: "hq",
+          spawnedBy: "agent:main:main",
+          spawnedWorkspaceDir: "/tmp/child-workspace",
+          parentSessionKey: "agent:main:main",
+          forkedFromParent: true,
+          spawnDepth: 2,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+          elevatedLevel: "on",
+          ttsAuto: "always",
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-1",
+          authProfileOverride: "work",
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 7,
+          sendPolicy: "deny",
+          queueMode: "interrupt",
+          queueDebounceMs: 250,
+          queueCap: 9,
+          queueDrop: "old",
+          groupActivation: "always",
+          groupActivationNeedsSystemIntro: true,
+          execHost: "gateway",
+          execSecurity: "allowlist",
+          execAsk: "on-miss",
+          execNode: "mac-mini",
+          displayName: "Ops Child",
+          cliSessionIds: {
+            "claude-cli": "cli-session-123",
+          },
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: "cli-session-123",
+              authProfileId: "anthropic:work",
+              extraSystemPromptHash: "prompt-hash",
+            },
+          },
+          claudeCliSessionId: "cli-session-123",
+          deliveryContext: {
+            channel: "discord",
+            to: "discord:child",
+            accountId: "acct-1",
+            threadId: "thread-1",
+          },
+          label: "owned child",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: {
+        sessionFile?: string;
+        chatType?: string;
+        channel?: string;
+        groupId?: string;
+        subject?: string;
+        groupChannel?: string;
+        space?: string;
+        spawnedBy?: string;
+        spawnedWorkspaceDir?: string;
+        parentSessionKey?: string;
+        forkedFromParent?: boolean;
+        spawnDepth?: number;
+        subagentRole?: string;
+        subagentControlScope?: string;
+        elevatedLevel?: string;
+        ttsAuto?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+        authProfileOverrideCompactionCount?: number;
+        sendPolicy?: string;
+        queueMode?: string;
+        queueDebounceMs?: number;
+        queueCap?: number;
+        queueDrop?: string;
+        groupActivation?: string;
+        groupActivationNeedsSystemIntro?: boolean;
+        execHost?: string;
+        execSecurity?: string;
+        execAsk?: string;
+        execNode?: string;
+        displayName?: string;
+        cliSessionBindings?: Record<
+          string,
+          {
+            sessionId?: string;
+            authProfileId?: string;
+            extraSystemPromptHash?: string;
+            mcpConfigHash?: string;
+          }
+        >;
+        cliSessionIds?: Record<string, string>;
+        claudeCliSessionId?: string;
+        deliveryContext?: {
+          channel?: string;
+          to?: string;
+          accountId?: string;
+          threadId?: string;
+        };
+        label?: string;
+      };
+    }>(ws, "sessions.reset", { key: "subagent:child" });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.sessionFile).toBe(customSessionFile);
+    expect(reset.payload?.entry.chatType).toBe("group");
+    expect(reset.payload?.entry.channel).toBe("discord");
+    expect(reset.payload?.entry.groupId).toBe("group-1");
+    expect(reset.payload?.entry.subject).toBe("Ops Thread");
+    expect(reset.payload?.entry.groupChannel).toBe("dev");
+    expect(reset.payload?.entry.space).toBe("hq");
+    expect(reset.payload?.entry.spawnedBy).toBe("agent:main:main");
+    expect(reset.payload?.entry.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
+    expect(reset.payload?.entry.parentSessionKey).toBe("agent:main:main");
+    expect(reset.payload?.entry.forkedFromParent).toBe(true);
+    expect(reset.payload?.entry.spawnDepth).toBe(2);
+    expect(reset.payload?.entry.subagentRole).toBe("orchestrator");
+    expect(reset.payload?.entry.subagentControlScope).toBe("children");
+    expect(reset.payload?.entry.elevatedLevel).toBe("on");
+    expect(reset.payload?.entry.ttsAuto).toBe("always");
+    expect(reset.payload?.entry.providerOverride).toBe("anthropic");
+    expect(reset.payload?.entry.modelOverride).toBe("claude-opus-4-1");
+    expect(reset.payload?.entry.authProfileOverride).toBe("work");
+    expect(reset.payload?.entry.authProfileOverrideSource).toBe("user");
+    expect(reset.payload?.entry.authProfileOverrideCompactionCount).toBe(7);
+    expect(reset.payload?.entry.sendPolicy).toBe("deny");
+    expect(reset.payload?.entry.queueMode).toBe("interrupt");
+    expect(reset.payload?.entry.queueDebounceMs).toBe(250);
+    expect(reset.payload?.entry.queueCap).toBe(9);
+    expect(reset.payload?.entry.queueDrop).toBe("old");
+    expect(reset.payload?.entry.groupActivation).toBe("always");
+    expect(reset.payload?.entry.groupActivationNeedsSystemIntro).toBe(true);
+    expect(reset.payload?.entry.execHost).toBe("gateway");
+    expect(reset.payload?.entry.execSecurity).toBe("allowlist");
+    expect(reset.payload?.entry.execAsk).toBe("on-miss");
+    expect(reset.payload?.entry.execNode).toBe("mac-mini");
+    expect(reset.payload?.entry.displayName).toBe("Ops Child");
+    expect(reset.payload?.entry.cliSessionBindings).toEqual({
+      "claude-cli": {
+        sessionId: "cli-session-123",
+        authProfileId: "anthropic:work",
+        extraSystemPromptHash: "prompt-hash",
+      },
+    });
+    expect(reset.payload?.entry.cliSessionIds).toEqual({
+      "claude-cli": "cli-session-123",
+    });
+    expect(reset.payload?.entry.claudeCliSessionId).toBe("cli-session-123");
+    expect(reset.payload?.entry.deliveryContext).toEqual({
+      channel: "discord",
+      to: "discord:child",
+      accountId: "acct-1",
+      threadId: "thread-1",
+    });
+    expect(reset.payload?.entry.label).toBe("owned child");
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        sessionFile?: string;
+        chatType?: string;
+        channel?: string;
+        groupId?: string;
+        subject?: string;
+        groupChannel?: string;
+        space?: string;
+        spawnedBy?: string;
+        spawnedWorkspaceDir?: string;
+        parentSessionKey?: string;
+        forkedFromParent?: boolean;
+        spawnDepth?: number;
+        subagentRole?: string;
+        subagentControlScope?: string;
+        elevatedLevel?: string;
+        ttsAuto?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+        authProfileOverrideCompactionCount?: number;
+        sendPolicy?: string;
+        queueMode?: string;
+        queueDebounceMs?: number;
+        queueCap?: number;
+        queueDrop?: string;
+        groupActivation?: string;
+        groupActivationNeedsSystemIntro?: boolean;
+        execHost?: string;
+        execSecurity?: string;
+        execAsk?: string;
+        execNode?: string;
+        displayName?: string;
+        cliSessionBindings?: Record<
+          string,
+          {
+            sessionId?: string;
+            authProfileId?: string;
+            extraSystemPromptHash?: string;
+            mcpConfigHash?: string;
+          }
+        >;
+        cliSessionIds?: Record<string, string>;
+        claudeCliSessionId?: string;
+        deliveryContext?: {
+          channel?: string;
+          to?: string;
+          accountId?: string;
+          threadId?: string;
+        };
+        label?: string;
+      }
+    >;
+    expect(store["agent:main:subagent:child"]?.sessionFile).toBe(customSessionFile);
+    expect(store["agent:main:subagent:child"]?.chatType).toBe("group");
+    expect(store["agent:main:subagent:child"]?.channel).toBe("discord");
+    expect(store["agent:main:subagent:child"]?.groupId).toBe("group-1");
+    expect(store["agent:main:subagent:child"]?.subject).toBe("Ops Thread");
+    expect(store["agent:main:subagent:child"]?.groupChannel).toBe("dev");
+    expect(store["agent:main:subagent:child"]?.space).toBe("hq");
+    expect(store["agent:main:subagent:child"]?.spawnedBy).toBe("agent:main:main");
+    expect(store["agent:main:subagent:child"]?.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
+    expect(store["agent:main:subagent:child"]?.parentSessionKey).toBe("agent:main:main");
+    expect(store["agent:main:subagent:child"]?.forkedFromParent).toBe(true);
+    expect(store["agent:main:subagent:child"]?.spawnDepth).toBe(2);
+    expect(store["agent:main:subagent:child"]?.subagentRole).toBe("orchestrator");
+    expect(store["agent:main:subagent:child"]?.subagentControlScope).toBe("children");
+    expect(store["agent:main:subagent:child"]?.elevatedLevel).toBe("on");
+    expect(store["agent:main:subagent:child"]?.ttsAuto).toBe("always");
+    expect(store["agent:main:subagent:child"]?.providerOverride).toBe("anthropic");
+    expect(store["agent:main:subagent:child"]?.modelOverride).toBe("claude-opus-4-1");
+    expect(store["agent:main:subagent:child"]?.authProfileOverride).toBe("work");
+    expect(store["agent:main:subagent:child"]?.authProfileOverrideSource).toBe("user");
+    expect(store["agent:main:subagent:child"]?.authProfileOverrideCompactionCount).toBe(7);
+    expect(store["agent:main:subagent:child"]?.sendPolicy).toBe("deny");
+    expect(store["agent:main:subagent:child"]?.queueMode).toBe("interrupt");
+    expect(store["agent:main:subagent:child"]?.queueDebounceMs).toBe(250);
+    expect(store["agent:main:subagent:child"]?.queueCap).toBe(9);
+    expect(store["agent:main:subagent:child"]?.queueDrop).toBe("old");
+    expect(store["agent:main:subagent:child"]?.groupActivation).toBe("always");
+    expect(store["agent:main:subagent:child"]?.groupActivationNeedsSystemIntro).toBe(true);
+    expect(store["agent:main:subagent:child"]?.execHost).toBe("gateway");
+    expect(store["agent:main:subagent:child"]?.execSecurity).toBe("allowlist");
+    expect(store["agent:main:subagent:child"]?.execAsk).toBe("on-miss");
+    expect(store["agent:main:subagent:child"]?.execNode).toBe("mac-mini");
+    expect(store["agent:main:subagent:child"]?.displayName).toBe("Ops Child");
+    expect(store["agent:main:subagent:child"]?.cliSessionBindings).toEqual({
+      "claude-cli": {
+        sessionId: "cli-session-123",
+        authProfileId: "anthropic:work",
+        extraSystemPromptHash: "prompt-hash",
+      },
+    });
+    expect(store["agent:main:subagent:child"]?.cliSessionIds).toEqual({
+      "claude-cli": "cli-session-123",
+    });
+    expect(store["agent:main:subagent:child"]?.claudeCliSessionId).toBe("cli-session-123");
+    expect(store["agent:main:subagent:child"]?.deliveryContext).toEqual({
+      channel: "discord",
+      to: "discord:child",
+      accountId: "acct-1",
+      threadId: "thread-1",
+    });
+    expect(store["agent:main:subagent:child"]?.label).toBe("owned child");
+
+    ws.close();
+  });
+
   test("sessions.preview resolves legacy mixed-case main alias with custom mainKey", async () => {
     const { dir, storePath } = await createSessionStoreDir();
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
@@ -608,6 +1614,55 @@ describe("gateway server sessions", () => {
     const { ws } = await openClient();
     const entry = await getMainPreviewEntry(ws);
     expect(entry?.items[0]?.text).toContain("Legacy alias transcript");
+
+    ws.close();
+  });
+
+  test("sessions.preview prefers the freshest duplicate row for a legacy mixed-case main alias", async () => {
+    const { dir, storePath } = await createSessionStoreDir();
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+    testState.sessionConfig = { mainKey: "work" };
+
+    const staleTranscriptPath = path.join(dir, "sess-stale-main.jsonl");
+    const freshTranscriptPath = path.join(dir, "sess-fresh-main.jsonl");
+    await fs.writeFile(
+      staleTranscriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-stale-main" }),
+        JSON.stringify({ message: { role: "assistant", content: "stale preview" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      freshTranscriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-fresh-main" }),
+        JSON.stringify({ message: { role: "assistant", content: "fresh preview" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:ops:work": {
+            sessionId: "sess-stale-main",
+            updatedAt: 1,
+          },
+          "agent:ops:WORK": {
+            sessionId: "sess-fresh-main",
+            updatedAt: 2,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { ws } = await openClient();
+    const entry = await getMainPreviewEntry(ws);
+    expect(entry?.items[0]?.text).toContain("fresh preview");
 
     ws.close();
   });
@@ -685,6 +1740,68 @@ describe("gateway server sessions", () => {
     expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
 
     ws.close();
+  });
+
+  test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
+    await createSessionStoreDir();
+    const now = Date.now();
+    const entries: Record<string, { sessionId: string; updatedAt: number; label?: string }> = {
+      "agent:main:subagent:target": {
+        sessionId: "sess-target-exact",
+        updatedAt: now - 20_000,
+      },
+    };
+    for (let i = 0; i < 9; i += 1) {
+      entries[`agent:main:subagent:noisy-${i}`] = {
+        sessionId: `sess-noisy-${i}`,
+        updatedAt: now - i * 1_000,
+        label: `sess-target-exact noisy ${i}`,
+      };
+    }
+    await writeSessionStore({ entries });
+
+    const { ws } = await openClient();
+    const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+      sessionId: "sess-target-exact",
+    });
+
+    expect(resolved.ok).toBe(true);
+    expect(resolved.payload?.key).toBe("agent:main:subagent:target");
+  });
+
+  test("sessions.resolve by key respects spawnedBy visibility filters", async () => {
+    await createSessionStoreDir();
+    const now = Date.now();
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:visible-parent": {
+          sessionId: "sess-visible-parent",
+          updatedAt: now - 3_000,
+          spawnedBy: "agent:main:main",
+        },
+        "agent:main:subagent:hidden-parent": {
+          sessionId: "sess-hidden-parent",
+          updatedAt: now - 2_000,
+          spawnedBy: "agent:main:main",
+        },
+        "agent:main:subagent:shared-child-key-filter": {
+          sessionId: "sess-shared-child-key-filter",
+          updatedAt: now - 1_000,
+          spawnedBy: "agent:main:subagent:hidden-parent",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const resolved = await rpcReq(ws, "sessions.resolve", {
+      key: "agent:main:subagent:shared-child-key-filter",
+      spawnedBy: "agent:main:subagent:visible-parent",
+    });
+
+    expect(resolved.ok).toBe(false);
+    expect(resolved.error?.message).toContain(
+      "No session found: agent:main:subagent:shared-child-key-filter",
+    );
   });
 
   test("sessions.delete rejects main and aborts active runs", async () => {
@@ -775,43 +1892,80 @@ describe("gateway server sessions", () => {
         },
       },
     });
-    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime: {
-        ensureSession: vi.fn(async () => ({
-          sessionKey: "agent:main:discord:group:dev",
-          backend: "acpx",
-          runtimeSessionName: "runtime:delete",
-        })),
-        runTurn: vi.fn(async function* () {}),
-        cancel: acpRuntimeMocks.cancel,
-        close: acpRuntimeMocks.close,
-      },
-    });
-
     const { ws } = await openClient();
     const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
       key: "discord:group:dev",
     });
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
-    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:discord:group:dev",
-        backend: "acpx",
-        runtimeSessionName: "runtime:delete",
-      },
+    expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      requireAcpSession: false,
       reason: "session-delete",
+      sessionKey: "agent:main:discord:group:dev",
     });
-    expect(acpRuntimeMocks.cancel).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:discord:group:dev",
-        backend: "acpx",
-        runtimeSessionName: "runtime:delete",
-      },
+    expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       reason: "session-delete",
+      sessionKey: "agent:main:discord:group:dev",
     });
 
+    ws.close();
+  });
+
+  test("sessions.delete emits session_end with deleted reason and no replacement", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    const transcriptPath = path.join(dir, "sess-delete.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m-delete",
+        message: { role: "user", content: "delete me" },
+      })}\n`,
+      "utf-8",
+    );
+
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        "discord:group:delete": {
+          sessionId: "sess-delete",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "discord:group:delete",
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+
+    const [event, context] = (
+      sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    expect(event).toMatchObject({
+      sessionId: "sess-delete",
+      sessionKey: "agent:main:discord:group:delete",
+      reason: "deleted",
+      transcriptArchived: true,
+    });
+    expect((event as { sessionFile?: string } | undefined)?.sessionFile).toContain(
+      ".jsonl.deleted.",
+    );
+    expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
+    expect(context).toMatchObject({
+      sessionId: "sess-delete",
+      sessionKey: "agent:main:discord:group:delete",
+      agentId: "main",
+    });
     ws.close();
   });
 
@@ -995,7 +2149,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
-    const { dir } = await createSessionStoreDir();
+    const { dir, storePath } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
 
     await writeSessionStore({
@@ -1008,38 +2162,86 @@ describe("gateway server sessions", () => {
             agent: "codex",
             runtimeSessionName: "runtime:reset",
             mode: "persistent",
+            runtimeOptions: {
+              runtimeMode: "auto",
+              timeoutSeconds: 30,
+            },
+            cwd: "/tmp/acp-session",
             state: "idle",
             lastActivityAt: Date.now(),
           },
         },
       },
     });
-    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime: {
-        ensureSession: vi.fn(async () => ({
-          sessionKey: "agent:main:main",
-          backend: "acpx",
-          runtimeSessionName: "runtime:reset",
-        })),
-        runTurn: vi.fn(async function* () {}),
-        cancel: vi.fn(async () => {}),
-        close: acpRuntimeMocks.close,
-      },
-    });
-
     const { ws } = await openClient();
-    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: {
+        acp?: {
+          backend?: string;
+          agent?: string;
+          runtimeSessionName?: string;
+          mode?: string;
+          runtimeOptions?: {
+            runtimeMode?: string;
+            timeoutSeconds?: number;
+          };
+          cwd?: string;
+          state?: string;
+        };
+      };
+    }>(ws, "sessions.reset", {
       key: "main",
     });
     expect(reset.ok).toBe(true);
-    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:main",
-        backend: "acpx",
-        runtimeSessionName: "runtime:reset",
+    expect(reset.payload?.entry.acp).toMatchObject({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "runtime:reset",
+      mode: "persistent",
+      runtimeOptions: {
+        runtimeMode: "auto",
+        timeoutSeconds: 30,
       },
+      cwd: "/tmp/acp-session",
+      state: "idle",
+    });
+    expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      requireAcpSession: false,
       reason: "session-reset",
+      sessionKey: "agent:main:main",
+    });
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        acp?: {
+          backend?: string;
+          agent?: string;
+          runtimeSessionName?: string;
+          mode?: string;
+          runtimeOptions?: {
+            runtimeMode?: string;
+            timeoutSeconds?: number;
+          };
+          cwd?: string;
+          state?: string;
+        };
+      }
+    >;
+    expect(store["agent:main:main"]?.acp).toMatchObject({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "runtime:reset",
+      mode: "persistent",
+      runtimeOptions: {
+        runtimeMode: "auto",
+        timeoutSeconds: 30,
+      },
+      cwd: "/tmp/acp-session",
+      state: "idle",
     });
 
     ws.close();
@@ -1179,6 +2381,127 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset emits before_reset hook with transcript context", async () => {
+    const { dir } = await createSessionStoreDir();
+    const transcriptPath = path.join(dir, "sess-main.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "hello from transcript" },
+      })}\n`,
+      "utf-8",
+    );
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    beforeResetHookState.hasBeforeResetHook = true;
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+      key: "main",
+      reason: "new",
+    });
+    expect(reset.ok).toBe(true);
+    expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+    const [event, context] = (
+      beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    expect(event).toMatchObject({
+      sessionFile: transcriptPath,
+      reason: "new",
+      messages: [
+        {
+          role: "user",
+          content: "hello from transcript",
+        },
+      ],
+    });
+    expect(context).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-main",
+    });
+    ws.close();
+  });
+
+  test("sessions.reset emits enriched session_end and session_start hooks", async () => {
+    const { dir } = await createSessionStoreDir();
+    const transcriptPath = path.join(dir, "sess-main.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "hello from transcript" },
+      })}\n`,
+      "utf-8",
+    );
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+      key: "main",
+      reason: "new",
+    });
+    expect(reset.ok).toBe(true);
+    expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+
+    const [endEvent, endContext] = (
+      sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    const [startEvent, startContext] = (
+      sessionLifecycleHookMocks.runSessionStart.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+
+    expect(endEvent).toMatchObject({
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      reason: "new",
+      transcriptArchived: true,
+    });
+    expect((endEvent as { sessionFile?: string } | undefined)?.sessionFile).toContain(
+      ".jsonl.reset.",
+    );
+    expect((endEvent as { nextSessionId?: string } | undefined)?.nextSessionId).toBe(
+      (startEvent as { sessionId?: string } | undefined)?.sessionId,
+    );
+    expect(endContext).toMatchObject({
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    expect(startEvent).toMatchObject({
+      sessionKey: "agent:main:main",
+      resumedFrom: "sess-main",
+    });
+    expect(startContext).toMatchObject({
+      sessionId: (startEvent as { sessionId?: string } | undefined)?.sessionId,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    ws.close();
+  });
+
   test("sessions.reset returns unavailable when active run does not stop", async () => {
     const { dir, storePath } = await seedActiveMainSession();
     const waitCallCountAtSnapshotClear: number[] = [];
@@ -1186,6 +2509,7 @@ describe("gateway server sessions", () => {
       waitCallCountAtSnapshotClear.push(embeddedRunMock.waitCalls.length);
     });
 
+    beforeResetHookState.hasBeforeResetHook = true;
     embeddedRunMock.activeIds.add("sess-main");
     embeddedRunMock.waitResults.set("sess-main", false);
 
@@ -1202,6 +2526,7 @@ describe("gateway server sessions", () => {
       ["main", "agent:main:main", "sess-main"],
       "sess-main",
     );
+    expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
     expect(waitCallCountAtSnapshotClear).toEqual([1]);
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 
@@ -1214,6 +2539,99 @@ describe("gateway server sessions", () => {
     expect(filesAfterResetAttempt.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(false);
 
     ws.close();
+  });
+
+  test("sessions.reset emits before_reset for the entry actually reset under the store lock", async () => {
+    const { dir } = await createSessionStoreDir();
+    const oldTranscriptPath = path.join(dir, "sess-old.jsonl");
+    const newTranscriptPath = path.join(dir, "sess-new.jsonl");
+    await fs.writeFile(
+      oldTranscriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m-old",
+        message: { role: "user", content: "old transcript" },
+      })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      newTranscriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m-new",
+        message: { role: "user", content: "new transcript" },
+      })}\n`,
+      "utf-8",
+    );
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-old",
+          sessionFile: oldTranscriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    beforeResetHookState.hasBeforeResetHook = true;
+    const gatewayStorePath = resolveGatewaySessionStoreTarget({
+      cfg: loadConfig(),
+      key: "main",
+    }).storePath;
+
+    let pendingReset: ReturnType<typeof performGatewaySessionReset> | undefined;
+    await withSessionStoreLockForTest(gatewayStorePath, async () => {
+      pendingReset = performGatewaySessionReset({
+        key: "main",
+        reason: "new",
+        commandSource: "gateway:sessions.reset",
+      });
+      await vi.waitFor(() => {
+        expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+      });
+      await fs.writeFile(
+        gatewayStorePath,
+        JSON.stringify(
+          {
+            "agent:main:main": {
+              sessionId: "sess-new",
+              sessionFile: newTranscriptPath,
+              updatedAt: Date.now(),
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+    });
+
+    const reset = await pendingReset!;
+    expect(reset.ok).toBe(true);
+    const internalEvent = (
+      sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as { context?: { previousSessionEntry?: { sessionId?: string } } } | undefined;
+    expect(internalEvent?.context?.previousSessionEntry?.sessionId).toBe("sess-old");
+    expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+    const [event, context] = (
+      beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    expect(event).toMatchObject({
+      sessionFile: newTranscriptPath,
+      reason: "new",
+      messages: [
+        {
+          role: "user",
+          content: "new transcript",
+        },
+      ],
+    });
+    expect(context).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "sess-new",
+    });
   });
 
   test("sessions.delete returns unavailable when active run does not stop", async () => {
@@ -1303,6 +2721,206 @@ describe("gateway server sessions", () => {
     });
     expect(deleted.ok).toBe(false);
     expect(deleted.error?.message ?? "").toMatch(/webchat clients cannot delete sessions/i);
+
+    ws.close();
+  });
+
+  test("session:patch hook fires with correct context", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-patch-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-hook-test",
+          updatedAt: Date.now(),
+          label: "original-label",
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    const { ws } = await openClient();
+
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "updated-label",
+    });
+
+    expect(patched.ok).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session",
+        action: "patch",
+        sessionKey: expect.stringMatching(/agent:main:main/),
+        context: expect.objectContaining({
+          sessionEntry: expect.objectContaining({
+            sessionId: "sess-hook-test",
+            label: "updated-label",
+          }),
+          patch: expect.objectContaining({
+            label: "updated-label",
+          }),
+          cfg: expect.any(Object),
+        }),
+      }),
+    );
+
+    ws.close();
+  });
+
+  test("session:patch hook does not fire for webchat clients", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-webchat-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    const ws = new WebSocket(`ws://127.0.0.1:${harness.port}`, {
+      headers: { origin: `http://127.0.0.1:${harness.port}` },
+    });
+    trackConnectChallengeNonce(ws);
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await connectOk(ws, {
+      client: {
+        id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+      scopes: ["operator.admin"],
+    });
+
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "should-not-trigger-hook",
+    });
+
+    expect(patched.ok).toBe(false);
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    ws.close();
+  });
+
+  test("session:patch hook only fires after successful patch", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-success-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-success-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    // Test 1: Invalid patch (missing key) - hook should not fire
+    const invalidPatch = await rpcReq(ws, "sessions.patch", {
+      // Missing required 'key' parameter
+      label: "should-fail",
+    });
+
+    expect(invalidPatch.ok).toBe(false);
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    // Test 2: Valid patch - hook should fire
+    const validPatch = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "should-succeed",
+    });
+
+    expect(validPatch.ok).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session",
+        action: "patch",
+      }),
+    );
+
+    ws.close();
+  });
+
+  test("session:patch skips clone and dispatch when no hooks listen", async () => {
+    const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
+    sessionHookMocks.hasInternalHookListeners.mockReturnValue(false);
+
+    const { ws } = await openClient();
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "no-hook-listener",
+    });
+
+    expect(patched.ok).toBe(true);
+    expect(structuredCloneSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        patch: expect.any(Object),
+        sessionEntry: expect.any(Object),
+      }),
+    );
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    structuredCloneSpy.mockRestore();
+    ws.close();
+  });
+
+  test("session:patch hook mutations cannot change the response path", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-cfg-isolation-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockImplementationOnce(async (event) => {
+      if (!isInternalHookEvent(event) || !isSessionPatchEvent(event)) {
+        return;
+      }
+      event.context.cfg.agents = {
+        ...event.context.cfg.agents,
+        defaults: {
+          ...event.context.cfg.agents?.defaults,
+          model: "zai/glm-4.6",
+        },
+      };
+    });
+
+    const { ws } = await openClient();
+    const patched = await rpcReq<{
+      entry: { label?: string };
+      key: string;
+      resolved: { modelProvider: string; model: string };
+    }>(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "cfg-isolation",
+    });
+
+    expect(patched.ok).toBe(true);
+    expect(patched.payload?.resolved).toEqual({
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+    expect(patched.payload?.entry.label).toBe("cfg-isolation");
 
     ws.close();
   });

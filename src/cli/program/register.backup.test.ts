@@ -1,32 +1,32 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerBackupCommand } from "./register.backup.js";
 
-const backupCreateCommand = vi.fn();
-const backupVerifyCommand = vi.fn();
+const mocks = vi.hoisted(() => ({
+  backupCreateCommand: vi.fn(),
+  backupVerifyCommand: vi.fn(),
+  runtime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  },
+}));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const backupCreateCommand = mocks.backupCreateCommand;
+const backupVerifyCommand = mocks.backupVerifyCommand;
+const runtime = mocks.runtime;
 
 vi.mock("../../commands/backup.js", () => ({
-  backupCreateCommand,
+  backupCreateCommand: mocks.backupCreateCommand,
 }));
 
 vi.mock("../../commands/backup-verify.js", () => ({
-  backupVerifyCommand,
+  backupVerifyCommand: mocks.backupVerifyCommand,
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: runtime,
+  defaultRuntime: mocks.runtime,
 }));
-
-let registerBackupCommand: typeof import("./register.backup.js").registerBackupCommand;
-
-beforeAll(async () => {
-  ({ registerBackupCommand } = await import("./register.backup.js"));
-});
 
 describe("registerBackupCommand", () => {
   async function runCli(args: string[]) {

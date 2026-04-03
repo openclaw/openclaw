@@ -1,4 +1,6 @@
-import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "openclaw/plugin-sdk/acpx";
+import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { z } from "zod";
+import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "../../runtime-api.js";
 import {
   asOptionalBoolean,
   asOptionalString,
@@ -9,18 +11,18 @@ import {
   isRecord,
 } from "./shared.js";
 
+const AcpxJsonObjectSchema = z.record(z.string(), z.unknown());
+
+const AcpxErrorEventSchema = z.object({
+  type: z.literal("error"),
+  message: z.string().trim().min(1).catch("acpx reported an error"),
+  code: z.string().optional(),
+  retryable: z.boolean().optional(),
+});
+
 export function toAcpxErrorEvent(value: unknown): AcpxErrorEvent | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  if (asTrimmedString(value.type) !== "error") {
-    return null;
-  }
-  return {
-    message: asTrimmedString(value.message) || "acpx reported an error",
-    code: asOptionalString(value.code),
-    retryable: asOptionalBoolean(value.retryable),
-  };
+  const parsed = AcpxErrorEventSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 export function parseJsonLines(value: string): AcpxJsonObject[] {
@@ -30,13 +32,9 @@ export function parseJsonLines(value: string): AcpxJsonObject[] {
     if (!trimmed) {
       continue;
     }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (isRecord(parsed)) {
-        events.push(parsed);
-      }
-    } catch {
-      // Ignore malformed lines; callers handle missing typed events via exit code.
+    const parsed = safeParseJsonWithSchema(AcpxJsonObjectSchema, trimmed);
+    if (parsed) {
+      events.push(parsed);
     }
   }
   return events;
@@ -162,23 +160,50 @@ function resolveTextChunk(params: {
   };
 }
 
+function createTextDeltaEvent(params: {
+  content: string | null | undefined;
+  stream: "output" | "thought";
+  tag?: AcpSessionUpdateTag;
+}): AcpRuntimeEvent | null {
+  if (params.content == null || params.content.length === 0) {
+    return null;
+  }
+  return {
+    type: "text_delta",
+    text: params.content,
+    stream: params.stream,
+    ...(params.tag ? { tag: params.tag } : {}),
+  };
+}
+
+function createToolCallEvent(params: {
+  payload: Record<string, unknown>;
+  tag: AcpSessionUpdateTag;
+}): AcpRuntimeEvent {
+  const title = asTrimmedString(params.payload.title) || "tool call";
+  const status = asTrimmedString(params.payload.status);
+  const toolCallId = asOptionalString(params.payload.toolCallId);
+  return {
+    type: "tool_call",
+    text: status ? `${title} (${status})` : title,
+    tag: params.tag,
+    ...(toolCallId ? { toolCallId } : {}),
+    ...(status ? { status } : {}),
+    title,
+  };
+}
+
 export function parsePromptEventLine(line: string): AcpRuntimeEvent | null {
   const trimmed = line.trim();
   if (!trimmed) {
     return null;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
+  const parsed = safeParseJsonWithSchema(AcpxJsonObjectSchema, trimmed);
+  if (!parsed) {
     return {
       type: "status",
       text: trimmed,
     };
-  }
-
-  if (!isRecord(parsed)) {
-    return null;
   }
 
   const structured = resolveStructuredPromptPayload(parsed);
@@ -187,57 +212,28 @@ export function parsePromptEventLine(line: string): AcpRuntimeEvent | null {
   const tag = structured.tag;
 
   switch (type) {
-    case "text": {
-      const content = asString(payload.content);
-      if (content == null || content.length === 0) {
-        return null;
-      }
-      return {
-        type: "text_delta",
-        text: content,
+    case "text":
+      return createTextDeltaEvent({
+        content: asString(payload.content),
         stream: "output",
-        ...(tag ? { tag } : {}),
-      };
-    }
-    case "thought": {
-      const content = asString(payload.content);
-      if (content == null || content.length === 0) {
-        return null;
-      }
-      return {
-        type: "text_delta",
-        text: content,
+        tag,
+      });
+    case "thought":
+      return createTextDeltaEvent({
+        content: asString(payload.content),
         stream: "thought",
-        ...(tag ? { tag } : {}),
-      };
-    }
-    case "tool_call": {
-      const title = asTrimmedString(payload.title) || "tool call";
-      const status = asTrimmedString(payload.status);
-      const toolCallId = asOptionalString(payload.toolCallId);
-      return {
-        type: "tool_call",
-        text: status ? `${title} (${status})` : title,
+        tag,
+      });
+    case "tool_call":
+      return createToolCallEvent({
+        payload,
         tag: (tag ?? "tool_call") as AcpSessionUpdateTag,
-        ...(toolCallId ? { toolCallId } : {}),
-        ...(status ? { status } : {}),
-        title,
-      };
-    }
-    case "tool_call_update": {
-      const title = asTrimmedString(payload.title) || "tool call";
-      const status = asTrimmedString(payload.status);
-      const toolCallId = asOptionalString(payload.toolCallId);
-      const text = status ? `${title} (${status})` : title;
-      return {
-        type: "tool_call",
-        text,
+      });
+    case "tool_call_update":
+      return createToolCallEvent({
+        payload,
         tag: (tag ?? "tool_call_update") as AcpSessionUpdateTag,
-        ...(toolCallId ? { toolCallId } : {}),
-        ...(status ? { status } : {}),
-        title,
-      };
-    }
+      });
     case "agent_message_chunk":
       return resolveTextChunk({
         payload,

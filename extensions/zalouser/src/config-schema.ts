@@ -1,9 +1,12 @@
 import {
-  AllowFromEntrySchema,
+  AllowFromListSchema,
   buildCatchallMultiAccountChannelSchema,
-} from "openclaw/plugin-sdk/compat";
-import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/zalouser";
-import { z } from "zod";
+  DmPolicySchema,
+  GroupPolicySchema,
+  MarkdownConfigSchema,
+  ToolPolicySchema,
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "openclaw/plugin-sdk/zod";
 
 const groupConfigSchema = z.object({
   allow: z.boolean().optional(),
@@ -17,11 +20,12 @@ const zalouserAccountSchema = z.object({
   enabled: z.boolean().optional(),
   markdown: MarkdownConfigSchema,
   profile: z.string().optional(),
-  dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
-  allowFrom: z.array(AllowFromEntrySchema).optional(),
+  dangerouslyAllowNameMatching: z.boolean().optional(),
+  dmPolicy: DmPolicySchema.optional(),
+  allowFrom: AllowFromListSchema,
   historyLimit: z.number().int().min(0).optional(),
-  groupAllowFrom: z.array(AllowFromEntrySchema).optional(),
-  groupPolicy: z.enum(["disabled", "allowlist", "open"]).optional(),
+  groupAllowFrom: AllowFromListSchema,
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   groups: z.object({}).catchall(groupConfigSchema).optional(),
   messagePrefix: z.string().optional(),
   responsePrefix: z.string().optional(),

@@ -1,16 +1,139 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
+import {
+  isWhatsAppGroupJid,
+  normalizeWhatsAppTarget,
+} from "../../channels/plugins/normalize/whatsapp.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveOutboundTarget } from "./targets.js";
+
+const createOutboundStub = (channel: "telegram" | "whatsapp"): ChannelOutboundAdapter => ({
+  deliveryMode: channel === "whatsapp" ? "gateway" : "direct",
+  resolveTarget:
+    channel === "whatsapp"
+      ? ({ to }) => {
+          const normalized = to ? normalizeWhatsAppTarget(to) : null;
+          return normalized
+            ? { ok: true, to: normalized }
+            : { ok: false, error: new Error("WhatsApp target required") };
+        }
+      : ({ to }) =>
+          typeof to === "string" && to.trim()
+            ? { ok: true, to: to.trim() }
+            : { ok: false, error: new Error("Telegram target required") },
+  sendText: async () => ({ channel, messageId: `${channel}-msg` }),
+});
+
+const telegramOutbound = createOutboundStub("telegram");
+const whatsappOutbound = createOutboundStub("whatsapp");
+
+function parseTelegramTargetForTest(raw: string): {
+  chatId: string;
+  messageThreadId?: number;
+  chatType: "direct" | "group" | "unknown";
+} {
+  const trimmed = raw
+    .trim()
+    .replace(/^telegram:/i, "")
+    .replace(/^tg:/i, "");
+  const prefixedTopic = /^group:([^:]+):topic:(\d+)$/i.exec(trimmed);
+  if (prefixedTopic) {
+    return {
+      chatId: prefixedTopic[1],
+      messageThreadId: Number.parseInt(prefixedTopic[2], 10),
+      chatType: "group",
+    };
+  }
+  const topic = /^([^:]+):topic:(\d+)$/i.exec(trimmed);
+  if (topic) {
+    return {
+      chatId: topic[1],
+      messageThreadId: Number.parseInt(topic[2], 10),
+      chatType: topic[1].startsWith("-") ? "group" : "direct",
+    };
+  }
+  const colonPair = /^([^:]+):(\d+)$/i.exec(trimmed);
+  if (colonPair && colonPair[1].startsWith("-")) {
+    return {
+      chatId: colonPair[1],
+      messageThreadId: Number.parseInt(colonPair[2], 10),
+      chatType: "group",
+    };
+  }
+  return {
+    chatId: trimmed,
+    chatType: trimmed.startsWith("-") ? "group" : "unknown",
+  };
+}
+
+const telegramMessaging = {
+  parseExplicitTarget: ({ raw }: { raw: string }) => {
+    const target = parseTelegramTargetForTest(raw);
+    return {
+      to: target.chatId,
+      threadId: target.messageThreadId,
+      chatType: target.chatType === "unknown" ? undefined : target.chatType,
+    };
+  },
+};
+
+const whatsappMessaging = {
+  inferTargetChatType: ({ to }: { to: string }) => {
+    const normalized = normalizeWhatsAppTarget(to);
+    if (!normalized) {
+      return undefined;
+    }
+    return isWhatsAppGroupJid(normalized) ? ("group" as const) : ("direct" as const);
+  },
+  targetResolver: {
+    hint: "<E.164|group JID>",
+  },
+};
 
 export function installResolveOutboundTargetPluginRegistryHooks(): void {
   beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([
-        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
-        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+        {
+          pluginId: "whatsapp",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "whatsapp",
+              label: "WhatsApp",
+              outbound: whatsappOutbound,
+              messaging: whatsappMessaging,
+            }),
+            config: {
+              listAccountIds: () => [],
+              resolveDefaultTo: ({ cfg }: { cfg: OpenClawConfig }) =>
+                typeof cfg.channels?.whatsapp?.defaultTo === "string"
+                  ? cfg.channels.whatsapp.defaultTo
+                  : undefined,
+            },
+          },
+          source: "test",
+        },
+        {
+          pluginId: "telegram",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "telegram",
+              label: "Telegram",
+              outbound: telegramOutbound,
+              messaging: telegramMessaging,
+            }),
+            config: {
+              listAccountIds: () => [],
+              resolveDefaultTo: ({ cfg }: { cfg: OpenClawConfig }) =>
+                typeof cfg.channels?.telegram?.defaultTo === "string"
+                  ? cfg.channels.telegram.defaultTo
+                  : undefined,
+            },
+          },
+          source: "test",
+        },
       ]),
     );
   });

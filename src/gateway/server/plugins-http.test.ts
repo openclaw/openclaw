@@ -1,5 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import {
@@ -39,7 +47,108 @@ function buildRepeatedEncodedSlash(depth: number): string {
   return encodedSlash;
 }
 
+function createSecurePluginRouteHandler(params: {
+  exactPluginHandler: () => boolean | Promise<boolean>;
+  prefixGatewayHandler: () => boolean | Promise<boolean>;
+}) {
+  return createGatewayPluginRequestHandler({
+    registry: createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: "/plugin/secure/report",
+          match: "exact",
+          auth: "plugin",
+          handler: params.exactPluginHandler,
+        }),
+        createRoute({
+          path: "/plugin/secure",
+          match: "prefix",
+          auth: "gateway",
+          handler: params.prefixGatewayHandler,
+        }),
+      ],
+    }),
+    log: createPluginLog(),
+  });
+}
+
+async function invokeSecureGatewayRoute(params: { gatewayAuthSatisfied: boolean }) {
+  const exactPluginHandler = vi.fn(async () => false);
+  const prefixGatewayHandler = vi.fn(async () => true);
+  const handler = createSecurePluginRouteHandler({
+    exactPluginHandler,
+    prefixGatewayHandler,
+  });
+  const { res } = makeMockHttpResponse();
+  const handled = await handler(
+    { url: "/plugin/secure/report" } as IncomingMessage,
+    res,
+    undefined,
+    { gatewayAuthSatisfied: params.gatewayAuthSatisfied },
+  );
+  return { handled, exactPluginHandler, prefixGatewayHandler };
+}
+
+async function invokeRouteAndCollectRuntimeScopes(params: {
+  path: string;
+  auth: "gateway" | "plugin";
+  gatewayAuthSatisfied: boolean;
+}) {
+  let observedScopes: string[] | undefined;
+  const handler = createGatewayPluginRequestHandler({
+    registry: createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: params.path,
+          auth: params.auth,
+          handler: async () => {
+            observedScopes =
+              getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
+            return true;
+          },
+        }),
+      ],
+    }),
+    log: createPluginLog(),
+  });
+
+  const response = makeMockHttpResponse();
+  const handled = await handler({ url: params.path } as IncomingMessage, response.res, undefined, {
+    gatewayAuthSatisfied: params.gatewayAuthSatisfied,
+  });
+  return { handled, observedScopes, ...response };
+}
+
 describe("createGatewayPluginRequestHandler", () => {
+  afterEach(() => {
+    releasePinnedPluginHttpRouteRegistry();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("keeps unauthenticated plugin routes off operator runtime scopes", async () => {
+    const { handled, observedScopes, res } = await invokeRouteAndCollectRuntimeScopes({
+      path: "/hook",
+      auth: "plugin",
+      gatewayAuthSatisfied: false,
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(observedScopes).toEqual([]);
+  });
+
+  it("keeps gateway-authenticated plugin routes on write runtime scopes", async () => {
+    const { handled, observedScopes, res } = await invokeRouteAndCollectRuntimeScopes({
+      path: "/secure-hook",
+      auth: "gateway",
+      gatewayAuthSatisfied: true,
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(observedScopes).toEqual(["operator.write"]);
+  });
+
   it("returns false when no routes are registered", async () => {
     const log = createPluginLog();
     const handler = createGatewayPluginRequestHandler({
@@ -111,74 +220,18 @@ describe("createGatewayPluginRequestHandler", () => {
   });
 
   it("fails closed when a matched gateway route reaches dispatch without auth", async () => {
-    const exactPluginHandler = vi.fn(async () => false);
-    const prefixGatewayHandler = vi.fn(async () => true);
-    const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/plugin/secure/report",
-            match: "exact",
-            auth: "plugin",
-            handler: exactPluginHandler,
-          }),
-          createRoute({
-            path: "/plugin/secure",
-            match: "prefix",
-            auth: "gateway",
-            handler: prefixGatewayHandler,
-          }),
-        ],
-      }),
-      log: createPluginLog(),
+    const { handled, exactPluginHandler, prefixGatewayHandler } = await invokeSecureGatewayRoute({
+      gatewayAuthSatisfied: false,
     });
-
-    const { res } = makeMockHttpResponse();
-    const handled = await handler(
-      { url: "/plugin/secure/report" } as IncomingMessage,
-      res,
-      undefined,
-      {
-        gatewayAuthSatisfied: false,
-      },
-    );
     expect(handled).toBe(false);
     expect(exactPluginHandler).not.toHaveBeenCalled();
     expect(prefixGatewayHandler).not.toHaveBeenCalled();
   });
 
   it("allows gateway route fallthrough only after gateway auth succeeds", async () => {
-    const exactPluginHandler = vi.fn(async () => false);
-    const prefixGatewayHandler = vi.fn(async () => true);
-    const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/plugin/secure/report",
-            match: "exact",
-            auth: "plugin",
-            handler: exactPluginHandler,
-          }),
-          createRoute({
-            path: "/plugin/secure",
-            match: "prefix",
-            auth: "gateway",
-            handler: prefixGatewayHandler,
-          }),
-        ],
-      }),
-      log: createPluginLog(),
+    const { handled, exactPluginHandler, prefixGatewayHandler } = await invokeSecureGatewayRoute({
+      gatewayAuthSatisfied: true,
     });
-
-    const { res } = makeMockHttpResponse();
-    const handled = await handler(
-      { url: "/plugin/secure/report" } as IncomingMessage,
-      res,
-      undefined,
-      {
-        gatewayAuthSatisfied: true,
-      },
-    );
     expect(handled).toBe(true);
     expect(exactPluginHandler).toHaveBeenCalledTimes(1);
     expect(prefixGatewayHandler).toHaveBeenCalledTimes(1);
@@ -199,6 +252,100 @@ describe("createGatewayPluginRequestHandler", () => {
     const handled = await handler({ url: "/API//demo" } as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(routeHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the provided registry when the pinned route registry is empty", async () => {
+    const explicitRouteHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 200;
+      return true;
+    });
+    const startupRegistry = createTestRegistry();
+    const explicitRegistry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/demo", auth: "plugin", handler: explicitRouteHandler })],
+    });
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+
+    const handler = createGatewayPluginRequestHandler({
+      registry: explicitRegistry,
+      log: createPluginLog(),
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/demo" } as IncomingMessage, res);
+    expect(handled).toBe(true);
+    expect(explicitRouteHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles routes registered into the pinned startup registry after the active registry changes", async () => {
+    const startupRegistry = createTestRegistry();
+    const laterActiveRegistry = createTestRegistry();
+    const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 202;
+      return true;
+    });
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+    setActivePluginRegistry(laterActiveRegistry);
+
+    const unregister = registerPluginHttpRoute({
+      path: "/bluebubbles-webhook",
+      auth: "plugin",
+      handler: routeHandler,
+    });
+
+    try {
+      const handler = createGatewayPluginRequestHandler({
+        registry: startupRegistry,
+        log: createPluginLog(),
+      });
+
+      const { res } = makeMockHttpResponse();
+      const handled = await handler({ url: "/bluebubbles-webhook" } as IncomingMessage, res);
+      expect(handled).toBe(true);
+      expect(routeHandler).toHaveBeenCalledTimes(1);
+      expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("prefers the pinned route registry over a stale explicit registry", async () => {
+    const startupRegistry = createTestRegistry();
+    const staleExplicitRegistry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/plugins/diffs", auth: "plugin" })],
+    });
+    const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 204;
+      return true;
+    });
+
+    setActivePluginRegistry(createTestRegistry());
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+
+    const unregister = registerPluginHttpRoute({
+      path: "/bluebubbles-webhook",
+      auth: "plugin",
+      handler: routeHandler,
+    });
+
+    try {
+      const handler = createGatewayPluginRequestHandler({
+        registry: staleExplicitRegistry,
+        log: createPluginLog(),
+      });
+
+      const { res } = makeMockHttpResponse();
+      const handled = await handler({ url: "/bluebubbles-webhook" } as IncomingMessage, res);
+      expect(handled).toBe(true);
+      expect(routeHandler).toHaveBeenCalledTimes(1);
+      expect(staleExplicitRegistry.httpRoutes).toHaveLength(1);
+      expect(startupRegistry.httpRoutes).toHaveLength(1);
+    } finally {
+      unregister();
+    }
   });
 
   it("logs and responds with 500 when a route throws", async () => {

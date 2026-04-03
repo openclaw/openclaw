@@ -1,10 +1,10 @@
 import { readErrorName } from "../infra/errors.js";
+import { isTimeoutErrorMessage, type FailoverReason } from "./pi-embedded-helpers.js";
 import {
-  classifyFailoverReason,
-  classifyFailoverReasonFromHttpStatus,
-  isTimeoutErrorMessage,
-  type FailoverReason,
-} from "./pi-embedded-helpers.js";
+  classifyFailoverSignal,
+  type FailoverClassification,
+  type FailoverSignal,
+} from "./pi-embedded-helpers/errors.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
@@ -68,7 +68,30 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
   }
 }
 
-function getStatusCode(err: unknown): number | undefined {
+function findErrorProperty<T>(
+  err: unknown,
+  reader: (candidate: unknown) => T | undefined,
+  seen: Set<object> = new Set(),
+): T | undefined {
+  const direct = reader(err);
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  if (seen.has(err)) {
+    return undefined;
+  }
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown };
+  return (
+    findErrorProperty(candidate.error, reader, seen) ??
+    findErrorProperty(candidate.cause, reader, seen)
+  );
+}
+
+function readDirectStatusCode(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
@@ -84,38 +107,62 @@ function getStatusCode(err: unknown): number | undefined {
   return undefined;
 }
 
-function getErrorCode(err: unknown): string | undefined {
+function getStatusCode(err: unknown): number | undefined {
+  return findErrorProperty(err, readDirectStatusCode);
+}
+
+function readDirectErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const candidate = (err as { code?: unknown }).code;
-  if (typeof candidate !== "string") {
+  const directCode = (err as { code?: unknown }).code;
+  if (typeof directCode === "string") {
+    const trimmed = directCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  const status = (err as { status?: unknown }).status;
+  if (typeof status !== "string" || /^\d+$/.test(status)) {
     return undefined;
   }
-  const trimmed = candidate.trim();
+  const trimmed = status.trim();
   return trimmed ? trimmed : undefined;
 }
 
-function getErrorMessage(err: unknown): string {
+function getErrorCode(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectErrorCode);
+}
+
+function readDirectErrorMessage(err: unknown): string | undefined {
   if (err instanceof Error) {
-    return err.message;
+    return err.message || undefined;
   }
   if (typeof err === "string") {
-    return err;
+    return err || undefined;
   }
   if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
     return String(err);
   }
   if (typeof err === "symbol") {
-    return err.description ?? "";
+    return err.description ?? undefined;
   }
   if (err && typeof err === "object") {
     const message = (err as { message?: unknown }).message;
     if (typeof message === "string") {
-      return message;
+      return message || undefined;
     }
   }
-  return "";
+  return undefined;
+}
+
+function getErrorMessage(err: unknown): string {
+  return findErrorProperty(err, readDirectErrorMessage) ?? "";
+}
+
+function getErrorCause(err: unknown): unknown {
+  if (!err || typeof err !== "object" || !("cause" in err)) {
+    return undefined;
+  }
+  return (err as { cause?: unknown }).cause;
 }
 
 function hasTimeoutHint(err: unknown): boolean {
@@ -148,41 +195,56 @@ export function isTimeoutError(err: unknown): boolean {
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
 }
 
-export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
-  if (isFailoverError(err)) {
-    return err.reason;
-  }
+function failoverReasonFromClassification(
+  classification: FailoverClassification | null,
+): FailoverReason | null {
+  return classification?.kind === "reason" ? classification.reason : null;
+}
 
-  const status = getStatusCode(err);
+function normalizeErrorSignal(err: unknown): FailoverSignal {
   const message = getErrorMessage(err);
-  const statusReason = classifyFailoverReasonFromHttpStatus(status, message);
-  if (statusReason) {
-    return statusReason;
+  return {
+    status: getStatusCode(err),
+    code: getErrorCode(err),
+    message: message || undefined,
+  };
+}
+
+function resolveFailoverClassificationFromError(err: unknown): FailoverClassification | null {
+  if (isFailoverError(err)) {
+    return {
+      kind: "reason",
+      reason: err.reason,
+    };
   }
 
-  const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (
-    [
-      "ETIMEDOUT",
-      "ESOCKETTIMEDOUT",
-      "ECONNRESET",
-      "ECONNABORTED",
-      "ECONNREFUSED",
-      "ENETUNREACH",
-      "EHOSTUNREACH",
-      "ENETRESET",
-      "EAI_AGAIN",
-    ].includes(code)
-  ) {
-    return "timeout";
+  const classification = classifyFailoverSignal(normalizeErrorSignal(err));
+  if (!classification || classification.kind === "context_overflow") {
+    // Let wrapped causes override parent timeout/overflow guesses.
+    const cause = getErrorCause(err);
+    if (cause && cause !== err) {
+      const causeClassification = resolveFailoverClassificationFromError(cause);
+      if (causeClassification) {
+        return causeClassification;
+      }
+    }
   }
+
+  if (classification) {
+    return classification;
+  }
+
   if (isTimeoutError(err)) {
-    return "timeout";
+    return {
+      kind: "reason",
+      reason: "timeout",
+    };
   }
-  if (!message) {
-    return null;
-  }
-  return classifyFailoverReason(message);
+  return null;
+}
+
+export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
+  return failoverReasonFromClassification(resolveFailoverClassificationFromError(err));
 }
 
 export function describeFailoverError(err: unknown): {
@@ -199,12 +261,13 @@ export function describeFailoverError(err: unknown): {
       code: err.code,
     };
   }
-  const message = getErrorMessage(err) || String(err);
+  const signal = normalizeErrorSignal(err);
+  const message = signal.message ?? String(err);
   return {
     message,
     reason: resolveFailoverReasonFromError(err) ?? undefined,
-    status: getStatusCode(err),
-    code: getErrorCode(err),
+    status: signal.status,
+    code: signal.code,
   };
 }
 
@@ -224,9 +287,10 @@ export function coerceToFailoverError(
     return null;
   }
 
-  const message = getErrorMessage(err) || String(err);
-  const status = getStatusCode(err) ?? resolveFailoverStatus(reason);
-  const code = getErrorCode(err);
+  const signal = normalizeErrorSignal(err);
+  const message = signal.message ?? String(err);
+  const status = signal.status ?? resolveFailoverStatus(reason);
+  const code = signal.code;
 
   return new FailoverError(message, {
     reason,

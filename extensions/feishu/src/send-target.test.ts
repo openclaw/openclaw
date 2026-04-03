@@ -1,21 +1,27 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveFeishuSendTarget } from "./send-target.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
+  resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
 }));
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
+let resolveFeishuSendTarget: typeof import("./send-target.js").resolveFeishuSendTarget;
+
 describe("resolveFeishuSendTarget", () => {
   const cfg = {} as ClawdbotConfig;
   const client = { id: "client" };
+
+  beforeAll(async () => {
+    ({ resolveFeishuSendTarget } = await import("./send-target.js"));
+  });
 
   beforeEach(() => {
     resolveFeishuAccountMock.mockReset().mockReturnValue({

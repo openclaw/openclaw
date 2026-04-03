@@ -4,7 +4,11 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
-import { writeFileWithinRoot } from "../infra/fs-safe.js";
+import {
+  mkdirPathWithinRoot,
+  removePathWithinRoot,
+  writeFileWithinRoot,
+} from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
@@ -270,8 +274,29 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         encoding: "utf8",
       });
     },
-    remove: (filePath) => fs.rm(filePath),
-    mkdirp: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+    remove: async (filePath) => {
+      if (!workspaceOnly) {
+        await fs.rm(filePath);
+        return;
+      }
+      const relative = toRelativeSandboxPath(options.cwd, filePath);
+      await removePathWithinRoot({
+        rootDir: options.cwd,
+        relativePath: relative,
+      });
+    },
+    mkdirp: async (dir) => {
+      if (!workspaceOnly) {
+        await fs.mkdir(dir, { recursive: true });
+        return;
+      }
+      const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
+      await mkdirPathWithinRoot({
+        rootDir: options.cwd,
+        relativePath: relative,
+        allowRoot: true,
+      });
+    },
   };
 }
 
@@ -293,7 +318,7 @@ async function resolvePatchPath(
       filePath,
       cwd: options.cwd,
     });
-    if (options.workspaceOnly !== false) {
+    if (options.workspaceOnly !== false && resolved.hostPath) {
       await assertSandboxPath({
         filePath: resolved.hostPath,
         cwd: options.cwd,
@@ -303,8 +328,8 @@ async function resolvePatchPath(
       });
     }
     return {
-      resolved: resolved.hostPath,
-      display: resolved.relativePath || resolved.hostPath,
+      resolved: resolved.hostPath ?? resolved.containerPath,
+      display: resolved.relativePath || resolved.containerPath,
     };
   }
 

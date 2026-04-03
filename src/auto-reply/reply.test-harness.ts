@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll } from "vitest";
+import { afterAll, beforeAll, vi, type Mock } from "vitest";
 
 type HomeEnvSnapshot = {
   HOME: string | undefined;
@@ -93,5 +93,75 @@ export function makeReplyConfig(home: string) {
       },
     },
     session: { store: path.join(home, "sessions.json") },
+  };
+}
+
+export type ReplyRuntimeMocks = {
+  runEmbeddedPiAgent: Mock;
+  loadModelCatalog: Mock;
+  webAuthExists: Mock;
+  getWebAuthAgeMs: Mock;
+  readWebSelfId: Mock;
+};
+
+export function createReplyRuntimeMocks(): ReplyRuntimeMocks {
+  return {
+    runEmbeddedPiAgent: vi.fn(),
+    loadModelCatalog: vi.fn(),
+    webAuthExists: vi.fn().mockResolvedValue(true),
+    getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
+    readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
+  };
+}
+
+export function installReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
+  vi.mock("../agents/pi-embedded.js", () => ({
+    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+    runEmbeddedPiAgent: (...args: unknown[]) => mocks.runEmbeddedPiAgent(...args),
+    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  }));
+
+  vi.mock("../agents/model-catalog.runtime.js", () => ({
+    loadModelCatalog: mocks.loadModelCatalog,
+  }));
+
+  vi.mock("../agents/auth-profiles/session-override.js", () => ({
+    clearSessionAuthProfileOverride: vi.fn(),
+    resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
+  }));
+
+  vi.mock("../commands-registry.runtime.js", () => ({
+    listChatCommands: () => [],
+  }));
+
+  vi.mock("../skill-commands.runtime.js", () => ({
+    listSkillCommandsForWorkspace: () => [],
+  }));
+
+  vi.mock("../plugins/runtime/runtime-web-channel-boundary.js", () => ({
+    webAuthExists: mocks.webAuthExists,
+    getWebAuthAgeMs: mocks.getWebAuthAgeMs,
+    readWebSelfId: mocks.readWebSelfId,
+  }));
+}
+
+export function resetReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
+  mocks.runEmbeddedPiAgent.mockClear();
+  mocks.loadModelCatalog.mockClear();
+  mocks.loadModelCatalog.mockResolvedValue([
+    { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
+  ]);
+}
+
+export function makeEmbeddedTextResult(text: string) {
+  return {
+    payloads: [{ text }],
+    meta: {
+      durationMs: 5,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
   };
 }

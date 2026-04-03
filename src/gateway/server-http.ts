@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -7,13 +8,14 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
+import { handleSlackHttpRequest } from "../../extensions/slack/api.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import { handleSlackHttpRequest } from "../slack/http/index.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   createAuthRateLimiter,
@@ -32,16 +34,20 @@ import {
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
+import { handleOpenAiEmbeddingsHttpRequest } from "./embeddings-http.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
   getHookAgentPolicyError,
   getHookChannelError,
+  getHookSessionKeyPrefixError,
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
   isHookAgentAllowed,
+  isSessionKeyAllowedByPrefix,
   normalizeAgentPayload,
   normalizeHookHeaders,
+  resolveHookIdempotencyKey,
   normalizeWakePayload,
   readJsonBody,
   normalizeHookDispatchSessionKey,
@@ -51,9 +57,12 @@ import {
   resolveHookDeliver,
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
-import { getBearerToken } from "./http-utils.js";
+import { getBearerToken, resolveHttpBrowserOriginPolicy } from "./http-utils.js";
+import { handleOpenAiModelsHttpRequest } from "./models-http.js";
+import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   authorizeCanvasRequest,
   enforcePluginRouteGatewayAuth,
@@ -65,8 +74,11 @@ import {
   type PluginHttpRequestHandler,
   type PluginRoutePathContext,
 } from "./server/plugins-http.js";
+import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { handleSessionKillHttpRequest } from "./session-kill-http.js";
+import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -77,6 +89,36 @@ const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
+};
+
+function resolveMappedHookExternalContentSource(params: {
+  subPath: string;
+  payload: Record<string, unknown>;
+  sessionKey: string;
+}) {
+  const payloadSource =
+    typeof params.payload.source === "string" ? params.payload.source.trim().toLowerCase() : "";
+  if (params.subPath === "gmail" || payloadSource === "gmail") {
+    return "gmail" as const;
+  }
+  return resolveHookExternalContentSourceFromSession(params.sessionKey) ?? "webhook";
+}
+
+export type HookClientIpConfig = Readonly<{
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+}>;
+
+type HookReplayEntry = {
+  ts: number;
+  runId: string;
+};
+
+type HookReplayScope = {
+  pathKey: string;
+  token: string | undefined;
+  idempotencyKey?: string;
+  dispatchScope: Record<string, unknown>;
 };
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -177,6 +219,7 @@ async function canRevealReadinessDetails(params: {
     req: params.req,
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
+    browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req),
   });
   return authResult.ok;
 }
@@ -271,12 +314,21 @@ type GatewayHttpRequestStage = {
   run: () => Promise<boolean> | boolean;
 };
 
-async function runGatewayHttpRequestStages(
+export async function runGatewayHttpRequestStages(
   stages: readonly GatewayHttpRequestStage[],
 ): Promise<boolean> {
   for (const stage of stages) {
-    if (await stage.run()) {
-      return true;
+    try {
+      if (await stage.run()) {
+        return true;
+      }
+    } catch (err) {
+      // Log and skip the failing stage so subsequent stages (control-ui,
+      // gateway-probes, etc.) remain reachable.  A common trigger is a
+      // bundled-plugin facade that fails to load because an optional
+      // dependency is missing (e.g. @slack/bolt after the lazy-facade
+      // refactor).
+      console.error(`[gateway-http] stage "${stage.name}" threw — skipping:`, err);
     }
   }
   return false;
@@ -351,9 +403,11 @@ export function createHooksRequestHandler(
     bindHost: string;
     port: number;
     logHooks: SubsystemLogger;
+    getClientIpConfig?: () => HookClientIpConfig;
   } & HookDispatchers,
 ): HooksRequestHandler {
-  const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook } = opts;
+  const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
+  const hookReplayCache = new Map<string, HookReplayEntry>();
   const hookAuthLimiter = createAuthRateLimiter({
     maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
     windowMs: HOOK_AUTH_FAILURE_WINDOW_MS,
@@ -364,7 +418,74 @@ export function createHooksRequestHandler(
   });
 
   const resolveHookClientKey = (req: IncomingMessage): string => {
-    return normalizeRateLimitClientIp(req.socket?.remoteAddress);
+    const clientIpConfig = getClientIpConfig?.();
+    const clientIp =
+      resolveRequestClientIp(
+        req,
+        clientIpConfig?.trustedProxies,
+        clientIpConfig?.allowRealIpFallback === true,
+      ) ?? req.socket?.remoteAddress;
+    return normalizeRateLimitClientIp(clientIp);
+  };
+
+  const pruneHookReplayCache = (now: number) => {
+    const cutoff = now - DEDUPE_TTL_MS;
+    for (const [key, entry] of hookReplayCache) {
+      if (entry.ts < cutoff) {
+        hookReplayCache.delete(key);
+      }
+    }
+    while (hookReplayCache.size > DEDUPE_MAX) {
+      const oldestKey = hookReplayCache.keys().next().value;
+      if (!oldestKey) {
+        break;
+      }
+      hookReplayCache.delete(oldestKey);
+    }
+  };
+
+  const buildHookReplayCacheKey = (params: HookReplayScope): string | undefined => {
+    const idem = params.idempotencyKey?.trim();
+    if (!idem) {
+      return undefined;
+    }
+    const tokenFingerprint = createHash("sha256")
+      .update(params.token ?? "", "utf8")
+      .digest("hex");
+    const idempotencyFingerprint = createHash("sha256").update(idem, "utf8").digest("hex");
+    const scopeFingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          pathKey: params.pathKey,
+          dispatchScope: params.dispatchScope,
+        }),
+        "utf8",
+      )
+      .digest("hex");
+    return `${tokenFingerprint}:${scopeFingerprint}:${idempotencyFingerprint}`;
+  };
+
+  const resolveCachedHookRunId = (key: string | undefined, now: number): string | undefined => {
+    if (!key) {
+      return undefined;
+    }
+    pruneHookReplayCache(now);
+    const cached = hookReplayCache.get(key);
+    if (!cached) {
+      return undefined;
+    }
+    hookReplayCache.delete(key);
+    hookReplayCache.set(key, cached);
+    return cached.runId;
+  };
+
+  const rememberHookRunId = (key: string | undefined, runId: string, now: number) => {
+    if (!key) {
+      return;
+    }
+    hookReplayCache.delete(key);
+    hookReplayCache.set(key, { ts: now, runId });
+    pruneHookReplayCache(now);
   };
 
   return async (req, res) => {
@@ -440,6 +561,11 @@ export function createHooksRequestHandler(
 
     const payload = typeof body.value === "object" && body.value !== null ? body.value : {};
     const headers = normalizeHookHeaders(req);
+    const idempotencyKey = resolveHookIdempotencyKey({
+      payload: payload as Record<string, unknown>,
+      headers,
+    });
+    const now = Date.now();
 
     if (subPath === "wake") {
       const normalized = normalizeWakePayload(payload as Record<string, unknown>);
@@ -472,14 +598,50 @@ export function createHooksRequestHandler(
         return true;
       }
       const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
+      const replayKey = buildHookReplayCacheKey({
+        pathKey: "agent",
+        token,
+        idempotencyKey,
+        dispatchScope: {
+          agentId: targetAgentId ?? null,
+          sessionKey:
+            normalized.value.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
+          message: normalized.value.message,
+          name: normalized.value.name,
+          wakeMode: normalized.value.wakeMode,
+          deliver: normalized.value.deliver,
+          channel: normalized.value.channel,
+          to: normalized.value.to ?? null,
+          model: normalized.value.model ?? null,
+          thinking: normalized.value.thinking ?? null,
+          timeoutSeconds: normalized.value.timeoutSeconds ?? null,
+        },
+      });
+      const cachedRunId = resolveCachedHookRunId(replayKey, now);
+      if (cachedRunId) {
+        sendJson(res, 200, { ok: true, runId: cachedRunId });
+        return true;
+      }
+      const normalizedDispatchSessionKey = normalizeHookDispatchSessionKey({
+        sessionKey: sessionKey.value,
+        targetAgentId,
+      });
+      const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+      if (
+        allowedPrefixes &&
+        !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
+      ) {
+        sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
+        return true;
+      }
       const runId = dispatchAgentHook({
         ...normalized.value,
-        sessionKey: normalizeHookDispatchSessionKey({
-          sessionKey: sessionKey.value,
-          targetAgentId,
-        }),
+        idempotencyKey,
+        sessionKey: normalizedDispatchSessionKey,
         agentId: targetAgentId,
+        externalContentSource: "webhook",
       });
+      rememberHookRunId(replayKey, runId, now);
       sendJson(res, 200, { ok: true, runId });
       return true;
     }
@@ -529,15 +691,49 @@ export function createHooksRequestHandler(
             return true;
           }
           const targetAgentId = resolveHookTargetAgentId(hooksConfig, mapped.action.agentId);
+          const normalizedDispatchSessionKey = normalizeHookDispatchSessionKey({
+            sessionKey: sessionKey.value,
+            targetAgentId,
+          });
+          const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+          if (
+            allowedPrefixes &&
+            !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
+          ) {
+            sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
+            return true;
+          }
+          const replayKey = buildHookReplayCacheKey({
+            pathKey: subPath || "mapping",
+            token,
+            idempotencyKey,
+            dispatchScope: {
+              agentId: targetAgentId ?? null,
+              sessionKey:
+                mapped.action.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
+              message: mapped.action.message,
+              name: mapped.action.name ?? "Hook",
+              wakeMode: mapped.action.wakeMode,
+              deliver: resolveHookDeliver(mapped.action.deliver),
+              channel,
+              to: mapped.action.to ?? null,
+              model: mapped.action.model ?? null,
+              thinking: mapped.action.thinking ?? null,
+              timeoutSeconds: mapped.action.timeoutSeconds ?? null,
+            },
+          });
+          const cachedRunId = resolveCachedHookRunId(replayKey, now);
+          if (cachedRunId) {
+            sendJson(res, 200, { ok: true, runId: cachedRunId });
+            return true;
+          }
           const runId = dispatchAgentHook({
             message: mapped.action.message,
             name: mapped.action.name ?? "Hook",
+            idempotencyKey,
             agentId: targetAgentId,
             wakeMode: mapped.action.wakeMode,
-            sessionKey: normalizeHookDispatchSessionKey({
-              sessionKey: sessionKey.value,
-              targetAgentId,
-            }),
+            sessionKey: normalizedDispatchSessionKey,
             deliver: resolveHookDeliver(mapped.action.deliver),
             channel,
             to: mapped.action.to,
@@ -545,7 +741,13 @@ export function createHooksRequestHandler(
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,
             allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
+            externalContentSource: resolveMappedHookExternalContentSource({
+              subPath,
+              payload: payload as Record<string, unknown>,
+              sessionKey: sessionKey.value,
+            }),
           });
+          rememberHookRunId(replayKey, runId, now);
           sendJson(res, 200, { ok: true, runId });
           return true;
         }
@@ -601,6 +803,7 @@ export function createGatewayHttpServer(opts: {
     rateLimiter,
     getReadiness,
   } = opts;
+  const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
         void handleRequest(req, res);
@@ -642,9 +845,53 @@ export function createGatewayHttpServer(opts: {
           run: () => handleHooksRequest(req, res),
         },
         {
+          name: "models",
+          run: () =>
+            openAiCompatEnabled
+              ? handleOpenAiModelsHttpRequest(req, res, {
+                  auth: resolvedAuth,
+                  trustedProxies,
+                  allowRealIpFallback,
+                  rateLimiter,
+                })
+              : false,
+        },
+        {
+          name: "embeddings",
+          run: () =>
+            openAiCompatEnabled
+              ? handleOpenAiEmbeddingsHttpRequest(req, res, {
+                  auth: resolvedAuth,
+                  trustedProxies,
+                  allowRealIpFallback,
+                  rateLimiter,
+                })
+              : false,
+        },
+        {
           name: "tools-invoke",
           run: () =>
             handleToolsInvokeHttpRequest(req, res, {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        },
+        {
+          name: "sessions-kill",
+          run: () =>
+            handleSessionKillHttpRequest(req, res, {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        },
+        {
+          name: "sessions-history",
+          run: () =>
+            handleSessionHistoryHttpRequest(req, res, {
               auth: resolvedAuth,
               trustedProxies,
               allowRealIpFallback,
@@ -775,7 +1022,8 @@ export function createGatewayHttpServer(opts: {
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
-    } catch {
+    } catch (err) {
+      console.error("[gateway-http] unhandled error in request handler:", err);
       res.statusCode = 500;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Internal Server Error");
@@ -790,13 +1038,25 @@ export function attachGatewayUpgradeHandler(opts: {
   wss: WebSocketServer;
   canvasHost: CanvasHostHandler | null;
   clients: Set<GatewayWsClient>;
+  preauthConnectionBudget: PreauthConnectionBudget;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
 }) {
-  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
+  const {
+    httpServer,
+    wss,
+    canvasHost,
+    clients,
+    preauthConnectionBudget,
+    resolvedAuth,
+    rateLimiter,
+  } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      const configSnapshot = loadConfig();
+      const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
@@ -809,9 +1069,6 @@ export function attachGatewayUpgradeHandler(opts: {
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {
-          const configSnapshot = loadConfig();
-          const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-          const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,
@@ -832,9 +1089,68 @@ export function attachGatewayUpgradeHandler(opts: {
           return;
         }
       }
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit("connection", ws, req);
-      });
+      const preauthBudgetKey = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
+      if (wss.listenerCount("connection") === 0) {
+        const responseBody = "Gateway websocket handlers unavailable";
+        socket.write(
+          "HTTP/1.1 503 Service Unavailable\r\n" +
+            "Connection: close\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            `Content-Length: ${Buffer.byteLength(responseBody, "utf8")}\r\n` +
+            "\r\n" +
+            responseBody,
+        );
+        socket.destroy();
+        return;
+      }
+      if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
+        const responseBody = "Too many unauthenticated sockets";
+        socket.write(
+          "HTTP/1.1 503 Service Unavailable\r\n" +
+            "Connection: close\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            `Content-Length: ${Buffer.byteLength(responseBody, "utf8")}\r\n` +
+            "\r\n" +
+            responseBody,
+        );
+        socket.destroy();
+        return;
+      }
+      let budgetTransferred = false;
+      const releaseUpgradeBudget = () => {
+        if (budgetTransferred) {
+          return;
+        }
+        budgetTransferred = true;
+        preauthConnectionBudget.release(preauthBudgetKey);
+      };
+      socket.once("close", releaseUpgradeBudget);
+      try {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          (
+            ws as unknown as import("ws").WebSocket & {
+              __openclawPreauthBudgetClaimed?: boolean;
+              __openclawPreauthBudgetKey?: string;
+            }
+          ).__openclawPreauthBudgetKey = preauthBudgetKey;
+          wss.emit("connection", ws, req);
+          const budgetClaimed = Boolean(
+            (
+              ws as unknown as import("ws").WebSocket & {
+                __openclawPreauthBudgetClaimed?: boolean;
+              }
+            ).__openclawPreauthBudgetClaimed,
+          );
+          if (budgetClaimed) {
+            budgetTransferred = true;
+            socket.off("close", releaseUpgradeBudget);
+          }
+        });
+      } catch {
+        socket.off("close", releaseUpgradeBudget);
+        releaseUpgradeBudget();
+        throw new Error("gateway websocket upgrade failed");
+      }
     })().catch(() => {
       socket.destroy();
     });

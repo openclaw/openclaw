@@ -1,8 +1,29 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { buildProviderRegistry, runCapability } from "./runner.js";
 import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, VideoDescriptionRequest } from "./types.js";
+
+const proxyFetchMocks = vi.hoisted(() => {
+  const proxyFetch = vi.fn() as unknown as typeof fetch;
+  const resolveProxyFetchFromEnv = vi.fn((env: NodeJS.ProcessEnv = process.env) => {
+    const hasProxy = Boolean(
+      env.https_proxy?.trim() ||
+      env.HTTPS_PROXY?.trim() ||
+      env.http_proxy?.trim() ||
+      env.HTTP_PROXY?.trim(),
+    );
+    return hasProxy ? proxyFetch : undefined;
+  });
+  return { proxyFetch, resolveProxyFetchFromEnv };
+});
+
+vi.mock("../infra/net/proxy-fetch.js", () => ({
+  resolveProxyFetchFromEnv: proxyFetchMocks.resolveProxyFetchFromEnv,
+}));
+
+let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
+let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
+let runCapability: typeof import("./runner.js").runCapability;
 
 async function runAudioCapabilityWithFetchCapture(params: {
   fixturePrefix: string;
@@ -55,7 +76,16 @@ async function runAudioCapabilityWithFetchCapture(params: {
 }
 
 describe("runCapability proxy fetch passthrough", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeAll(async () => {
+    ({ buildProviderRegistry, clearMediaUnderstandingBinaryCacheForTests, runCapability } =
+      await import("./runner.js"));
+  });
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    clearMediaUnderstandingBinaryCacheForTests();
+  });
   afterEach(() => vi.unstubAllEnvs());
 
   it("passes fetchFn to audio provider when HTTPS_PROXY is set", async () => {
@@ -64,8 +94,7 @@ describe("runCapability proxy fetch passthrough", () => {
       fixturePrefix: "openclaw-audio-proxy",
       outputText: "transcribed",
     });
-    expect(seenFetchFn).toBeDefined();
-    expect(seenFetchFn).not.toBe(globalThis.fetch);
+    expect(seenFetchFn).toBe(proxyFetchMocks.proxyFetch);
   });
 
   it("passes fetchFn to video provider when HTTPS_PROXY is set", async () => {
@@ -113,8 +142,7 @@ describe("runCapability proxy fetch passthrough", () => {
       });
 
       expect(result.outputs[0]?.text).toBe("video ok");
-      expect(seenFetchFn).toBeDefined();
-      expect(seenFetchFn).not.toBe(globalThis.fetch);
+      expect(seenFetchFn).toBe(proxyFetchMocks.proxyFetch);
     });
   });
 

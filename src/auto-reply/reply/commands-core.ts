@@ -1,50 +1,116 @@
 import fs from "node:fs/promises";
-import { resetAcpSessionInPlace } from "../../acp/persistent-bindings.js";
+import path from "node:path";
+import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
-import { handleAcpCommand } from "./commands-acp.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
-import { handleAllowlistCommand } from "./commands-allowlist.js";
-import { handleApproveCommand } from "./commands-approve.js";
-import { handleBashCommand } from "./commands-bash.js";
-import { handleCompactCommand } from "./commands-compact.js";
-import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
-import {
-  handleCommandsListCommand,
-  handleContextCommand,
-  handleExportSessionCommand,
-  handleHelpCommand,
-  handleStatusCommand,
-  handleWhoamiCommand,
-} from "./commands-info.js";
-import { handleModelsCommand } from "./commands-models.js";
-import { handlePluginCommand } from "./commands-plugin.js";
-import {
-  handleAbortTrigger,
-  handleActivationCommand,
-  handleRestartCommand,
-  handleSessionCommand,
-  handleSendPolicyCommand,
-  handleStopCommand,
-  handleTotalUsageCommand,
-  handleUsageCommand,
-} from "./commands-session.js";
-import { handleSubagentsCommand } from "./commands-subagents.js";
-import { handleTtsCommands } from "./commands-tts.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
-import { routeReply } from "./route-reply.js";
+
+let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
+let commandHandlersRuntimePromise: Promise<typeof import("./commands-handlers.runtime.js")> | null =
+  null;
+
+function loadRouteReplyRuntime() {
+  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
+  return routeReplyRuntimePromise;
+}
+
+function loadCommandHandlersRuntime() {
+  commandHandlersRuntimePromise ??= import("./commands-handlers.runtime.js");
+  return commandHandlersRuntimePromise;
+}
 
 let HANDLERS: CommandHandler[] | null = null;
 
 export type ResetCommandAction = "new" | "reset";
+
+// Reset hooks only need the transcript message payloads, not session headers or metadata rows.
+function parseTranscriptMessages(content: string): unknown[] {
+  const messages: unknown[] = [];
+  for (const line of content.split("\n")) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "message" && entry.message) {
+        messages.push(entry.message);
+      }
+    } catch {
+      // Skip malformed lines from partially-written transcripts.
+    }
+  }
+  return messages;
+}
+
+// Once /reset rotates a transcript, the newest archived sibling is the best fallback source.
+async function findLatestArchivedTranscript(sessionFile: string): Promise<string | undefined> {
+  try {
+    const dir = path.dirname(sessionFile);
+    const base = path.basename(sessionFile);
+    const resetPrefix = `${base}.reset.`;
+    const archived = (await fs.readdir(dir))
+      .filter((name) => name.startsWith(resetPrefix))
+      .toSorted();
+    const latest = archived[archived.length - 1];
+    return latest ? path.join(dir, latest) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Prefer the live transcript path, but fall back to the archived reset transcript when rotation won the race.
+async function loadBeforeResetTranscript(params: {
+  sessionFile?: string;
+}): Promise<{ sessionFile?: string; messages: unknown[] }> {
+  const sessionFile = params.sessionFile;
+  if (!sessionFile) {
+    logVerbose("before_reset: no session file available, firing hook with empty messages");
+    return { sessionFile, messages: [] };
+  }
+
+  try {
+    return {
+      sessionFile,
+      messages: parseTranscriptMessages(await fs.readFile(sessionFile, "utf-8")),
+    };
+  } catch (err: unknown) {
+    if ((err as { code?: unknown })?.code !== "ENOENT") {
+      logVerbose(
+        `before_reset: failed to read session file ${sessionFile}; firing hook with empty messages (${String(err)})`,
+      );
+      return { sessionFile, messages: [] };
+    }
+  }
+
+  const archivedSessionFile = await findLatestArchivedTranscript(sessionFile);
+  if (!archivedSessionFile) {
+    logVerbose(
+      `before_reset: failed to find archived transcript for ${sessionFile}; firing hook with empty messages`,
+    );
+    return { sessionFile, messages: [] };
+  }
+
+  try {
+    return {
+      sessionFile: archivedSessionFile,
+      messages: parseTranscriptMessages(await fs.readFile(archivedSessionFile, "utf-8")),
+    };
+  } catch (err: unknown) {
+    logVerbose(
+      `before_reset: failed to read archived session file ${archivedSessionFile}; firing hook with empty messages (${String(err)})`,
+    );
+    return { sessionFile: archivedSessionFile, messages: [] };
+  }
+}
 
 export async function emitResetCommandHooks(params: {
   action: ResetCommandAction;
@@ -79,6 +145,7 @@ export async function emitResetCommandHooks(params: {
     const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
 
     if (channel && to) {
+      const { routeReply } = await loadRouteReplyRuntime();
       const hookReply = { text: hookEvent.messages.join("\n\n") };
       await routeReply({
         payload: hookReply,
@@ -96,29 +163,13 @@ export async function emitResetCommandHooks(params: {
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_reset")) {
     const prevEntry = params.previousSessionEntry;
-    const sessionFile = prevEntry?.sessionFile;
     // Fire-and-forget: read old session messages and run hook
     void (async () => {
+      const { sessionFile, messages } = await loadBeforeResetTranscript({
+        sessionFile: prevEntry?.sessionFile,
+      });
+
       try {
-        const messages: unknown[] = [];
-        if (sessionFile) {
-          const content = await fs.readFile(sessionFile, "utf-8");
-          for (const line of content.split("\n")) {
-            if (!line.trim()) {
-              continue;
-            }
-            try {
-              const entry = JSON.parse(line);
-              if (entry.type === "message" && entry.message) {
-                messages.push(entry.message);
-              }
-            } catch {
-              // skip malformed lines
-            }
-          }
-        } else {
-          logVerbose("before_reset: no session file available, firing hook with empty messages");
-        }
         await hookRunner.runBeforeReset(
           { sessionFile, messages, reason: params.action },
           {
@@ -171,34 +222,7 @@ function resolveSessionEntryForHookSessionKey(
 
 export async function handleCommands(params: HandleCommandsParams): Promise<CommandHandlerResult> {
   if (HANDLERS === null) {
-    HANDLERS = [
-      // Plugin commands are processed first, before built-in commands
-      handlePluginCommand,
-      handleBashCommand,
-      handleActivationCommand,
-      handleSendPolicyCommand,
-      handleUsageCommand,
-      handleTotalUsageCommand,
-      handleSessionCommand,
-      handleRestartCommand,
-      handleTtsCommands,
-      handleHelpCommand,
-      handleCommandsListCommand,
-      handleStatusCommand,
-      handleAllowlistCommand,
-      handleApproveCommand,
-      handleContextCommand,
-      handleExportSessionCommand,
-      handleWhoamiCommand,
-      handleSubagentsCommand,
-      handleAcpCommand,
-      handleConfigCommand,
-      handleDebugCommand,
-      handleModelsCommand,
-      handleStopCommand,
-      handleCompactCommand,
-      handleAbortTrigger,
-    ];
+    HANDLERS = (await loadCommandHandlersRuntime()).loadCommandHandlers();
   }
   const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
   const resetRequested = Boolean(resetMatch);
@@ -222,7 +246,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
         ? boundAcpSessionKey.trim()
         : undefined;
     if (boundAcpKey) {
-      const resetResult = await resetAcpSessionInPlace({
+      const resetResult = await resetConfiguredBindingTargetInPlace({
         cfg: params.cfg,
         sessionKey: boundAcpKey,
         reason: commandAction,

@@ -10,19 +10,24 @@ import {
   verifyNodeToken,
 } from "../../infra/node-pairing.js";
 import {
+  clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
-  resolveApnsAuthConfigFromEnv,
   sendApnsAlert,
   sendApnsBackgroundWake,
+  shouldClearStoredApnsRegistration,
+  resolveApnsAuthConfigFromEnv,
+  resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
 import {
   buildCanvasScopedHostUrl,
   CANVAS_CAPABILITY_TTL_MS,
   mintCanvasCapabilityToken,
 } from "../canvas-capability.js";
+import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import {
+  type ConnectParams,
   ErrorCodes,
   errorShape,
   validateNodeDescribeParams,
@@ -43,13 +48,12 @@ import {
   respondUnavailableOnNodeInvokeError,
   respondUnavailableOnThrow,
   safeParseJson,
-  uniqueSortedStrings,
 } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
-const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
-const NODE_WAKE_RECONNECT_POLL_MS = 150;
+export const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
+export const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
+export const NODE_WAKE_RECONNECT_POLL_MS = 150;
 const NODE_WAKE_THROTTLE_MS = 15_000;
 const NODE_WAKE_NUDGE_THROTTLE_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_TTL_MS = 10 * 60_000;
@@ -92,14 +96,37 @@ type PendingNodeAction = {
 
 const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
 
-function isNodeEntry(entry: { role?: string; roles?: string[] }) {
-  if (entry.role === "node") {
-    return true;
+async function resolveDirectNodePushConfig() {
+  const auth = await resolveApnsAuthConfigFromEnv(process.env);
+  return auth.ok
+    ? { ok: true as const, auth: auth.value }
+    : { ok: false as const, error: auth.error };
+}
+
+function resolveRelayNodePushConfig() {
+  const relay = resolveApnsRelayConfigFromEnv(process.env, loadConfig().gateway);
+  return relay.ok
+    ? { ok: true as const, relayConfig: relay.value }
+    : { ok: false as const, error: relay.error };
+}
+
+async function clearStaleApnsRegistrationIfNeeded(
+  registration: NonNullable<Awaited<ReturnType<typeof loadApnsRegistration>>>,
+  nodeId: string,
+  params: { status: number; reason?: string },
+) {
+  if (
+    !shouldClearStoredApnsRegistration({
+      registration,
+      result: params,
+    })
+  ) {
+    return;
   }
-  if (Array.isArray(entry.roles) && entry.roles.includes("node")) {
-    return true;
-  }
-  return false;
+  await clearApnsRegistrationIfCurrent({
+    nodeId,
+    registration,
+  });
 }
 
 async function delayMs(ms: number): Promise<void> {
@@ -182,6 +209,38 @@ function listPendingNodeActions(nodeId: string): PendingNodeAction[] {
   return prunePendingNodeActions(nodeId, Date.now());
 }
 
+function resolveAllowedPendingNodeActions(params: {
+  nodeId: string;
+  client: { connect?: ConnectParams | null } | null;
+}): PendingNodeAction[] {
+  const pending = listPendingNodeActions(params.nodeId);
+  if (pending.length === 0) {
+    return pending;
+  }
+  const connect = params.client?.connect;
+  const declaredCommands = Array.isArray(connect?.commands) ? connect.commands : [];
+  const allowlist = resolveNodeCommandAllowlist(loadConfig(), {
+    platform: connect?.client?.platform,
+    deviceFamily: connect?.client?.deviceFamily,
+  });
+  const allowed = pending.filter((entry) => {
+    const result = isNodeCommandAllowed({
+      command: entry.command,
+      declaredCommands,
+      allowlist,
+    });
+    return result.ok;
+  });
+  if (allowed.length !== pending.length) {
+    if (allowed.length === 0) {
+      pendingNodeActionsById.delete(params.nodeId);
+    } else {
+      pendingNodeActionsById.set(params.nodeId, allowed);
+    }
+  }
+  return allowed;
+}
+
 function ackPendingNodeActions(nodeId: string, ids: string[]): PendingNodeAction[] {
   if (ids.length === 0) {
     return listPendingNodeActions(nodeId);
@@ -208,9 +267,9 @@ function toPendingParamsJSON(params: unknown): string | undefined {
   }
 }
 
-async function maybeWakeNodeWithApns(
+export async function maybeWakeNodeWithApns(
   nodeId: string,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; wakeReason?: string },
 ): Promise<NodeWakeAttempt> {
   const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
   nodeWakeById.set(nodeId, state);
@@ -238,23 +297,43 @@ async function maybeWakeNodeWithApns(
         return withDuration({ available: false, throttled: false, path: "no-registration" });
       }
 
-      const auth = await resolveApnsAuthConfigFromEnv(process.env);
-      if (!auth.ok) {
-        return withDuration({
-          available: false,
-          throttled: false,
-          path: "no-auth",
-          apnsReason: auth.error,
+      let wakeResult;
+      if (registration.transport === "relay") {
+        const relay = resolveRelayNodePushConfig();
+        if (!relay.ok) {
+          return withDuration({
+            available: false,
+            throttled: false,
+            path: "no-auth",
+            apnsReason: relay.error,
+          });
+        }
+        state.lastWakeAtMs = Date.now();
+        wakeResult = await sendApnsBackgroundWake({
+          registration,
+          nodeId,
+          wakeReason: opts?.wakeReason ?? "node.invoke",
+          relayConfig: relay.relayConfig,
+        });
+      } else {
+        const auth = await resolveDirectNodePushConfig();
+        if (!auth.ok) {
+          return withDuration({
+            available: false,
+            throttled: false,
+            path: "no-auth",
+            apnsReason: auth.error,
+          });
+        }
+        state.lastWakeAtMs = Date.now();
+        wakeResult = await sendApnsBackgroundWake({
+          registration,
+          nodeId,
+          wakeReason: opts?.wakeReason ?? "node.invoke",
+          auth: auth.auth,
         });
       }
-
-      state.lastWakeAtMs = Date.now();
-      const wakeResult = await sendApnsBackgroundWake({
-        auth: auth.value,
-        registration,
-        nodeId,
-        wakeReason: "node.invoke",
-      });
+      await clearStaleApnsRegistrationIfNeeded(registration, nodeId, wakeResult);
       if (!wakeResult.ok) {
         return withDuration({
           available: true,
@@ -298,7 +377,7 @@ async function maybeWakeNodeWithApns(
   }
 }
 
-async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNudgeAttempt> {
+export async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNudgeAttempt> {
   const startedAtMs = Date.now();
   const withDuration = (
     attempt: Omit<NodeWakeNudgeAttempt, "durationMs">,
@@ -316,24 +395,44 @@ async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNudgeAtte
   if (!registration) {
     return withDuration({ sent: false, throttled: false, reason: "no-registration" });
   }
-  const auth = await resolveApnsAuthConfigFromEnv(process.env);
-  if (!auth.ok) {
-    return withDuration({
-      sent: false,
-      throttled: false,
-      reason: "no-auth",
-      apnsReason: auth.error,
-    });
-  }
-
   try {
-    const result = await sendApnsAlert({
-      auth: auth.value,
-      registration,
-      nodeId,
-      title: "OpenClaw needs a quick reopen",
-      body: "Tap to reopen OpenClaw and restore the node connection.",
-    });
+    let result;
+    if (registration.transport === "relay") {
+      const relay = resolveRelayNodePushConfig();
+      if (!relay.ok) {
+        return withDuration({
+          sent: false,
+          throttled: false,
+          reason: "no-auth",
+          apnsReason: relay.error,
+        });
+      }
+      result = await sendApnsAlert({
+        registration,
+        nodeId,
+        title: "OpenClaw needs a quick reopen",
+        body: "Tap to reopen OpenClaw and restore the node connection.",
+        relayConfig: relay.relayConfig,
+      });
+    } else {
+      const auth = await resolveDirectNodePushConfig();
+      if (!auth.ok) {
+        return withDuration({
+          sent: false,
+          throttled: false,
+          reason: "no-auth",
+          apnsReason: auth.error,
+        });
+      }
+      result = await sendApnsAlert({
+        registration,
+        nodeId,
+        title: "OpenClaw needs a quick reopen",
+        body: "Tap to reopen OpenClaw and restore the node connection.",
+        auth: auth.auth,
+      });
+    }
+    await clearStaleApnsRegistrationIfNeeded(registration, nodeId, result);
     if (!result.ok) {
       return withDuration({
         sent: false,
@@ -362,7 +461,7 @@ async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNudgeAtte
   }
 }
 
-async function waitForNodeReconnect(params: {
+export async function waitForNodeReconnect(params: {
   nodeId: string;
   context: { nodeRegistry: { get: (nodeId: string) => unknown } };
   timeoutMs?: number;
@@ -430,7 +529,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, list, undefined);
     });
   },
-  "node.pair.approve": async ({ params, respond, context }) => {
+  "node.pair.approve": async ({ params, respond, context, client }) => {
     if (!validateNodePairApproveParams(params)) {
       respondInvalidParams({
         respond,
@@ -440,17 +539,32 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const { requestId } = params as { requestId: string };
+    // Intentionally fail closed for RPC callers without an explicit scoped session.
+    const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     await respondUnavailableOnThrow(respond, async () => {
-      const approved = await approveNodePairing(requestId);
+      const approved = await approveNodePairing(requestId, { callerScopes });
       if (!approved) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
         return;
       }
+      if ("status" in approved && approved.status === "forbidden") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${approved.missingScope}`),
+        );
+        return;
+      }
+      if (!("node" in approved)) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
+        return;
+      }
+      const approvedNode = approved.node;
       context.broadcast(
         "node.pair.resolved",
         {
           requestId,
-          nodeId: approved.node.nodeId,
+          nodeId: approvedNode.nodeId,
           decision: "approved",
           ts: Date.now(),
         },
@@ -543,74 +657,16 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const list = await listDevicePairing();
-      const pairedById = new Map(
-        list.paired
-          .filter((entry) => isNodeEntry(entry))
-          .map((entry) => [
-            entry.deviceId,
-            {
-              nodeId: entry.deviceId,
-              displayName: entry.displayName,
-              platform: entry.platform,
-              version: undefined,
-              coreVersion: undefined,
-              uiVersion: undefined,
-              deviceFamily: undefined,
-              modelIdentifier: undefined,
-              remoteIp: entry.remoteIp,
-              caps: [],
-              commands: [],
-              permissions: undefined,
-            },
-          ]),
-      );
-      const connected = context.nodeRegistry.listConnected();
-      const connectedById = new Map(connected.map((n) => [n.nodeId, n]));
-      const nodeIds = new Set<string>([...pairedById.keys(), ...connectedById.keys()]);
-
-      const nodes = [...nodeIds].map((nodeId) => {
-        const paired = pairedById.get(nodeId);
-        const live = connectedById.get(nodeId);
-
-        const caps = uniqueSortedStrings([...(live?.caps ?? paired?.caps ?? [])]);
-        const commands = uniqueSortedStrings([...(live?.commands ?? paired?.commands ?? [])]);
-
-        return {
-          nodeId,
-          displayName: live?.displayName ?? paired?.displayName,
-          platform: live?.platform ?? paired?.platform,
-          version: live?.version ?? paired?.version,
-          coreVersion: live?.coreVersion ?? paired?.coreVersion,
-          uiVersion: live?.uiVersion ?? paired?.uiVersion,
-          deviceFamily: live?.deviceFamily ?? paired?.deviceFamily,
-          modelIdentifier: live?.modelIdentifier ?? paired?.modelIdentifier,
-          remoteIp: live?.remoteIp ?? paired?.remoteIp,
-          caps,
-          commands,
-          pathEnv: live?.pathEnv,
-          permissions: live?.permissions ?? paired?.permissions,
-          connectedAtMs: live?.connectedAtMs,
-          paired: Boolean(paired),
-          connected: Boolean(live),
-        };
+      const [devicePairing, nodePairing] = await Promise.all([
+        listDevicePairing(),
+        listNodePairing(),
+      ]);
+      const catalog = createKnownNodeCatalog({
+        pairedDevices: devicePairing.paired,
+        pairedNodes: nodePairing.paired,
+        connectedNodes: context.nodeRegistry.listConnected(),
       });
-
-      nodes.sort((a, b) => {
-        if (a.connected !== b.connected) {
-          return a.connected ? -1 : 1;
-        }
-        const an = (a.displayName ?? a.nodeId).toLowerCase();
-        const bn = (b.displayName ?? b.nodeId).toLowerCase();
-        if (an < bn) {
-          return -1;
-        }
-        if (an > bn) {
-          return 1;
-        }
-        return a.nodeId.localeCompare(b.nodeId);
-      });
-
+      const nodes = listKnownNodes(catalog);
       respond(true, { ts: Date.now(), nodes }, undefined);
     });
   },
@@ -630,42 +686,21 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const list = await listDevicePairing();
-      const paired = list.paired.find((n) => n.deviceId === id && isNodeEntry(n));
-      const connected = context.nodeRegistry.listConnected();
-      const live = connected.find((n) => n.nodeId === id);
-
-      if (!paired && !live) {
+      const [devicePairing, nodePairing] = await Promise.all([
+        listDevicePairing(),
+        listNodePairing(),
+      ]);
+      const catalog = createKnownNodeCatalog({
+        pairedDevices: devicePairing.paired,
+        pairedNodes: nodePairing.paired,
+        connectedNodes: context.nodeRegistry.listConnected(),
+      });
+      const node = getKnownNode(catalog, id);
+      if (!node) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
       }
-
-      const caps = uniqueSortedStrings([...(live?.caps ?? [])]);
-      const commands = uniqueSortedStrings([...(live?.commands ?? [])]);
-
-      respond(
-        true,
-        {
-          ts: Date.now(),
-          nodeId: id,
-          displayName: live?.displayName ?? paired?.displayName,
-          platform: live?.platform ?? paired?.platform,
-          version: live?.version,
-          coreVersion: live?.coreVersion,
-          uiVersion: live?.uiVersion,
-          deviceFamily: live?.deviceFamily,
-          modelIdentifier: live?.modelIdentifier,
-          remoteIp: live?.remoteIp ?? paired?.remoteIp,
-          caps,
-          commands,
-          pathEnv: live?.pathEnv,
-          permissions: live?.permissions,
-          connectedAtMs: live?.connectedAtMs,
-          paired: Boolean(paired),
-          connected: Boolean(live),
-        },
-        undefined,
-      );
+      respond(true, { ts: Date.now(), ...node }, undefined);
     });
   },
   "node.canvas.capability.refresh": async ({ params, respond, client }) => {
@@ -729,7 +764,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const pending = listPendingNodeActions(trimmedNodeId);
+    const pending = resolveAllowedPendingNodeActions({ nodeId: trimmedNodeId, client });
     respond(
       true,
       {

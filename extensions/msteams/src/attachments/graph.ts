@@ -1,4 +1,4 @@
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/msteams";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadMSTeamsAttachments } from "./download.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
@@ -194,13 +194,44 @@ async function downloadGraphHostedContent(params: {
   const out: MSTeamsInboundMedia[] = [];
   for (const item of hosted.items) {
     const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
-    if (!contentBytes) {
-      continue;
-    }
     let buffer: Buffer;
-    try {
-      buffer = Buffer.from(contentBytes, "base64");
-    } catch {
+    if (contentBytes) {
+      try {
+        buffer = Buffer.from(contentBytes, "base64");
+      } catch {
+        continue;
+      }
+    } else if (item.id) {
+      // contentBytes not inline — fetch from the individual $value endpoint.
+      try {
+        const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
+        const { response: valRes, release } = await fetchWithSsrFGuard({
+          url: valueUrl,
+          fetchImpl: params.fetchFn ?? fetch,
+          init: {
+            headers: { Authorization: `Bearer ${params.accessToken}` },
+          },
+          policy: params.ssrfPolicy,
+          auditContext: "msteams.graph.hostedContent.value",
+        });
+        try {
+          if (!valRes.ok) {
+            continue;
+          }
+          // Check Content-Length before buffering to avoid RSS spikes on large files.
+          const cl = valRes.headers.get("content-length");
+          if (cl && Number(cl) > params.maxBytes) {
+            continue;
+          }
+          const ab = await valRes.arrayBuffer();
+          buffer = Buffer.from(ab);
+        } finally {
+          await release();
+        }
+      } catch {
+        continue;
+      }
+    } else {
       continue;
     }
     if (buffer.byteLength > params.maxBytes) {

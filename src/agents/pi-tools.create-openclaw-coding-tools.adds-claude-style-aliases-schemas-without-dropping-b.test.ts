@@ -7,7 +7,11 @@ const defaultTools = createOpenClawCodingTools({ senderIsOwner: true });
 
 describe("createOpenClawCodingTools", () => {
   it("preserves action enums in normalized schemas", () => {
-    const toolNames = ["browser", "canvas", "nodes", "cron", "gateway", "message"];
+    const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];
+    const missingNames = toolNames.filter(
+      (name) => !defaultTools.some((candidate) => candidate.name === name),
+    );
+    expect(missingNames).toEqual([]);
 
     const collectActionValues = (schema: unknown, values: Set<string>): void => {
       if (!schema || typeof schema !== "object") {
@@ -33,7 +37,6 @@ describe("createOpenClawCodingTools", () => {
 
     for (const name of toolNames) {
       const tool = defaultTools.find((candidate) => candidate.name === name);
-      expect(tool).toBeDefined();
       const parameters = tool?.parameters as {
         properties?: Record<string, unknown>;
       };
@@ -56,22 +59,34 @@ describe("createOpenClawCodingTools", () => {
     expect(defaultTools.some((tool) => tool.name === "process")).toBe(true);
     expect(defaultTools.some((tool) => tool.name === "apply_patch")).toBe(false);
 
-    const enabledConfig: OpenClawConfig = {
-      tools: {
-        exec: {
-          applyPatch: { enabled: true },
-        },
-      },
-    };
     const openAiTools = createOpenClawCodingTools({
-      config: enabledConfig,
       modelProvider: "openai",
       modelId: "gpt-5.2",
     });
     expect(openAiTools.some((tool) => tool.name === "apply_patch")).toBe(true);
 
+    const codexTools = createOpenClawCodingTools({
+      modelProvider: "openai-codex",
+      modelId: "gpt-5.4",
+    });
+    expect(codexTools.some((tool) => tool.name === "apply_patch")).toBe(true);
+
+    const disabledConfig: OpenClawConfig = {
+      tools: {
+        exec: {
+          applyPatch: { enabled: false },
+        },
+      },
+    };
+    const disabledOpenAiTools = createOpenClawCodingTools({
+      config: disabledConfig,
+      modelProvider: "openai",
+      modelId: "gpt-5.2",
+    });
+    expect(disabledOpenAiTools.some((tool) => tool.name === "apply_patch")).toBe(false);
+
     const anthropicTools = createOpenClawCodingTools({
-      config: enabledConfig,
+      config: disabledConfig,
       modelProvider: "anthropic",
       modelId: "claude-opus-4-5",
     });
@@ -80,7 +95,7 @@ describe("createOpenClawCodingTools", () => {
     const allowModelsConfig: OpenClawConfig = {
       tools: {
         exec: {
-          applyPatch: { enabled: true, allowModels: ["gpt-5.2"] },
+          applyPatch: { allowModels: ["gpt-5.2"] },
         },
       },
     };

@@ -1,9 +1,16 @@
+import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
+import { sanitizeExecApprovalDisplayText } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
-import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
+import {
+  buildSystemRunApprovalBinding,
+  buildSystemRunApprovalEnvBinding,
+} from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
@@ -15,18 +22,14 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+const APPROVAL_NOT_FOUND_DETAILS = {
+  reason: ErrorCodes.APPROVAL_NOT_FOUND,
+} as const;
+
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
-  const hasApprovalClients = (context: { hasExecApprovalClients?: () => boolean }) => {
-    if (typeof context.hasExecApprovalClients === "function") {
-      return context.hasExecApprovalClients();
-    }
-    // Fail closed when no operator-scope probe is available.
-    return false;
-  };
-
   return {
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
@@ -99,6 +102,10 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      if (!effectiveCommandText) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "command is required"));
+        return;
+      }
       if (
         host === "node" &&
         (!Array.isArray(effectiveCommandArgv) || effectiveCommandArgv.length === 0)
@@ -110,6 +117,7 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const systemRunBinding =
         host === "node"
           ? buildSystemRunApprovalBinding({
@@ -129,9 +137,13 @@ export function createExecApprovalHandlers(
         return;
       }
       const request = {
-        command: effectiveCommandText,
-        commandArgv: effectiveCommandArgv,
-        envKeys: systemRunBinding?.envKeys?.length ? systemRunBinding.envKeys : undefined,
+        command: sanitizeExecApprovalDisplayText(effectiveCommandText),
+        commandPreview:
+          host === "node" || !approvalContext.commandPreview
+            ? undefined
+            : sanitizeExecApprovalDisplayText(approvalContext.commandPreview),
+        commandArgv: host === "node" ? undefined : effectiveCommandArgv,
+        envKeys: envBinding.envKeys.length > 0 ? envBinding.envKeys : undefined,
         systemRunBinding: systemRunBinding?.binding ?? null,
         systemRunPlan: approvalContext.plan,
         cwd: effectiveCwd ?? null,
@@ -139,6 +151,7 @@ export function createExecApprovalHandlers(
         host: host || null,
         security: p.security ?? null,
         ask: p.ask ?? null,
+        allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: p.ask ?? null }),
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
         sessionKey: effectiveSessionKey ?? null,
@@ -178,10 +191,15 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
-      let forwardedToTargets = false;
+      const hasExecApprovalClients = context.hasExecApprovalClients?.(client?.connId) ?? false;
+      const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
+        turnSourceChannel: record.request.turnSourceChannel,
+        turnSourceAccountId: record.request.turnSourceAccountId,
+      });
+      let forwarded = false;
       if (opts?.forwarder) {
         try {
-          forwardedToTargets = await opts.forwarder.handleRequested({
+          forwarded = await opts.forwarder.handleRequested({
             id: record.id,
             request: record.request,
             createdAtMs: record.createdAtMs,
@@ -192,8 +210,19 @@ export function createExecApprovalHandlers(
         }
       }
 
-      if (!hasApprovalClients(context) && !forwardedToTargets) {
-        manager.expire(record.id, "auto-expire:no-approver-clients");
+      if (!hasExecApprovalClients && !forwarded && !hasTurnSourceRoute) {
+        manager.expire(record.id, "no-approval-route");
+        respond(
+          true,
+          {
+            id: record.id,
+            decision: null,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          },
+          undefined,
+        );
+        return;
       }
 
       // Only send immediate "accepted" response when twoPhase is requested.
@@ -275,21 +304,64 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
-      const snapshot = manager.getSnapshot(p.id);
+      const resolvedId = manager.lookupPendingId(p.id);
+      if (resolvedId.kind === "none") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
+            details: APPROVAL_NOT_FOUND_DETAILS,
+          }),
+        );
+        return;
+      }
+      if (resolvedId.kind === "ambiguous") {
+        const candidates = resolvedId.ids.slice(0, 3).join(", ");
+        const remainder = resolvedId.ids.length > 3 ? ` (+${resolvedId.ids.length - 3} more)` : "";
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `ambiguous approval id prefix; matches: ${candidates}${remainder}. Use the full id.`,
+          ),
+        );
+        return;
+      }
+      const approvalId = resolvedId.id;
+      const snapshot = manager.getSnapshot(approvalId);
+      const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(snapshot?.request);
+      if (snapshot && !allowedDecisions.includes(decision)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "allow-always is unavailable because the effective policy requires approval every time",
+          ),
+        );
+        return;
+      }
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
-      const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
+      const ok = manager.resolve(approvalId, decision, resolvedBy ?? null);
       if (!ok) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
+            details: APPROVAL_NOT_FOUND_DETAILS,
+          }),
+        );
         return;
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        { id: approvalId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
       void opts?.forwarder
         ?.handleResolved({
-          id: p.id,
+          id: approvalId,
           decision,
           resolvedBy,
           ts: Date.now(),

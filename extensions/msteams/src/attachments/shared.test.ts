@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyAuthorizationHeaderForUrl,
+  extractInlineImageCandidates,
   isPrivateOrReservedIP,
   isUrlAllowed,
   resolveAndValidateIP,
@@ -29,6 +30,23 @@ function mockFetchWithRedirect(redirectMap: Record<string, string>, finalBody = 
     }
     return new Response(finalBody, { status: 200 });
   });
+}
+
+async function expectSafeFetchStatus(params: {
+  fetchMock: ReturnType<typeof vi.fn>;
+  url: string;
+  allowHosts: string[];
+  expectedStatus: number;
+  resolveFn?: typeof publicResolve;
+}) {
+  const res = await safeFetch({
+    url: params.url,
+    allowHosts: params.allowHosts,
+    fetchFn: params.fetchMock as unknown as typeof fetch,
+    resolveFn: params.resolveFn ?? publicResolve,
+  });
+  expect(res.status).toBe(params.expectedStatus);
+  return res;
 }
 
 describe("msteams attachment allowlists", () => {
@@ -121,13 +139,12 @@ describe("safeFetch", () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
       return new Response("ok", { status: 200 });
     });
-    const res = await safeFetch({
+    await expectSafeFetchStatus({
+      fetchMock,
       url: "https://teams.sharepoint.com/file.pdf",
       allowHosts: ["sharepoint.com"],
-      fetchFn: fetchMock as unknown as typeof fetch,
-      resolveFn: publicResolve,
+      expectedStatus: 200,
     });
-    expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledOnce();
     // Should have used redirect: "manual"
     expect(fetchMock.mock.calls[0][1]).toHaveProperty("redirect", "manual");
@@ -137,13 +154,12 @@ describe("safeFetch", () => {
     const fetchMock = mockFetchWithRedirect({
       "https://teams.sharepoint.com/file.pdf": "https://cdn.sharepoint.com/storage/file.pdf",
     });
-    const res = await safeFetch({
+    await expectSafeFetchStatus({
+      fetchMock,
       url: "https://teams.sharepoint.com/file.pdf",
       allowHosts: ["sharepoint.com"],
-      fetchFn: fetchMock as unknown as typeof fetch,
-      resolveFn: publicResolve,
+      expectedStatus: 200,
     });
-    expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -374,5 +390,55 @@ describe("attachment fetch auth helpers", () => {
     });
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("msteams inline image limits", () => {
+  const smallPngDataUrl = "data:image/png;base64,aGVsbG8="; // "hello" (5 bytes)
+
+  it("rejects inline data images above per-image limit", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src=\"${smallPngDataUrl}\" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 4 });
+    expect(out).toEqual([]);
+  });
+
+  it("accepts inline data images within limit", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src=\"${smallPngDataUrl}\" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
+    expect(out.length).toBe(1);
+    expect(out[0]?.kind).toBe("data");
+    if (out[0]?.kind === "data") {
+      expect(out[0].data.byteLength).toBeGreaterThan(0);
+      expect(out[0].contentType).toBe("image/png");
+    }
+  });
+
+  it("enforces cumulative inline size limit across attachments", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src=\"${smallPngDataUrl}\" />`,
+      },
+      {
+        contentType: "text/html",
+        content: `<img src=\"${smallPngDataUrl}\" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, {
+      maxInlineBytes: 10,
+      maxInlineTotalBytes: 6,
+    });
+    expect(out.length).toBe(1);
+    expect(out[0]?.kind).toBe("data");
   });
 });

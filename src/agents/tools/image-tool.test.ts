@@ -4,12 +4,132 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type {
+  ImageDescriptionRequest,
+  ImagesDescriptionRequest,
+  MediaUnderstandingProvider,
+} from "../../plugin-sdk/media-understanding.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { createOpenClawCodingTools } from "../pi-tools.js";
+import { minimaxUnderstandImage } from "../minimax-vlm.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+
+type PiToolsModule = typeof import("../pi-tools.js");
+type CreateOpenClawCodingToolsArgs = Parameters<PiToolsModule["createOpenClawCodingTools"]>[0];
+type MockOpenClawToolsOptions = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  sandboxRoot?: string;
+  sandboxFsBridge?: SandboxFsBridge;
+  fsPolicy?: NonNullable<Parameters<typeof createImageTool>[0]>["fsPolicy"];
+  modelHasVision?: boolean;
+};
+
+const piToolsHarness = vi.hoisted(() => ({
+  createStubTool(name: string) {
+    return {
+      name,
+      description: `${name} stub`,
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(),
+    };
+  },
+}));
+
+const imageProviderHarness = vi.hoisted(() => {
+  let providers = new Map<string, MediaUnderstandingProvider>();
+  return {
+    setProviders(next: MediaUnderstandingProvider[]) {
+      providers = new Map(next.map((provider) => [provider.id.toLowerCase(), provider]));
+    },
+    reset() {
+      providers = new Map();
+    },
+    buildProviderRegistry(overrides?: Record<string, MediaUnderstandingProvider>) {
+      const registry = new Map(providers);
+      for (const [id, provider] of Object.entries(overrides ?? {})) {
+        registry.set(id.toLowerCase(), provider);
+      }
+      return registry;
+    },
+    getMediaUnderstandingProvider(
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ): MediaUnderstandingProvider | undefined {
+      return registry.get(id.toLowerCase()) ?? providers.get(id.toLowerCase());
+    },
+  };
+});
+
+vi.mock("../../media-understanding/runner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../media-understanding/runner.js")>();
+  return {
+    ...actual,
+    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+      imageProviderHarness.buildProviderRegistry(overrides),
+  };
+});
+
+vi.mock("../../media-understanding/provider-registry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../media-understanding/provider-registry.js")>();
+  return {
+    ...actual,
+    getMediaUnderstandingProvider: (
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+  };
+});
+
+vi.mock("../bash-tools.js", () => ({
+  createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
+  createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
+}));
+
+vi.mock("../channel-tools.js", () => ({
+  copyChannelAgentToolMeta: vi.fn((_from, to) => to),
+  listChannelAgentTools: vi.fn(() => []),
+}));
+
+vi.mock("../apply-patch.js", () => ({
+  createApplyPatchTool: vi.fn(() => piToolsHarness.createStubTool("apply_patch")),
+}));
+
+vi.mock("../pi-tools.before-tool-call.js", () => ({
+  wrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
+}));
+
+vi.mock("../pi-tools.abort.js", () => ({
+  wrapToolWithAbortSignal: vi.fn((tool) => tool),
+}));
+
+vi.mock("../openclaw-tools.js", async () => {
+  const { createImageTool } = await import("./image-tool.js");
+  return {
+    createOpenClawTools: vi.fn((options?: MockOpenClawToolsOptions) => {
+      const imageTool = createImageTool({
+        config: options?.config,
+        agentDir: options?.agentDir,
+        workspaceDir: options?.workspaceDir,
+        sandbox:
+          options?.sandboxRoot && options?.sandboxFsBridge
+            ? {
+                root: options.sandboxRoot,
+                bridge: options.sandboxFsBridge,
+              }
+            : undefined,
+        fsPolicy: options?.fsPolicy,
+        modelHasVision: options?.modelHasVision,
+      });
+      return imageTool ? [imageTool] : [];
+    }),
+  };
+});
 
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
   await fs.mkdir(agentDir, { recursive: true });
@@ -18,6 +138,12 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
     `${JSON.stringify(profiles, null, 2)}\n`,
     "utf8",
   );
+}
+
+async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenClawCodingToolsArgs) {
+  vi.resetModules();
+  const { createOpenClawCodingTools } = await import("../pi-tools.js");
+  return createOpenClawCodingTools(options);
 }
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
@@ -32,11 +158,14 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
+const ONE_PIXEL_JPEG_B64 = "QUJDRA==";
 
 async function withTempWorkspacePng(
   cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
+  options?: { parentDir?: string },
 ) {
-  const workspaceParent = await fs.mkdtemp(path.join(process.cwd(), ".openclaw-workspace-image-"));
+  const parentDir = options?.parentDir ?? os.tmpdir();
+  const workspaceParent = await fs.mkdtemp(path.join(parentDir, "openclaw-workspace-image-"));
   try {
     const workspaceDir = path.join(workspaceParent, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -46,6 +175,19 @@ async function withTempWorkspacePng(
   } finally {
     await fs.rm(workspaceParent, { recursive: true, force: true });
   }
+}
+
+function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string[]) {
+  beforeEach(() => {
+    for (const key of keys) {
+      vi.stubEnv(key, "");
+    }
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
 }
 
 function stubMinimaxOkFetch() {
@@ -80,45 +222,46 @@ function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string },
 }
 
 function stubOpenAiCompletionsOkFetch(text = "ok") {
-  const fetch = vi.fn().mockResolvedValue(
-    new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          const encoder = new TextEncoder();
-          const chunks = [
-            `data: ${JSON.stringify({
-              id: "chatcmpl-moonshot-test",
-              object: "chat.completion.chunk",
-              created: Math.floor(Date.now() / 1000),
-              model: "kimi-k2.5",
-              choices: [
-                {
-                  index: 0,
-                  delta: { role: "assistant", content: text },
-                  finish_reason: null,
-                },
-              ],
-            })}\n\n`,
-            `data: ${JSON.stringify({
-              id: "chatcmpl-moonshot-test",
-              object: "chat.completion.chunk",
-              created: Math.floor(Date.now() / 1000),
-              model: "kimi-k2.5",
-              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            })}\n\n`,
-            "data: [DONE]\n\n",
-          ];
-          for (const chunk of chunks) {
-            controller.enqueue(encoder.encode(chunk));
-          }
-          controller.close();
+  const fetch = vi.fn().mockImplementation(
+    async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            const encoder = new TextEncoder();
+            const chunks = [
+              `data: ${JSON.stringify({
+                id: "chatcmpl-moonshot-test",
+                object: "chat.completion.chunk",
+                created: Math.floor(Date.now() / 1000),
+                model: "kimi-k2.5",
+                choices: [
+                  {
+                    index: 0,
+                    delta: { role: "assistant", content: text },
+                    finish_reason: null,
+                  },
+                ],
+              })}\n\n`,
+              `data: ${JSON.stringify({
+                id: "chatcmpl-moonshot-test",
+                object: "chat.completion.chunk",
+                created: Math.floor(Date.now() / 1000),
+                model: "kimi-k2.5",
+                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+              })}\n\n`,
+              "data: [DONE]\n\n",
+            ];
+            for (const chunk of chunks) {
+              controller.enqueue(encoder.encode(chunk));
+            }
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
         },
-      }),
-      {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      },
-    ),
+      ),
   );
   global.fetch = withFetchPreconnect(fetch);
   return fetch;
@@ -128,8 +271,13 @@ function createMinimaxImageConfig(): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: { primary: "minimax/MiniMax-M2.5" },
+        model: { primary: "minimax/MiniMax-M2.7" },
         imageModel: { primary: "minimax/MiniMax-VL-01" },
+      },
+    },
+    plugins: {
+      entries: {
+        minimax: { enabled: true },
       },
     },
   };
@@ -140,6 +288,103 @@ function createDefaultImageFallbackExpectation(primary: string) {
     primary,
     fallbacks: ["openai/gpt-5-mini", "anthropic/claude-opus-4-5"],
   };
+}
+
+const minimaxProvider = {
+  id: "minimax",
+  capabilities: ["image"],
+  describeImage: async (params: ImageDescriptionRequest) => ({
+    text: await minimaxUnderstandImage({
+      apiKey: process.env.MINIMAX_API_KEY ?? "",
+      prompt: params.prompt ?? "Describe the image.",
+      imageDataUrl: `data:${params.mime ?? "image/jpeg"};base64,${params.buffer.toString("base64")}`,
+    }),
+    model: "MiniMax-VL-01",
+  }),
+  describeImages: async (params: ImagesDescriptionRequest) => {
+    const parts: string[] = [];
+    for (const [index, image] of params.images.entries()) {
+      const text = await minimaxUnderstandImage({
+        apiKey: process.env.MINIMAX_API_KEY ?? "",
+        prompt:
+          params.images.length > 1
+            ? `${params.prompt ?? "Describe the image."}\n\nDescribe image ${index + 1} of ${params.images.length} independently.`
+            : (params.prompt ?? "Describe the image."),
+        imageDataUrl: `data:${image.mime ?? "image/jpeg"};base64,${image.buffer.toString("base64")}`,
+      });
+      parts.push(params.images.length > 1 ? `Image ${index + 1}:\n${text.trim()}` : text.trim());
+    }
+    return {
+      text: parts.join("\n\n").trim(),
+      model: "MiniMax-VL-01",
+    };
+  },
+} satisfies MediaUnderstandingProvider;
+
+async function describeMoonshotImage(
+  params: ImageDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const baseUrl =
+    params.cfg.models?.providers?.moonshot?.baseUrl?.trim() ?? "https://api.moonshot.ai/v1";
+  await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.MOONSHOT_API_KEY ?? ""}`,
+    },
+    body: JSON.stringify({
+      model: params.model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: params.prompt ?? "Describe the image." },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:${params.mime ?? "image/jpeg"};base64,${params.buffer.toString("base64")}`,
+              },
+            },
+          ],
+        },
+      ],
+    }),
+  });
+  return { text: "ok moonshot", model: params.model };
+}
+
+async function describeMoonshotImages(
+  params: ImagesDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const [first] = params.images;
+  if (!first) {
+    return { text: "", model: params.model };
+  }
+  return await describeMoonshotImage({
+    ...params,
+    buffer: first.buffer,
+    fileName: first.fileName,
+    mime: first.mime,
+  });
+}
+
+const moonshotProvider = {
+  id: "moonshot",
+  capabilities: ["image"],
+  describeImage: describeMoonshotImage,
+  describeImages: describeMoonshotImages,
+} satisfies MediaUnderstandingProvider;
+
+function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
+  imageProviderHarness.setProviders(providers);
+  __testing.setProviderDepsForTest({
+    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+      imageProviderHarness.buildProviderRegistry(overrides),
+    getMediaUnderstandingProvider: (
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+  });
 }
 
 function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelDefinitionConfig {
@@ -229,23 +474,26 @@ function findSchemaUnionKeywords(schema: unknown, path = "root"): string[] {
 
 describe("image tool implicit imageModel config", () => {
   const priorFetch = global.fetch;
+  registerImageToolEnvReset(priorFetch, [
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_OAUTH_TOKEN",
+    "MINIMAX_API_KEY",
+    "ZAI_API_KEY",
+    "Z_AI_API_KEY",
+    // Avoid implicit Copilot provider discovery hitting the network in tests.
+    "COPILOT_GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+  ]);
 
   beforeEach(() => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    vi.stubEnv("ANTHROPIC_API_KEY", "");
-    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
-    vi.stubEnv("MINIMAX_API_KEY", "");
-    vi.stubEnv("ZAI_API_KEY", "");
-    vi.stubEnv("Z_AI_API_KEY", "");
-    // Avoid implicit Copilot provider discovery hitting the network in tests.
-    vi.stubEnv("COPILOT_GITHUB_TOKEN", "");
-    vi.stubEnv("GH_TOKEN", "");
-    vi.stubEnv("GITHUB_TOKEN", "");
+    installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider);
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
-    global.fetch = priorFetch;
+    imageProviderHarness.reset();
+    __testing.setProviderDepsForTest();
   });
 
   it("stays disabled without auth when no pairing is possible", async () => {
@@ -264,7 +512,7 @@ describe("image tool implicit imageModel config", () => {
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.5" } } },
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
@@ -290,7 +538,7 @@ describe("image tool implicit imageModel config", () => {
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "minimax-portal/MiniMax-M2.5" } } },
+        agents: { defaults: { model: { primary: "minimax-portal/MiniMax-M2.7" } } },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("minimax-portal/MiniMax-VL-01"),
@@ -343,12 +591,45 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("pairs a provider when config uses an alias key", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "amazon-bedrock:default": {
+            type: "api_key",
+            provider: "amazon-bedrock",
+            key: "sk-test",
+          },
+        },
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "aws-bedrock/text-1" } } },
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://example.com",
+              models: [
+                makeModelDefinition("text-1", ["text"]),
+                makeModelDefinition("vision-1", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "amazon-bedrock/vision-1",
+      });
+      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+    });
+  });
+
   it("prefers explicit agents.defaults.imageModel", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "minimax/MiniMax-M2.5" },
+            model: { primary: "minimax/MiniMax-M2.7" },
             imageModel: { primary: "openai/gpt-5-mini" },
           },
         },
@@ -458,6 +739,110 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("falls back to the generic image runtime when openrouter has no media provider registration", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const fetch = stubOpenAiCompletionsOkFetch("ok openrouter");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter/google/gemini-2.5-flash-lite" },
+            imageModel: { primary: "openrouter/google/gemini-2.5-flash-lite" },
+          },
+        },
+        models: {
+          providers: {
+            openrouter: {
+              api: "openai-completions",
+              baseUrl: "https://openrouter.ai/api/v1",
+              apiKey: "openrouter-test",
+              models: [makeModelDefinition("google/gemini-2.5-flash-lite", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "Describe the image.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok openrouter" })]),
+      );
+    });
+  });
+
+  it("falls back to the generic multi-image runtime when openrouter has no media provider registration", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const fetch = stubOpenAiCompletionsOkFetch("ok multi");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter/google/gemini-2.5-flash-lite" },
+            imageModel: { primary: "openrouter/google/gemini-2.5-flash-lite" },
+          },
+        },
+        models: {
+          providers: {
+            openrouter: {
+              api: "openai-completions",
+              baseUrl: "https://openrouter.ai/api/v1",
+              apiKey: "openrouter-test",
+              models: [makeModelDefinition("google/gemini-2.5-flash-lite", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "Describe the images.",
+        images: [
+          `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+          `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        ],
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok multi" })]),
+      );
+    });
+  });
+
+  it("falls back to the generic image runtime when minimax-portal has no media provider registration", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      installImageUnderstandingProviderStubs();
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "minimax-portal:default": {
+            type: "oauth",
+            provider: "minimax-portal",
+            access: "oauth-test",
+            refresh: "refresh-test",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+      const fetch = stubMinimaxOkFetch();
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "minimax-portal/MiniMax-M2.7" },
+            imageModel: { primary: "minimax-portal/MiniMax-VL-01" },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      await expectImageToolExecOk(tool, `data:image/png;base64,${ONE_PIXEL_PNG_B64}`);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("exposes an Anthropic-safe image schema without union keywords", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
       const violations = findSchemaUnionKeywords(tool.parameters, "image.parameters");
@@ -498,25 +883,20 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("allows workspace images outside default local media roots", async () => {
+  it("allows local image paths outside default media roots when workspaceOnly is off", async () => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       const fetch = stubMinimaxOkFetch();
       await withTempAgentDir(async (agentDir) => {
         const cfg = createMinimaxImageConfig();
 
         const withoutWorkspace = createRequiredImageTool({ config: cfg, agentDir });
-        await expect(
-          withoutWorkspace.execute("t0", {
-            prompt: "Describe the image.",
-            image: imagePath,
-          }),
-        ).rejects.toThrow(/Local media path is not under an allowed directory/i);
+        await expectImageToolExecOk(withoutWorkspace, imagePath);
 
         const withWorkspace = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
 
         await expectImageToolExecOk(withWorkspace, imagePath);
 
-        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(fetch).toHaveBeenCalledTimes(2);
       });
     });
   });
@@ -553,17 +933,63 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("allows workspace images via createOpenClawCodingTools default workspace root", async () => {
-    await withTempWorkspacePng(async ({ imagePath }) => {
+  it("allows non-workspace local image paths when workspaceOnly is disabled", async () => {
+    const fetch = stubMinimaxOkFetch();
+    await withTempAgentDir(async (agentDir) => {
+      const cfg = createMinimaxImageConfig();
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-outside-"));
+      const outsideImage = path.join(outsideDir, "secret.png");
+      await fs.writeFile(outsideImage, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const tool = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          fsPolicy: { workspaceOnly: false },
+        });
+
+        await expectImageToolExecOk(tool, outsideImage);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("allows workspace images via createOpenClawCodingTools when workspace root is explicit", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       const fetch = stubMinimaxOkFetch();
       await withTempAgentDir(async (agentDir) => {
         const cfg = createMinimaxImageConfig();
 
-        const tools = createOpenClawCodingTools({ config: cfg, agentDir });
+        const tools = await createOpenClawCodingToolsWithFreshModules({
+          config: cfg,
+          agentDir,
+          workspaceDir,
+        });
         const tool = requireImageTool(tools.find((candidate) => candidate.name === "image"));
 
         await expectImageToolExecOk(tool, imagePath);
 
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  it("resolves relative image paths against workspaceDir", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir }) => {
+      // Place image in a subdirectory of the workspace
+      const subdir = path.join(workspaceDir, "inbox");
+      await fs.mkdir(subdir, { recursive: true });
+      const imagePath = path.join(subdir, "receipt.png");
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg = createMinimaxImageConfig();
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+
+        // Relative path should be resolved against workspaceDir
+        await expectImageToolExecOk(tool, "inbox/receipt.png");
         expect(fetch).toHaveBeenCalledTimes(1);
       });
     });
@@ -576,7 +1002,7 @@ describe("image tool implicit imageModel config", () => {
 
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.5" } } },
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
       };
       const tool = createRequiredImageTool({ config: cfg, agentDir, sandbox });
 
@@ -603,7 +1029,7 @@ describe("image tool implicit imageModel config", () => {
         tools: { fs: { workspaceOnly: true } },
       };
 
-      const tools = createOpenClawCodingTools({
+      const tools = await createOpenClawCodingToolsWithFreshModules({
         config: cfg,
         agentDir,
         sandbox,
@@ -643,7 +1069,7 @@ describe("image tool implicit imageModel config", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "minimax/MiniMax-M2.5" },
+            model: { primary: "minimax/MiniMax-M2.7" },
             imageModel: { primary: "minimax/MiniMax-VL-01" },
           },
         },
@@ -683,17 +1109,20 @@ describe("image tool MiniMax VLM routing", () => {
   const pngB64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
   const priorFetch = global.fetch;
+  registerImageToolEnvReset(priorFetch, [
+    "MINIMAX_API_KEY",
+    "COPILOT_GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+  ]);
 
   beforeEach(() => {
-    vi.stubEnv("MINIMAX_API_KEY", "");
-    vi.stubEnv("COPILOT_GITHUB_TOKEN", "");
-    vi.stubEnv("GH_TOKEN", "");
-    vi.stubEnv("GITHUB_TOKEN", "");
+    installImageUnderstandingProviderStubs(minimaxProvider);
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
-    global.fetch = priorFetch;
+    imageProviderHarness.reset();
+    __testing.setProviderDepsForTest();
   });
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
@@ -701,9 +1130,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "minimax/MiniMax-M2.5" } } },
-    };
+    const cfg = createMinimaxImageConfig();
     const tool = createRequiredImageTool({ config: cfg, agentDir });
     return { fetch, tool };
   }
@@ -735,10 +1162,10 @@ describe("image tool MiniMax VLM routing", () => {
 
     const res = await tool.execute("t1", {
       prompt: "Compare these images.",
-      images: [`data:image/png;base64,${pngB64}`, `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
+      images: [`data:image/png;base64,${pngB64}`, `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`],
     });
 
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
     const details = res.details as
       | {
           images?: Array<{ image: string }>;
@@ -755,12 +1182,12 @@ describe("image tool MiniMax VLM routing", () => {
       image: `data:image/png;base64,${pngB64}`,
       images: [
         `data:image/png;base64,${pngB64}`,
-        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
-        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
+        `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`,
+        `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`,
       ],
     });
 
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
     const dedupedDetails = deduped.details as
       | {
           images?: Array<{ image: string }>;
@@ -775,7 +1202,7 @@ describe("image tool MiniMax VLM routing", () => {
       maxImages: 1,
     });
 
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
     expect(tooMany.details).toMatchObject({
       error: "too_many_images",
       count: 2,

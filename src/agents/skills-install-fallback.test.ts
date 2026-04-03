@@ -2,13 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { installSkill } from "./skills-install.js";
 import {
   hasBinaryMock,
   runCommandWithTimeoutMock,
   scanDirectoryWithSummaryMock,
 } from "./skills-install.test-mocks.js";
-import { buildWorkspaceSkillStatus } from "./skills-status.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -34,6 +32,14 @@ vi.mock("../shared/config-eval.js", async (importOriginal) => {
 vi.mock("../infra/brew.js", () => ({
   resolveBrewExecutable: () => undefined,
 }));
+
+let installSkill: typeof import("./skills-install.js").installSkill;
+let buildWorkspaceSkillStatus: typeof import("./skills-status.js").buildWorkspaceSkillStatus;
+
+async function loadSkillsInstallModulesForTest() {
+  ({ installSkill } = await import("./skills-install.js"));
+  ({ buildWorkspaceSkillStatus } = await import("./skills-status.js"));
+}
 
 async function writeSkillWithInstallers(
   workspaceDir: string,
@@ -94,9 +100,10 @@ describe("skills-install fallback edge cases", () => {
     await writeSkillWithInstaller(workspaceDir, "py-tool", "uv", {
       package: "example-package",
     });
+    await loadSkillsInstallModulesForTest();
   });
 
-  beforeEach(async () => {
+  beforeEach(() => {
     runCommandWithTimeoutMock.mockClear();
     scanDirectoryWithSummaryMock.mockClear();
     hasBinaryMock.mockClear();

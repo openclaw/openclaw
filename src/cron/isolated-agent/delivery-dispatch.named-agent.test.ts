@@ -87,13 +87,4 @@ describe("resolveCronDeliveryBestEffort", () => {
     const job = { delivery: { bestEffort: true }, payload: { kind: "agentTurn" } } as never;
     expect(resolveCronDeliveryBestEffort(job)).toBe(true);
   });
-
-  it("returns true when payload.bestEffortDeliver is true and no delivery.bestEffort", async () => {
-    const { resolveCronDeliveryBestEffort } = await import("./delivery-dispatch.js");
-    const job = {
-      delivery: {},
-      payload: { kind: "agentTurn", bestEffortDeliver: true },
-    } as never;
-    expect(resolveCronDeliveryBestEffort(job)).toBe(true);
-  });
 });

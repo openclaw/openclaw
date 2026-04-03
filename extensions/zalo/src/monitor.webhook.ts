@@ -1,6 +1,8 @@
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/zalo";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
+import type { ResolvedZaloAccount } from "./accounts.js";
+import type { ZaloFetch, ZaloUpdate } from "./api.js";
+import type { ZaloRuntimeEnv } from "./monitor.js";
 import {
   createDedupeCache,
   createFixedWindowRateLimiter,
@@ -15,10 +17,9 @@ import {
   withResolvedWebhookRequestPipeline,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
-} from "openclaw/plugin-sdk/zalo";
-import type { ResolvedZaloAccount } from "./accounts.js";
-import type { ZaloFetch, ZaloUpdate } from "./api.js";
-import type { ZaloRuntimeEnv } from "./monitor.js";
+  resolveClientIp,
+  type OpenClawConfig,
+} from "./runtime-api.js";
 
 const ZALO_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
 
@@ -58,6 +59,7 @@ const webhookAnomalyTracker = createWebhookAnomalyTracker({
 
 export function clearZaloWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
+  recentWebhookEvents.clear();
   webhookAnomalyTracker.clear();
 }
 
@@ -70,28 +72,25 @@ export function getZaloWebhookStatusCounterSizeForTest(): number {
 }
 
 function timingSafeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-
-  if (leftBuffer.length !== rightBuffer.length) {
-    const length = Math.max(1, leftBuffer.length, rightBuffer.length);
-    const paddedLeft = Buffer.alloc(length);
-    const paddedRight = Buffer.alloc(length);
-    leftBuffer.copy(paddedLeft);
-    rightBuffer.copy(paddedRight);
-    timingSafeEqual(paddedLeft, paddedRight);
-    return false;
-  }
-
-  return timingSafeEqual(leftBuffer, rightBuffer);
+  return safeEqualSecret(left, right);
 }
 
-function isReplayEvent(update: ZaloUpdate, nowMs: number): boolean {
+function buildReplayEventCacheKey(
+  target: ZaloWebhookTarget,
+  update: ZaloUpdate,
+  messageId: string,
+): string {
+  const chatId = update.message?.chat?.id ?? "";
+  const senderId = update.message?.from?.id ?? "";
+  return JSON.stringify([target.path, target.account.accountId, update.event_name, chatId, senderId, messageId]);
+}
+
+function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: number): boolean {
   const messageId = update.message?.message_id;
   if (!messageId) {
     return false;
   }
-  const key = `${update.event_name}:${messageId}`;
+  const key = buildReplayEventCacheKey(target, update, messageId);
   return recentWebhookEvents.check(key, nowMs);
 }
 
@@ -107,6 +106,10 @@ function recordWebhookStatus(
     message: (count) =>
       `[zalo] webhook anomaly path=${path} status=${statusCode} count=${String(count)}`,
   });
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 export function registerZaloWebhookTarget(
@@ -140,6 +143,33 @@ export async function handleZaloWebhookRequest(
     targetsByPath: webhookTargets,
     allowMethods: ["POST"],
     handle: async ({ targets, path }) => {
+      const trustedProxies = targets[0]?.config.gateway?.trustedProxies;
+      const allowRealIpFallback = targets[0]?.config.gateway?.allowRealIpFallback === true;
+      const clientIp =
+        resolveClientIp({
+          remoteAddr: req.socket.remoteAddress,
+          forwardedFor: headerValue(req.headers["x-forwarded-for"]),
+          realIp: headerValue(req.headers["x-real-ip"]),
+          trustedProxies,
+          allowRealIpFallback,
+        }) ??
+        req.socket.remoteAddress ??
+        "unknown";
+      const rateLimitKey = `${path}:${clientIp}`;
+      const nowMs = Date.now();
+      if (
+        !applyBasicWebhookRequestGuards({
+          req,
+          res,
+          rateLimiter: webhookRateLimiter,
+          rateLimitKey,
+          nowMs,
+        })
+      ) {
+        recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
+        return true;
+      }
+
       const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
       const target = resolveWebhookTargetWithAuthOrRejectSync({
         targets,
@@ -150,16 +180,12 @@ export async function handleZaloWebhookRequest(
         recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
         return true;
       }
-      const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
-      const nowMs = Date.now();
-
+      // Preserve the historical 401-before-415 ordering for invalid secrets while still
+      // consuming rate-limit budget on unauthenticated guesses.
       if (
         !applyBasicWebhookRequestGuards({
           req,
           res,
-          rateLimiter: webhookRateLimiter,
-          rateLimitKey,
-          nowMs,
           requireJsonContentType: true,
         })
       ) {
@@ -194,7 +220,7 @@ export async function handleZaloWebhookRequest(
         return true;
       }
 
-      if (isReplayEvent(update, nowMs)) {
+      if (isReplayEvent(target, update, nowMs)) {
         res.statusCode = 200;
         res.end("ok");
         return true;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 
@@ -98,6 +99,41 @@ describe("buildInboundMetaSystemPrompt", () => {
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["sender_id"]).toBeUndefined();
+  });
+
+  it("includes Slack mrkdwn response format hints for Slack chats", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "channel:C123",
+      OriginatingChannel: "slack",
+      Provider: "slack",
+      Surface: "slack",
+      ChatType: "channel",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["response_format"]).toEqual({
+      text_markup: "slack_mrkdwn",
+      rules: [
+        "Use Slack mrkdwn, not standard Markdown.",
+        "Bold uses *single asterisks*.",
+        "Links use <url|label>.",
+        "Code blocks use triple backticks without a language identifier.",
+        "Do not use markdown headings or pipe tables.",
+      ],
+    });
+  });
+
+  it("omits response format hints for non-Slack chats", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "telegram:123",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["response_format"]).toBeUndefined();
   });
 });
 
@@ -215,6 +251,25 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+  });
+
+  it("honors envelope user timezone for conversation timestamps", () => {
+    withEnv({ TZ: "America/Los_Angeles" }, () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          MessageSid: "msg-with-user-tz",
+          Timestamp: Date.UTC(2026, 2, 19, 0, 0),
+        } as TemplateContext,
+        {
+          timezone: "user",
+          userTimezone: "Asia/Tokyo",
+        },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["timestamp"]).toBe("Thu 2026-03-19 09:00 GMT+9");
+    });
   });
 
   it("omits invalid timestamps instead of throwing", () => {

@@ -1,12 +1,16 @@
+import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../../gateway/credentials.js";
+import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
-import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
+import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { pickGatewaySelfPresence } from "../gateway-presence.js";
+
+const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
 type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
@@ -64,20 +68,7 @@ function parseIntOrNull(value: unknown): number | null {
 }
 
 export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {
-  const value =
-    typeof raw === "string"
-      ? raw.trim()
-      : typeof raw === "number" || typeof raw === "bigint"
-        ? String(raw)
-        : "";
-  if (!value) {
-    return fallbackMs;
-  }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`invalid --timeout: ${value}`);
-  }
-  return parsed;
+  return parseTimeoutMsWithFallback(raw, fallbackMs);
 }
 
 function normalizeWsUrl(value: string): string | null {
@@ -126,14 +117,34 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   return targets;
 }
 
-export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
-  if (kind === "localLoopback") {
-    return Math.min(800, overallMs);
+function isLoopbackProbeTarget(target: Pick<GatewayStatusTarget, "kind" | "url">): boolean {
+  if (target.kind === "localLoopback") {
+    return true;
   }
-  if (kind === "sshTunnel") {
+  try {
+    return isLoopbackHost(new URL(target.url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function resolveProbeBudgetMs(
+  overallMs: number,
+  target: Pick<GatewayStatusTarget, "kind" | "active" | "url">,
+): number {
+  if (target.kind === "sshTunnel") {
     return Math.min(2000, overallMs);
   }
-  return Math.min(1500, overallMs);
+  if (!isLoopbackProbeTarget(target)) {
+    return Math.min(1500, overallMs);
+  }
+  if (target.kind === "localLoopback" && !target.active) {
+    return Math.min(800, overallMs);
+  }
+  // Active/discovered loopback probes and explicit loopback URLs should honor
+  // the caller budget because healthy local detail RPCs can legitimately take
+  // longer than the legacy short caps.
+  return overallMs;
 }
 
 export function sanitizeSshTarget(value: unknown): string | null {
@@ -313,7 +324,7 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
 }
 
 export function buildNetworkHints(cfg: OpenClawConfig) {
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
   const port = resolveGatewayPort(cfg);
   return {
     localLoopbackUrl: `ws://127.0.0.1:${port}`,
@@ -336,6 +347,17 @@ export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
   return `${colorize(rich, theme.heading, kindLabel)} ${colorize(rich, theme.muted, target.url)}`;
 }
 
+export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
+  if (probe.ok || probe.connectLatencyMs == null) {
+    return false;
+  }
+  return MISSING_SCOPE_PATTERN.test(probe.error ?? "");
+}
+
+export function isProbeReachable(probe: GatewayProbeResult): boolean {
+  return probe.ok || isScopeLimitedProbeFailure(probe);
+}
+
 export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
   if (probe.ok) {
     const latency =
@@ -347,7 +369,10 @@ export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean)
   if (probe.connectLatencyMs != null) {
     const latency =
       typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${colorize(rich, theme.error, "RPC: failed")}${detail}`;
+    const rpcStatus = isScopeLimitedProbeFailure(probe)
+      ? colorize(rich, theme.warn, "RPC: limited")
+      : colorize(rich, theme.error, "RPC: failed");
+    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${rpcStatus}${detail}`;
   }
 
   return `${colorize(rich, theme.error, "Connect: failed")}${detail}`;

@@ -4,12 +4,23 @@ import type {
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
-import type { StickerMetadata } from "../telegram/bot/types.js";
 import type { InternalMessageChannel } from "../utils/message-channel.js";
 import type { CommandArgs } from "./commands-registry.types.js";
 
 /** Valid message channels for routing. */
 export type OriginatingChannelType = ChannelId | InternalMessageChannel;
+
+export type StickerContextMetadata = {
+  cachedDescription?: string;
+  emoji?: string;
+  setName?: string;
+  description?: string;
+  fileId?: string;
+  fileUniqueId?: string;
+  uniqueFileId?: string;
+  isAnimated?: boolean;
+  isVideo?: boolean;
+} & Record<string, unknown>;
 
 export type MsgContext = {
   Body?: string;
@@ -94,7 +105,7 @@ export type MsgContext = {
   MediaUrls?: string[];
   MediaTypes?: string[];
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
-  Sticker?: StickerMetadata;
+  Sticker?: StickerContextMetadata;
   /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
   StickerMediaIncluded?: boolean;
   OutputDir?: string;
@@ -132,6 +143,8 @@ export type MsgContext = {
   Provider?: string;
   /** Provider surface label (e.g. discord, slack). Prefer this over `Provider` when available. */
   Surface?: string;
+  /** Platform bot username when command mentions should be normalized. */
+  BotUsername?: string;
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
@@ -143,6 +156,8 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
+  /** Trusted system override for contexts that must never inherit owner semantics. */
+  ForceSenderIsOwnerFalse?: boolean;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */

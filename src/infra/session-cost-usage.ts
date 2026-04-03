@@ -6,6 +6,13 @@ import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  isPrimarySessionTranscriptFileName,
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
+  parseSessionArchiveTimestamp,
+  parseUsageCountedSessionIdFromFileName,
+} from "../config/sessions/artifacts.js";
+import {
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
@@ -36,7 +43,6 @@ import type {
 
 export type {
   CostUsageDailyEntry,
-  CostUsageModelEntry,
   CostUsageSummary,
   CostUsageTotals,
   DiscoveredSession,
@@ -288,6 +294,69 @@ async function scanUsageFile(params: {
   });
 }
 
+export function resolveExistingUsageSessionFile(params: {
+  sessionId?: string;
+  sessionEntry?: SessionEntry;
+  sessionFile?: string;
+  agentId?: string;
+}): string | undefined {
+  const candidate =
+    params.sessionFile ??
+    (params.sessionId
+      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
+          agentId: params.agentId,
+        })
+      : undefined);
+
+  if (candidate && fs.existsSync(candidate)) {
+    return candidate;
+  }
+
+  const sessionId = params.sessionId?.trim();
+  if (!sessionId) {
+    return candidate;
+  }
+
+  try {
+    const sessionsDir = candidate
+      ? path.dirname(candidate)
+      : resolveSessionTranscriptsDirForAgent(params.agentId);
+    const baseFileName = `${sessionId}.jsonl`;
+    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter((entry) => {
+      return (
+        entry.isFile() &&
+        (entry.name === baseFileName ||
+          entry.name.startsWith(`${baseFileName}.reset.`) ||
+          entry.name.startsWith(`${baseFileName}.deleted.`))
+      );
+    });
+
+    const primary = entries.find((entry) => entry.name === baseFileName);
+    if (primary) {
+      return path.join(sessionsDir, primary.name);
+    }
+
+    const latestArchive = entries
+      .filter((entry) => isSessionArchiveArtifactName(entry.name))
+      .map((entry) => entry.name)
+      .toSorted((a, b) => {
+        const tsA =
+          parseSessionArchiveTimestamp(a, "deleted") ??
+          parseSessionArchiveTimestamp(a, "reset") ??
+          0;
+        const tsB =
+          parseSessionArchiveTimestamp(b, "deleted") ??
+          parseSessionArchiveTimestamp(b, "reset") ??
+          0;
+        return tsB - tsA || b.localeCompare(a);
+      })[0];
+
+    return latestArchive ? path.join(sessionsDir, latestArchive) : candidate;
+  } catch {
+    return candidate;
+  }
+}
+
 export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
@@ -312,10 +381,6 @@ export async function loadCostUsageSummary(params?: {
   }
 
   const dailyMap = new Map<string, CostUsageTotals>();
-  const modelMap = new Map<
-    string,
-    CostUsageTotals & { sessionFiles: Set<string>; provider?: string }
-  >();
   const totals = emptyTotals();
 
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
@@ -323,9 +388,17 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
+          const stats = await fs.promises.stat(filePath).catch(() => null);
+          if (!stats) {
+            return null;
+          }
+          // Include file if it was modified after our start time
+          if (stats.mtimeMs < sinceTime) {
+            return null;
+          }
           return filePath;
         }),
     )
@@ -340,7 +413,6 @@ export async function loadCostUsageSummary(params?: {
         if (!ts || ts < sinceTime || ts > untilTime) {
           return;
         }
-
         const dayKey = formatDayKey(entry.timestamp ?? now);
         const bucket = dailyMap.get(dayKey) ?? emptyTotals();
         applyUsageTotals(bucket, entry.usage);
@@ -350,22 +422,6 @@ export async function loadCostUsageSummary(params?: {
           applyCostTotal(bucket, entry.costTotal);
         }
         dailyMap.set(dayKey, bucket);
-
-        const modelKey = entry.model || "unknown";
-        const modelBucket =
-          modelMap.get(modelKey) ??
-          Object.assign(emptyTotals(), {
-            sessionFiles: new Set<string>(),
-            provider: entry.provider,
-          });
-        applyUsageTotals(modelBucket, entry.usage);
-        if (entry.costBreakdown?.total !== undefined) {
-          applyCostBreakdown(modelBucket, entry.costBreakdown);
-        } else {
-          applyCostTotal(modelBucket, entry.costTotal);
-        }
-        modelBucket.sessionFiles.add(filePath);
-        modelMap.set(modelKey, modelBucket);
 
         applyUsageTotals(totals, entry.usage);
         if (entry.costBreakdown?.total !== undefined) {
@@ -381,13 +437,6 @@ export async function loadCostUsageSummary(params?: {
     .map(([date, bucket]) => Object.assign({ date }, bucket))
     .toSorted((a, b) => a.date.localeCompare(b.date));
 
-  const models = Array.from(modelMap.entries())
-    .map(([model, bucket]) => {
-      const { sessionFiles, ...rest } = bucket;
-      return Object.assign({ model, sessionCount: sessionFiles.size }, rest);
-    })
-    .toSorted((a, b) => b.totalTokens - a.totalTokens);
-
   // Calculate days for backwards compatibility in response
   const days = Math.ceil((untilTime - sinceTime) / (24 * 60 * 60 * 1000)) + 1;
 
@@ -395,7 +444,6 @@ export async function loadCostUsageSummary(params?: {
     updatedAt: Date.now(),
     days,
     daily,
-    models,
     totals,
   };
 }
@@ -412,10 +460,10 @@ export async function discoverAllSessions(params?: {
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
 
-  const discovered: DiscoveredSession[] = [];
+  const discovered = new Map<string, DiscoveredSession>();
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+    if (!entry.isFile() || !isUsageCountedSessionTranscriptFileName(entry.name)) {
       continue;
     }
 
@@ -425,8 +473,11 @@ export async function discoverAllSessions(params?: {
       continue;
     }
 
-    // Extract session ID from filename (remove .jsonl)
-    const sessionId = entry.name.slice(0, -6);
+    const sessionId = parseUsageCountedSessionIdFromFileName(entry.name);
+    if (!sessionId) {
+      continue;
+    }
+    const isPrimaryTranscript = isPrimarySessionTranscriptFileName(entry.name);
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
@@ -463,16 +514,33 @@ export async function discoverAllSessions(params?: {
       // Ignore read errors
     }
 
-    discovered.push({
-      sessionId,
-      sessionFile: filePath,
-      mtime: stats.mtimeMs,
-      firstUserMessage,
-    });
+    const existing = discovered.get(sessionId);
+    const existingIsPrimary = existing
+      ? isPrimarySessionTranscriptFileName(path.basename(existing.sessionFile))
+      : false;
+    const shouldReplace =
+      !existing ||
+      (isPrimaryTranscript && !existingIsPrimary) ||
+      (isPrimaryTranscript === existingIsPrimary && stats.mtimeMs >= existing.mtime);
+
+    if (shouldReplace) {
+      discovered.set(sessionId, {
+        sessionId,
+        sessionFile: filePath,
+        mtime: stats.mtimeMs,
+        firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
+      });
+      continue;
+    }
+
+    if (!existing.firstUserMessage && firstUserMessage) {
+      existing.firstUserMessage = firstUserMessage;
+      discovered.set(sessionId, existing);
+    }
   }
 
   // Sort by mtime descending (most recent first)
-  return discovered.toSorted((a, b) => b.mtime - a.mtime);
+  return Array.from(discovered.values()).toSorted((a, b) => b.mtime - a.mtime);
 }
 
 export async function loadSessionCostSummary(params: {
@@ -484,13 +552,7 @@ export async function loadSessionCostSummary(params: {
   startMs?: number;
   endMs?: number;
 }): Promise<SessionCostSummary | null> {
-  const sessionFile =
-    params.sessionFile ??
-    (params.sessionId
-      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
-          agentId: params.agentId,
-        })
-      : undefined);
+  const sessionFile = resolveExistingUsageSessionFile(params);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -723,11 +785,11 @@ export async function loadSessionCostSummary(params: {
 
   const modelUsage = modelUsageMap.size
     ? Array.from(modelUsageMap.values()).toSorted((a, b) => {
-        const costDiff = b.totals.totalCost - a.totals.totalCost;
+        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
         if (costDiff !== 0) {
           return costDiff;
         }
-        return b.totals.totalTokens - a.totals.totalTokens;
+        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
       })
     : undefined;
 
@@ -761,13 +823,7 @@ export async function loadSessionUsageTimeSeries(params: {
   agentId?: string;
   maxPoints?: number;
 }): Promise<SessionUsageTimeSeries | null> {
-  const sessionFile =
-    params.sessionFile ??
-    (params.sessionId
-      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
-          agentId: params.agentId,
-        })
-      : undefined);
+  const sessionFile = resolveExistingUsageSessionFile(params);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -870,13 +926,7 @@ export async function loadSessionLogs(params: {
   agentId?: string;
   limit?: number;
 }): Promise<SessionLogEntry[] | null> {
-  const sessionFile =
-    params.sessionFile ??
-    (params.sessionId
-      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
-          agentId: params.agentId,
-        })
-      : undefined);
+  const sessionFile = resolveExistingUsageSessionFile(params);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return null;
   }

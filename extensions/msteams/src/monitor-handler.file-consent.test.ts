@@ -1,14 +1,15 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
-import type { MSTeamsAdapter } from "./messenger.js";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import {
   type MSTeamsActivityHandler,
   type MSTeamsMessageHandlerDeps,
   registerMSTeamsHandlers,
 } from "./monitor-handler.js";
+import {
+  createActivityHandler,
+  createMSTeamsMessageHandlerDeps,
+} from "./monitor-handler.test-helpers.js";
 import { clearPendingUploads, getPendingUpload, storePendingUpload } from "./pending-uploads.js";
-import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
@@ -39,52 +40,12 @@ const runtimeStub: PluginRuntime = {
 } as unknown as PluginRuntime;
 
 function createDeps(): MSTeamsMessageHandlerDeps {
-  const adapter: MSTeamsAdapter = {
-    continueConversation: async () => {},
-    process: async () => {},
-  };
-  const conversationStore: MSTeamsConversationStore = {
-    upsert: async () => {},
-    get: async () => null,
-    list: async () => [],
-    remove: async () => false,
-    findByUserId: async () => null,
-  };
-  const pollStore: MSTeamsPollStore = {
-    createPoll: async () => {},
-    getPoll: async () => null,
-    recordVote: async () => null,
-  };
-  return {
+  return createMSTeamsMessageHandlerDeps({
     cfg: {} as OpenClawConfig,
     runtime: {
       error: vi.fn(),
     } as unknown as RuntimeEnv,
-    appId: "test-app-id",
-    adapter,
-    tokenProvider: {
-      getAccessToken: async () => "token",
-    },
-    textLimit: 4000,
-    mediaMaxBytes: 8 * 1024 * 1024,
-    conversationStore,
-    pollStore,
-    log: {
-      info: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    },
-  };
-}
-
-function createActivityHandler(): MSTeamsActivityHandler {
-  let handler: MSTeamsActivityHandler;
-  handler = {
-    onMessage: () => handler,
-    onMembersAdded: () => handler,
-    run: async () => {},
-  };
-  return handler;
+  });
 }
 
 function createInvokeContext(params: {
@@ -123,6 +84,39 @@ function createInvokeContext(params: {
   };
 }
 
+function createConsentInvokeHarness(params: {
+  pendingConversationId?: string;
+  invokeConversationId: string;
+  action: "accept" | "decline";
+}) {
+  const uploadId = storePendingUpload({
+    buffer: Buffer.from("TOP_SECRET_VICTIM_FILE\n"),
+    filename: "secret.txt",
+    contentType: "text/plain",
+    conversationId: params.pendingConversationId ?? "19:victim@thread.v2",
+  });
+  const handler = registerMSTeamsHandlers(
+    createActivityHandler(),
+    createDeps(),
+  ) as MSTeamsActivityHandler & {
+    run: NonNullable<MSTeamsActivityHandler["run"]>;
+  };
+  const { context, sendActivity } = createInvokeContext({
+    conversationId: params.invokeConversationId,
+    uploadId,
+    action: params.action,
+  });
+  return { uploadId, handler, context, sendActivity };
+}
+
+function requirePendingUpload(uploadId: string) {
+  const upload = getPendingUpload(uploadId);
+  if (!upload) {
+    throw new Error(`expected pending upload ${uploadId}`);
+  }
+  return upload;
+}
+
 describe("msteams file consent invoke authz", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
@@ -132,21 +126,12 @@ describe("msteams file consent invoke authz", () => {
   });
 
   it("uploads when invoke conversation matches pending upload conversation", async () => {
-    const uploadId = storePendingUpload({
-      buffer: Buffer.from("TOP_SECRET_VICTIM_FILE\n"),
-      filename: "secret.txt",
-      contentType: "text/plain",
-      conversationId: "19:victim@thread.v2",
-    });
-    const deps = createDeps();
-    const handler = registerMSTeamsHandlers(createActivityHandler(), deps);
-    const { context, sendActivity } = createInvokeContext({
-      conversationId: "19:victim@thread.v2;messageid=abc123",
-      uploadId,
+    const { uploadId, handler, context, sendActivity } = createConsentInvokeHarness({
+      invokeConversationId: "19:victim@thread.v2;messageid=abc123",
       action: "accept",
     });
 
-    await handler.run?.(context);
+    await handler.run(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -166,21 +151,12 @@ describe("msteams file consent invoke authz", () => {
   });
 
   it("rejects cross-conversation accept invoke and keeps pending upload", async () => {
-    const uploadId = storePendingUpload({
-      buffer: Buffer.from("TOP_SECRET_VICTIM_FILE\n"),
-      filename: "secret.txt",
-      contentType: "text/plain",
-      conversationId: "19:victim@thread.v2",
-    });
-    const deps = createDeps();
-    const handler = registerMSTeamsHandlers(createActivityHandler(), deps);
-    const { context, sendActivity } = createInvokeContext({
-      conversationId: "19:attacker@thread.v2",
-      uploadId,
+    const { uploadId, handler, context, sendActivity } = createConsentInvokeHarness({
+      invokeConversationId: "19:attacker@thread.v2",
       action: "accept",
     });
 
-    await handler.run?.(context);
+    await handler.run(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -194,25 +170,20 @@ describe("msteams file consent invoke authz", () => {
     );
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(getPendingUpload(uploadId)).toBeDefined();
+    expect(requirePendingUpload(uploadId)).toMatchObject({
+      conversationId: "19:victim@thread.v2",
+      filename: "secret.txt",
+      contentType: "text/plain",
+    });
   });
 
   it("ignores cross-conversation decline invoke and keeps pending upload", async () => {
-    const uploadId = storePendingUpload({
-      buffer: Buffer.from("TOP_SECRET_VICTIM_FILE\n"),
-      filename: "secret.txt",
-      contentType: "text/plain",
-      conversationId: "19:victim@thread.v2",
-    });
-    const deps = createDeps();
-    const handler = registerMSTeamsHandlers(createActivityHandler(), deps);
-    const { context, sendActivity } = createInvokeContext({
-      conversationId: "19:attacker@thread.v2",
-      uploadId,
+    const { uploadId, handler, context, sendActivity } = createConsentInvokeHarness({
+      invokeConversationId: "19:attacker@thread.v2",
       action: "decline",
     });
 
-    await handler.run?.(context);
+    await handler.run(context);
 
     // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
@@ -222,7 +193,11 @@ describe("msteams file consent invoke authz", () => {
     );
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(getPendingUpload(uploadId)).toBeDefined();
+    expect(requirePendingUpload(uploadId)).toMatchObject({
+      conversationId: "19:victim@thread.v2",
+      filename: "secret.txt",
+      contentType: "text/plain",
+    });
     expect(sendActivity).toHaveBeenCalledTimes(1);
   });
 });

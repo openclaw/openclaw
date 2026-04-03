@@ -6,6 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClientOptions } from "ws";
 import type {
   ClientEvent,
   OpenAIWebSocketEvent,
@@ -34,12 +35,12 @@ const { MockWebSocket } = vi.hoisted(() => {
 
     readyState: number = MockWebSocket.CONNECTING;
     url: string;
-    options: Record<string, unknown>;
+    options: ClientOptions | undefined;
     sentMessages: string[] = [];
 
     private _listeners: Map<string, AnyFn[]> = new Map();
 
-    constructor(url: string, options?: Record<string, unknown>) {
+    constructor(url: string, options?: ClientOptions) {
       this.url = url;
       this.options = options ?? {};
       MockWebSocket.lastInstance = this;
@@ -167,6 +168,7 @@ function buildManager(opts?: ConstructorParameters<typeof OpenAIWebSocketManager
   return new OpenAIWebSocketManager({
     // Use faster backoff in tests to avoid slow timer waits
     backoffDelaysMs: [10, 20, 40, 80, 160],
+    socketFactory: (url, options) => new MockWebSocket(url, options) as never,
     ...opts,
   });
 }
@@ -230,6 +232,58 @@ describe("OpenAIWebSocketManager", () => {
 
       sock.simulateOpen();
       await connectPromise;
+    });
+
+    it("adds OpenClaw attribution headers on the native OpenAI websocket", async () => {
+      const manager = buildManager();
+      const connectPromise = manager.connect("sk-test-key");
+
+      const sock = lastSocket();
+      expect(sock.options).toMatchObject({
+        headers: expect.objectContaining({
+          originator: "openclaw",
+          version: expect.any(String),
+          "User-Agent": expect.stringMatching(/^openclaw\//),
+        }),
+      });
+
+      sock.simulateOpen();
+      await connectPromise;
+    });
+
+    it("does not add hidden attribution headers on custom websocket endpoints", async () => {
+      const manager = buildManager({
+        url: "wss://proxy.example.com/v1/responses",
+      });
+      const connectPromise = manager.connect("sk-test-key");
+
+      const sock = lastSocket();
+      expect(sock.options).toMatchObject({
+        headers: expect.objectContaining({
+          Authorization: "Bearer sk-test-key",
+          "OpenAI-Beta": "responses-websocket=v1",
+        }),
+      });
+      const headers = sock.options?.headers as Record<string, string>;
+      expect(headers.originator).toBeUndefined();
+      expect(headers.version).toBeUndefined();
+      expect(headers["User-Agent"]).toBeUndefined();
+
+      sock.simulateOpen();
+      await connectPromise;
+    });
+
+    it("rejects insecure websocket TLS overrides", async () => {
+      const manager = buildManager({
+        request: {
+          tls: {
+            insecureSkipVerify: true,
+          },
+        },
+      });
+
+      await expect(manager.connect("sk-test-key")).rejects.toThrow(/insecureskipverify/i);
+      expect(MockWebSocket.lastInstance).toBeNull();
     });
 
     it("resolves when the connection opens", async () => {
@@ -595,14 +649,12 @@ describe("OpenAIWebSocketManager", () => {
 
       manager.warmUp({
         model: "gpt-5.2",
-        tools: [{ type: "function", function: { name: "exec", description: "Run a command" } }],
+        tools: [{ type: "function", name: "exec", description: "Run a command" }],
       });
 
       const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<string, unknown>;
       expect(sent["tools"]).toHaveLength(1);
-      expect((sent["tools"] as Array<{ function?: { name?: string } }>)[0]?.function?.name).toBe(
-        "exec",
-      );
+      expect((sent["tools"] as Array<{ name?: string }>)[0]?.name).toBe("exec");
     });
   });
 

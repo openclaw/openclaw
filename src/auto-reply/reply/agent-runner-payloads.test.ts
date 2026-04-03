@@ -9,6 +9,20 @@ const baseParams = {
   replyToMode: "off" as const,
 };
 
+async function expectSameTargetRepliesSuppressed(params: { provider: string; to: string }) {
+  const { replyPayloads } = await buildReplyPayloads({
+    ...baseParams,
+    payloads: [{ text: "hello world!" }],
+    messageProvider: "heartbeat",
+    originatingChannel: "feishu",
+    originatingTo: "ou_abc123",
+    messagingToolSentTexts: ["different message"],
+    messagingToolSentTargets: [{ tool: "message", provider: params.provider, to: params.to }],
+  });
+
+  expect(replyPayloads).toHaveLength(0);
+}
+
 describe("buildReplyPayloads media filter integration", () => {
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
     const { replyPayloads } = await buildReplyPayloads({
@@ -142,28 +156,62 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("suppresses same-target replies when message tool target provider is generic", async () => {
+    await expectSameTargetRepliesSuppressed({ provider: "message", to: "ou_abc123" });
+  });
+
+  it("suppresses same-target replies when target provider is channel alias", async () => {
+    await expectSameTargetRepliesSuppressed({ provider: "lark", to: "ou_abc123" });
+  });
+
+  it("drops all final payloads when block pipeline streamed successfully", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+    };
+    // shouldDropFinalPayloads short-circuits to [] when the pipeline streamed
+    // without aborting, so hasSentPayload is never reached.
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
-      payloads: [{ text: "hello world!" }],
-      messageProvider: "heartbeat",
-      originatingChannel: "feishu",
-      originatingTo: "ou_abc123",
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "message", provider: "message", to: "ou_abc123" }],
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      replyToMode: "all",
+      payloads: [{ text: "response", replyToId: "post-123" }],
     });
 
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("suppresses same-target replies when target provider is channel alias", async () => {
+  it("drops all final payloads during silent turns, including media-only payloads", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
-      payloads: [{ text: "hello world!" }],
-      messageProvider: "heartbeat",
-      originatingChannel: "feishu",
-      originatingTo: "ou_abc123",
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "message", provider: "lark", to: "ou_abc123" }],
+      silentExpected: true,
+      payloads: [{ text: "NO_REPLY", mediaUrl: "file:///tmp/photo.jpg" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("deduplicates final payloads against directly sent block keys regardless of replyToId", async () => {
+    // When block streaming is not active but directlySentBlockKeys has entries
+    // (e.g. from pre-tool flush), the key should match even if replyToId differs.
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>();
+    directlySentBlockKeys.add(
+      createBlockReplyContentKey({ text: "response", replyToId: "post-1" }),
+    );
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      replyToMode: "off",
+      payloads: [{ text: "response" }],
     });
 
     expect(replyPayloads).toHaveLength(0);

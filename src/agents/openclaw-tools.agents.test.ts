@@ -15,7 +15,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+
+let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 describe("agents_list", () => {
   type AgentConfig = NonNullable<NonNullable<typeof configOverride.agents>["list"]>[number];
@@ -44,10 +45,13 @@ describe("agents_list", () => {
       .details?.agents;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     configOverride = {
       session: createPerSenderSessionConfig(),
     };
+    await import("./test-helpers/fast-core-tools.js");
+    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
   });
 
   it("defaults to the requester agent only", async () => {
@@ -78,6 +82,34 @@ describe("agents_list", () => {
 
     const tool = requireAgentsListTool();
     const result = await tool.execute("call2", {});
+    const agents = readAgentList(result);
+    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
+  });
+
+  it("falls back to default allowlist when the requester agent omits allowAgents", async () => {
+    configOverride = {
+      session: createPerSenderSessionConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["research"],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            name: "Main",
+          },
+          {
+            id: "research",
+            name: "Research",
+          },
+        ],
+      },
+    };
+
+    const tool = requireAgentsListTool();
+    const result = await tool.execute("call2b", {});
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
   });

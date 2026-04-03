@@ -1,5 +1,11 @@
 .git
 .worktrees
+
+# Sensitive files – scripts/docker/setup.sh writes .env with OPENCLAW_GATEWAY_TOKEN
+# into the project root; keep it out of the build context.
+.env
+.env.*
+
 .bun-cache
 .bun
 .tmp
@@ -27,6 +33,8 @@ node_modules
 **/.next
 coverage
 **/coverage
+docs/.generated
+**/.generated
 *.log
 tmp
 **/tmp
