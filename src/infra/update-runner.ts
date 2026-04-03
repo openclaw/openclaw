@@ -28,6 +28,7 @@ import {
   globalInstallArgs,
   globalInstallFallbackArgs,
   resolveExpectedInstalledVersionFromSpec,
+  resolveGlobalManagerCommand,
   resolveGlobalInstallSpec,
   resolveGlobalPackageRoot,
 } from "./update-global.js";
@@ -1015,10 +1016,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       tag,
       env: globalInstallEnv,
     });
+    const globalCommand = resolveGlobalManagerCommand(globalManager, path.dirname(pkgRoot));
     const updateStep = await runStep({
       runCommand,
       name: "global update",
-      argv: globalInstallArgs(globalManager, spec),
+      argv: globalInstallArgs(globalManager, spec, globalCommand),
       cwd: pkgRoot,
       timeoutMs,
       env: globalInstallEnv,
@@ -1035,7 +1037,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         const fallbackStep = await runStep({
           runCommand,
           name: "global update (omit optional)",
-          argv: fallbackArgv,
+          argv: globalInstallFallbackArgs(globalManager, spec, globalCommand)!,
           cwd: pkgRoot,
           timeoutMs,
           env: globalInstallEnv,
