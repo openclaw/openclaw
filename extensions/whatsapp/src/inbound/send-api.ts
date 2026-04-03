@@ -2,6 +2,7 @@ import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import type { ActiveWebSendOptions } from "../active-listener.js";
+import { shouldSendAsPtt } from "../media-utils.js";
 
 function recordWhatsAppOutbound(accountId: string) {
   recordChannelActivity({
@@ -9,13 +10,6 @@ function recordWhatsAppOutbound(accountId: string) {
     accountId,
     direction: "outbound",
   });
-}
-
-function shouldSendAsPtt(mediaType: string): boolean {
-  const normalized = mediaType.trim().toLowerCase();
-  return (
-    normalized === "audio/ogg" || normalized.startsWith("audio/ogg;") || normalized === "audio/opus"
-  );
 }
 
 function resolveOutboundMessageId(result: unknown): string {

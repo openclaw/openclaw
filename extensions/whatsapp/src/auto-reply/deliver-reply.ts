@@ -9,6 +9,7 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
 import { sleep } from "openclaw/plugin-sdk/text-runtime";
+import { shouldSendAsPtt } from "../media-utils.js";
 import { loadWebMedia } from "../media.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
@@ -17,16 +18,6 @@ import type { WebInboundMsg } from "./types.js";
 import { elide } from "./util.js";
 
 const REASONING_PREFIX = "reasoning:";
-
-function shouldSendAsPtt(contentType?: string | null): boolean {
-  if (typeof contentType !== "string") {
-    return false;
-  }
-  const normalized = contentType.trim().toLowerCase();
-  return (
-    normalized === "audio/ogg" || normalized.startsWith("audio/ogg;") || normalized === "audio/opus"
-  );
-}
 
 function shouldSuppressReasoningReply(payload: ReplyPayload): boolean {
   if (payload.isReasoning === true) {
