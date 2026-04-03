@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { createMinimaxFastModeWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import {
@@ -31,6 +32,10 @@ const PROVIDER_LABEL = "MiniMax";
 const DEFAULT_MODEL = MINIMAX_DEFAULT_MODEL_ID;
 const DEFAULT_BASE_URL_CN = "https://api.minimaxi.com/anthropic";
 const DEFAULT_BASE_URL_GLOBAL = "https://api.minimax.io/anthropic";
+
+function resolveMinimaxReasoningOutputMode(): "tagged" {
+  return "tagged";
+}
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {
   return region === "cn" ? DEFAULT_BASE_URL_CN : DEFAULT_BASE_URL_GLOBAL;
@@ -165,10 +170,9 @@ export default definePluginEntry({
     api.registerProvider({
       id: API_PROVIDER_ID,
       label: PROVIDER_LABEL,
+      hookAliases: ["minimax-cn"],
       docsPath: "/providers/minimax",
-      aliases: ["minimax-cn"],
       envVars: ["MINIMAX_API_KEY"],
-      resolveReasoningOutputMode: () => "native",
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: API_PROVIDER_ID,
@@ -229,6 +233,9 @@ export default definePluginEntry({
         });
         return apiKey ? { token: apiKey } : null;
       },
+      wrapStreamFn: (ctx) =>
+        createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+      resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
       isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
       fetchUsageSnapshot: async (ctx) =>
         await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
@@ -240,9 +247,9 @@ export default definePluginEntry({
     api.registerProvider({
       id: PORTAL_PROVIDER_ID,
       label: PROVIDER_LABEL,
+      hookAliases: ["minimax-portal-cn"],
       docsPath: "/providers/minimax",
       envVars: ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
-      resolveReasoningOutputMode: () => "native",
       catalog: {
         run: async (ctx) => resolvePortalCatalog(ctx),
       },
@@ -278,6 +285,9 @@ export default definePluginEntry({
           run: createOAuthHandler("cn"),
         },
       ],
+      wrapStreamFn: (ctx) =>
+        createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+      resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
       isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
     });
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
