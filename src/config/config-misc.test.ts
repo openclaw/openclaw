@@ -794,6 +794,65 @@ describe("config strict validation", () => {
     });
   });
 
+  it("accepts legacy discord voice tts provider keys via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        channels: {
+          discord: {
+            voice: {
+              tts: {
+                provider: "elevenlabs",
+                elevenlabs: {
+                  voiceId: "voice-1",
+                },
+              },
+            },
+            accounts: {
+              main: {
+                voice: {
+                  tts: {
+                    edge: {
+                      voice: "en-US-AvaNeural",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.voice.tts")).toBe(
+        true,
+      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.channels?.discord?.voice?.tts?.providers?.elevenlabs).toEqual({
+        voiceId: "voice-1",
+      });
+      expect(
+        snap.sourceConfig.channels?.discord?.accounts?.main?.voice?.tts?.providers?.microsoft,
+      ).toEqual({
+        voice: "en-US-AvaNeural",
+      });
+      expect(
+        (snap.sourceConfig.channels?.discord?.voice?.tts as Record<string, unknown> | undefined)
+          ?.elevenlabs,
+      ).toBeUndefined();
+      expect(
+        (
+          snap.sourceConfig.channels?.discord?.accounts?.main?.voice?.tts as
+            | Record<string, unknown>
+            | undefined
+        )?.edge,
+      ).toBeUndefined();
+    });
+  });
+
   it("does not mark resolved-only gateway.bind aliases as auto-migratable legacy", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {

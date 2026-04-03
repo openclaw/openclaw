@@ -5,6 +5,7 @@ import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runti
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { loadBundledPluginTestApiSync } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import {
   __testing,
