@@ -1,0 +1,28 @@
+import { defineProject } from "vitest/config";
+import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
+import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
+
+export function loadBoundaryIncludePatternsFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): string[] | null {
+  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+}
+
+export function createBoundaryVitestConfig(env: Record<string, string | undefined> = process.env) {
+  return defineProject({
+    ...sharedVitestConfig,
+    test: {
+      ...sharedVitestConfig.test,
+      name: "boundary",
+      isolate: false,
+      runner: "./test/non-isolated-runner.ts",
+      include: loadBoundaryIncludePatternsFromEnv(env) ?? boundaryTestFiles,
+      // Keep this lane free of OpenClaw runtime bootstrap so pure infra/boundary
+      // suites can avoid plugin/channel setup import cost.
+      setupFiles: [],
+    },
+  });
+}
+
+export default createBoundaryVitestConfig();

@@ -3,11 +3,17 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
 
+type FeishuSendTarget = {
+  client: ReturnType<typeof createFeishuClient>;
+  receiveId: string;
+  receiveIdType: ReturnType<typeof resolveReceiveIdType>;
+};
+
 export function resolveFeishuSendTarget(params: {
   cfg: ClawdbotConfig;
   to: string;
   accountId?: string;
-}) {
+}): FeishuSendTarget {
   const target = params.to.trim();
   const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {

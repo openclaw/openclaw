@@ -34,10 +34,10 @@ class ConnectionManager(
       val stableId = endpoint.stableId
       val stored = storedFingerprint?.trim().takeIf { !it.isNullOrEmpty() }
       val isManual = stableId.startsWith("manual|")
-      val isLoopback = isLoopbackGatewayHost(endpoint.host)
+      val cleartextAllowedHost = isLoopbackGatewayHost(endpoint.host)
 
       if (isManual) {
-        if (!manualTlsEnabled && isLoopback) return null
+        if (!manualTlsEnabled && cleartextAllowedHost) return null
         if (!stored.isNullOrBlank()) {
           return GatewayTlsParams(
             required = true,
@@ -75,7 +75,7 @@ class ConnectionManager(
         )
       }
 
-      if (!isLoopback) {
+      if (!cleartextAllowedHost) {
         return GatewayTlsParams(
           required = true,
           expectedFingerprint = null,

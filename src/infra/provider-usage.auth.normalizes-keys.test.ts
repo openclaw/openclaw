@@ -160,8 +160,10 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
   return {
     ...actual,
     ...providerRuntimeMocks.providerRuntimeMock,
@@ -169,8 +171,10 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/provider-runtime.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/provider-runtime.ts")>();
+vi.mock("../plugins/provider-runtime.ts", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.ts")>(
+    "../plugins/provider-runtime.ts",
+  );
   return {
     ...actual,
     ...providerRuntimeMocks.providerRuntimeMock,
@@ -205,6 +209,9 @@ describe("resolveProviderAuths key normalization", () => {
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-suite-"));
+    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
+    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
+    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
   });
 
   afterAll(async () => {
@@ -213,11 +220,7 @@ describe("resolveProviderAuths key normalization", () => {
     suiteCase = 0;
   });
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
-    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
+  beforeEach(() => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();

@@ -1,39 +1,96 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+import { compileSlackInteractiveReplies } from "./interactive-replies.js";
 
-describe("isSlackInteractiveRepliesEnabled", () => {
-  it("uses the configured default account when accountId is unknown and multiple accounts exist", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          defaultAccount: "one",
-          accounts: {
-            one: {
-              capabilities: { interactiveReplies: true },
-            },
-            two: {},
-          },
+describe("compileSlackInteractiveReplies", () => {
+  it("compiles inline Slack button directives into shared interactive blocks", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[bot] hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
+    });
+
+    expect(result.text).toBe("[bot] hello");
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "[bot] hello",
         },
-      },
-    } as OpenClawConfig;
-
-    expect(isSlackInteractiveRepliesEnabled({ cfg, accountId: undefined })).toBe(true);
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Retry",
+              value: "retry",
+            },
+            {
+              label: "Ignore",
+              value: "ignore",
+            },
+          ],
+        },
+      ],
+    });
   });
 
-  it("uses the only configured account when accountId is unknown", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          accounts: {
-            only: {
-              capabilities: { interactiveReplies: true },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+  it("compiles simple trailing Options lines into Slack buttons", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "Current verbose level: off.\nOptions: on, full, off.",
+    });
 
-    expect(isSlackInteractiveRepliesEnabled({ cfg, accountId: undefined })).toBe(true);
+    expect(result.text).toBe("Current verbose level: off.");
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "Current verbose level: off.",
+        },
+        {
+          type: "buttons",
+          buttons: [
+            { label: "on", value: "on" },
+            { label: "full", value: "full" },
+            { label: "off", value: "off" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("uses a Slack select when Options lines exceed button capacity", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
+    });
+
+    expect(result.text).toBe("Choose a reasoning level.");
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "Choose a reasoning level.",
+        },
+        {
+          type: "select",
+          placeholder: "Choose an option",
+          options: [
+            { label: "off", value: "off" },
+            { label: "minimal", value: "minimal" },
+            { label: "low", value: "low" },
+            { label: "medium", value: "medium" },
+            { label: "high", value: "high" },
+            { label: "adaptive", value: "adaptive" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("leaves complex Options lines as plain text", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
+    });
+
+    expect(result.text).toBe(
+      "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
+    );
+    expect(result.interactive).toBeUndefined();
   });
 });

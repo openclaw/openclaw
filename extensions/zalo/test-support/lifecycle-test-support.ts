@@ -1,7 +1,6 @@
 import { request as httpRequest } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
 import { expect, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { ResolvedZaloAccount } from "../src/types.js";
 
 export function createLifecycleConfig(params: {
@@ -123,8 +122,43 @@ export function createImageLifecycleCore() {
     path: "/tmp/zalo-photo.jpg",
     contentType: "image/jpeg",
   }));
-  const core = createPluginRuntimeMock({
+  const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
+  const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
+  const core = {
+    logging: {
+      shouldLogVerbose: vi.fn(
+        () => false,
+      ) as unknown as PluginRuntime["logging"]["shouldLogVerbose"],
+    },
     channel: {
+      pairing: {
+        readAllowFromStore:
+          readAllowFromStoreMock as unknown as PluginRuntime["channel"]["pairing"]["readAllowFromStore"],
+        upsertPairingRequest:
+          upsertPairingRequestMock as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
+      },
+      routing: {
+        resolveAgentRoute: vi.fn(() => ({
+          agentId: "main",
+          accountId: "default",
+          sessionKey: "agent:main:zalo:direct:chat-123",
+        })) as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+      },
+      session: {
+        resolveStorePath: vi.fn(
+          () => "/tmp/zalo-sessions.json",
+        ) as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
+        readSessionUpdatedAt: vi.fn(
+          () => undefined,
+        ) as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+        recordInboundSession:
+          recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
+      },
+      text: {
+        resolveMarkdownTableMode: vi.fn(
+          () => "code",
+        ) as unknown as PluginRuntime["channel"]["text"]["resolveMarkdownTableMode"],
+      },
       media: {
         fetchRemoteMedia:
           fetchRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
@@ -134,13 +168,15 @@ export function createImageLifecycleCore() {
       reply: {
         finalizeInboundContext:
           finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+        resolveEnvelopeFormatOptions: vi.fn(() => ({
+          template: "channel+name+time",
+        })) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+        formatAgentEnvelope: vi.fn(
+          (opts: { body: string }) => opts.body,
+        ) as unknown as PluginRuntime["channel"]["reply"]["formatAgentEnvelope"],
         dispatchReplyWithBufferedBlockDispatcher: vi.fn(
           async () => undefined,
         ) as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-      },
-      session: {
-        recordInboundSession:
-          recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(
@@ -154,13 +190,15 @@ export function createImageLifecycleCore() {
         ) as unknown as PluginRuntime["channel"]["commands"]["isControlCommandMessage"],
       },
     },
-  });
+  } as PluginRuntime;
   return {
     core,
     finalizeInboundContextMock,
     recordInboundSessionMock,
     fetchRemoteMediaMock,
     saveMediaBufferMock,
+    readAllowFromStoreMock,
+    upsertPairingRequestMock,
   };
 }
 

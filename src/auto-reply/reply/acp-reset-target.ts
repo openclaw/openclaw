@@ -35,6 +35,25 @@ function normalizeText(value: string | undefined | null): string {
   return value?.trim() ?? "";
 }
 
+function resolveResetTargetAccountId(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  accountId?: string | null;
+}): string {
+  const explicit = normalizeText(params.accountId);
+  if (explicit) {
+    return explicit;
+  }
+
+  const channelCfg = (params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>)[
+    params.channel
+  ];
+  const configuredDefault = channelCfg?.defaultAccount;
+  return typeof configuredDefault === "string" && configuredDefault.trim()
+    ? configuredDefault.trim()
+    : DEFAULT_ACCOUNT_ID;
+}
+
 function resolveRawConfiguredAcpSessionKey(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -102,7 +121,11 @@ export function resolveEffectiveResetTargetSessionKey(params: {
   if (!channel || !conversationId) {
     return activeAcpSessionKey;
   }
-  const accountId = normalizeText(params.accountId) || DEFAULT_ACCOUNT_ID;
+  const accountId = resolveResetTargetAccountId({
+    cfg: params.cfg,
+    channel,
+    accountId: params.accountId,
+  });
   const parentConversationId = normalizeText(params.parentConversationId) || undefined;
   const allowNonAcpBindingSessionKey = Boolean(params.allowNonAcpBindingSessionKey);
 

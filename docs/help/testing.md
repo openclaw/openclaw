@@ -24,6 +24,8 @@ Most days:
 
 - Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
 - Faster local full-suite run on a roomy machine: `pnpm test:max`
+- Direct Vitest watch loop (modern projects config): `pnpm test:watch`
+- Direct file targeting now routes extension/channel paths too: `pnpm test -- extensions/discord/src/monitor/message-handler.preflight.test.ts`
 
 When you touch tests or want extra confidence:
 
@@ -44,8 +46,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 ### Unit / integration (default)
 
 - Command: `pnpm test`
-- Config: `scripts/test-parallel.mjs` (runs `vitest.unit.config.ts`, `vitest.extensions.config.ts`, `vitest.gateway.config.ts`)
-- Files: `src/**/*.test.ts`, bundled plugin `**/*.test.ts`
+- Config: native Vitest `projects` via `vitest.config.ts` (`unit` + `boundary`)
+- Files: core/unit inventories under `src/**/*.test.ts`, `packages/**/*.test.ts`, `test/**/*.test.ts`, and the whitelisted `ui` node tests covered by `vitest.unit.config.ts`
 - Scope:
   - Pure unit tests
   - In-process integration tests (gateway auth, routing, tooling, parsing, config)
@@ -54,22 +56,10 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI
   - No real keys required
   - Should be fast and stable
-- Scheduler note:
-  - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
-  - Extension-only local runs now also use a checked-in extensions timing snapshot plus a slightly coarser shared batch target on high-memory hosts, so the shared extensions lane avoids spawning an extra batch when two measured shared runs are enough.
-  - High-memory local extension shared batches also run with a slightly higher worker cap than before, which shortened the two remaining shared extension batches without changing the isolated extension lanes.
-  - High-memory local channel runs now reuse the checked-in channel timing snapshot to split the shared channels lane into a few measured batches instead of one long shared worker.
-  - High-memory local channel shared batches also run with a slightly lower worker cap than shared unit batches, which helped targeted channel reruns avoid CPU oversubscription once isolated channel lanes are already in flight.
-  - Targeted local channel reruns now start splitting shared channel work a bit earlier, which keeps medium-sized targeted reruns from leaving one oversized shared channel batch on the critical path.
-  - Targeted local unit reruns also split medium-sized shared unit selections into measured batches, which helps large focused reruns overlap instead of waiting behind one long shared unit lane.
-  - High-memory local multi-surface runs also use slightly coarser shared `unit-fast` batches so the mixed planner spends less time spinning up extra shared unit workers before the later surfaces can overlap.
-  - Shared unit, extension, channel, and gateway runs all stay on Vitest `forks`.
-  - The wrapper keeps measured fork-isolated exceptions and heavy singleton lanes explicit in `test/fixtures/test-parallel.behavior.json`.
-  - The wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
-  - CLI startup benchmarking now has distinct saved outputs: `pnpm test:startup:bench:smoke` writes the targeted smoke artifact at `.artifacts/cli-startup-bench-smoke.json`, `pnpm test:startup:bench:save` writes the full-suite artifact at `.artifacts/cli-startup-bench-all.json` with `runs=5` and `warmup=1`, and `pnpm test:startup:bench:update` refreshes the checked-in fixture at `test/fixtures/cli-startup-bench.json` with `runs=5` and `warmup=1`.
-  - For surface-only local runs, unit, extension, and channel shared lanes can overlap their isolated hotspots instead of waiting behind one serial prefix.
-  - For multi-surface local runs, the wrapper keeps the shared surface phases ordered, but batches inside the same shared phase now fan out together, deferred isolated work can overlap the next shared phase, and spare `unit-fast` headroom now starts that deferred work earlier instead of leaving those slots idle.
-  - Refresh the timing snapshots with `pnpm test:perf:update-timings` and `pnpm test:perf:update-timings:extensions` after major suite shape changes.
+- Projects note:
+  - `pnpm test` and `pnpm test:watch` both use the same native Vitest `projects` config now.
+  - The tiny script wrapper still keeps scheduling native, but it now reroutes direct `extensions/...` and channel-surface test paths onto the matching Vitest lane automatically.
+  - If you target mixed suites in one command, the wrapper runs those lanes sequentially under the same local heavy-check lock.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
     keep both levels of coverage.
@@ -83,19 +73,17 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     sufficient substitute for those integration paths.
 - Pool note:
   - Base Vitest config still defaults to `forks`.
-  - Unit, channel, extension, and gateway wrapper lanes all default to `forks`.
+  - Unit and boundary projects stay on `forks`.
+  - Channel, extension, and gateway configs also stay on `forks`.
   - Unit, channel, and extension configs default to `isolate: false` for faster file startup.
-  - `pnpm test` also passes `--isolate=false` at the wrapper level.
-  - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
+  - `pnpm test` inherits the isolation defaults from the root `vitest.config.ts` projects config.
+  - Opt back into unit-file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
   - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
 - Fast-local iteration note:
-  - `pnpm test:changed` runs the wrapper with `--changed origin/main`.
-  - `pnpm test:changed:max` keeps the same changed-file filter but uses the wrapper's aggressive local planner profile.
-  - `pnpm test:max` exposes that same planner profile for a full local run.
-  - On supported local Node versions, including Node 25, the normal profile can use top-level lane parallelism. `pnpm test:max` still pushes the planner harder when you want a more aggressive local run.
-  - The base Vitest config marks the wrapper manifests/config files as `forceRerunTriggers` so changed-mode reruns stay correct when scheduler inputs change.
-  - The wrapper keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on supported hosts, but assigns a lane-local `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` so concurrent Vitest processes do not race on one shared experimental cache directory.
-  - Set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path` if you want one explicit cache location for direct single-run profiling.
+  - `pnpm test:changed` runs the native projects config with `--changed origin/main`.
+  - `pnpm test:max` and `pnpm test:changed:max` keep the same native projects config, just with a higher worker cap.
+  - The base Vitest config marks the projects/config files as `forceRerunTriggers` so changed-mode reruns stay correct when test wiring changes.
+  - The config keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on supported hosts; set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path` if you want one explicit cache location for direct profiling.
 - Perf-debug note:
   - `pnpm test:perf:imports` enables Vitest import-duration reporting plus import-breakdown output.
   - `pnpm test:perf:imports:changed` scopes the same profiling view to files changed since `origin/main`.

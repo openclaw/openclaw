@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
@@ -283,6 +284,227 @@ describe("legacy migrate tts provider shape", () => {
 
     expect(res.changes).toEqual([]);
     expect(res.config).toBeNull();
+  });
+});
+
+describe("legacy migrate talk provider shape", () => {
+  it("moves legacy talk fields into talk.providers.elevenlabs", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        voiceId: "voice-1",
+        modelId: "eleven_v3",
+        outputFormat: "pcm_44100",
+        apiKey: "test-key",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved talk legacy fields (voiceId, modelId, outputFormat, apiKey) → talk.providers.elevenlabs (filled missing provider fields only).",
+    );
+    expect(res.config?.talk).toEqual({
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-1",
+          modelId: "eleven_v3",
+          outputFormat: "pcm_44100",
+          apiKey: "test-key",
+        },
+      },
+    });
+  });
+
+  it("merges legacy talk fields into the active provider without overwriting explicit provider values", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        provider: "acme",
+        providers: {
+          acme: {
+            voiceId: "provider-voice",
+          },
+        },
+        voiceId: "legacy-voice",
+        modelId: "acme-model",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved talk legacy fields (voiceId, modelId) → talk.providers.acme (filled missing provider fields only).",
+    );
+    expect(res.config?.talk).toEqual({
+      provider: "acme",
+      providers: {
+        acme: {
+          voiceId: "provider-voice",
+          modelId: "acme-model",
+        },
+      },
+    });
+  });
+
+  it("treats empty talk.providers as legacy-only talk config", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        providers: {},
+        voiceId: "voice-1",
+        modelId: "eleven_v3",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved talk legacy fields (voiceId, modelId) → talk.providers.elevenlabs (filled missing provider fields only).",
+    );
+    expect(res.config?.talk).toMatchObject({
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-1",
+          modelId: "eleven_v3",
+        },
+      },
+    });
+  });
+
+  it("does not trust blocked talk.provider ids during migration", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        provider: "__proto__",
+        voiceId: "legacy-voice",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Skipped talk legacy field migration because talk.providers defines multiple providers and talk.provider is unset; move talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey under the intended provider manually.",
+    );
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
+
+  it("leaves legacy talk fields in place when the target provider is ambiguous", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        providers: {
+          acme: { voiceId: "acme-voice" },
+          elevenlabs: { voiceId: "eleven-voice" },
+        },
+        voiceId: "legacy-voice",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Skipped talk legacy field migration because talk.providers defines multiple providers and talk.provider is unset; move talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey under the intended provider manually.",
+    );
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
+});
+
+describe("legacy migrate sandbox scope aliases", () => {
+  it("moves agents.defaults.sandbox.perSession into scope", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            perSession: true,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved agents.defaults.sandbox.perSession → agents.defaults.sandbox.scope (session).",
+    );
+    expect(res.config?.agents?.defaults?.sandbox).toEqual({
+      scope: "session",
+    });
+  });
+
+  it("moves agents.list[].sandbox.perSession into scope", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        list: [
+          {
+            id: "pi",
+            sandbox: {
+              perSession: false,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved agents.list.0.sandbox.perSession → agents.list.0.sandbox.scope (shared).",
+    );
+    expect(res.config?.agents?.list?.[0]?.sandbox).toEqual({
+      scope: "shared",
+    });
+  });
+
+  it("drops legacy sandbox perSession when scope is already set", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            scope: "agent",
+            perSession: true,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed agents.defaults.sandbox.perSession (agents.defaults.sandbox.scope already set).",
+    );
+    expect(res.config?.agents?.defaults?.sandbox).toEqual({
+      scope: "agent",
+    });
+  });
+
+  it("does not migrate invalid sandbox perSession values", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          sandbox: {
+            perSession: "yes",
+          },
+        },
+      },
+    };
+
+    const res = migrateLegacyConfig(raw);
+
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
+    expect(validateConfigObjectWithPlugins(raw).ok).toBe(false);
+  });
+});
+
+describe("legacy migrate channel streaming aliases", () => {
+  it("migrates telegram and discord streaming aliases", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          streamMode: "block",
+        },
+        discord: {
+          streaming: false,
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.telegram.streamMode → channels.telegram.streaming (block).",
+    );
+    expect(res.changes).toContain("Normalized channels.discord.streaming boolean → enum (off).");
+    expect(res.config?.channels?.telegram).toMatchObject({
+      streaming: "block",
+    });
+    expect(res.config?.channels?.discord).toMatchObject({
+      streaming: "off",
+    });
   });
 });
 

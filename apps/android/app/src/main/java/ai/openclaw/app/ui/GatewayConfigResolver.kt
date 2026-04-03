@@ -33,7 +33,32 @@ internal data class GatewayConnectConfig(
   val password: String,
 )
 
+internal enum class GatewayEndpointValidationError {
+  INVALID_URL,
+  INSECURE_REMOTE_URL,
+}
+
+internal enum class GatewayEndpointInputSource {
+  SETUP_CODE,
+  MANUAL,
+  QR_SCAN,
+}
+
+internal data class GatewayEndpointParseResult(
+  val config: GatewayEndpointConfig? = null,
+  val error: GatewayEndpointValidationError? = null,
+)
+
+internal data class GatewayScannedSetupCodeResult(
+  val setupCode: String? = null,
+  val error: GatewayEndpointValidationError? = null,
+)
+
 private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
+private const val remoteGatewaySecurityRule =
+  "Non-loopback mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and the Android emulator."
+private const val remoteGatewaySecurityFix =
+  "Use a private LAN host/address, or enable Tailscale Serve / expose a wss:// gateway URL."
 
 internal fun resolveGatewayConnectConfig(
   useSetupCode: Boolean,
@@ -50,7 +75,7 @@ internal fun resolveGatewayConnectConfig(
 ): GatewayConnectConfig? {
   if (useSetupCode) {
     val setup = decodeGatewaySetupCode(setupCode) ?: return null
-    val parsed = parseGatewayEndpoint(setup.url) ?: return null
+    val parsed = parseGatewayEndpointResult(setup.url).config ?: return null
     val setupBootstrapToken = setup.bootstrapToken?.trim().orEmpty()
     val sharedToken =
       when {
@@ -75,10 +100,10 @@ internal fun resolveGatewayConnectConfig(
   }
 
   val manualUrl = composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput) ?: return null
-  val parsed = parseGatewayEndpoint(manualUrl) ?: return null
+  val parsed = parseGatewayEndpointResult(manualUrl).config ?: return null
   val savedManualEndpoint =
     composeGatewayManualUrl(savedManualHost, savedManualPort, savedManualTls)
-      ?.let(::parseGatewayEndpoint)
+      ?.let { parseGatewayEndpointResult(it).config }
   val preserveBootstrapToken =
     savedManualEndpoint != null &&
       savedManualEndpoint.host == parsed.host &&
@@ -97,13 +122,19 @@ internal fun resolveGatewayConnectConfig(
 }
 
 internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
+  return parseGatewayEndpointResult(rawInput).config
+}
+
+  internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseResult {
   val raw = rawInput.trim()
-  if (raw.isEmpty()) return null
+  if (raw.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
 
   val normalized = if (raw.contains("://")) raw else "https://$raw"
-  val uri = runCatching { URI(normalized) }.getOrNull() ?: return null
+  val uri =
+    runCatching { URI(normalized) }.getOrNull()
+      ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
   val host = uri.host?.trim()?.trim('[', ']').orEmpty()
-  if (host.isEmpty()) return null
+  if (host.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
 
   val scheme = uri.scheme?.trim()?.lowercase(Locale.US).orEmpty()
   val tls =
@@ -112,7 +143,9 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
       "wss", "https" -> true
       else -> true
     }
-  if (!tls && !isLoopbackGatewayHost(host)) return null
+  if (!tls && !isLoopbackGatewayHost(host)) {
+    return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INSECURE_REMOTE_URL)
+  }
   val defaultPort =
     when (scheme) {
       "wss", "https" -> 443
@@ -134,7 +167,9 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
       "${if (tls) "https" else "http"}://$displayHost:$port"
     }
 
-  return GatewayEndpointConfig(host = host, port = port, tls = tls, displayUrl = displayUrl)
+  return GatewayEndpointParseResult(
+    config = GatewayEndpointConfig(host = host, port = port, tls = tls, displayUrl = displayUrl),
+  )
 }
 
 internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
@@ -165,9 +200,44 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
 }
 
 internal fun resolveScannedSetupCode(rawInput: String): String? {
-  val setupCode = resolveSetupCodeCandidate(rawInput) ?: return null
-  val decoded = decodeGatewaySetupCode(setupCode) ?: return null
-  return setupCode.takeIf { parseGatewayEndpoint(decoded.url) != null }
+  return resolveScannedSetupCodeResult(rawInput).setupCode
+}
+
+internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetupCodeResult {
+  val setupCode =
+    resolveSetupCodeCandidate(rawInput)
+      ?: return GatewayScannedSetupCodeResult(error = GatewayEndpointValidationError.INVALID_URL)
+  val decoded =
+    decodeGatewaySetupCode(setupCode)
+      ?: return GatewayScannedSetupCodeResult(error = GatewayEndpointValidationError.INVALID_URL)
+  val parsed = parseGatewayEndpointResult(decoded.url)
+  if (parsed.config == null) {
+    return GatewayScannedSetupCodeResult(error = parsed.error)
+  }
+  return GatewayScannedSetupCodeResult(setupCode = setupCode)
+}
+
+internal fun gatewayEndpointValidationMessage(
+  error: GatewayEndpointValidationError,
+  source: GatewayEndpointInputSource,
+): String {
+  return when (error) {
+    GatewayEndpointValidationError.INSECURE_REMOTE_URL ->
+      when (source) {
+        GatewayEndpointInputSource.SETUP_CODE ->
+          "Setup code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
+        GatewayEndpointInputSource.QR_SCAN ->
+          "QR code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
+        GatewayEndpointInputSource.MANUAL ->
+          "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
+      }
+    GatewayEndpointValidationError.INVALID_URL ->
+      when (source) {
+        GatewayEndpointInputSource.SETUP_CODE -> "Setup code has invalid gateway URL."
+        GatewayEndpointInputSource.QR_SCAN -> "QR code did not contain a valid setup code."
+        GatewayEndpointInputSource.MANUAL -> "Enter a valid manual host and port to connect."
+      }
+  }
 }
 
 internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: Boolean): String? {

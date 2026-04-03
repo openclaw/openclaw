@@ -53,6 +53,7 @@ export type PluginInspectOptions = {
 export type PluginUpdateOptions = {
   all?: boolean;
   dryRun?: boolean;
+  dangerouslyForceUnsafeInstall?: boolean;
 };
 
 export type PluginMarketplaceListOptions = {
@@ -451,6 +452,12 @@ export function registerPluginsCli(program: Command) {
       }
       lines.push("");
       lines.push(`${theme.muted("Status:")} ${inspect.plugin.status}`);
+      if (inspect.plugin.failurePhase) {
+        lines.push(`${theme.muted("Failure phase:")} ${inspect.plugin.failurePhase}`);
+      }
+      if (inspect.plugin.failedAt) {
+        lines.push(`${theme.muted("Failed at:")} ${inspect.plugin.failedAt.toISOString()}`);
+      }
       lines.push(`${theme.muted("Format:")} ${inspect.plugin.format ?? "openclaw"}`);
       if (inspect.plugin.bundleFormat) {
         lines.push(`${theme.muted("Bundle format:")} ${inspect.plugin.bundleFormat}`);
@@ -793,6 +800,11 @@ export function registerPluginsCli(program: Command) {
     .argument("[id]", "Plugin or hook-pack id (omit with --all)")
     .option("--all", "Update all tracked plugins and hook packs", false)
     .option("--dry-run", "Show what would change without writing", false)
+    .option(
+      "--dangerously-force-unsafe-install",
+      "Bypass built-in dangerous-code update blocking for plugins (plugin hooks may still block)",
+      false,
+    )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       await runPluginUpdateCommand({ id, opts });
     });
@@ -815,7 +827,8 @@ export function registerPluginsCli(program: Command) {
       if (errors.length > 0) {
         lines.push(theme.error("Plugin errors:"));
         for (const entry of errors) {
-          lines.push(`- ${entry.id}: ${entry.error ?? "failed to load"} (${entry.source})`);
+          const phase = entry.failurePhase ? ` [${entry.failurePhase}]` : "";
+          lines.push(`- ${entry.id}${phase}: ${entry.error ?? "failed to load"} (${entry.source})`);
         }
       }
       if (diags.length > 0) {

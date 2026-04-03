@@ -19,7 +19,6 @@ let createTelegramMessageProcessor: typeof import("./bot-message.js").createTele
 
 describe("telegram bot message processor", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
   });
 

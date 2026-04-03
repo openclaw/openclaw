@@ -6,7 +6,26 @@ import {
   formatReactionEmoji,
   normalizeReactionEmoji,
 } from "./send.shared.js";
-import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
+import type {
+  DiscordReactionRuntimeContext,
+  DiscordReactionSummary,
+  DiscordReactOpts,
+} from "./send.types.js";
+
+function createDiscordReactionRuntimeClient(opts: DiscordReactionRuntimeContext) {
+  return createDiscordClient(opts, opts.cfg);
+}
+
+function resolveDiscordReactionClient(opts: DiscordReactOpts) {
+  const cfg = opts.cfg ?? loadConfig();
+  return createDiscordClient(opts, cfg);
+}
+
+function isDiscordReactionRuntimeContext(
+  opts: DiscordReactOpts,
+): opts is DiscordReactionRuntimeContext {
+  return Boolean(opts.rest && opts.cfg && opts.accountId);
+}
 
 export async function reactMessageDiscord(
   channelId: string,
@@ -14,8 +33,9 @@ export async function reactMessageDiscord(
   emoji: string,
   opts: DiscordReactOpts = {},
 ) {
-  const cfg = opts.cfg ?? loadConfig();
-  const { rest, request } = createDiscordClient(opts, cfg);
+  const { rest, request } = isDiscordReactionRuntimeContext(opts)
+    ? createDiscordReactionRuntimeClient(opts)
+    : resolveDiscordReactionClient(opts);
   const encoded = normalizeReactionEmoji(emoji);
   await request(
     () => rest.put(Routes.channelMessageOwnReaction(channelId, messageId, encoded)),
@@ -30,8 +50,9 @@ export async function removeReactionDiscord(
   emoji: string,
   opts: DiscordReactOpts = {},
 ) {
-  const cfg = opts.cfg ?? loadConfig();
-  const { rest } = createDiscordClient(opts, cfg);
+  const { rest } = isDiscordReactionRuntimeContext(opts)
+    ? createDiscordReactionRuntimeClient(opts)
+    : resolveDiscordReactionClient(opts);
   const encoded = normalizeReactionEmoji(emoji);
   await rest.delete(Routes.channelMessageOwnReaction(channelId, messageId, encoded));
   return { ok: true };
@@ -42,8 +63,9 @@ export async function removeOwnReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts = {},
 ): Promise<{ ok: true; removed: string[] }> {
-  const cfg = opts.cfg ?? loadConfig();
-  const { rest } = createDiscordClient(opts, cfg);
+  const { rest } = isDiscordReactionRuntimeContext(opts)
+    ? createDiscordReactionRuntimeClient(opts)
+    : resolveDiscordReactionClient(opts);
   const message = (await rest.get(Routes.channelMessage(channelId, messageId))) as {
     reactions?: Array<{ emoji: { id?: string | null; name?: string | null } }>;
   };
@@ -74,8 +96,9 @@ export async function fetchReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts & { limit?: number } = {},
 ): Promise<DiscordReactionSummary[]> {
-  const cfg = opts.cfg ?? loadConfig();
-  const { rest } = createDiscordClient(opts, cfg);
+  const { rest } = isDiscordReactionRuntimeContext(opts)
+    ? createDiscordReactionRuntimeClient(opts)
+    : resolveDiscordReactionClient(opts);
   const message = (await rest.get(Routes.channelMessage(channelId, messageId))) as {
     reactions?: Array<{
       count: number;

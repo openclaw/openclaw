@@ -727,12 +727,18 @@ export class GatewayClient {
 
   private armConnectChallengeTimeout() {
     const connectChallengeTimeoutMs = resolveGatewayClientConnectChallengeTimeoutMs(this.opts);
+    const armedAt = Date.now();
     this.clearConnectChallengeTimeout();
     this.connectTimer = setTimeout(() => {
       if (this.connectSent || this.ws?.readyState !== WebSocket.OPEN) {
         return;
       }
-      this.opts.onConnectError?.(new Error("gateway connect challenge timeout"));
+      const elapsedMs = Date.now() - armedAt;
+      this.opts.onConnectError?.(
+        new Error(
+          `gateway connect challenge timeout (waited ${elapsedMs}ms, limit ${connectChallengeTimeoutMs}ms)`,
+        ),
+      );
       this.ws?.close(1008, "connect challenge timeout");
     }, connectChallengeTimeoutMs);
   }

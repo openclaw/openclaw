@@ -8,6 +8,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { resolveBundledPluginPublicSurfacePath } from "../plugins/bundled-plugin-metadata.js";
 import {
+  createPluginActivationSource,
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../plugins/config-state.js";
@@ -44,7 +45,7 @@ let cachedBoundaryResolvedConfig:
       rawConfig: OpenClawConfig;
       config: OpenClawConfig;
       normalizedPluginsConfig: ReturnType<typeof normalizePluginsConfig>;
-      sourceNormalizedPluginsConfig: ReturnType<typeof normalizePluginsConfig>;
+      activationSource: ReturnType<typeof createPluginActivationSource>;
       autoEnabledReasons: Record<string, string[]>;
     }
   | undefined;
@@ -157,7 +158,7 @@ function getFacadeBoundaryResolvedConfig() {
     rawConfig,
     config,
     normalizedPluginsConfig: normalizePluginsConfig(config?.plugins),
-    sourceNormalizedPluginsConfig: normalizePluginsConfig(rawConfig?.plugins),
+    activationSource: createPluginActivationSource({ config: rawConfig }),
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
   };
   cachedBoundaryRawConfig = rawConfig;
@@ -202,21 +203,15 @@ function resolveBundledPluginPublicSurfaceAccess(params: {
       reason: `no bundled plugin manifest found for ${params.dirName}`,
     };
   }
-  const {
-    rawConfig,
-    config,
-    normalizedPluginsConfig,
-    sourceNormalizedPluginsConfig,
-    autoEnabledReasons,
-  } = getFacadeBoundaryResolvedConfig();
+  const { config, normalizedPluginsConfig, activationSource, autoEnabledReasons } =
+    getFacadeBoundaryResolvedConfig();
   const activationState = resolveEffectivePluginActivationState({
     id: manifestRecord.id,
     origin: manifestRecord.origin,
     config: normalizedPluginsConfig,
     rootConfig: config,
     enabledByDefault: manifestRecord.enabledByDefault,
-    sourceConfig: sourceNormalizedPluginsConfig,
-    sourceRootConfig: rawConfig,
+    activationSource,
     autoEnabledReason: autoEnabledReasons[manifestRecord.id]?.[0],
   });
   if (activationState.enabled) {

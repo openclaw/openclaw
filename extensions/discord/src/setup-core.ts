@@ -108,11 +108,8 @@ export function createDiscordSetupWizardBase(handlers: {
       unconfiguredHint: "needs token",
       configuredScore: 2,
       unconfiguredScore: 1,
-      resolveConfigured: ({ cfg }) =>
-        listDiscordSetupAccountIds(cfg).some((accountId) => {
-          const account = inspectDiscordSetupAccount({ cfg, accountId });
-          return account.configured;
-        }),
+      resolveConfigured: ({ cfg, accountId }) =>
+        inspectDiscordSetupAccount({ cfg, accountId }).configured,
     }),
     credentials: [
       {

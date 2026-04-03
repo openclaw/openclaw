@@ -13,7 +13,11 @@ export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
 }
 
 export function resolveAcpCommandAccountId(params: HandleCommandsParams): string {
-  return resolveConversationBindingAccountIdFromMessage(params.ctx);
+  return resolveConversationBindingAccountIdFromMessage({
+    ctx: params.ctx,
+    cfg: params.cfg,
+    commandChannel: params.command.channel,
+  });
 }
 
 export function resolveAcpCommandThreadId(params: HandleCommandsParams): string | undefined {
