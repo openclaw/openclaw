@@ -23,10 +23,8 @@ const sendMessageMatrixMock = vi.hoisted(() =>
 const actualRename = fs.rename.bind(fs);
 const renameMock = vi.spyOn(fs, "rename");
 
-vi.mock("./send.js", async () => {
-  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+vi.mock("./send.js", () => {
   return {
-    ...actual,
     sendMessageMatrix: sendMessageMatrixMock,
   };
 });
