@@ -131,4 +131,42 @@ describe("gateway log streaming", () => {
       await harness.close();
     }
   });
+
+  test("closes the websocket when file-backed polling hits an internal log read error", async () => {
+    const file = await createLogFile();
+    await fs.writeFile(file, '{"time":"2026-01-01T00:00:00.000Z","0":"backlog line"}\n', "utf8");
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+
+    const harness = await createGatewaySuiteHarness();
+    try {
+      const ws = await harness.openWs();
+      try {
+        await connectOk(ws, { scopes: ["operator.read"] });
+        const subscribeRes = await rpcReq<{ subscribed?: boolean }>(ws, "logs.subscribe", {
+          limit: 200,
+          maxBytes: 250_000,
+        });
+        expect(subscribeRes.ok).toBe(true);
+        expect(subscribeRes.payload?.subscribed).toBe(true);
+
+        const closePromise = new Promise<{ code: number; reason: string }>((resolve) => {
+          ws.once("close", (code: number, reason: Buffer) => {
+            resolve({ code, reason: reason.toString("utf8") });
+          });
+        });
+
+        await fs.rm(file, { force: true });
+        await fs.mkdir(file);
+
+        await expect(closePromise).resolves.toEqual({
+          code: 1011,
+          reason: "log stream error",
+        });
+      } finally {
+        ws.close();
+      }
+    } finally {
+      await harness.close();
+    }
+  });
 });

@@ -85,6 +85,11 @@ export function createGatewayLogStream(params: {
       );
     } catch {
       unsubscribe(subscriber.connId);
+      try {
+        if (subscriber.socket.readyState === WebSocket.OPEN) {
+          subscriber.socket.close(1011, "log stream error");
+        }
+      } catch {}
     } finally {
       subscriber.polling = false;
     }

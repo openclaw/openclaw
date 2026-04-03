@@ -855,6 +855,14 @@ function resolveGatewayCallScopes(opts: CallGatewayOptions): OperatorScope[] {
   return resolveLeastPrivilegeOperatorScopesForMethod(opts.method);
 }
 
+function applyBackendGatewayIdentityDefaults<T extends CallGatewayBaseOptions>(opts: T): T {
+  return {
+    ...opts,
+    clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    mode: opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+  };
+}
+
 export async function resolveGatewayClientConnection(opts: CallGatewayOptions): Promise<{
   clientOptions: GatewayClientOptions;
   connectionDetails: GatewayConnectionDetails;
@@ -872,7 +880,7 @@ export async function resolveGatewayClientConnection(opts: CallGatewayOptions): 
 export async function callGatewayScoped<T = Record<string, unknown>>(
   opts: CallGatewayScopedOptions,
 ): Promise<T> {
-  return await callGatewayWithScopes(opts, opts.scopes);
+  return await callGatewayWithScopes(applyBackendGatewayIdentityDefaults(opts), opts.scopes);
 }
 
 export async function callGatewayCli<T = Record<string, unknown>>(
@@ -886,13 +894,16 @@ export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
 ): Promise<T> {
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method);
-  return await callGatewayWithScopes(opts, scopes);
+  return await callGatewayWithScopes(applyBackendGatewayIdentityDefaults(opts), scopes);
 }
 
 export async function callGateway<T = Record<string, unknown>>(
   opts: CallGatewayOptions,
 ): Promise<T> {
-  return await callGatewayWithScopes(opts, resolveGatewayCallScopes(opts));
+  return await callGatewayWithScopes(
+    applyBackendGatewayIdentityDefaults(opts),
+    resolveGatewayCallScopes(opts),
+  );
 }
 
 export function randomIdempotencyKey() {

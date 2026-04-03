@@ -209,7 +209,6 @@ describe("logs cli", () => {
       }),
     );
     expect(gatewayClientRequest).toHaveBeenCalledWith("logs.tail", {
-      file: undefined,
       cursor: undefined,
       limit: 200,
       maxBytes: 250_000,
@@ -217,6 +216,59 @@ describe("logs cli", () => {
     expect(callGatewayFromCli).not.toHaveBeenCalled();
     expect(gatewayClientStopAndWait).toHaveBeenCalledTimes(1);
     expect(stderrWrites.join("")).toContain("output stdout closed");
+  });
+
+  it("omits file when polling logs.tail in follow fallback mode", async () => {
+    vi.useFakeTimers();
+    try {
+      resolveGatewayClientConnection.mockResolvedValueOnce({
+        clientOptions: {
+          url: "ws://127.0.0.1:18789",
+        },
+        connectionDetails: {
+          message: "Gateway URL: ws://127.0.0.1:18789",
+        },
+      });
+      gatewayClientRequest
+        .mockResolvedValueOnce({
+          file: "/tmp/openclaw.log",
+          cursor: 1,
+          lines: ["line one"],
+        })
+        .mockResolvedValueOnce({
+          file: "/tmp/openclaw.log",
+          cursor: 2,
+          lines: ["line two"],
+        });
+      gatewayClientStopAndWait.mockResolvedValueOnce(undefined);
+
+      vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+        if (String(chunk).includes("line two")) {
+          const err = new Error("EPIPE") as NodeJS.ErrnoException;
+          err.code = "EPIPE";
+          throw err;
+        }
+        return true;
+      });
+      vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+      const runPromise = runLogsCli(["logs", "--follow"]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await runPromise;
+
+      expect(gatewayClientRequest).toHaveBeenNthCalledWith(1, "logs.tail", {
+        cursor: undefined,
+        limit: 200,
+        maxBytes: 250_000,
+      });
+      expect(gatewayClientRequest).toHaveBeenNthCalledWith(2, "logs.tail", {
+        cursor: 1,
+        limit: 200,
+        maxBytes: 250_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses logs.subscribe when the gateway advertises follow streaming", async () => {
@@ -305,7 +357,6 @@ describe("logs cli", () => {
       expect(resolveGatewayClientConnection).toHaveBeenCalledTimes(3);
       expect(startAttempts).toBe(3);
       expect(gatewayClientRequest).toHaveBeenCalledWith("logs.tail", {
-        file: undefined,
         cursor: undefined,
         limit: 200,
         maxBytes: 250_000,
@@ -319,6 +370,38 @@ describe("logs cli", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("surfaces startup close errors before hello-ok", async () => {
+    resolveGatewayClientConnection.mockResolvedValueOnce({
+      clientOptions: {
+        url: "ws://127.0.0.1:18789",
+      },
+      connectionDetails: {
+        message: "Gateway URL: ws://127.0.0.1:18789",
+      },
+    });
+    gatewayClientStartImpl = (opts) => {
+      void (opts.onClose as ((code: number, reason: string) => void) | undefined)?.(
+        1008,
+        "invalid token",
+      );
+    };
+
+    const stderrWrites: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    });
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as (code?: string | number | null) => never);
+
+    await runLogsCli(["logs", "--follow"]);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(stderrWrites.join("")).toContain("Gateway not reachable. Is it running and accessible?");
+    expect(stderrWrites.join("")).toContain("Reason: gateway closed (1008): invalid token");
   });
 
   it("keeps waiting for reconnects after a follow wait timeout", async () => {
@@ -402,6 +485,16 @@ describe("logs cli", () => {
 
     methods.delete("logs.unsubscribe");
     expect(__testing.supportsStreamingFollow(methods)).toBe(false);
+  });
+
+  it("treats non-retryable startup closes as fatal", () => {
+    const err = new Error("gateway closed (1008): invalid token") as Error & {
+      followRetryable?: boolean;
+    };
+    err.followRetryable = false;
+
+    expect(__testing.isRetryableFollowStartupError(err)).toBe(false);
+    expect(__testing.isRetryableFollowStartupError(new Error("gateway not connected"))).toBe(true);
   });
 
   describe("formatLogTimestamp", () => {
