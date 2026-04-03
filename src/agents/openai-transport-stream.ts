@@ -1,4 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import { withProviderLimiter } from "../utils/providerLimiters";
 import {
   calculateCost,
   createAssistantMessageEventStream,
@@ -904,10 +905,12 @@ function createOpenAIResponsesTransportStreamFn(): StreamFn {
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
-        const responseStream = (await client.responses.create(
-          params as never,
-          options?.signal ? { signal: options.signal } : undefined,
-        )) as unknown as AsyncIterable<unknown>;
+     const responseStream = (await withProviderLimiter('openai', () =>
+client.responses.create(
+params as never,
+options?.signal ? { signal: options.signal } : undefined,
+)
+)) as unknown as AsyncIterable<unknown>;
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model, {
           serviceTier: (options as OpenAIResponsesOptions | undefined)?.serviceTier,
@@ -1035,10 +1038,12 @@ function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
-        const responseStream = (await client.responses.create(
-          params as never,
-          options?.signal ? { signal: options.signal } : undefined,
-        )) as unknown as AsyncIterable<unknown>;
+        const responseStream = (await withProviderLimiter('openai', () =>
+client.responses.create(
+params as never,
+options?.signal ? { signal: options.signal } : undefined,
+)
+)) as unknown as AsyncIterable<unknown>;
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model);
         if (options?.signal?.aborted) {
