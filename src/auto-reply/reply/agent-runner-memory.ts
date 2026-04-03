@@ -397,12 +397,20 @@ export async function runPreflightCompactionIfNeeded(params: {
       `threshold=${threshold}`,
   );
 
+  if (!entry.sessionFile && !params.followupRun.run.sessionFile) {
+    return entry;
+  }
+
   const sessionFile = resolveSessionLogPath(
     entry.sessionId,
     entry.sessionFile ? entry : { ...entry, sessionFile: params.followupRun.run.sessionFile },
     params.sessionKey ?? params.followupRun.run.sessionKey,
     { storePath: params.storePath },
   );
+  const resolvedSessionFile = sessionFile ?? params.followupRun.run.sessionFile;
+  if (!resolvedSessionFile) {
+    return entry;
+  }
   const result = await compactEmbeddedPiSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
@@ -411,7 +419,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     groupId: entry.groupId ?? params.followupRun.run.groupId,
     groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
     groupSpace: entry.space ?? params.followupRun.run.groupSpace,
-    sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
+    sessionFile: resolvedSessionFile,
     workspaceDir: params.followupRun.run.workspaceDir,
     agentDir: params.followupRun.run.agentDir,
     config: params.cfg,

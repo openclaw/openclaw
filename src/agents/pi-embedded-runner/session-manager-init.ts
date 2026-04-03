@@ -15,7 +15,7 @@ type SessionMessageEntry = { type: "message"; message?: { role?: string } };
  */
 export async function prepareSessionManagerForRun(params: {
   sessionManager: unknown;
-  sessionFile: string;
+  sessionFile?: string;
   hadSessionFile: boolean;
   sessionId: string;
   cwd: string;
@@ -41,7 +41,7 @@ export async function prepareSessionManagerForRun(params: {
     return;
   }
 
-  if (params.hadSessionFile && header && !hasAssistant) {
+  if (params.hadSessionFile && params.sessionFile && header && !hasAssistant) {
     // Reset file so the first assistant flush includes header+user+assistant in order.
     await fs.writeFile(params.sessionFile, "", "utf-8");
     sm.fileEntries = [header];

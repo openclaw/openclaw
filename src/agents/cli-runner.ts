@@ -94,7 +94,7 @@ export async function runClaudeCliAgent(params: {
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
-  sessionFile: string;
+  sessionFile?: string;
   workspaceDir: string;
   config?: OpenClawConfig;
   prompt: string;

@@ -631,14 +631,11 @@ export async function initSessionState(params: {
       }
     }
   }
-  const fallbackSessionFile = !sessionEntry.sessionFile
-    ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)
-    : undefined;
-  if (skipPersistence) {
-    if (fallbackSessionFile) {
-      sessionEntry.sessionFile = fallbackSessionFile;
-    }
-  } else {
+  const fallbackSessionFile =
+    !skipPersistence && !sessionEntry.sessionFile
+      ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)
+      : undefined;
+  if (!skipPersistence) {
     const resolvedSessionFile = await resolveAndPersistSessionFile({
       sessionId: sessionEntry.sessionId,
       sessionKey,

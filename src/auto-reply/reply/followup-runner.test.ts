@@ -500,7 +500,7 @@ describe("createFollowupRunner compaction", () => {
     await runner(current);
 
     expect(queuedNext.run.sessionId).toBe("session-rotated");
-    expect(await normalizeComparablePath(queuedNext.run.sessionFile)).toBe(
+    expect(await normalizeComparablePath(queuedNext.run.sessionFile ?? "")).toBe(
       await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
     );
   });

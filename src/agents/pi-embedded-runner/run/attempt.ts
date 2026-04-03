@@ -737,28 +737,36 @@ export async function runEmbeddedAttempt(
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
 
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
-          runTimeoutMs: params.timeoutMs,
-          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
-        }),
-      }),
-    });
+    const sessionLock = params.sessionFile
+      ? await acquireSessionWriteLock({
+          sessionFile: params.sessionFile,
+          maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
+            timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
+              runTimeoutMs: params.timeoutMs,
+              compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
+            }),
+          }),
+        })
+      : {
+          release: async () => {},
+        };
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
     try {
-      await repairSessionFileIfNeeded({
-        sessionFile: params.sessionFile,
-        warn: (message) => log.warn(message),
-      });
-      const hadSessionFile = await fs
-        .stat(params.sessionFile)
-        .then(() => true)
-        .catch(() => false);
+      if (params.sessionFile) {
+        await repairSessionFileIfNeeded({
+          sessionFile: params.sessionFile,
+          warn: (message) => log.warn(message),
+        });
+      }
+      const hadSessionFile = params.sessionFile
+        ? await fs
+            .stat(params.sessionFile)
+            .then(() => true)
+            .catch(() => false)
+        : false;
 
       const transcriptPolicy = resolveTranscriptPolicy({
         modelApi: params.model?.api,
@@ -770,44 +778,55 @@ export async function runEmbeddedAttempt(
         model: params.model,
       });
 
-      await prewarmSessionFile(params.sessionFile);
-      sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
-        agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
-        inputProvenance: params.inputProvenance,
-        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-        allowedToolNames,
-      });
-      trackSessionManagerAccess(params.sessionFile);
+      if (params.sessionFile) {
+        await prewarmSessionFile(params.sessionFile);
+      }
+      sessionManager = guardSessionManager(
+        params.sessionFile
+          ? SessionManager.open(params.sessionFile)
+          : SessionManager.inMemory(effectiveWorkspace),
+        {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          inputProvenance: params.inputProvenance,
+          allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+          allowedToolNames,
+        },
+      );
+      if (params.sessionFile) {
+        trackSessionManagerAccess(params.sessionFile);
+      }
 
-      await runAttemptContextEngineBootstrap({
-        hadSessionFile,
-        contextEngine: params.contextEngine,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
-        sessionManager,
-        runtimeContext: buildAfterTurnRuntimeContext({
-          attempt: params,
-          workspaceDir: effectiveWorkspace,
-          agentDir,
-        }),
-        runMaintenance: async (contextParams) =>
-          await runContextEngineMaintenance({
-            contextEngine: contextParams.contextEngine as never,
-            sessionId: contextParams.sessionId,
-            sessionKey: contextParams.sessionKey,
-            sessionFile: contextParams.sessionFile,
-            reason: contextParams.reason,
-            sessionManager: contextParams.sessionManager as never,
-            runtimeContext: contextParams.runtimeContext,
+      if (params.sessionFile && params.contextEngine) {
+        await runAttemptContextEngineBootstrap({
+          hadSessionFile,
+          contextEngine: params.contextEngine,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+          sessionManager,
+          runtimeContext: buildAfterTurnRuntimeContext({
+            attempt: params,
+            workspaceDir: effectiveWorkspace,
+            agentDir,
           }),
-        warn: (message) => log.warn(message),
-      });
+          runMaintenance: async (contextParams) =>
+            await runContextEngineMaintenance({
+              contextEngine: contextParams.contextEngine as never,
+              sessionId: contextParams.sessionId,
+              sessionKey: contextParams.sessionKey,
+              sessionFile: contextParams.sessionFile,
+              reason: contextParams.reason,
+              sessionManager: contextParams.sessionManager as never,
+              runtimeContext: contextParams.runtimeContext,
+            }),
+          warn: (message) => log.warn(message),
+        });
+      }
 
       await prepareSessionManagerForRun({
         sessionManager,
-        sessionFile: params.sessionFile,
+        ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
         hadSessionFile,
         sessionId: params.sessionId,
         cwd: effectiveWorkspace,
@@ -1769,7 +1788,7 @@ export async function runEmbeddedAttempt(
         }
 
         // Let the active context engine run its post-turn lifecycle.
-        if (params.contextEngine) {
+        if (params.contextEngine && params.sessionFile) {
           const afterTurnRuntimeContext = buildAfterTurnRuntimeContext({
             attempt: params,
             workspaceDir: effectiveWorkspace,

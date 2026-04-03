@@ -140,8 +140,7 @@ describe("session hook context wiring", () => {
 
     expect(result.sessionKey).toBe(sessionKey);
     expect(result.sessionEntry.forkedFromParent).not.toBe(true);
-    expect(result.sessionEntry.sessionFile).toContain("ephemeral-thread");
-    await expect(fs.stat(result.sessionEntry.sessionFile ?? "")).rejects.toThrow();
+    expect(result.sessionEntry.sessionFile).toBeUndefined();
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored).toEqual({
       [parentSessionKey]: {

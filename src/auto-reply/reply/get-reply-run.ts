@@ -468,11 +468,14 @@ export async function runPreparedReply(
     });
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
-  const sessionFile = resolveSessionFilePath(
-    sessionIdFinal,
-    sessionEntry,
-    resolveSessionFilePathOptions({ agentId, storePath }),
-  );
+  const sessionFile =
+    opts?.skipSessionPersistence === true
+      ? undefined
+      : resolveSessionFilePath(
+          sessionIdFinal,
+          sessionEntry,
+          resolveSessionFilePathOptions({ agentId, storePath }),
+        );
   // Use bodyWithEvents (events prepended, but no session hints / untrusted context) so
   // deferred turns receive system events while keeping the same scope as effectiveBaseBody did.
   const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");

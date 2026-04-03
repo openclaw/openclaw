@@ -389,15 +389,20 @@ export async function runEmbeddedPiAgent(
       };
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
-      ensureContextEnginesInitialized();
-      const contextEngine = await resolveContextEngine(params.config);
+      const contextEngine = params.sessionFile
+        ? (() => {
+            ensureContextEnginesInitialized();
+            return resolveContextEngine(params.config);
+          })()
+        : Promise.resolve(undefined);
+      const resolvedContextEngine = await contextEngine;
       try {
         // When the engine owns compaction, compactEmbeddedPiSessionDirect is
         // bypassed. Fire lifecycle hooks here so recovery paths still notify
         // subscribers like memory extensions and usage trackers.
         const runOwnsCompactionBeforeHook = async (reason: string) => {
           if (
-            contextEngine.info.ownsCompaction !== true ||
+            resolvedContextEngine?.info.ownsCompaction !== true ||
             !hookRunner?.hasHooks("before_compaction")
           ) {
             return;
@@ -413,10 +418,14 @@ export async function runEmbeddedPiAgent(
         };
         const runOwnsCompactionAfterHook = async (
           reason: string,
-          compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
+          compactResult: {
+            ok: boolean;
+            compacted: boolean;
+            result?: { tokensAfter?: number };
+          },
         ) => {
           if (
-            contextEngine.info.ownsCompaction !== true ||
+            resolvedContextEngine?.info.ownsCompaction !== true ||
             !compactResult.ok ||
             !compactResult.compacted ||
             !hookRunner?.hasHooks("after_compaction")
@@ -510,7 +519,7 @@ export async function runEmbeddedPiAgent(
             agentDir,
             config: params.config,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-            contextEngine,
+            contextEngine: resolvedContextEngine,
             contextTokenBudget: ctxInfo.tokens,
             skillsSnapshot: params.skillsSnapshot,
             prompt,
@@ -652,9 +661,17 @@ export async function runEmbeddedPiAgent(
                 `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
                   `attempting compaction before retry (attempt ${timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
               );
-              let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
-              await runOwnsCompactionBeforeHook("timeout recovery");
+              const sessionFile = params.sessionFile;
+              let timeoutCompactResult:
+                | { ok: boolean; compacted: boolean; reason?: string }
+                | undefined;
+              if (resolvedContextEngine) {
+                await runOwnsCompactionBeforeHook("timeout recovery");
+              }
               try {
+                if (!resolvedContextEngine || !sessionFile) {
+                  throw new Error("No context engine available for timeout recovery.");
+                }
                 const timeoutCompactionRuntimeContext = {
                   ...buildEmbeddedCompactionRuntimeContext({
                     sessionKey: params.sessionKey,
@@ -685,10 +702,10 @@ export async function runEmbeddedPiAgent(
                   attempt: timeoutCompactionAttempts,
                   maxAttempts: MAX_TIMEOUT_COMPACTION_ATTEMPTS,
                 };
-                timeoutCompactResult = await contextEngine.compact({
+                timeoutCompactResult = await resolvedContextEngine.compact({
                   sessionId: params.sessionId,
                   sessionKey: params.sessionKey,
-                  sessionFile: params.sessionFile,
+                  sessionFile,
                   tokenBudget: ctxInfo.tokens,
                   force: true,
                   compactionTarget: "budget",
@@ -704,14 +721,16 @@ export async function runEmbeddedPiAgent(
                   reason: String(compactErr),
                 };
               }
-              await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
-              if (timeoutCompactResult.compacted) {
+              if (timeoutCompactResult) {
+                await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
+              }
+              if (timeoutCompactResult?.compacted && sessionFile) {
                 autoCompactionCount += 1;
-                if (contextEngine.info.ownsCompaction === true) {
+                if (resolvedContextEngine?.info.ownsCompaction === true) {
                   await runPostCompactionSideEffects({
                     config: params.config,
                     sessionKey: params.sessionKey,
-                    sessionFile: params.sessionFile,
+                    sessionFile,
                   });
                 }
                 log.info(
@@ -793,9 +812,15 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
-              let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
-              await runOwnsCompactionBeforeHook("overflow recovery");
+              const sessionFile = params.sessionFile;
+              let compactResult: { ok: boolean; compacted: boolean; reason?: string } | undefined;
+              if (resolvedContextEngine) {
+                await runOwnsCompactionBeforeHook("overflow recovery");
+              }
               try {
+                if (!resolvedContextEngine || !sessionFile) {
+                  throw new Error("No context engine available for overflow recovery.");
+                }
                 const overflowCompactionRuntimeContext = {
                   ...buildEmbeddedCompactionRuntimeContext({
                     sessionKey: params.sessionKey,
@@ -829,10 +854,10 @@ export async function runEmbeddedPiAgent(
                   attempt: overflowCompactionAttempts,
                   maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
                 };
-                compactResult = await contextEngine.compact({
+                compactResult = await resolvedContextEngine.compact({
                   sessionId: params.sessionId,
                   sessionKey: params.sessionKey,
-                  sessionFile: params.sessionFile,
+                  sessionFile,
                   tokenBudget: ctxInfo.tokens,
                   ...(observedOverflowTokens !== undefined
                     ? { currentTokenCount: observedOverflowTokens }
@@ -843,10 +868,10 @@ export async function runEmbeddedPiAgent(
                 });
                 if (compactResult.ok && compactResult.compacted) {
                   await runContextEngineMaintenance({
-                    contextEngine,
+                    contextEngine: resolvedContextEngine,
                     sessionId: params.sessionId,
                     sessionKey: params.sessionKey,
-                    sessionFile: params.sessionFile,
+                    sessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
                   });
@@ -861,14 +886,16 @@ export async function runEmbeddedPiAgent(
                   reason: String(compactErr),
                 };
               }
-              await runOwnsCompactionAfterHook("overflow recovery", compactResult);
-              if (compactResult.compacted) {
+              if (compactResult) {
+                await runOwnsCompactionAfterHook("overflow recovery", compactResult);
+              }
+              if (compactResult?.compacted) {
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
               }
               log.warn(
-                `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
+                `auto-compaction failed for ${provider}/${modelId}: ${compactResult?.reason ?? "nothing to compact"}`,
               );
             }
             // Fallback: try truncating oversized tool results in the session.
@@ -896,6 +923,9 @@ export async function runEmbeddedPiAgent(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
                     `(contextWindow=${contextWindowTokens} tokens)`,
                 );
+                if (!params.sessionFile) {
+                  continue;
+                }
                 const truncResult = await truncateOversizedToolResultsInSession({
                   sessionFile: params.sessionFile,
                   contextWindowTokens,
@@ -1408,7 +1438,7 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
-        await contextEngine.dispose?.();
+        await resolvedContextEngine?.dispose?.();
         stopRuntimeAuthRefreshTimer();
         if (params.cleanupBundleMcpOnRunEnd === true) {
           await disposeSessionMcpRuntime(params.sessionId).catch((error) => {

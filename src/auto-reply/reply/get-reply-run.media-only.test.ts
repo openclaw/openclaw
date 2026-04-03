@@ -375,6 +375,25 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.suppressTyping).toBe(true);
   });
 
+  it("keeps eval runs off transcript files when skipSessionPersistence is enabled", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          skipHooks: true,
+          skipSessionPersistence: true,
+        },
+        sessionEntry: {
+          sessionId: "eval-session",
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.followupRun.run.sessionFile).toBeUndefined();
+  });
+
   it("routes queued system events into user prompt text, not system prompt context", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Model switched.");
 
