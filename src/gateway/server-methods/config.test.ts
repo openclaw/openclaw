@@ -1,41 +1,19 @@
 import { execFile } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configHandlers, resolveConfigOpenCommand } from "./config.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import { createConfigHandlerHarness } from "./config.test-helpers.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
+  const { mockNodeBuiltinModule } = await import("../../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(importOriginal, {
     execFile: vi.fn(),
-  };
+  });
 });
 
 function invokeExecFileCallback(args: unknown[], error: Error | null) {
   const callback = args.at(-1);
   expect(callback).toEqual(expect.any(Function));
   (callback as (error: Error | null) => void)(error);
-}
-
-function createOptions(
-  overrides?: Partial<GatewayRequestHandlerOptions>,
-): GatewayRequestHandlerOptions {
-  return {
-    req: { type: "req", id: "1", method: "config.openFile" },
-    params: {},
-    client: null,
-    isWebchatConnect: () => false,
-    respond: vi.fn(),
-    context: {
-      logGateway: {
-        error: vi.fn(),
-        warn: vi.fn(),
-        info: vi.fn(),
-        debug: vi.fn(),
-      },
-    },
-    ...overrides,
-  } as unknown as GatewayRequestHandlerOptions;
 }
 
 describe("resolveConfigOpenCommand", () => {
@@ -81,10 +59,10 @@ describe("config.openFile", () => {
       return {} as never;
     }) as unknown as typeof execFile);
 
-    const opts = createOptions();
-    await configHandlers["config.openFile"](opts);
+    const { options, respond } = createConfigHandlerHarness({ method: "config.openFile" });
+    await configHandlers["config.openFile"](options);
 
-    expect(opts.respond).toHaveBeenCalledWith(
+    expect(respond).toHaveBeenCalledWith(
       true,
       {
         ok: true,
@@ -104,10 +82,12 @@ describe("config.openFile", () => {
       return {} as never;
     }) as unknown as typeof execFile);
 
-    const opts = createOptions();
-    await configHandlers["config.openFile"](opts);
+    const { options, respond, logGateway } = createConfigHandlerHarness({
+      method: "config.openFile",
+    });
+    await configHandlers["config.openFile"](options);
 
-    expect(opts.respond).toHaveBeenCalledWith(
+    expect(respond).toHaveBeenCalledWith(
       true,
       {
         ok: false,
@@ -116,8 +96,6 @@ describe("config.openFile", () => {
       },
       undefined,
     );
-    expect(opts.context.logGateway.warn).toHaveBeenCalledWith(
-      expect.stringContaining("spawn xdg-open ENOENT"),
-    );
+    expect(logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("spawn xdg-open ENOENT"));
   });
 });

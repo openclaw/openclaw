@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-const runStartupMatrixMigrationMock = vi.fn().mockResolvedValue(undefined);
+const runChannelPluginStartupMaintenanceMock = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("./server-startup-matrix-migration.js", () => ({
-  runStartupMatrixMigration: runStartupMatrixMigrationMock,
+vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
+  runChannelPluginStartupMaintenance: runChannelPluginStartupMaintenanceMock,
 }));
 
 import {
@@ -15,7 +15,7 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-describe("gateway startup Matrix migration wiring", () => {
+describe("gateway startup channel maintenance wiring", () => {
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 
   beforeAll(async () => {
@@ -33,9 +33,9 @@ describe("gateway startup Matrix migration wiring", () => {
     await server?.close();
   });
 
-  it("runs startup Matrix migration with the resolved startup config", () => {
-    expect(runStartupMatrixMigrationMock).toHaveBeenCalledTimes(1);
-    expect(runStartupMatrixMigrationMock).toHaveBeenCalledWith(
+  it("runs startup channel maintenance with the resolved startup config", () => {
+    expect(runChannelPluginStartupMaintenanceMock).toHaveBeenCalledTimes(1);
+    expect(runChannelPluginStartupMaintenanceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg: expect.objectContaining({
           channels: expect.objectContaining({

@@ -39,11 +39,11 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
   channel,
   policyKey: "channels.zalo.dmPolicy",
   allowFromKey: "channels.zalo.allowFrom",
-  resolveConfigKeys: (_cfg, accountId) =>
-    accountId && accountId !== DEFAULT_ACCOUNT_ID
+  resolveConfigKeys: (cfg, accountId) =>
+    (accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)) !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.zalo.accounts.${accountId}.dmPolicy`,
-          allowFromKey: `channels.zalo.accounts.${accountId}.allowFrom`,
+          policyKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)}.dmPolicy`,
+          allowFromKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)}.allowFrom`,
         }
       : {
           policyKey: "channels.zalo.dmPolicy",
@@ -52,7 +52,7 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
   getCurrent: (cfg, accountId) =>
     resolveZaloAccount({
       cfg: cfg as OpenClawConfig,
-      accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+      accountId: accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig),
     }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) => {
     const resolvedAccountId =

@@ -13,6 +13,7 @@ Related:
 
 - Multi-agent routing: [Multi-Agent Routing](/concepts/multi-agent)
 - Agent workspace: [Agent workspace](/concepts/agent-workspace)
+- Skill visibility config: [Skills config](/tools/skills-config)
 
 ## Examples
 
@@ -30,6 +31,11 @@ openclaw agents delete work
 ## Routing bindings
 
 Use routing bindings to pin inbound channel traffic to a specific agent.
+
+If you also want different visible skills per agent, configure
+`agents.defaults.skills` and `agents.list[].skills` in `openclaw.json`. See
+[Skills config](/tools/skills-config) and
+[Configuration Reference](/gateway/configuration-reference#agentsdefaultsskills).
 
 List bindings:
 

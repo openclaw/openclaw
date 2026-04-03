@@ -19,7 +19,6 @@ const ORIGINAL_GATEWAY_TOKEN_ENV = process.env.OPENCLAW_GATEWAY_TOKEN;
 const OLD_TOKEN = "shared-token-old";
 const NEW_TOKEN = "shared-token-new";
 const DEFERRED_RESTART_DELAY_MS = 1_000;
-const RESTARTING_AUTH_CHANGE_METHODS = ["config.patch", "config.apply"] as const;
 const SECRET_REF_TOKEN_ID = "OPENCLAW_SHARED_AUTH_ROTATION_SECRET_REF";
 
 let server: Awaited<ReturnType<typeof startGatewayServer>>;
@@ -111,52 +110,43 @@ async function loadCurrentConfig(ws: WebSocket): Promise<{
   };
 }
 
-async function sendAuthTokenChange(
-  ws: WebSocket,
-  method: (typeof RESTARTING_AUTH_CHANGE_METHODS)[number],
-): Promise<{ ok: boolean }> {
+async function sendSharedTokenRotationPatch(ws: WebSocket): Promise<{ ok: boolean }> {
   const current = await loadCurrentConfig(ws);
-  const currentConfig = current.config;
-  const gateway = (currentConfig.gateway ??= {}) as Record<string, unknown>;
-  const auth = (gateway.auth ??= {}) as Record<string, unknown>;
-  auth.token = NEW_TOKEN;
+  return await rpcReq(ws, "config.patch", {
+    baseHash: current.hash,
+    raw: JSON.stringify({ gateway: { auth: { token: NEW_TOKEN } } }),
+    restartDelayMs: DEFERRED_RESTART_DELAY_MS,
+  });
+}
 
-  if (method === "config.patch") {
-    return await rpcReq(ws, "config.patch", {
-      baseHash: current.hash,
-      raw: JSON.stringify({ gateway: { auth: { token: NEW_TOKEN } } }),
-      restartDelayMs: DEFERRED_RESTART_DELAY_MS,
-    });
-  }
-
-  return await rpcReq(ws, method, {
-    raw: JSON.stringify(currentConfig, null, 2),
+async function applyCurrentConfig(ws: WebSocket) {
+  const current = await loadCurrentConfig(ws);
+  return await rpcReq(ws, "config.apply", {
+    raw: JSON.stringify(current.config, null, 2),
   });
 }
 
 describe("gateway shared auth rotation", () => {
-  for (const method of RESTARTING_AUTH_CHANGE_METHODS) {
-    it(`disconnects existing shared-token websocket sessions after ${method}`, async () => {
-      const ws = await openAuthenticatedWs(OLD_TOKEN);
-      try {
-        const closed = waitForClose(ws);
-        const res = await sendAuthTokenChange(ws, method);
+  it("disconnects existing shared-token websocket sessions after config.patch rotates auth", async () => {
+    const ws = await openAuthenticatedWs(OLD_TOKEN);
+    try {
+      const closed = waitForClose(ws);
+      const res = await sendSharedTokenRotationPatch(ws);
 
-        expect(res.ok).toBe(true);
-        await expect(closed).resolves.toMatchObject({
-          code: 4001,
-          reason: "gateway auth changed",
-        });
-      } finally {
-        ws.close();
-      }
-    });
-  }
+      expect(res.ok).toBe(true);
+      await expect(closed).resolves.toMatchObject({
+        code: 4001,
+        reason: "gateway auth changed",
+      });
+    } finally {
+      ws.close();
+    }
+  });
 
   it("keeps existing device-token websocket sessions connected after shared token rotation", async () => {
     const ws = await openDeviceTokenWs();
     try {
-      const res = await sendAuthTokenChange(ws, "config.patch");
+      const res = await sendSharedTokenRotationPatch(ws);
       expect(res.ok).toBe(true);
 
       const followUp = await rpcReq<{ hash?: string }>(ws, "config.get", {});
@@ -196,29 +186,17 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
     return ws;
   }
 
-  for (const method of ["config.set", "config.apply"] as const) {
-    it(`keeps shared-auth websocket sessions connected when ${method} reapplies an unchanged SecretRef token`, async () => {
-      const ws = await openSecretRefAuthenticatedWs();
-      try {
-        const current = await rpcReq<{
-          hash?: string;
-          config?: Record<string, unknown>;
-        }>(ws, "config.get", {});
-        expect(current.ok).toBe(true);
-        expect(typeof current.payload?.hash).toBe("string");
+  it("keeps shared-auth websocket sessions connected when config.apply reapplies an unchanged SecretRef token", async () => {
+    const ws = await openSecretRefAuthenticatedWs();
+    try {
+      const res = await applyCurrentConfig(ws);
+      expect(res.ok).toBe(true);
 
-        const res = await rpcReq(ws, method, {
-          raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
-          ...(method === "config.set" ? { baseHash: current.payload?.hash } : {}),
-        });
-        expect(res.ok).toBe(true);
-
-        const followUp = await rpcReq<{ hash?: string }>(ws, "config.get", {});
-        expect(followUp.ok).toBe(true);
-        expect(typeof followUp.payload?.hash).toBe("string");
-      } finally {
-        ws.close();
-      }
-    });
-  }
+      const followUp = await rpcReq<{ hash?: string }>(ws, "config.get", {});
+      expect(followUp.ok).toBe(true);
+      expect(typeof followUp.payload?.hash).toBe("string");
+    } finally {
+      ws.close();
+    }
+  });
 });

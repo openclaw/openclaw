@@ -162,6 +162,10 @@ const whatsappCommandTestPlugin: ChannelPlugin = {
       nativeCommands: true,
     },
   }),
+  commands: {
+    enforceOwnerForCommands: true,
+    preferSenderE164ForCommands: true,
+  },
   allowlist: buildDmGroupAccountAllowlistAdapter({
     channelId: "whatsapp",
     resolveAccount: ({ cfg }) => cfg.channels?.whatsapp ?? {},
@@ -281,7 +285,6 @@ const { abortEmbeddedPiRun, compactEmbeddedPiSession } =
 const { __testing: subagentControlTesting } = await import("../../agents/subagent-control.js");
 const { resetBashChatCommandForTests } = await import("./bash-command.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
-const { buildCommandsPaginationKeyboard } = await import("./commands-info.js");
 const { extractMessageText } = await import("./commands-subagents.js");
 const { buildCommandTestParams } = await import("./commands.test-harness.js");
 const { parseConfigCommand } = await import("./config-commands.js");
@@ -1503,17 +1506,6 @@ describe("abort trigger command", () => {
     expect(result).toEqual({ shouldContinue: false });
     expect(sessionStore[params.sessionKey]?.abortedLastRun).toBe(false);
     expect(vi.mocked(abortEmbeddedPiRun)).not.toHaveBeenCalled();
-  });
-});
-
-describe("buildCommandsPaginationKeyboard", () => {
-  it("adds agent id to callback data when provided", () => {
-    const keyboard = buildCommandsPaginationKeyboard(2, 3, "agent-main");
-    expect(keyboard[0]).toEqual([
-      { text: "◀ Prev", callback_data: "commands_page_1:agent-main" },
-      { text: "2/3", callback_data: "commands_page_noop:agent-main" },
-      { text: "Next ▶", callback_data: "commands_page_3:agent-main" },
-    ]);
   });
 });
 

@@ -1,4 +1,5 @@
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -183,6 +184,37 @@ describe("bluebubbles setup surface", () => {
       policyKey: "channels.bluebubbles.accounts.work.dmPolicy",
       allowFromKey: "channels.bluebubbles.accounts.work.allowFrom",
     });
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", async () => {
+    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
+
+    const cfg = {
+      channels: {
+        bluebubbles: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["user@example.com"],
+          accounts: {
+            work: {
+              serverUrl: "http://localhost:1234",
+              password: "secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(blueBubblesSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(blueBubblesSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.bluebubbles.accounts.work.dmPolicy",
+      allowFromKey: "channels.bluebubbles.accounts.work.allowFrom",
+    });
+
+    const next = blueBubblesSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    expect(next?.channels?.bluebubbles?.dmPolicy).toBe("disabled");
+    expect(next?.channels?.bluebubbles?.accounts?.work?.dmPolicy).toBe("open");
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {

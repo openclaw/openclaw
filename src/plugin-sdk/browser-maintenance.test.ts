@@ -14,32 +14,22 @@ vi.mock("./facade-runtime.js", () => ({
   tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 }));
 
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      mkdir,
-      access,
-      rename,
-    },
-    mkdir,
-    access,
-    rename,
-  };
+vi.mock("node:fs/promises", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:fs/promises")>("node:fs/promises"),
+    { mkdir, access, rename },
+    { mirrorToDefault: true },
+  );
 });
 
-vi.mock("node:os", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:os")>();
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      homedir: () => "/home/test",
-    },
-    homedir: () => "/home/test",
-  };
+vi.mock("node:os", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:os")>("node:os"),
+    { homedir: () => "/home/test" },
+    { mirrorToDefault: true },
+  );
 });
 
 describe("browser maintenance", () => {

@@ -1,10 +1,12 @@
 import { rm } from "node:fs/promises";
-import type { PluginInteractiveTelegramHandlerContext } from "openclaw/plugin-sdk/core";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "./test-support/inbound-context-contract.js";
 const {
   answerCallbackQuerySpy,
   commandSpy,
@@ -1816,12 +1818,12 @@ describe("createTelegramBot", () => {
     registerPluginInteractiveHandler("codex-plugin", {
       channel: "telegram",
       namespace: "codexapp",
-      handler: async ({ respond, callback }: PluginInteractiveTelegramHandlerContext) => {
+      handler: (async ({ respond, callback }: TelegramInteractiveHandlerContext) => {
         await respond.editMessage({
           text: `Handled ${callback.payload}`,
         });
         return { handled: true };
-      },
+      }) as never,
     });
 
     createTelegramBot({
@@ -1863,7 +1865,7 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     getChatSpy.mockResolvedValue({ id: -100123456789, type: "supergroup", is_forum: true });
     const handler = vi.fn(
-      async ({ respond, conversationId, threadId }: PluginInteractiveTelegramHandlerContext) => {
+      async ({ respond, conversationId, threadId }: TelegramInteractiveHandlerContext) => {
         expect(conversationId).toBe("-100123456789:topic:1");
         expect(threadId).toBe(1);
         await respond.editMessage({
@@ -1875,7 +1877,7 @@ describe("createTelegramBot", () => {
     registerPluginInteractiveHandler("codex-plugin", {
       channel: "telegram",
       namespace: "codexapp",
-      handler,
+      handler: handler as never,
     });
 
     createTelegramBot({

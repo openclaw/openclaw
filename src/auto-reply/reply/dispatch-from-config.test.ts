@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type {
@@ -131,13 +131,23 @@ vi.mock("./route-reply.runtime.js", () => ({
   routeReply: mocks.routeReply,
 }));
 
-vi.mock("./route-reply.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./route-reply.js")>();
-  return {
-    ...actual,
-    routeReply: mocks.routeReply,
-  };
-});
+vi.mock("./route-reply.js", () => ({
+  isRoutableChannel: (channel: string | undefined) =>
+    Boolean(
+      channel &&
+      [
+        "telegram",
+        "slack",
+        "discord",
+        "signal",
+        "imessage",
+        "whatsapp",
+        "feishu",
+        "mattermost",
+      ].includes(channel),
+    ),
+  routeReply: mocks.routeReply,
+}));
 
 vi.mock("./abort.runtime.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
@@ -155,29 +165,17 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
 }));
-vi.mock("../../config/sessions/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/store.js")>();
-  return {
-    ...actual,
-    loadSessionStore: sessionStoreMocks.loadSessionStore,
-    resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
-  };
-});
-vi.mock("../../config/sessions/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/paths.js")>();
-  return {
-    ...actual,
-    resolveStorePath: sessionStoreMocks.resolveStorePath,
-  };
-});
+vi.mock("./dispatch-from-config.runtime.js", () => ({
+  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
+  loadSessionStore: sessionStoreMocks.loadSessionStore,
+  resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
+  resolveStorePath: sessionStoreMocks.resolveStorePath,
+  triggerInternalHook: internalHookMocks.triggerInternalHook,
+}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
   getGlobalPluginRegistry: () => hookMocks.registry,
-}));
-vi.mock("../../hooks/internal-hooks.js", () => ({
-  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
-  triggerInternalHook: internalHookMocks.triggerInternalHook,
 }));
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
@@ -187,36 +185,27 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
 vi.mock("../../acp/runtime/registry.js", () => ({
   requireAcpRuntimeBackend: acpMocks.requireAcpRuntimeBackend,
 }));
-vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
-  return {
-    ...actual,
-    getSessionBindingService: () => ({
-      bind: vi.fn(async () => {
-        throw new Error("bind not mocked");
-      }),
-      getCapabilities: vi.fn(() => ({
-        adapterAvailable: true,
-        bindSupported: true,
-        unbindSupported: true,
-        placements: ["current", "child"] as const,
-      })),
-      listBySession: (targetSessionKey: string) =>
-        sessionBindingMocks.listBySession(targetSessionKey),
-      resolveByConversation: sessionBindingMocks.resolveByConversation,
-      touch: sessionBindingMocks.touch,
-      unbind: vi.fn(async () => []),
+vi.mock("../../infra/outbound/session-binding-service.js", () => ({
+  getSessionBindingService: () => ({
+    bind: vi.fn(async () => {
+      throw new Error("bind not mocked");
     }),
-  };
-});
-vi.mock("../../infra/agent-events.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/agent-events.js")>();
-  return {
-    ...actual,
-    emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
-  };
-});
+    getCapabilities: vi.fn(() => ({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current", "child"] as const,
+    })),
+    listBySession: (targetSessionKey: string) =>
+      sessionBindingMocks.listBySession(targetSessionKey),
+    resolveByConversation: sessionBindingMocks.resolveByConversation,
+    touch: sessionBindingMocks.touch,
+    unbind: vi.fn(async () => []),
+  }),
+}));
+vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
+}));
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
@@ -295,13 +284,15 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
 }
 
 describe("dispatchReplyFromConfig", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     ({ __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js"));
     ({ __testing: pluginBindingTesting } = await import("../../plugins/conversation-binding.js"));
     ({ AcpRuntimeError: AcpRuntimeErrorClass } = await import("../../acp/runtime/errors.js"));
+  });
+
+  beforeEach(() => {
     const discordTestPlugin = {
       ...createChannelTestPluginBase({
         id: "discord",

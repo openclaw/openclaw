@@ -18,28 +18,13 @@ import type {
   ResponseInput,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "./openai-completions-compat.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
-import {
-  buildProviderRequestDispatcherPolicy,
-  getModelProviderRequestTransport,
-  resolveProviderRequestPolicyConfig,
-} from "./provider-request-config.js";
+import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { transformTransportMessages } from "./transport-message-transform.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
-
-const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
-  "openai-responses",
-  "openai-completions",
-  "azure-openai-responses",
-]);
-
-const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
-  "openai-responses": "openclaw-openai-responses-transport",
-  "openai-completions": "openclaw-openai-completions-transport",
-  "azure-openai-responses": "openclaw-azure-openai-responses-transport",
-};
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -165,164 +150,6 @@ function shortHash(value: string): string {
   return Math.abs(hash).toString(36);
 }
 
-function inferCopilotInitiator(messages: Context["messages"]): "agent" | "user" {
-  const last = messages[messages.length - 1];
-  return last && last.role !== "user" ? "agent" : "user";
-}
-
-function hasCopilotVisionInput(messages: Context["messages"]): boolean {
-  return messages.some((message) => {
-    if (message.role === "user" && Array.isArray(message.content)) {
-      return message.content.some((item) => item.type === "image");
-    }
-    if (message.role === "toolResult" && Array.isArray(message.content)) {
-      return message.content.some((item) => item.type === "image");
-    }
-    return false;
-  });
-}
-
-function buildCopilotDynamicHeaders(params: {
-  messages: Context["messages"];
-  hasImages: boolean;
-}): Record<string, string> {
-  return {
-    "X-Initiator": inferCopilotInitiator(params.messages),
-    "Openai-Intent": "conversation-edits",
-    ...(params.hasImages ? { "Copilot-Vision-Request": "true" } : {}),
-  };
-}
-
-function transformMessages(
-  messages: Context["messages"],
-  model: Model<Api>,
-  normalizeToolCallId?: (
-    id: string,
-    targetModel: Model<Api>,
-    source: { provider: string; api: Api; model: string },
-  ) => string,
-): Context["messages"] {
-  const toolCallIdMap = new Map<string, string>();
-  const transformed = messages.map((msg) => {
-    if (msg.role === "user") {
-      return msg;
-    }
-    if (msg.role === "toolResult") {
-      const normalizedId = toolCallIdMap.get(msg.toolCallId);
-      return normalizedId && normalizedId !== msg.toolCallId
-        ? { ...msg, toolCallId: normalizedId }
-        : msg;
-    }
-    if (msg.role !== "assistant") {
-      return msg;
-    }
-    const isSameModel =
-      msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
-    const content: typeof msg.content = [];
-    for (const block of msg.content) {
-      if (block.type === "thinking") {
-        if (block.redacted) {
-          if (isSameModel) {
-            content.push(block);
-          }
-          continue;
-        }
-        if (isSameModel && block.thinkingSignature) {
-          content.push(block);
-          continue;
-        }
-        if (!block.thinking.trim()) {
-          continue;
-        }
-        content.push(isSameModel ? block : { type: "text", text: block.thinking });
-        continue;
-      }
-      if (block.type === "text") {
-        content.push(isSameModel ? block : { type: "text", text: block.text });
-        continue;
-      }
-      if (block.type !== "toolCall") {
-        content.push(block);
-        continue;
-      }
-      let normalizedToolCall = block;
-      if (!isSameModel && block.thoughtSignature) {
-        normalizedToolCall = { ...normalizedToolCall };
-        delete normalizedToolCall.thoughtSignature;
-      }
-      if (!isSameModel && normalizeToolCallId) {
-        const normalizedId = normalizeToolCallId(block.id, model, msg);
-        if (normalizedId !== block.id) {
-          toolCallIdMap.set(block.id, normalizedId);
-          normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
-        }
-      }
-      content.push(normalizedToolCall);
-    }
-    return { ...msg, content };
-  });
-
-  const result: Context["messages"] = [];
-  let pendingToolCalls: Array<{ id: string; name: string }> = [];
-  let existingToolResultIds = new Set<string>();
-  for (const msg of transformed) {
-    if (msg.role === "assistant") {
-      if (pendingToolCalls.length > 0) {
-        for (const toolCall of pendingToolCalls) {
-          if (!existingToolResultIds.has(toolCall.id)) {
-            result.push({
-              role: "toolResult",
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
-              content: [{ type: "text", text: "No result provided" }],
-              isError: true,
-              timestamp: Date.now(),
-            });
-          }
-        }
-        pendingToolCalls = [];
-        existingToolResultIds = new Set();
-      }
-      if (msg.stopReason === "error" || msg.stopReason === "aborted") {
-        continue;
-      }
-      const toolCalls = msg.content.filter(
-        (block): block is Extract<(typeof msg.content)[number], { type: "toolCall" }> =>
-          block.type === "toolCall",
-      );
-      if (toolCalls.length > 0) {
-        pendingToolCalls = toolCalls.map((block) => ({ id: block.id, name: block.name }));
-        existingToolResultIds = new Set();
-      }
-      result.push(msg);
-      continue;
-    }
-    if (msg.role === "toolResult") {
-      existingToolResultIds.add(msg.toolCallId);
-      result.push(msg);
-      continue;
-    }
-    if (pendingToolCalls.length > 0) {
-      for (const toolCall of pendingToolCalls) {
-        if (!existingToolResultIds.has(toolCall.id)) {
-          result.push({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "No result provided" }],
-            isError: true,
-            timestamp: Date.now(),
-          });
-        }
-      }
-      pendingToolCalls = [];
-      existingToolResultIds = new Set();
-    }
-    result.push(msg);
-  }
-  return result;
-}
-
 function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
 }
@@ -386,7 +213,11 @@ function convertResponsesMessages(
     }
     return `${normalizedCallId}|${normalizedItemId}`;
   };
-  const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+  const transformedMessages = transformTransportMessages(
+    context.messages,
+    model,
+    normalizeToolCallId,
+  );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push({
@@ -718,133 +549,6 @@ function mapResponsesStopReason(status: string | undefined): string {
   }
 }
 
-function hasTransportOverrides(model: Model<Api>): boolean {
-  const request = getModelProviderRequestTransport(model);
-  return Boolean(request?.proxy || request?.tls);
-}
-
-export function isTransportAwareApiSupported(api: Api): boolean {
-  return SUPPORTED_TRANSPORT_APIS.has(api);
-}
-
-export function resolveTransportAwareSimpleApi(api: Api): Api | undefined {
-  return SIMPLE_TRANSPORT_API_ALIAS[api];
-}
-
-export function createTransportAwareStreamFnForModel(model: Model<Api>): StreamFn | undefined {
-  if (!hasTransportOverrides(model)) {
-    return undefined;
-  }
-  if (!isTransportAwareApiSupported(model.api)) {
-    throw new Error(
-      `Model-provider request.proxy/request.tls is not yet supported for api "${model.api}"`,
-    );
-  }
-  switch (model.api) {
-    case "openai-responses":
-      return createOpenAIResponsesTransportStreamFn();
-    case "openai-completions":
-      return createOpenAICompletionsTransportStreamFn();
-    case "azure-openai-responses":
-      return createAzureOpenAIResponsesTransportStreamFn();
-    default:
-      return undefined;
-  }
-}
-
-function resolveModelRequestPolicy(model: Model<Api>) {
-  return resolveProviderRequestPolicyConfig({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-    request: getModelProviderRequestTransport(model),
-  });
-}
-
-function buildManagedResponse(response: Response, release: () => Promise<void>): Response {
-  if (!response.body) {
-    void release();
-    return response;
-  }
-  const source = response.body;
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let released = false;
-  const finalize = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    await release().catch(() => undefined);
-  };
-  const wrappedBody = new ReadableStream<Uint8Array>({
-    start() {
-      reader = source.getReader();
-    },
-    async pull(controller) {
-      try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          controller.close();
-          await finalize();
-          return;
-        }
-        controller.enqueue(chunk.value);
-      } catch (error) {
-        controller.error(error);
-        await finalize();
-      }
-    },
-    async cancel(reason) {
-      try {
-        await reader?.cancel(reason);
-      } finally {
-        await finalize();
-      }
-    },
-  });
-  return new Response(wrappedBody, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
-
-function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
-  const requestConfig = resolveModelRequestPolicy(model);
-  const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
-  return async (input, init) => {
-    const request = input instanceof Request ? new Request(input, init) : undefined;
-    const url =
-      request?.url ??
-      (input instanceof URL
-        ? input.toString()
-        : typeof input === "string"
-          ? input
-          : (() => {
-              throw new Error("Unsupported fetch input for transport-aware model request");
-            })());
-    const requestInit =
-      request &&
-      ({
-        method: request.method,
-        headers: request.headers,
-        body: request.body ?? undefined,
-        redirect: request.redirect,
-        signal: request.signal,
-        ...(request.body ? ({ duplex: "half" } as const) : {}),
-      } satisfies RequestInit & { duplex?: "half" });
-    const result = await fetchWithSsrFGuard({
-      url,
-      init: requestInit ?? init,
-      dispatcherPolicy,
-      ...(requestConfig.allowPrivateNetwork ? { policy: { allowPrivateNetwork: true } } : {}),
-    });
-    return buildManagedResponse(result.response, result.release);
-  };
-}
-
 function buildOpenAIClientHeaders(
   model: Model<Api>,
   context: Context,
@@ -881,7 +585,7 @@ function createOpenAIResponsesClient(
   });
 }
 
-function createOpenAIResponsesTransportStreamFn(): StreamFn {
+export function createOpenAIResponsesTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
@@ -1008,7 +712,7 @@ export function buildOpenAIResponsesParams(
   return params;
 }
 
-function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
+export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
@@ -1137,7 +841,7 @@ function createOpenAICompletionsClient(
   });
 }
 
-function createOpenAICompletionsTransportStreamFn(): StreamFn {
+export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
@@ -1552,20 +1256,4 @@ function mapStopReason(reason: string | null) {
         errorMessage: `Provider finish_reason: ${reason}`,
       };
   }
-}
-
-export function prepareTransportAwareSimpleModel<TApi extends Api>(model: Model<TApi>): Model<Api> {
-  const streamFn = createTransportAwareStreamFnForModel(model as Model<Api>);
-  const alias = resolveTransportAwareSimpleApi(model.api);
-  if (!streamFn || !alias) {
-    return model;
-  }
-  return {
-    ...model,
-    api: alias,
-  };
-}
-
-export function buildTransportAwareSimpleStreamFn(model: Model<Api>): StreamFn | undefined {
-  return createTransportAwareStreamFnForModel(model);
 }

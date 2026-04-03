@@ -130,6 +130,34 @@ describe("nextcloud talk setup", () => {
     });
   });
 
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const base: CoreConfig = {
+      channels: {
+        "nextcloud-talk": {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          accounts: {
+            work: {
+              baseUrl: "https://cloud.example.com",
+              botSecret: "work-secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    };
+
+    expect(nextcloudTalkDmPolicy.getCurrent(base)).toBe("allowlist");
+    expect(nextcloudTalkDmPolicy.resolveConfigKeys?.(base)).toEqual({
+      policyKey: "channels.nextcloud-talk.accounts.work.dmPolicy",
+      allowFromKey: "channels.nextcloud-talk.accounts.work.allowFrom",
+    });
+
+    const next = nextcloudTalkDmPolicy.setPolicy(base, "open");
+    expect(next.channels?.["nextcloud-talk"]?.dmPolicy).toBe("disabled");
+    expect(next.channels?.["nextcloud-talk"]?.accounts?.work?.dmPolicy).toBe("open");
+  });
+
   it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
     const next = nextcloudTalkDmPolicy.setPolicy(
       {
@@ -334,5 +362,29 @@ describe("resolveNextcloudTalkAccount", () => {
     expect(account.secret).toBe("");
     expect(account.secretSource).toBe("none");
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const account = resolveNextcloudTalkAccount({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            defaultAccount: "work",
+            botSecret: "top-secret",
+            accounts: {
+              work: {
+                baseUrl: "https://cloud.example.com",
+                botSecret: "work-secret",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+    });
+
+    expect(account.accountId).toBe("work");
+    expect(account.baseUrl).toBe("https://cloud.example.com");
+    expect(account.secret).toBe("work-secret");
+    expect(account.secretSource).toBe("config");
   });
 });

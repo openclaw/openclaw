@@ -101,10 +101,6 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
-    enableSlackInteractiveReplies: plugin?.messaging?.enableInteractiveReplies?.({
-      cfg,
-      accountId,
-    }),
   });
   if (!normalized) {
     return { ok: true };
@@ -162,14 +158,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       threadId,
       replyToId,
     }) ?? null;
-  const resolvedReplyToId =
-    replyTransport?.replyToId ??
-    replyToId ??
-    ((channelId === "slack" || channelId === "mattermost") && threadId != null && threadId !== ""
-      ? String(threadId)
-      : undefined);
+  const resolvedReplyToId = replyTransport?.replyToId ?? replyToId ?? undefined;
   const resolvedThreadId =
-    replyTransport?.threadId ?? (channelId === "slack" ? null : (threadId ?? null));
+    replyTransport && Object.hasOwn(replyTransport, "threadId")
+      ? (replyTransport.threadId ?? null)
+      : (threadId ?? null);
 
   try {
     // Provider docking: this is an execution boundary (we're about to send).

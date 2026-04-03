@@ -25,6 +25,7 @@ Most days:
 - Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
 - Faster local full-suite run on a roomy machine: `pnpm test:max`
 - Direct Vitest watch loop (modern projects config): `pnpm test:watch`
+- Direct file targeting now routes extension/channel paths too: `pnpm test -- extensions/discord/src/monitor/message-handler.preflight.test.ts`
 
 When you touch tests or want extra confidence:
 
@@ -57,7 +58,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Should be fast and stable
 - Projects note:
   - `pnpm test` and `pnpm test:watch` both use the same native Vitest `projects` config now.
-  - The tiny script wrapper only strips pnpm's passthrough separator; scheduling stays native Vitest.
+  - The tiny script wrapper still keeps scheduling native, but it now reroutes direct `extensions/...` and channel-surface test paths onto the matching Vitest lane automatically.
+  - If you target mixed suites in one command, the wrapper runs those lanes sequentially under the same local heavy-check lock.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
     keep both levels of coverage.

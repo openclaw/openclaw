@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import {
+  createConfigHandlerHarness,
+  createConfigWriteSnapshot,
+  flushConfigHandlerMicrotasks,
+} from "./config.test-helpers.js";
 
 const readConfigFileSnapshotForWriteMock = vi.fn();
 const writeConfigFileMock = vi.fn();
@@ -38,54 +42,6 @@ vi.mock("../../infra/restart.js", () => ({
 
 const { configHandlers } = await import("./config.js");
 
-function createConfigSnapshot(config: OpenClawConfig) {
-  return {
-    snapshot: {
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: JSON.stringify(config, null, 2),
-      parsed: config,
-      sourceConfig: config,
-      resolved: config,
-      valid: true,
-      runtimeConfig: config,
-      config,
-      hash: "base-hash",
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    },
-    writeOptions: {} as Record<string, never>,
-  };
-}
-
-function createOptions(
-  params: unknown,
-  contextOverrides?: Partial<GatewayRequestHandlerOptions["context"]>,
-): GatewayRequestHandlerOptions {
-  return {
-    req: { type: "req", id: "1", method: "config.patch" },
-    params,
-    client: null,
-    isWebchatConnect: () => false,
-    respond: vi.fn(),
-    context: {
-      logGateway: {
-        error: vi.fn(),
-        warn: vi.fn(),
-        info: vi.fn(),
-        debug: vi.fn(),
-      },
-      disconnectClientsUsingSharedGatewayAuth: vi.fn(),
-      ...contextOverrides,
-    },
-  } as unknown as GatewayRequestHandlerOptions;
-}
-
-async function flushMicrotaskQueue() {
-  await new Promise<void>((resolve) => queueMicrotask(resolve));
-}
-
 afterEach(() => {
   vi.clearAllMocks();
 });
@@ -116,18 +72,21 @@ describe("config shared auth disconnects", () => {
         },
       },
     };
-    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigSnapshot(prevConfig));
+    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
 
-    const opts = createOptions({
-      raw: JSON.stringify(nextConfig, null, 2),
-      baseHash: "base-hash",
+    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+      method: "config.set",
+      params: {
+        raw: JSON.stringify(nextConfig, null, 2),
+        baseHash: "base-hash",
+      },
     });
 
-    await configHandlers["config.set"](opts);
-    await flushMicrotaskQueue();
+    await configHandlers["config.set"](options);
+    await flushConfigHandlerMicrotasks();
 
     expect(writeConfigFileMock).toHaveBeenCalledWith(nextConfig, {});
-    expect(opts.context.disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
+    expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
   });
 
@@ -140,19 +99,22 @@ describe("config shared auth disconnects", () => {
         },
       },
     };
-    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigSnapshot(prevConfig));
+    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
 
-    const opts = createOptions({
-      baseHash: "base-hash",
-      raw: JSON.stringify({ gateway: { auth: { token: "new-token" } } }),
-      restartDelayMs: 1_000,
+    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+      method: "config.patch",
+      params: {
+        baseHash: "base-hash",
+        raw: JSON.stringify({ gateway: { auth: { token: "new-token" } } }),
+        restartDelayMs: 1_000,
+      },
     });
 
-    await configHandlers["config.patch"](opts);
-    await flushMicrotaskQueue();
+    await configHandlers["config.patch"](options);
+    await flushConfigHandlerMicrotasks();
 
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
-    expect(opts.context.disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
+    expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
   });
 
   it("does not disconnect shared-auth clients when config.patch changes only inactive password auth", async () => {
@@ -164,18 +126,21 @@ describe("config shared auth disconnects", () => {
         },
       },
     };
-    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigSnapshot(prevConfig));
+    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
 
-    const opts = createOptions({
-      baseHash: "base-hash",
-      raw: JSON.stringify({ gateway: { auth: { password: "new-password" } } }),
-      restartDelayMs: 1_000,
+    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+      method: "config.patch",
+      params: {
+        baseHash: "base-hash",
+        raw: JSON.stringify({ gateway: { auth: { password: "new-password" } } }),
+        restartDelayMs: 1_000,
+      },
     });
 
-    await configHandlers["config.patch"](opts);
-    await flushMicrotaskQueue();
+    await configHandlers["config.patch"](options);
+    await flushConfigHandlerMicrotasks();
 
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
-    expect(opts.context.disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
+    expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 });

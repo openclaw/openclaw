@@ -6,10 +6,21 @@ import {
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  PAIRING_APPROVED_MESSAGE,
+  buildTokenChannelStatusSummary,
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
+} from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { clearAccountEntryFields } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/outbound-runtime";
 import {
   buildOutboundBaseSessionKey,
   normalizeMessageChannel,
@@ -18,6 +29,10 @@ import {
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
 import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
+import {
   listTelegramAccountIds,
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
@@ -25,13 +40,9 @@ import {
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { telegramApprovalCapability } from "./approval-native.js";
+import * as auditModule from "./audit.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
-import {
-  matchTelegramAcpConversation,
-  normalizeTelegramAcpConversationId,
-  resolveTelegramCommandConversation,
-} from "./channel-bindings.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
@@ -50,53 +61,64 @@ import {
   resolveTelegramGroupToolPolicy,
 } from "./group-policy.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
+import * as monitorModule from "./monitor.js";
 import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
-import { telegramChannelOutbound } from "./outbound-base.js";
-import { parseTelegramThreadId } from "./outbound-params.js";
-import { telegramPairingText } from "./pairing-text.js";
+import { sendTelegramPayloadMessages } from "./outbound-adapter.js";
+import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
+import * as probeModule from "./probe.js";
 import type { TelegramProbe } from "./probe.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { getTelegramRuntime } from "./runtime.js";
+import { collectTelegramSecurityAuditFindings } from "./security-audit.js";
+import { sendMessageTelegram, sendPollTelegram, sendTypingTelegram } from "./send.js";
 import { resolveTelegramSessionConversation } from "./session-conversation.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
-import { createTelegramPluginBase, telegramConfigAdapter } from "./shared.js";
+import {
+  createTelegramPluginBase,
+  findTelegramTokenOwnerAccountId,
+  formatDuplicateTelegramTokenReason,
+  telegramConfigAdapter,
+} from "./shared.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
-import { telegramGateway } from "./telegram-gateway.js";
-import { telegramStatus } from "./telegram-status.js";
-import { telegramThreading } from "./telegram-threading.js";
 import {
   createTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
+import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
+import { resolveTelegramToken } from "./token.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
-let telegramAuditModulePromise: Promise<typeof import("./audit.js")> | null = null;
-let telegramMonitorModulePromise: Promise<typeof import("./monitor.js")> | null = null;
-let telegramProbeModulePromise: Promise<typeof import("./probe.js")> | null = null;
-async function loadTelegramAuditModule() {
-  telegramAuditModulePromise ??= import("./audit.js");
-  return await telegramAuditModulePromise;
-}
+type TelegramSendFn = typeof sendMessageTelegram;
 
-async function loadTelegramProbeModule() {
-  telegramProbeModulePromise ??= import("./probe.js");
-  return await telegramProbeModulePromise;
-}
+type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
 
-async function resolveTelegramProbe() {
+function resolveTelegramProbe() {
   return (
-    getOptionalTelegramRuntime()?.channel?.telegram?.probeTelegram ??
-    (await loadTelegramProbeModule()).probeTelegram
+    getOptionalTelegramRuntime()?.channel?.telegram?.probeTelegram ?? probeModule.probeTelegram
   );
 }
 
-async function resolveTelegramAuditCollector() {
+function resolveTelegramAuditCollector() {
   return (
     getOptionalTelegramRuntime()?.channel?.telegram?.collectTelegramUnmentionedGroupIds ??
-    (await loadTelegramAuditModule()).collectTelegramUnmentionedGroupIds
+    auditModule.collectTelegramUnmentionedGroupIds
+  );
+}
+
+function resolveTelegramAuditMembership() {
+  return (
+    getOptionalTelegramRuntime()?.channel?.telegram?.auditTelegramGroupMembership ??
+    auditModule.auditTelegramGroupMembership
+  );
+}
+
+function resolveTelegramMonitor() {
+  return (
+    getOptionalTelegramRuntime()?.channel?.telegram?.monitorTelegramProvider ??
+    monitorModule.monitorTelegramProvider
   );
 }
 
@@ -106,6 +128,77 @@ function getOptionalTelegramRuntime() {
   } catch {
     return null;
   }
+}
+
+function resolveTelegramSend(deps?: OutboundSendDeps): TelegramSendFn {
+  return (
+    resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
+    getOptionalTelegramRuntime()?.channel?.telegram?.sendMessageTelegram ??
+    sendMessageTelegram
+  );
+}
+
+function resolveTelegramTokenHelper() {
+  return (
+    getOptionalTelegramRuntime()?.channel?.telegram?.resolveTelegramToken ?? resolveTelegramToken
+  );
+}
+
+function buildTelegramSendOptions(params: {
+  cfg: OpenClawConfig;
+  mediaUrl?: string | null;
+  mediaLocalRoots?: readonly string[] | null;
+  accountId?: string | null;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean | null;
+  forceDocument?: boolean | null;
+  gatewayClientScopes?: readonly string[] | null;
+}): TelegramSendOptions {
+  return {
+    verbose: false,
+    cfg: params.cfg,
+    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    messageThreadId: parseTelegramThreadId(params.threadId),
+    replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
+    accountId: params.accountId ?? undefined,
+    silent: params.silent ?? undefined,
+    forceDocument: params.forceDocument ?? undefined,
+    ...(Array.isArray(params.gatewayClientScopes)
+      ? { gatewayClientScopes: [...params.gatewayClientScopes] }
+      : {}),
+  };
+}
+
+async function sendTelegramOutbound(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  mediaUrl?: string | null;
+  mediaLocalRoots?: readonly string[] | null;
+  accountId?: string | null;
+  deps?: OutboundSendDeps;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean | null;
+  gatewayClientScopes?: readonly string[] | null;
+}) {
+  const send = resolveTelegramSend(params.deps);
+  return await send(
+    params.to,
+    params.text,
+    buildTelegramSendOptions({
+      cfg: params.cfg,
+      mediaUrl: params.mediaUrl,
+      mediaLocalRoots: params.mediaLocalRoots,
+      accountId: params.accountId,
+      replyToId: params.replyToId,
+      threadId: params.threadId,
+      silent: params.silent,
+      gatewayClientScopes: params.gatewayClientScopes,
+    }),
+  );
 }
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
@@ -130,6 +223,173 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
+function normalizeTelegramAcpConversationId(conversationId: string) {
+  const parsed = parseTelegramTopicConversation({ conversationId });
+  if (!parsed || !parsed.chatId.startsWith("-")) {
+    return null;
+  }
+  return {
+    conversationId: parsed.canonicalConversationId,
+    parentConversationId: parsed.chatId,
+  };
+}
+
+function matchTelegramAcpConversation(params: {
+  bindingConversationId: string;
+  conversationId: string;
+  parentConversationId?: string;
+}) {
+  const binding = normalizeTelegramAcpConversationId(params.bindingConversationId);
+  if (!binding) {
+    return null;
+  }
+  const incoming = parseTelegramTopicConversation({
+    conversationId: params.conversationId,
+    parentConversationId: params.parentConversationId,
+  });
+  if (!incoming || !incoming.chatId.startsWith("-")) {
+    return null;
+  }
+  if (binding.conversationId !== incoming.canonicalConversationId) {
+    return null;
+  }
+  return {
+    conversationId: incoming.canonicalConversationId,
+    parentConversationId: incoming.chatId,
+    matchPriority: 2,
+  };
+}
+
+function shouldTreatTelegramRoutedTextAsVisible(params: {
+  kind: "tool" | "block" | "final";
+  text?: string;
+}): boolean {
+  void params.text;
+  return params.kind !== "final";
+}
+
+function targetsMatchTelegramReplySuppression(params: {
+  originTarget: string;
+  targetKey: string;
+  targetThreadId?: string;
+}): boolean {
+  const origin = parseTelegramTarget(params.originTarget);
+  const target = parseTelegramTarget(params.targetKey);
+  const originThreadId =
+    origin.messageThreadId != null && String(origin.messageThreadId).trim()
+      ? String(origin.messageThreadId).trim()
+      : undefined;
+  const targetThreadId =
+    params.targetThreadId?.trim() ||
+    (target.messageThreadId != null && String(target.messageThreadId).trim()
+      ? String(target.messageThreadId).trim()
+      : undefined);
+  if (origin.chatId.trim().toLowerCase() !== target.chatId.trim().toLowerCase()) {
+    return false;
+  }
+  if (originThreadId && targetThreadId) {
+    return originThreadId === targetThreadId;
+  }
+  return originThreadId == null && targetThreadId == null;
+}
+
+function resolveTelegramCommandConversation(params: {
+  threadId?: string;
+  originatingTo?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+}) {
+  const chatId = [params.originatingTo, params.commandTo, params.fallbackTo]
+    .map((candidate) => {
+      const trimmed = candidate?.trim();
+      return trimmed ? parseTelegramTarget(trimmed).chatId.trim() : "";
+    })
+    .find((candidate) => candidate.length > 0);
+  if (!chatId) {
+    return null;
+  }
+  if (params.threadId) {
+    return {
+      conversationId: `${chatId}:topic:${params.threadId}`,
+      parentConversationId: chatId,
+    };
+  }
+  if (chatId.startsWith("-")) {
+    return null;
+  }
+  return {
+    conversationId: chatId,
+    parentConversationId: chatId,
+  };
+}
+
+function resolveTelegramInboundConversation(params: {
+  to?: string;
+  conversationId?: string;
+  threadId?: string | number;
+}) {
+  const rawTarget = params.to?.trim() || params.conversationId?.trim() || "";
+  if (!rawTarget) {
+    return null;
+  }
+  const parsedTarget = parseTelegramTarget(rawTarget);
+  const chatId = parsedTarget.chatId.trim();
+  if (!chatId) {
+    return null;
+  }
+  const threadId =
+    parsedTarget.messageThreadId != null
+      ? String(parsedTarget.messageThreadId)
+      : params.threadId != null
+        ? String(params.threadId).trim() || undefined
+        : undefined;
+  if (threadId) {
+    const parsedTopic = parseTelegramTopicConversation({
+      conversationId: threadId,
+      parentConversationId: chatId,
+    });
+    if (!parsedTopic) {
+      return null;
+    }
+    return {
+      conversationId: parsedTopic.canonicalConversationId,
+      parentConversationId: parsedTopic.chatId,
+    };
+  }
+  return {
+    conversationId: chatId,
+    parentConversationId: chatId,
+  };
+}
+
+function resolveTelegramDeliveryTarget(params: {
+  conversationId: string;
+  parentConversationId?: string;
+}) {
+  const parsedTopic = parseTelegramTopicConversation({
+    conversationId: params.conversationId,
+    parentConversationId: params.parentConversationId,
+  });
+  if (parsedTopic) {
+    return {
+      to: parsedTopic.chatId,
+      threadId: parsedTopic.topicId,
+    };
+  }
+  const parsedTarget = parseTelegramTarget(
+    params.parentConversationId?.trim() || params.conversationId,
+  );
+  if (!parsedTarget.chatId.trim()) {
+    return null;
+  }
+  return {
+    to: parsedTarget.chatId,
+    ...(parsedTarget.messageThreadId != null
+      ? { threadId: String(parsedTarget.messageThreadId) }
+      : {}),
+  };
+}
+
 function parseTelegramExplicitTarget(raw: string) {
   const target = parseTelegramTarget(raw);
   return {
@@ -137,6 +397,41 @@ function parseTelegramExplicitTarget(raw: string) {
     threadId: target.messageThreadId,
     chatType: target.chatType === "unknown" ? undefined : target.chatType,
   };
+}
+
+function shouldStripTelegramThreadFromAnnounceOrigin(params: {
+  requester: {
+    channel?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  entry: {
+    channel?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+}): boolean {
+  const requesterChannel = params.requester.channel?.trim().toLowerCase();
+  if (requesterChannel && requesterChannel !== "telegram") {
+    return true;
+  }
+  const requesterTo = params.requester.to?.trim();
+  if (!requesterTo) {
+    return false;
+  }
+  if (!requesterChannel && !requesterTo.startsWith("telegram:")) {
+    return true;
+  }
+  const requesterTarget = parseTelegramExplicitTarget(requesterTo);
+  if (requesterTarget.chatType !== "group") {
+    return true;
+  }
+  const entryTo = params.entry.to?.trim();
+  if (!entryTo) {
+    return false;
+  }
+  const entryTarget = parseTelegramExplicitTarget(entryTo);
+  return entryTarget.to !== requesterTarget.to;
 }
 
 function buildTelegramBaseSessionKey(params: {
@@ -313,6 +608,7 @@ export const telegramPlugin = createChatChannelPlugin({
       resolveGroupOverrides: resolveTelegramAllowlistGroupOverrides,
     }),
     bindings: {
+      selfParentConversationByDefault: true,
       compileConfiguredBinding: ({ conversationId }) =>
         normalizeTelegramAcpConversationId(conversationId),
       matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
@@ -331,6 +627,25 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     conversationBindings: {
       supportsCurrentConversationBinding: true,
+      defaultTopLevelPlacement: "current",
+      resolveConversationRef: ({
+        accountId: _accountId,
+        conversationId,
+        parentConversationId,
+        threadId,
+      }) =>
+        resolveTelegramInboundConversation({
+          to: parentConversationId ?? conversationId,
+          conversationId,
+          threadId: threadId ?? undefined,
+        }),
+      buildBoundReplyChannelData: ({ operation, conversation }) => {
+        if (operation !== "acp-spawn") {
+          return null;
+        }
+        return conversation.conversationId.includes(":topic:") ? { telegram: { pin: true } } : null;
+      },
+      shouldStripThreadFromAnnounceOrigin: shouldStripTelegramThreadFromAnnounceOrigin,
       createManager: ({ accountId }) =>
         createTelegramThreadBindingManager({
           accountId: accountId ?? undefined,
@@ -372,6 +687,10 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     messaging: {
       normalizeTarget: normalizeTelegramMessagingTarget,
+      resolveInboundConversation: ({ to, conversationId, threadId }) =>
+        resolveTelegramInboundConversation({ to, conversationId, threadId }),
+      resolveDeliveryTarget: ({ conversationId, parentConversationId }) =>
+        resolveTelegramDeliveryTarget({ conversationId, parentConversationId }),
       resolveSessionConversation: ({ kind, rawId }) =>
         resolveTelegramSessionConversation({ kind, rawId }),
       parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
@@ -432,11 +751,226 @@ export const telegramPlugin = createChatChannelPlugin({
       listGroups: async (params) => listTelegramDirectoryGroupsFromConfig(params),
     }),
     actions: telegramMessageActions,
-    status: telegramStatus,
-    gateway: telegramGateway,
+    status: createComputedAccountStatusAdapter<ResolvedTelegramAccount, TelegramProbe, unknown>({
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+      skipStaleSocketHealthCheck: true,
+      collectStatusIssues: collectTelegramStatusIssues,
+      buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
+      probeAccount: async ({ account, timeoutMs }) =>
+        resolveTelegramProbe()(account.token, timeoutMs, {
+          accountId: account.accountId,
+          proxyUrl: account.config.proxy,
+          network: account.config.network,
+          apiRoot: account.config.apiRoot,
+        }),
+      formatCapabilitiesProbe: ({ probe }) => {
+        const lines = [];
+        if (probe?.bot?.username) {
+          const botId = probe.bot.id ? ` (${probe.bot.id})` : "";
+          lines.push({ text: `Bot: @${probe.bot.username}${botId}` });
+        }
+        const flags: string[] = [];
+        if (typeof probe?.bot?.canJoinGroups === "boolean") {
+          flags.push(`joinGroups=${probe.bot.canJoinGroups}`);
+        }
+        if (typeof probe?.bot?.canReadAllGroupMessages === "boolean") {
+          flags.push(`readAllGroupMessages=${probe.bot.canReadAllGroupMessages}`);
+        }
+        if (typeof probe?.bot?.supportsInlineQueries === "boolean") {
+          flags.push(`inlineQueries=${probe.bot.supportsInlineQueries}`);
+        }
+        if (flags.length > 0) {
+          lines.push({ text: `Flags: ${flags.join(" ")}` });
+        }
+        if (probe?.webhook?.url !== undefined) {
+          lines.push({ text: `Webhook: ${probe.webhook.url || "none"}` });
+        }
+        return lines;
+      },
+      auditAccount: async ({ account, timeoutMs, probe, cfg }) => {
+        const groups =
+          cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
+          cfg.channels?.telegram?.groups;
+        const { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups } =
+          resolveTelegramAuditCollector()(groups);
+        if (!groupIds.length && unresolvedGroups === 0 && !hasWildcardUnmentionedGroups) {
+          return undefined;
+        }
+        const botId = probe?.ok && probe.bot?.id != null ? probe.bot.id : null;
+        if (!botId) {
+          return {
+            ok: unresolvedGroups === 0 && !hasWildcardUnmentionedGroups,
+            checkedGroups: 0,
+            unresolvedGroups,
+            hasWildcardUnmentionedGroups,
+            groups: [],
+            elapsedMs: 0,
+          };
+        }
+        const audit = await resolveTelegramAuditMembership()({
+          token: account.token,
+          botId,
+          groupIds,
+          proxyUrl: account.config.proxy,
+          network: account.config.network,
+          apiRoot: account.config.apiRoot,
+          timeoutMs,
+        });
+        return { ...audit, unresolvedGroups, hasWildcardUnmentionedGroups };
+      },
+      resolveAccountSnapshot: ({ account, cfg, runtime, audit }) => {
+        const configuredFromStatus = resolveConfiguredFromCredentialStatuses(account);
+        const ownerAccountId = findTelegramTokenOwnerAccountId({
+          cfg,
+          accountId: account.accountId,
+        });
+        const duplicateTokenReason = ownerAccountId
+          ? formatDuplicateTelegramTokenReason({
+              accountId: account.accountId,
+              ownerAccountId,
+            })
+          : null;
+        const configured =
+          (configuredFromStatus ?? Boolean(account.token?.trim())) && !ownerAccountId;
+        const groups =
+          cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
+          cfg.channels?.telegram?.groups;
+        const allowUnmentionedGroups =
+          groups?.["*"]?.requireMention === false ||
+          Object.entries(groups ?? {}).some(
+            ([key, value]) => key !== "*" && value?.requireMention === false,
+          );
+        return {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured,
+          extra: {
+            ...projectCredentialSnapshotFields(account),
+            lastError: runtime?.lastError ?? duplicateTokenReason,
+            mode: runtime?.mode ?? (account.config.webhookUrl ? "webhook" : "polling"),
+            audit,
+            allowUnmentionedGroups,
+          },
+        };
+      },
+    }),
+    gateway: {
+      startAccount: async (ctx) => {
+        const account = ctx.account;
+        const ownerAccountId = findTelegramTokenOwnerAccountId({
+          cfg: ctx.cfg,
+          accountId: account.accountId,
+        });
+        if (ownerAccountId) {
+          const reason = formatDuplicateTelegramTokenReason({
+            accountId: account.accountId,
+            ownerAccountId,
+          });
+          ctx.log?.error?.(`[${account.accountId}] ${reason}`);
+          throw new Error(reason);
+        }
+        const token = (account.token ?? "").trim();
+        let telegramBotLabel = "";
+        try {
+          const probe = await resolveTelegramProbe()(token, 2500, {
+            accountId: account.accountId,
+            proxyUrl: account.config.proxy,
+            network: account.config.network,
+            apiRoot: account.config.apiRoot,
+          });
+          const username = probe.ok ? probe.bot?.username?.trim() : null;
+          if (username) {
+            telegramBotLabel = ` (@${username})`;
+          }
+        } catch (err) {
+          if (getTelegramRuntime().logging.shouldLogVerbose()) {
+            ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+          }
+        }
+        ctx.log?.info(`[${account.accountId}] starting provider${telegramBotLabel}`);
+        return resolveTelegramMonitor()({
+          token,
+          accountId: account.accountId,
+          config: ctx.cfg,
+          runtime: ctx.runtime,
+          abortSignal: ctx.abortSignal,
+          useWebhook: Boolean(account.config.webhookUrl),
+          webhookUrl: account.config.webhookUrl,
+          webhookSecret: account.config.webhookSecret,
+          webhookPath: account.config.webhookPath,
+          webhookHost: account.config.webhookHost,
+          webhookPort: account.config.webhookPort,
+          webhookCertPath: account.config.webhookCertPath,
+        });
+      },
+      logoutAccount: async ({ accountId, cfg }) => {
+        const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";
+        const nextCfg = { ...cfg } as OpenClawConfig;
+        const nextTelegram = cfg.channels?.telegram ? { ...cfg.channels.telegram } : undefined;
+        let cleared = false;
+        let changed = false;
+        if (nextTelegram) {
+          if (accountId === DEFAULT_ACCOUNT_ID && nextTelegram.botToken) {
+            delete nextTelegram.botToken;
+            cleared = true;
+            changed = true;
+          }
+          const accountCleanup = clearAccountEntryFields({
+            accounts: nextTelegram.accounts,
+            accountId,
+            fields: ["botToken"],
+          });
+          if (accountCleanup.changed) {
+            changed = true;
+            if (accountCleanup.cleared) {
+              cleared = true;
+            }
+            if (accountCleanup.nextAccounts) {
+              nextTelegram.accounts = accountCleanup.nextAccounts;
+            } else {
+              delete nextTelegram.accounts;
+            }
+          }
+        }
+        if (changed) {
+          if (nextTelegram && Object.keys(nextTelegram).length > 0) {
+            nextCfg.channels = { ...nextCfg.channels, telegram: nextTelegram };
+          } else {
+            const nextChannels = { ...nextCfg.channels };
+            delete nextChannels.telegram;
+            if (Object.keys(nextChannels).length > 0) {
+              nextCfg.channels = nextChannels;
+            } else {
+              delete nextCfg.channels;
+            }
+          }
+        }
+        const resolved = resolveTelegramAccount({
+          cfg: changed ? nextCfg : cfg,
+          accountId,
+        });
+        const loggedOut = resolved.tokenSource === "none";
+        if (changed) {
+          await getTelegramRuntime().config.writeConfigFile(nextCfg);
+        }
+        return { cleared, envToken: Boolean(envToken), loggedOut };
+      },
+    },
   },
   pairing: {
-    text: telegramPairingText,
+    text: {
+      idLabel: "telegramUserId",
+      message: PAIRING_APPROVED_MESSAGE,
+      normalizeAllowEntry: createPairingPrefixStripper(/^(telegram|tg):/i),
+      notify: async ({ cfg, id, message, accountId }) => {
+        const { token } = resolveTelegramTokenHelper()(cfg, { accountId });
+        if (!token) {
+          throw new Error("telegram token not configured");
+        }
+        await resolveTelegramSend()(id, message, { token, accountId });
+      },
+    },
   },
   security: {
     dm: {
@@ -447,7 +981,149 @@ export const telegramPlugin = createChatChannelPlugin({
       normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
     },
     collectWarnings: collectTelegramSecurityWarnings,
+    collectAuditFindings: collectTelegramSecurityAuditFindings,
   },
-  threading: telegramThreading,
-  outbound: telegramChannelOutbound,
+  threading: {
+    topLevelReplyToMode: "telegram",
+    buildToolContext: (params) => buildTelegramThreadingToolContext(params),
+    resolveAutoThreadId: ({ to, toolContext }) => resolveTelegramAutoThreadId({ to, toolContext }),
+  },
+  outbound: {
+    base: {
+      deliveryMode: "direct",
+      chunker: (text, limit) => getTelegramRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunkerMode: "markdown",
+      textChunkLimit: 4000,
+      pollMaxOptions: 10,
+      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+        shouldSuppressLocalTelegramExecApprovalPrompt({
+          cfg,
+          accountId,
+          payload,
+        }),
+      beforeDeliverPayload: async ({ cfg, target, hint }) => {
+        if (hint?.kind !== "approval-pending" || hint.approvalKind !== "exec") {
+          return;
+        }
+        const threadId =
+          typeof target.threadId === "number"
+            ? target.threadId
+            : typeof target.threadId === "string"
+              ? Number.parseInt(target.threadId, 10)
+              : undefined;
+        await sendTypingTelegram(target.to, {
+          cfg,
+          accountId: target.accountId ?? undefined,
+          ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
+        }).catch(() => {});
+      },
+      shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
+      shouldTreatRoutedTextAsVisible: shouldTreatTelegramRoutedTextAsVisible,
+      targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
+      resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
+        typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
+      supportsPollDurationSeconds: true,
+      supportsAnonymousPolls: true,
+      sendPayload: async ({
+        cfg,
+        to,
+        payload,
+        mediaLocalRoots,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        silent,
+        forceDocument,
+        gatewayClientScopes,
+      }) => {
+        const send = resolveTelegramSend(deps);
+        const result = await sendTelegramPayloadMessages({
+          send,
+          to,
+          payload,
+          baseOpts: buildTelegramSendOptions({
+            cfg,
+            mediaLocalRoots,
+            accountId,
+            replyToId,
+            threadId,
+            silent,
+            forceDocument,
+            gatewayClientScopes,
+          }),
+        });
+        return attachChannelToResult("telegram", result);
+      },
+    },
+    attachedResults: {
+      channel: "telegram",
+      sendText: async ({
+        cfg,
+        to,
+        text,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        silent,
+        gatewayClientScopes,
+      }) =>
+        await sendTelegramOutbound({
+          cfg,
+          to,
+          text,
+          accountId,
+          deps,
+          replyToId,
+          threadId,
+          silent,
+          gatewayClientScopes,
+        }),
+      sendMedia: async ({
+        cfg,
+        to,
+        text,
+        mediaUrl,
+        mediaLocalRoots,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        silent,
+        gatewayClientScopes,
+      }) =>
+        await sendTelegramOutbound({
+          cfg,
+          to,
+          text,
+          mediaUrl,
+          mediaLocalRoots,
+          accountId,
+          deps,
+          replyToId,
+          threadId,
+          silent,
+          gatewayClientScopes,
+        }),
+      sendPoll: async ({
+        cfg,
+        to,
+        poll,
+        accountId,
+        threadId,
+        silent,
+        isAnonymous,
+        gatewayClientScopes,
+      }) =>
+        await sendPollTelegram(to, poll, {
+          cfg,
+          accountId: accountId ?? undefined,
+          messageThreadId: parseTelegramThreadId(threadId),
+          silent: silent ?? undefined,
+          isAnonymous: isAnonymous ?? undefined,
+          gatewayClientScopes,
+        }),
+    },
+  },
 });

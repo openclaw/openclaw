@@ -1,3 +1,4 @@
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequence,
@@ -112,6 +113,7 @@ export function createDirectTextMediaOutbound<
     chunker: chunkText,
     chunkerMode: "text",
     textChunkLimit: 4000,
+    sanitizeText: ({ text }) => sanitizeForPlainText(text),
     sendPayload: async (ctx) =>
       await sendTextMediaPayload({ channel: params.channel, ctx, adapter: outbound }),
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {

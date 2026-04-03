@@ -121,6 +121,50 @@ function isBoundThreadBotSystemMessage(params: {
   return DISCORD_BOUND_THREAD_SYSTEM_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
+function resolveDiscordMentionState(params: {
+  authorIsBot: boolean;
+  botId?: string;
+  hasAnyMention: boolean;
+  isDirectMessage: boolean;
+  isExplicitlyMentioned: boolean;
+  mentionRegexes: RegExp[];
+  mentionText: string;
+  mentionedEveryone: boolean;
+  referencedAuthorId?: string;
+  senderIsPluralKit: boolean;
+  transcript?: string;
+}): { implicitMention: boolean; wasMentioned: boolean } {
+  if (params.isDirectMessage) {
+    return {
+      implicitMention: false,
+      wasMentioned: false,
+    };
+  }
+
+  const everyoneMentioned =
+    params.mentionedEveryone && (!params.authorIsBot || params.senderIsPluralKit);
+  const wasMentioned =
+    everyoneMentioned ||
+    matchesMentionWithExplicit({
+      text: params.mentionText,
+      mentionRegexes: params.mentionRegexes,
+      explicit: {
+        hasAnyMention: params.hasAnyMention,
+        isExplicitlyMentioned: params.isExplicitlyMentioned,
+        canResolveExplicit: Boolean(params.botId),
+      },
+      transcript: params.transcript,
+    });
+  const implicitMention = Boolean(
+    params.botId && params.referencedAuthorId && params.referencedAuthorId === params.botId,
+  );
+
+  return {
+    implicitMention,
+    wasMentioned,
+  };
+}
+
 export function resolvePreflightMentionRequirement(params: {
   shouldRequireMention: boolean;
   bypassMentionRequirement: boolean;
@@ -751,25 +795,19 @@ export async function preflightDiscordMessage(
   }
 
   const mentionText = hasTypedText ? baseText : "";
-  const wasMentioned =
-    !isDirectMessage &&
-    (((!author.bot || sender.isPluralKit) && Boolean(message.mentionedEveryone)) ||
-      matchesMentionWithExplicit({
-        text: mentionText,
-        mentionRegexes,
-        explicit: {
-          hasAnyMention,
-          isExplicitlyMentioned: explicitlyMentioned,
-          canResolveExplicit: Boolean(botId),
-        },
-        transcript: preflightTranscript,
-      }));
-  const implicitMention = Boolean(
-    !isDirectMessage &&
-    botId &&
-    message.referencedMessage?.author?.id &&
-    message.referencedMessage.author.id === botId,
-  );
+  const { implicitMention, wasMentioned } = resolveDiscordMentionState({
+    authorIsBot: Boolean(author.bot),
+    botId,
+    hasAnyMention,
+    isDirectMessage,
+    isExplicitlyMentioned: explicitlyMentioned,
+    mentionRegexes,
+    mentionText,
+    mentionedEveryone: Boolean(message.mentionedEveryone),
+    referencedAuthorId: message.referencedMessage?.author?.id,
+    senderIsPluralKit: sender.isPluralKit,
+    transcript: preflightTranscript,
+  });
   if (shouldLogVerbose()) {
     logVerbose(
       `discord: inbound id=${message.id} guild=${params.data.guild_id ?? "dm"} channel=${messageChannelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${messageText ? "yes" : "no"}`,

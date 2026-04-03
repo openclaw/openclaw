@@ -1,5 +1,7 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { formatWhatsAppConfigAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -23,20 +25,16 @@ import {
   listWhatsAppDirectoryPeersFromConfig,
 } from "./directory-config.js";
 import {
+  resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppMentionStripRegexes,
+} from "./group-intro.js";
+import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
+import { resolveWhatsAppHeartbeatRecipients } from "./heartbeat-recipients.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  formatWhatsAppConfigAllowFromEntries,
-  resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppHeartbeatRecipients,
-  resolveWhatsAppMentionStripRegexes,
-  type ChannelPlugin,
-  isWhatsAppGroupJid,
-  normalizeWhatsAppTarget,
-} from "./runtime-api.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
@@ -91,6 +89,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
       commands: {
         enforceOwnerForCommands: true,
+        preferSenderE164ForCommands: true,
         skipWhenConfigEmpty: true,
       },
       agentPrompt: {

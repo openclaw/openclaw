@@ -89,12 +89,14 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
+            meta: { label: "Telegram" },
             auth: {
               getActionAvailabilityState: () => ({ kind: "enabled" }),
             },
           }
         : channel === "discord"
           ? {
+              meta: { label: "Discord" },
               auth: {
                 getActionAvailabilityState: () => ({ kind: "disabled" }),
               },
@@ -131,6 +133,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
 
   it("reads approval availability from approvalCapability when auth is omitted", () => {
     getChannelPluginMock.mockReturnValue({
+      meta: { label: "Discord" },
       approvalCapability: {
         getActionAvailabilityState: () => ({ kind: "disabled" }),
       },
@@ -154,6 +157,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
+            meta: { label: "Telegram" },
             auth: {
               getActionAvailabilityState: () => ({ kind: "disabled" }),
             },

@@ -2,9 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { collectDiscordSecurityAuditFindings } from "../../extensions/discord/api.js";
+import { collectSlackSecurityAuditFindings } from "../../extensions/slack/api.js";
+import { collectSynologyChatSecurityAuditFindings } from "../../extensions/synology-chat/api.js";
+import { collectTelegramSecurityAuditFindings } from "../../extensions/telegram/api.js";
+import { collectZalouserSecurityAuditFindings } from "../../extensions/zalouser/api.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import type { SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
 import { runSecurityAudit } from "./audit.js";
@@ -39,7 +46,47 @@ function stubChannelPlugin(params: {
   listAccountIds?: (cfg: OpenClawConfig) => string[];
   isConfigured?: (account: unknown, cfg: OpenClawConfig) => boolean;
   isEnabled?: (account: unknown, cfg: OpenClawConfig) => boolean;
+  collectAuditFindings?: NonNullable<ChannelPlugin["security"]>["collectAuditFindings"];
+  commands?: ChannelPlugin["commands"];
 }): ChannelPlugin {
+  const channelConfigured = (cfg: OpenClawConfig) =>
+    Boolean((cfg.channels as Record<string, unknown> | undefined)?.[params.id]);
+  const defaultCollectAuditFindings =
+    params.collectAuditFindings ??
+    (params.id === "discord"
+      ? (collectDiscordSecurityAuditFindings as NonNullable<
+          ChannelPlugin["security"]
+        >["collectAuditFindings"])
+      : params.id === "slack"
+        ? (collectSlackSecurityAuditFindings as NonNullable<
+            ChannelPlugin["security"]
+          >["collectAuditFindings"])
+        : params.id === "synology-chat"
+          ? (collectSynologyChatSecurityAuditFindings as NonNullable<
+              ChannelPlugin["security"]
+            >["collectAuditFindings"])
+          : params.id === "telegram"
+            ? (collectTelegramSecurityAuditFindings as NonNullable<
+                ChannelPlugin["security"]
+              >["collectAuditFindings"])
+            : params.id === "zalouser"
+              ? (collectZalouserSecurityAuditFindings as NonNullable<
+                  ChannelPlugin["security"]
+                >["collectAuditFindings"])
+              : undefined);
+  const defaultCommands =
+    params.commands ??
+    (params.id === "discord" || params.id === "telegram"
+      ? {
+          nativeCommandsAutoEnabled: true,
+          nativeSkillsAutoEnabled: true,
+        }
+      : params.id === "slack"
+        ? {
+            nativeCommandsAutoEnabled: false,
+            nativeSkillsAutoEnabled: false,
+          }
+        : undefined);
   return {
     id: params.id,
     meta: {
@@ -52,7 +99,12 @@ function stubChannelPlugin(params: {
     capabilities: {
       chatTypes: ["direct", "group"],
     },
-    security: {},
+    ...(defaultCommands ? { commands: defaultCommands } : {}),
+    security: defaultCollectAuditFindings
+      ? {
+          collectAuditFindings: defaultCollectAuditFindings,
+        }
+      : {},
     config: {
       listAccountIds:
         params.listAccountIds ??
@@ -78,14 +130,14 @@ function stubChannelPlugin(params: {
           const config = account?.config ?? {};
           return {
             accountId: resolvedAccountId,
-            enabled: params.isEnabled?.(account, cfg) ?? true,
-            configured: params.isConfigured?.(account, cfg) ?? true,
+            enabled: params.isEnabled?.(account, cfg) ?? channelConfigured(cfg),
+            configured: params.isConfigured?.(account, cfg) ?? channelConfigured(cfg),
             config,
           };
         }),
       resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
-      isEnabled: (account, cfg) => params.isEnabled?.(account, cfg) ?? true,
-      isConfigured: (account, cfg) => params.isConfigured?.(account, cfg) ?? true,
+      isEnabled: (account, cfg) => params.isEnabled?.(account, cfg) ?? channelConfigured(cfg),
+      isConfigured: (account, cfg) => params.isConfigured?.(account, cfg) ?? channelConfigured(cfg),
     },
   };
 }
@@ -180,6 +232,14 @@ const synologyChatPlugin = stubChannelPlugin({
   },
 });
 
+const BASE_AUDIT_CHANNEL_PLUGINS = [
+  discordPlugin,
+  slackPlugin,
+  telegramPlugin,
+  zalouserPlugin,
+  synologyChatPlugin,
+] satisfies ChannelPlugin[];
+
 function successfulProbeResult(url: string) {
   return {
     ok: true,
@@ -202,12 +262,14 @@ async function audit(
     saveExecApprovals({ version: 1, agents: {} });
   }
   const { preserveExecApprovals: _preserveExecApprovals, ...options } = extra ?? {};
-  return runSecurityAudit({
-    config: cfg,
-    includeFilesystem: false,
-    includeChannelSecurity: false,
-    ...options,
-  });
+  return withActiveAuditChannelPlugins(options.plugins ?? BASE_AUDIT_CHANNEL_PLUGINS, () =>
+    runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+      ...options,
+    }),
+  );
 }
 
 async function runAuditCases<T>(
@@ -299,12 +361,33 @@ async function runChannelSecurityAudit(
   cfg: OpenClawConfig,
   plugins: ChannelPlugin[],
 ): Promise<SecurityAuditReport> {
-  return runSecurityAudit({
-    config: cfg,
-    includeFilesystem: false,
-    includeChannelSecurity: true,
-    plugins,
-  });
+  return withActiveAuditChannelPlugins(plugins, () =>
+    runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins,
+    }),
+  );
+}
+
+async function withActiveAuditChannelPlugins<T>(
+  plugins: ChannelPlugin[],
+  run: () => Promise<T>,
+): Promise<T> {
+  const previousRegistry = getActivePluginRegistry();
+  const registry = createEmptyPluginRegistry();
+  registry.channels = plugins.map((plugin) => ({
+    pluginId: plugin.id,
+    plugin,
+    source: "test",
+  }));
+  setActivePluginRegistry(registry);
+  try {
+    return await run();
+  } finally {
+    setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
+  }
 }
 
 async function runInstallMetadataAudit(
@@ -2191,12 +2274,14 @@ describe("security audit", () => {
       },
     ];
 
-    const res = await runSecurityAudit({
-      config: cfg,
-      includeFilesystem: false,
-      includeChannelSecurity: true,
-      plugins,
-    });
+    const res = await withActiveAuditChannelPlugins(plugins, () =>
+      runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins,
+      }),
+    );
 
     expect(res.findings).toEqual(
       expect.arrayContaining([
@@ -2255,12 +2340,14 @@ describe("security audit", () => {
     ] as const;
 
     await runChannelSecurityStateCases(cases, async (testCase) => {
-      const res = await runSecurityAudit({
-        config: testCase.cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
+      const res = await withActiveAuditChannelPlugins([discordPlugin], () =>
+        runSecurityAudit({
+          config: testCase.cfg,
+          includeFilesystem: false,
+          includeChannelSecurity: true,
+          plugins: [discordPlugin],
+        }),
+      );
 
       expect(
         res.findings.some(
@@ -2463,13 +2550,16 @@ describe("security audit", () => {
     ] as const;
 
     await runChannelSecurityStateCases(cases, async (testCase) => {
-      const res = await runSecurityAudit({
-        config: testCase.resolvedConfig,
-        sourceConfig: testCase.sourceConfig,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [testCase.plugin(testCase.sourceConfig)],
-      });
+      const plugins = [testCase.plugin(testCase.sourceConfig)];
+      const res = await withActiveAuditChannelPlugins(plugins, () =>
+        runSecurityAudit({
+          config: testCase.resolvedConfig,
+          sourceConfig: testCase.sourceConfig,
+          includeFilesystem: false,
+          includeChannelSecurity: true,
+          plugins,
+        }),
+      );
 
       expect(res.findings, testCase.name).toEqual(
         expect.arrayContaining([
@@ -2500,12 +2590,14 @@ describe("security audit", () => {
       },
     };
 
-    const res = await runSecurityAudit({
-      config: cfg,
-      includeFilesystem: false,
-      includeChannelSecurity: true,
-      plugins: [plugin],
-    });
+    const res = await withActiveAuditChannelPlugins([plugin], () =>
+      runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [plugin],
+      }),
+    );
 
     const finding = res.findings.find(
       (entry) => entry.checkId === "channels.zalouser.account.read_only_resolution",
@@ -2765,12 +2857,14 @@ describe("security audit", () => {
         },
       };
 
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [pluginWithProtoDefaultAccount],
-      });
+      const res = await withActiveAuditChannelPlugins([pluginWithProtoDefaultAccount], () =>
+        runSecurityAudit({
+          config: cfg,
+          includeFilesystem: false,
+          includeChannelSecurity: true,
+          plugins: [pluginWithProtoDefaultAccount],
+        }),
+      );
 
       const dangerousMatchingFinding = res.findings.find(
         (entry) => entry.checkId === "channels.discord.allowFrom.dangerous_name_matching_enabled",
@@ -3485,7 +3579,7 @@ describe("security audit", () => {
         },
       },
       {
-        name: "flags unallowlisted extensions as critical when native skill commands are exposed",
+        name: "flags unallowlisted extensions as warn-level findings when extension inventory exists",
         cfg: {
           channels: {
             discord: { enabled: true, token: "t" },
@@ -3496,7 +3590,7 @@ describe("security audit", () => {
             expect.arrayContaining([
               expect.objectContaining({
                 checkId: "plugins.extensions_no_allowlist",
-                severity: "critical",
+                severity: "warn",
               }),
             ]),
           );
@@ -3521,7 +3615,7 @@ describe("security audit", () => {
             expect.arrayContaining([
               expect.objectContaining({
                 checkId: "plugins.extensions_no_allowlist",
-                severity: "critical",
+                severity: "warn",
               }),
             ]),
           );

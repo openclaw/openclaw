@@ -1086,6 +1086,7 @@
     "test:e2e:openshell": "OPENCLAW_E2E_OPENSHELL=1 vitest run --config vitest.e2e.config.ts test/openshell-sandbox.e2e.test.ts",
     "test:extension": "node scripts/test-extension.mjs",
     "test:extensions": "vitest run --config vitest.extensions.config.ts",
+    "test:extensions:batch": "node scripts/test-extension-batch.mjs",
     "test:extensions:memory": "node scripts/profile-extension-memory.mjs",
     "test:fast": "vitest run --config vitest.unit.config.ts",
     "test:force": "node --import tsx scripts/test-force.ts",

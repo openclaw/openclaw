@@ -115,8 +115,10 @@ vi.mock("../../../src/agents/tools/gateway.js", () => gatewayMocks);
 const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({ browser: {} })),
 }));
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
   return {
     ...actual,
     loadConfig: configMocks.loadConfig,

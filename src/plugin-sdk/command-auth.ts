@@ -71,7 +71,6 @@ export {
   resolveSkillCommandInvocation,
 } from "../auto-reply/skill-commands.js";
 export type { SkillCommandSpec } from "../agents/skills.js";
-export { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
 export {
   buildModelsProviderData,
   formatModelsAvailableHeader,

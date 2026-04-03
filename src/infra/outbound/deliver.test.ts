@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import type { PluginHookRegistration } from "../../plugins/types.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
@@ -189,6 +192,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   beforeEach(() => {
+    releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
@@ -210,6 +214,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   afterEach(() => {
+    releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
   });
   it("chunks direct adapter text and preserves delivery overrides across sends", async () => {

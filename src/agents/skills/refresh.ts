@@ -12,11 +12,13 @@ import {
   registerSkillsChangeListener,
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
+  shouldRefreshSnapshotForVersion,
 } from "./refresh-state.js";
 export {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,
   registerSkillsChangeListener,
+  shouldRefreshSnapshotForVersion,
   type SkillsChangeEvent,
 } from "./refresh-state.js";
 

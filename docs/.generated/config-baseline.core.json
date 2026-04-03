@@ -3984,6 +3984,30 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.skills",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Skills",
+      "help": "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.skills.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.skipBootstrap",
       "kind": "core",
       "type": "boolean",
@@ -6460,7 +6484,7 @@
         "advanced"
       ],
       "label": "Agent Skill Filter",
-      "help": "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
+      "help": "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
       "hasChildren": true
     },
     {
@@ -7815,6 +7839,38 @@
       "label": "Auth Cooldowns",
       "help": "Cooldown/backoff controls for temporary profile suppression after billing-related failures and retry windows. Use these to prevent rapid re-selection of profiles that are still blocked.",
       "hasChildren": true
+    },
+    {
+      "path": "auth.cooldowns.authPermanentBackoffMinutes",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "auth",
+        "reliability"
+      ],
+      "label": "Auth-Permanent Backoff (minutes)",
+      "help": "Base backoff (minutes) for high-confidence auth_permanent failures (default: 10). Keep this shorter than billing so providers recover automatically after transient upstream auth incidents.",
+      "hasChildren": false
+    },
+    {
+      "path": "auth.cooldowns.authPermanentMaxMinutes",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "auth",
+        "performance"
+      ],
+      "label": "Auth-Permanent Backoff Cap (minutes)",
+      "help": "Cap (minutes) for auth_permanent backoff (default: 60).",
+      "hasChildren": false
     },
     {
       "path": "auth.cooldowns.billingBackoffHours",

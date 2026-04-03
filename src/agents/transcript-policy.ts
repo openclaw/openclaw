@@ -44,7 +44,14 @@ function isAnthropicApi(modelApi?: string | null): boolean {
   return modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream";
 }
 
-function buildTransportReplayFallback(params: {
+/**
+ * Provides a narrow replay-policy fallback for providers that do not have an
+ * owning runtime plugin.
+ *
+ * This exists to preserve generic custom-provider behavior. Bundled providers
+ * should express replay ownership through `buildReplayPolicy` instead.
+ */
+function buildUnownedProviderTransportReplayFallback(params: {
   modelApi?: string | null;
   modelId?: string | null;
 }): ProviderReplayPolicy | undefined {
@@ -162,13 +169,16 @@ export function resolveTranscriptPolicy(params: {
     model: params.model,
   };
 
-  const pluginPolicy = runtimePlugin?.buildReplayPolicy?.(context);
-  if (pluginPolicy != null) {
-    return mergeTranscriptPolicy(pluginPolicy);
+  // Once a provider adopts the replay-policy hook, replay policy should come
+  // from the plugin, not from transport-family defaults in core.
+  const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
+  if (buildReplayPolicy) {
+    const pluginPolicy = buildReplayPolicy(context);
+    return mergeTranscriptPolicy(pluginPolicy ?? undefined);
   }
 
   return mergeTranscriptPolicy(
-    buildTransportReplayFallback({
+    buildUnownedProviderTransportReplayFallback({
       modelApi: params.modelApi,
       modelId: params.modelId,
     }),

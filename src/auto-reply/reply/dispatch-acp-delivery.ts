@@ -1,4 +1,5 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -39,7 +40,16 @@ function shouldTreatDeliveredTextAsVisible(params: {
   if (params.kind === "final") {
     return true;
   }
-  return normalizeDeliveryChannel(params.channel) === "telegram";
+  const channelId = normalizeDeliveryChannel(params.channel);
+  if (!channelId) {
+    return false;
+  }
+  return (
+    getChannelPlugin(channelId)?.outbound?.shouldTreatRoutedTextAsVisible?.({
+      kind: params.kind,
+      text: params.text,
+    }) === true
+  );
 }
 
 type AcpDispatchDeliveryState = {

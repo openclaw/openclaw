@@ -9,11 +9,13 @@ import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { emitDoctorNotes } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
-import {
-  cleanStaleMatrixPluginConfig,
-  runMatrixDoctorSequence,
-} from "./doctor/providers/matrix.js";
 import { runDoctorRepairSequence } from "./doctor/repair-sequencing.js";
+import {
+  collectChannelDoctorCompatibilityMutations,
+  collectChannelDoctorMutableAllowlistWarnings,
+  collectChannelDoctorStaleConfigMutations,
+  runChannelDoctorConfigSequences,
+} from "./doctor/shared/channel-doctor.js";
 import {
   applyLegacyCompatibilityStep,
   applyUnknownConfigKeyStep,
@@ -68,6 +70,19 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
+  for (const compatibility of collectChannelDoctorCompatibilityMutations(candidate)) {
+    if (compatibility.changes.length === 0) {
+      continue;
+    }
+    note(compatibility.changes.join("\n"), "Doctor changes");
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: compatibility,
+      shouldRepair,
+      fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
+    }));
+  }
+
   const autoEnable = applyPluginAutoEnable({ config: candidate, env: process.env });
   if (autoEnable.changes.length > 0) {
     note(autoEnable.changes.join("\n"), "Doctor changes");
@@ -79,25 +94,27 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
-  const matrixSequence = await runMatrixDoctorSequence({
+  const channelDoctorSequence = await runChannelDoctorConfigSequences({
     cfg: candidate,
     env: process.env,
     shouldRepair,
   });
   emitDoctorNotes({
     note,
-    changeNotes: matrixSequence.changeNotes,
-    warningNotes: matrixSequence.warningNotes,
+    changeNotes: channelDoctorSequence.changeNotes,
+    warningNotes: channelDoctorSequence.warningNotes,
   });
 
-  const staleMatrixCleanup = await cleanStaleMatrixPluginConfig(candidate);
-  if (staleMatrixCleanup.changes.length > 0) {
-    note(staleMatrixCleanup.changes.join("\n"), "Doctor changes");
+  for (const staleCleanup of await collectChannelDoctorStaleConfigMutations(candidate)) {
+    if (staleCleanup.changes.length === 0) {
+      continue;
+    }
+    note(staleCleanup.changes.join("\n"), "Doctor changes");
     ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
       state: { cfg, candidate, pendingChanges, fixHints },
-      mutation: staleMatrixCleanup,
+      mutation: staleCleanup,
       shouldRepair,
-      fixHint: `Run "${doctorFixCommand}" to remove stale Matrix plugin references.`,
+      fixHint: `Run "${doctorFixCommand}" to remove stale channel plugin references.`,
     }));
   }
 
@@ -125,7 +142,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   } else {
     emitDoctorNotes({
       note,
-      warningNotes: collectDoctorPreviewWarnings({
+      warningNotes: await collectDoctorPreviewWarnings({
         cfg: candidate,
         doctorFixCommand,
       }),
@@ -133,8 +150,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   const mutableAllowlistHits = scanMutableAllowlistEntries(candidate);
-  if (mutableAllowlistHits.length > 0) {
-    note(collectMutableAllowlistWarnings(mutableAllowlistHits).join("\n"), "Doctor warnings");
+  const mutableAllowlistWarnings = [
+    ...(mutableAllowlistHits.length > 0
+      ? collectMutableAllowlistWarnings(mutableAllowlistHits)
+      : []),
+    ...(await collectChannelDoctorMutableAllowlistWarnings({ cfg: candidate })),
+  ];
+  if (mutableAllowlistWarnings.length > 0) {
+    note(mutableAllowlistWarnings.join("\n"), "Doctor warnings");
   }
 
   const unknownStep = applyUnknownConfigKeyStep({

@@ -565,6 +565,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       groups: {
         resolveToolPolicy: resolveFeishuGroupToolPolicy,
       },
+      conversationBindings: {
+        defaultTopLevelPlacement: "current",
+      },
       mentions: {
         stripPatterns: () => ['<at user_id="[^"]*">[^<]*</at>'],
       },

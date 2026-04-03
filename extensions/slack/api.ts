@@ -13,6 +13,7 @@ export * from "./src/message-actions.js";
 export * from "./src/group-policy.js";
 export * from "./src/monitor/allow-list.js";
 export * from "./src/probe.js";
+export * from "./src/security-audit.js";
 export * from "./src/sent-thread-cache.js";
 export * from "./src/targets.js";
 export * from "./src/threading-tool-context.js";
