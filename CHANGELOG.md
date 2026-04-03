@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - Hooks/session_end: preserve deterministic reason metadata for custom reset aliases and overlapping idle-plus-daily rollovers so plugins can rely on lifecycle reason reporting. (#59715) Thanks @jalehman.
 - Tools/image generation: stop inferring unsupported resolution overrides for OpenAI reference-image edits when no explicit `size` or `resolution` is provided, so default edit flows no longer fail before the provider request is sent.
 - Agents/sessions: release embedded runner session locks even when teardown cleanup throws, so timed-out or failed cleanup paths no longer leave sessions wedged until the stale-lock watchdog recovers them. (#59194) Thanks @samzong.
+- Slack/app manifest: add the missing `groups:read` scope to the onboarding and example Slack app manifest so apps copied from the OpenClaw templates can resolve private group conversations reliably.
 
 ## 2026.4.2
 
