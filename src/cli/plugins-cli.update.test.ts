@@ -1,7 +1,9 @@
+import { Command } from "commander";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadConfig,
+  registerPluginsCli,
   resetPluginsCliTestState,
   runPluginsCommand,
   runtimeErrors,
@@ -11,9 +13,41 @@ import {
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
 
+function createTrackedPluginConfig(params: {
+  pluginId: string;
+  spec: string;
+  resolvedName?: string;
+}): OpenClawConfig {
+  return {
+    plugins: {
+      installs: {
+        [params.pluginId]: {
+          source: "npm",
+          spec: params.spec,
+          installPath: `/tmp/${params.pluginId}`,
+          ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
 describe("plugins cli update", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+  });
+
+  it("shows the dangerous unsafe install override in update help", () => {
+    const program = new Command();
+    registerPluginsCli(program);
+
+    const pluginsCommand = program.commands.find((command) => command.name() === "plugins");
+    const updateCommand = pluginsCommand?.commands.find((command) => command.name() === "update");
+    const helpText = updateCommand?.helpInformation() ?? "";
+
+    expect(helpText).toContain("--dangerously-force-unsafe-install");
+    expect(helpText).toContain("Bypass built-in dangerous-code update");
+    expect(helpText).toContain("blocking for plugins");
   });
 
   it("updates tracked hook packs through plugins update", async () => {
@@ -199,6 +233,34 @@ describe("plugins cli update", () => {
         specOverrides: {
           "openclaw-codex-app-server": "openclaw-codex-app-server@0.2.0-beta.4",
         },
+      }),
+    );
+  });
+
+  it("passes dangerous force unsafe install to plugin updates", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "openclaw-codex-app-server",
+      spec: "openclaw-codex-app-server@beta",
+    });
+    loadConfig.mockReturnValue(config);
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [],
+    });
+
+    await runPluginsCommand([
+      "plugins",
+      "update",
+      "openclaw-codex-app-server",
+      "--dangerously-force-unsafe-install",
+    ]);
+
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        pluginIds: ["openclaw-codex-app-server"],
+        dangerouslyForceUnsafeInstall: true,
       }),
     );
   });
