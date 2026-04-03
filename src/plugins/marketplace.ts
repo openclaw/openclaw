@@ -811,7 +811,7 @@ async function downloadUrlToTempFile(
 async function ensureInsideMarketplaceRoot(
   rootDir: string,
   candidate: string,
-  options?: { enforceCanonicalContainment?: boolean; requireCanonicalRoot?: boolean },
+  options?: { enforceCanonicalContainment?: boolean },
 ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   const resolved = path.resolve(rootDir, candidate);
   const resolvedExists = await pathExists(resolved);
@@ -826,10 +826,7 @@ async function ensureInsideMarketplaceRoot(
   if (options?.enforceCanonicalContainment === true) {
     try {
       const rootLstat = await fs.lstat(rootDir);
-      if (
-        !rootLstat.isDirectory() ||
-        (options.requireCanonicalRoot === true && rootLstat.isSymbolicLink())
-      ) {
+      if (!rootLstat.isDirectory()) {
         throw new Error("invalid marketplace root");
       }
 
@@ -849,11 +846,19 @@ async function ensureInsideMarketplaceRoot(
       if (!isPathInside(rootRealPath, existingRealPath)) {
         throw new Error("marketplace path escapes canonical root");
       }
-    } catch {
-      return {
-        ok: false,
-        error: `plugin source escapes marketplace root: ${candidate}`,
-      };
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.message === "invalid marketplace root" ||
+          error.message === "unreachable marketplace path" ||
+          error.message === "marketplace path escapes canonical root")
+      ) {
+        return {
+          ok: false,
+          error: `plugin source escapes marketplace root: ${candidate}`,
+        };
+      }
+      throw error;
     }
   }
 
@@ -950,7 +955,6 @@ async function resolveMarketplaceEntryInstallPath(params: {
       ? { ok: true as const, path: params.source.path }
       : await ensureInsideMarketplaceRoot(params.marketplaceRootDir, params.source.path, {
           enforceCanonicalContainment: params.marketplaceOrigin === "remote",
-          requireCanonicalRoot: params.marketplaceOrigin === "remote",
         });
     if (!resolved.ok) {
       return resolved;
