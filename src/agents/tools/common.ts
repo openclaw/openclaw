@@ -35,10 +35,20 @@ export class ToolInputError extends Error {
 }
 
 export class ToolAuthorizationError extends ToolInputError {
-  override readonly status = 403;
+  // Use `declare` to keep the narrowed type without relying on a class field
+  // initializer, which may not be applied correctly on Error subclasses in
+  // certain transpiler/engine combinations. The value is set explicitly via
+  // Object.defineProperty in the constructor instead.
+  declare readonly status: 403;
 
   constructor(message: string) {
     super(message);
+    Object.defineProperty(this, "status", {
+      value: 403,
+      writable: false,
+      enumerable: true,
+      configurable: true,
+    });
     this.name = "ToolAuthorizationError";
   }
 }
