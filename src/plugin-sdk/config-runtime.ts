@@ -13,6 +13,10 @@ export {
 export { logConfigUpdated } from "../config/logging.js";
 export { updateConfig } from "../commands/models/shared.js";
 export { resolveChannelModelOverride } from "../channels/model-overrides.js";
+export {
+  resolveChannelContextVisibilityMode,
+  resolveDefaultContextVisibility,
+} from "../config/context-visibility.js";
 export { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 export {
   resolveChannelGroupPolicy,
@@ -65,6 +69,7 @@ export type {
   DiscordIntentsConfig,
   DiscordSlashCommandConfig,
   DmPolicy,
+  ContextVisibilityMode,
   GroupPolicy,
   MarkdownTableMode,
   OpenClawConfig,

@@ -104,6 +104,12 @@ This is now the default host behavior unless you tighten it explicitly:
 - `tools.exec.ask`: `off`
 - host `askFallback`: `full`
 
+Important distinction:
+
+- `tools.exec.host=auto` chooses where exec runs: sandbox when available, otherwise gateway.
+- YOLO chooses how host exec is approved: `security=full` plus `ask=off`.
+- `auto` does not let a tool call override a sandboxed session to `gateway` or `node`. If you want a different host, set `tools.exec.host` or use `/exec host=...` explicitly.
+
 If you want a more conservative setup, tighten either layer back to `allowlist` / `on-miss`
 or `deny`.
 

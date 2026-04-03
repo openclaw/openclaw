@@ -1320,6 +1320,36 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
+  it("prefers strict inline-eval denial over generic allowlist prompts", async () => {
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          strictInlineEval: true,
+        },
+      },
+    });
+    try {
+      const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: ["awk", 'BEGIN{system("id")}', "/dev/null"],
+        security: "allowlist",
+        ask: "on-miss",
+      });
+
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(sendNodeEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        "exec.denied",
+        expect.objectContaining({ reason: "approval-required" }),
+      );
+      expectInvokeErrorMessage(sendInvokeResult, {
+        message: "awk inline program requires explicit approval in strictInlineEval mode",
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it.each([
     { executable: "python3", args: ["-c", "print('hi')"] },
     { executable: "awk", args: ['BEGIN{system("id")}', "/dev/null"] },
@@ -1415,11 +1445,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
             expect(malicious.runCommand).not.toHaveBeenCalled();
             expectInvokeErrorMessage(malicious.sendInvokeResult, {
-              message:
-                process.platform === "win32"
-                  ? "SYSTEM_RUN_DENIED: approval required"
-                  : "awk inline program requires explicit approval in strictInlineEval mode",
-              exact: process.platform === "win32",
+              message: "awk inline program requires explicit approval in strictInlineEval mode",
             });
           } finally {
             fs.rmSync(tempDir, { recursive: true, force: true });
