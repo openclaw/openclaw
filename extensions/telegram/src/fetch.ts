@@ -651,6 +651,7 @@ function isIpv4LoopbackOrPrivate(hostname: string): boolean {
     a === 10 ||
     a === 127 ||
     (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168)
   );

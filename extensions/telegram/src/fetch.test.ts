@@ -78,11 +78,18 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
 let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
+let resolveTelegramApiBase: typeof import("./fetch.js").resolveTelegramApiBase;
+let resolveTelegramHeartbeatApiBase: typeof import("./fetch.js").resolveTelegramHeartbeatApiBase;
 
 beforeAll(async () => {
   vi.resetModules();
   ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
-  ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
+  ({
+    resolveTelegramFetch,
+    resolveTelegramTransport,
+    resolveTelegramApiBase,
+    resolveTelegramHeartbeatApiBase,
+  } = await import("./fetch.js"));
 });
 
 beforeEach(() => {
@@ -246,6 +253,24 @@ afterEach(() => {
   setDefaultResultOrder.mockReset();
   setDefaultAutoSelectFamily.mockReset();
   vi.clearAllMocks();
+});
+
+describe("resolveTelegramApiBase", () => {
+  it("accepts RFC6598 and RFC3927 IPv4 literals for heartbeat probing", () => {
+    expect(resolveTelegramHeartbeatApiBase("http://100.64.0.1:8081")).toBe(
+      "http://100.64.0.1:8081",
+    );
+    expect(resolveTelegramHeartbeatApiBase("http://169.254.10.20:8081")).toBe(
+      "http://169.254.10.20:8081",
+    );
+  });
+
+  it("still rejects public IPv4 literals for heartbeat probing", () => {
+    expect(resolveTelegramApiBase("http://8.8.8.8:8081")).toBe("http://8.8.8.8:8081");
+    expect(() => resolveTelegramHeartbeatApiBase("http://8.8.8.8:8081")).toThrow(
+      /Heartbeat probes only support api\.telegram\.org or loopback\/private-network custom Bot API hosts/,
+    );
+  });
 });
 
 describe("resolveTelegramFetch", () => {
