@@ -410,11 +410,13 @@ describe("openai transport stream", () => {
     ) as {
       messages?: Array<{ role?: string }>;
       stream_options?: unknown;
+      store?: unknown;
       tools?: Array<{ function?: { strict?: boolean } }>;
     };
 
     expect(params.messages?.[0]).toMatchObject({ role: "system" });
     expect(params).not.toHaveProperty("stream_options");
+    expect(params).not.toHaveProperty("store");
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });
 

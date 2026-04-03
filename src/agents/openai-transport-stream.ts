@@ -1364,22 +1364,7 @@ function detectCompat(model: OpenAIModeModel) {
         }
       : {};
   return {
-    supportsStore:
-      endpointClass !== "cerebras-native" &&
-      endpointClass !== "chutes-native" &&
-      endpointClass !== "deepseek-native" &&
-      !isMistral &&
-      endpointClass !== "opencode-native" &&
-      endpointClass !== "xai-native" &&
-      !isZai &&
-      !(
-        isDefaultRoute &&
-        (provider === "cerebras" ||
-          provider === "chutes" ||
-          provider === "deepseek" ||
-          provider === "opencode" ||
-          provider === "xai")
-      ),
+    supportsStore: compatDefaults.supportsStore,
     supportsDeveloperRole: compatDefaults.supportsDeveloperRole,
     supportsReasoningEffort: !isGrok && !isMistral && !isZai,
     reasoningEffortMap,

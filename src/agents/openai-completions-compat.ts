@@ -4,9 +4,11 @@ type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
   endpointClass: ProviderEndpointClass;
   knownProviderFamily: string;
+  usesExplicitProxyLikeEndpoint?: boolean;
 };
 
 export type OpenAICompletionsCompatDefaults = {
+  supportsStore: boolean;
   supportsDeveloperRole: boolean;
   supportsUsageInStreaming: boolean;
   supportsStrictMode: boolean;
@@ -19,7 +21,7 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
 export function resolveOpenAICompletionsCompatDefaults(
   input: OpenAICompletionsCompatDefaultsInput,
 ): OpenAICompletionsCompatDefaults {
-  const { endpointClass, knownProviderFamily } = input;
+  const { endpointClass, knownProviderFamily, usesExplicitProxyLikeEndpoint = false } = input;
   const isDefaultRoute = endpointClass === "default";
   const usesConfiguredNonOpenAIEndpoint =
     endpointClass !== "default" && endpointClass !== "openai-public";
@@ -43,6 +45,8 @@ export function resolveOpenAICompletionsCompatDefaults(
       isDefaultRouteProvider(input.provider, "cerebras", "chutes", "deepseek", "opencode", "xai"));
 
   return {
+    supportsStore:
+      !isNonStandard && knownProviderFamily !== "mistral" && !usesExplicitProxyLikeEndpoint,
     supportsDeveloperRole: !isNonStandard && !isMoonshotLike && !usesConfiguredNonOpenAIEndpoint,
     supportsUsageInStreaming: !isNonStandard && !usesConfiguredNonOpenAIEndpoint,
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
@@ -50,7 +54,10 @@ export function resolveOpenAICompletionsCompatDefaults(
 }
 
 export function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
-  input: Pick<ProviderRequestCapabilities, "endpointClass" | "knownProviderFamily"> & {
+  input: Pick<
+    ProviderRequestCapabilities,
+    "endpointClass" | "knownProviderFamily" | "usesExplicitProxyLikeEndpoint"
+  > & {
     provider?: string;
   },
 ): OpenAICompletionsCompatDefaults {
