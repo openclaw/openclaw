@@ -214,14 +214,14 @@ export async function fetchChatUsers(
  *
  * @returns The correct Chat user_id, or undefined if not found
  */
-export async function resolveLegacyWebhookNameToChatUserId(params: {
-  incomingUrl: string;
-  mutableWebhookUsername: string;
-  allowInsecureSsl?: boolean;
-  log?: { warn: (...args: unknown[]) => void };
-}): Promise<number | undefined> {
-  const users = await fetchChatUsers(params.incomingUrl, params.allowInsecureSsl, params.log);
-  const lower = params.mutableWebhookUsername.toLowerCase();
+export async function resolveChatUserId(
+  incomingUrl: string,
+  webhookUsername: string,
+  allowInsecureSsl = false,
+  log?: { warn: (...args: unknown[]) => void },
+): Promise<number | undefined> {
+  const users = await fetchChatUsers(incomingUrl, allowInsecureSsl, log);
+  const lower = webhookUsername.toLowerCase();
 
   // Match by nickname first (webhook "username" field = Chat "nickname")
   const byNickname = users.find((u) => u.nickname.toLowerCase() === lower);
