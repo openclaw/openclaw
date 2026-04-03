@@ -61,8 +61,9 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
       ],
     };
     const actualSkillCommands = await import("../../../src/auto-reply/skill-commands.js");
-    listSkillCommandsForAgents.mockImplementation(({ cfg, agentIds }) =>
-      actualSkillCommands.listSkillCommandsForAgents({ cfg, agentIds }),
+    listSkillCommandsForAgents.mockImplementation(
+      ({ cfg, agentIds }: { cfg: OpenClawConfig; agentIds?: string[] }) =>
+        actualSkillCommands.listSkillCommandsForAgents({ cfg, agentIds }),
     );
 
     registerTelegramNativeCommands({
