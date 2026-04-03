@@ -189,6 +189,46 @@ describe("sessions.usage", () => {
     }
   });
 
+  it("prefers the deterministic store key when duplicate sessionIds exist", async () => {
+    const preferredKey = "agent:opus:acp:run-dup";
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        fs.mkdirSync(agentSessionsDir, { recursive: true });
+        const sessionFile = path.join(agentSessionsDir, "run-dup.jsonl");
+        fs.writeFileSync(sessionFile, "", "utf-8");
+
+        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+          storePath: "(multiple)",
+          store: {
+            [preferredKey]: {
+              sessionId: "run-dup",
+              sessionFile: "run-dup.jsonl",
+              updatedAt: 1_000,
+            },
+            "agent:other:main": {
+              sessionId: "run-dup",
+              sessionFile: "run-dup.jsonl",
+              updatedAt: 2_000,
+            },
+          },
+        });
+
+        const respond = await runSessionsUsage({
+          ...BASE_USAGE_RANGE,
+          key: "agent:opus:run-dup",
+        });
+        const sessions = expectSuccessfulSessionsUsage(respond);
+        expect(sessions).toHaveLength(1);
+        expect(sessions[0]?.key).toBe(preferredKey);
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects traversal-style keys in specific session usage lookups", async () => {
     const respond = await runSessionsUsage({
       ...BASE_USAGE_RANGE,

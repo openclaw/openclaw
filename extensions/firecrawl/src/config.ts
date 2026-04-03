@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeSecretInput } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInput,
+} from "openclaw/plugin-sdk/secret-input";
 
 export const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 export const DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS = 30;
@@ -31,6 +33,13 @@ type PluginEntryConfig =
       webSearch?: {
         apiKey?: unknown;
         baseUrl?: string;
+      };
+      webFetch?: {
+        apiKey?: unknown;
+        baseUrl?: string;
+        onlyMainContent?: boolean;
+        maxAgeMs?: number;
+        timeoutSeconds?: number;
       };
     }
   | undefined;
@@ -79,6 +88,11 @@ export function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSea
 }
 
 export function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig {
+  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
+  const pluginWebFetch = pluginConfig?.webFetch;
+  if (pluginWebFetch && typeof pluginWebFetch === "object" && !Array.isArray(pluginWebFetch)) {
+    return pluginWebFetch;
+  }
   const fetch = resolveFetchConfig(cfg);
   if (!fetch || typeof fetch !== "object") {
     return undefined;
@@ -100,9 +114,14 @@ function normalizeConfiguredSecret(value: unknown, path: string): string | undef
 }
 
 export function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {
+  const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
   const search = resolveFirecrawlSearchConfig(cfg);
   const fetch = resolveFirecrawlFetchConfig(cfg);
   return (
+    normalizeConfiguredSecret(
+      pluginConfig?.webFetch?.apiKey,
+      "plugins.entries.firecrawl.config.webFetch.apiKey",
+    ) ||
     normalizeConfiguredSecret(
       search?.apiKey,
       "plugins.entries.firecrawl.config.webSearch.apiKey",

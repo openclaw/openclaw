@@ -6,6 +6,7 @@ import {
   diffInventory,
   main,
 } from "../scripts/check-plugin-extension-import-boundary.mjs";
+import { createCapturedIo } from "./helpers/captured-io.js";
 
 const repoRoot = process.cwd();
 const baselinePath = path.join(
@@ -15,27 +16,6 @@ const baselinePath = path.join(
   "plugin-extension-import-boundary-inventory.json",
 );
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
-
-function createCapturedIo() {
-  let stdout = "";
-  let stderr = "";
-  return {
-    io: {
-      stdout: {
-        write(chunk) {
-          stdout += String(chunk);
-        },
-      },
-      stderr: {
-        write(chunk) {
-          stderr += String(chunk);
-        },
-      },
-    },
-    readStdout: () => stdout,
-    readStderr: () => stderr,
-  };
-}
 
 describe("plugin extension import boundary inventory", () => {
   it("keeps dedicated web-search registry shims out of the remaining inventory", async () => {

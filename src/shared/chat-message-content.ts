@@ -3,6 +3,9 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
     return undefined;
   }
   const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content;
+  }
   if (!Array.isArray(content) || content.length === 0) {
     return undefined;
   }

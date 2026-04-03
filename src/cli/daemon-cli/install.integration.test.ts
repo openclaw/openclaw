@@ -11,6 +11,7 @@ const serviceMock = vi.hoisted(() => ({
   label: "Gateway",
   loadedText: "loaded",
   notLoadedText: "not loaded",
+  stage: vi.fn(async (_opts?: { environment?: Record<string, string | undefined> }) => {}),
   install: vi.fn(async (_opts?: { environment?: Record<string, string | undefined> }) => {}),
   uninstall: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
@@ -29,7 +30,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 const { runDaemonInstall } = await import("./install.js");
-const { clearConfigCache } = await import("../../config/config.js");
+const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../../config/config.js");
 
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as Record<string, unknown>;
@@ -63,6 +64,7 @@ describe("runDaemonInstall integration", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     resetRuntimeCapture();
+    clearRuntimeConfigSnapshot();
     // Keep these defined-but-empty so dotenv won't repopulate from local .env.
     process.env.OPENCLAW_GATEWAY_TOKEN = "";
     process.env.OPENCLAW_GATEWAY_PASSWORD = "";

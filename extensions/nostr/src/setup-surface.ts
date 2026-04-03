@@ -2,6 +2,10 @@ import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
+  hasConfiguredSecretInput,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
+import {
   createTopLevelChannelParsedAllowFromPrompt,
   createTopLevelChannelDmPolicy,
   createStandardChannelSetupStatus,
@@ -165,7 +169,7 @@ export const nostrSetupWizard: ChannelSetupWizard = {
     isAvailable: ({ cfg, accountId }) =>
       accountId === DEFAULT_ACCOUNT_ID &&
       Boolean(process.env.NOSTR_PRIVATE_KEY?.trim()) &&
-      !resolveNostrAccount({ cfg, accountId }).config.privateKey?.trim(),
+      !hasConfiguredSecretInput(resolveNostrAccount({ cfg, accountId }).config.privateKey),
     apply: async ({ cfg }) =>
       patchTopLevelChannelConfigSection({
         cfg,
@@ -191,8 +195,8 @@ export const nostrSetupWizard: ChannelSetupWizard = {
         const account = resolveNostrAccount({ cfg, accountId });
         return {
           accountConfigured: account.configured,
-          hasConfiguredValue: Boolean(account.config.privateKey?.trim()),
-          resolvedValue: account.config.privateKey?.trim(),
+          hasConfiguredValue: hasConfiguredSecretInput(account.config.privateKey),
+          resolvedValue: normalizeSecretInputString(account.config.privateKey),
           envValue: process.env.NOSTR_PRIVATE_KEY?.trim(),
         };
       },

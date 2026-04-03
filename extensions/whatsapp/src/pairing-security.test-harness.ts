@@ -1,0 +1,60 @@
+import {
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
+import { vi } from "vitest";
+import { resolveDmGroupAccessWithLists } from "../../../src/security/dm-policy-shared.js";
+
+export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {
+  (...args: TArgs): Promise<TResult>;
+  mockReset: () => AsyncMock<TArgs, TResult>;
+  mockResolvedValue: (value: TResult) => AsyncMock<TArgs, TResult>;
+  mockResolvedValueOnce: (value: TResult) => AsyncMock<TArgs, TResult>;
+};
+
+export const loadConfigMock = vi.fn();
+export const readAllowFromStoreMock = vi.fn() as AsyncMock;
+export const upsertPairingRequestMock = vi.fn() as AsyncMock;
+
+export function resetPairingSecurityMocks(config: Record<string, unknown>) {
+  loadConfigMock.mockReset().mockReturnValue(config);
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+}
+
+vi.mock("openclaw/plugin-sdk/config-runtime", () => {
+  return {
+    loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+    resolveDefaultGroupPolicy,
+    resolveOpenProviderRuntimeGroupPolicy,
+    warnMissingProviderGroupPolicyFallbackOnce,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => {
+  return {
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/security-runtime", () => {
+  return {
+    readStoreAllowFromForDmPolicy: async (params: {
+      provider: string;
+      accountId: string;
+      dmPolicy?: string | null;
+      shouldRead?: boolean | null;
+    }) => {
+      if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+        return [];
+      }
+      try {
+        return (await readAllowFromStoreMock(params.provider, params.accountId)) as string[];
+      } catch {
+        return [];
+      }
+    },
+    resolveDmGroupAccessWithLists,
+  };
+});

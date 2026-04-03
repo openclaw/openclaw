@@ -1,4 +1,7 @@
 import { resolveMatrixTargets } from "../../resolve-targets.js";
+import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
+import { isMatrixQualifiedUserId } from "../target-ids.js";
+import { normalizeMatrixUserId } from "./allowlist.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -6,9 +9,7 @@ import {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
   type RuntimeEnv,
-} from "../../runtime-api.js";
-import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
-import { normalizeMatrixUserId } from "./allowlist.js";
+} from "./runtime-api.js";
 
 type MatrixRoomsConfig = Record<string, MatrixRoomConfig>;
 type ResolveMatrixTargetsFn = typeof resolveMatrixTargets;
@@ -25,10 +26,6 @@ function normalizeMatrixRoomLookupEntry(raw: string): string {
     .replace(/^matrix:/i, "")
     .replace(/^(room|channel):/i, "")
     .trim();
-}
-
-function isMatrixQualifiedUserId(value: string): boolean {
-  return value.startsWith("@") && value.includes(":");
 }
 
 function filterResolvedMatrixAllowlistEntries(entries: string[]): string[] {

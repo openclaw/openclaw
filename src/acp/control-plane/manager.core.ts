@@ -4,6 +4,13 @@ import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import {
+  createRunningTaskRun,
+  completeTaskRunByRunId,
+  failTaskRunByRunId,
+  startTaskRunByRunId,
+} from "../../tasks/task-executor.js";
+import type { DeliveryContext } from "../../utils/delivery-context.js";
+import {
   AcpRuntimeError,
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
@@ -75,6 +82,72 @@ import { SessionActorQueue } from "./session-actor-queue.js";
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
 const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
+const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
+const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
+
+function summarizeBackgroundTaskText(text: string): string {
+  const normalized = normalizeText(text) ?? "ACP background task";
+  if (normalized.length <= ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH - 1)}…`;
+}
+
+function appendBackgroundTaskProgressSummary(current: string, chunk: string): string {
+  const normalizedChunk = normalizeText(chunk)?.replace(/\s+/g, " ");
+  if (!normalizedChunk) {
+    return current;
+  }
+  const combined = current ? `${current} ${normalizedChunk}` : normalizedChunk;
+  if (combined.length <= ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH) {
+    return combined;
+  }
+  return `${combined.slice(0, ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH - 1)}…`;
+}
+
+function resolveBackgroundTaskFailureStatus(error: AcpRuntimeError): "failed" | "timed_out" {
+  return /\btimed out\b/i.test(error.message) ? "timed_out" : "failed";
+}
+
+function resolveBackgroundTaskTerminalResult(progressSummary: string): {
+  terminalOutcome?: "blocked";
+  terminalSummary?: string;
+} {
+  const normalized = normalizeText(progressSummary)?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return {};
+  }
+  const permissionDeniedMatch = normalized.match(
+    /\b(?:write failed:\s*)?permission denied(?: for (?<path>\S+))?\.?/i,
+  );
+  if (permissionDeniedMatch) {
+    const path = permissionDeniedMatch.groups?.path?.trim().replace(/[.,;:!?]+$/, "");
+    return {
+      terminalOutcome: "blocked",
+      terminalSummary: path ? `Permission denied for ${path}.` : "Permission denied.",
+    };
+  }
+  if (
+    /\bneed a writable session\b/i.test(normalized) ||
+    /\bfilesystem authorization\b/i.test(normalized) ||
+    /`?apply_patch`?/i.test(normalized)
+  ) {
+    return {
+      terminalOutcome: "blocked",
+      terminalSummary: "Writable session or apply_patch authorization required.",
+    };
+  }
+  return {};
+}
+
+type BackgroundTaskContext = {
+  requesterSessionKey: string;
+  requesterOrigin?: DeliveryContext;
+  childSessionKey: string;
+  runId: string;
+  label?: string;
+  task: string;
+};
 
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
@@ -284,19 +357,15 @@ export class AcpSessionManager {
         state: "idle",
         lastActivityAt: Date.now(),
       };
+
+      let persisted: SessionEntry | null = null;
       try {
-        const persisted = await this.writeSessionMeta({
+        persisted = await this.writeSessionMeta({
           cfg: input.cfg,
           sessionKey,
           mutate: () => meta,
           failOnError: true,
         });
-        if (!persisted?.acp) {
-          throw new AcpRuntimeError(
-            "ACP_SESSION_INIT_FAILED",
-            `Could not persist ACP metadata for ${sessionKey}.`,
-          );
-        }
       } catch (error) {
         await runtime
           .close({
@@ -309,6 +378,24 @@ export class AcpSessionManager {
             );
           });
         throw error;
+      }
+
+      if (!persisted?.acp) {
+        await runtime
+          .close({
+            handle,
+            reason: "init-meta-failed",
+          })
+          .catch((closeError) => {
+            logVerbose(
+              `acp-manager: cleanup close failed after metadata write error for ${sessionKey}: ${String(closeError)}`,
+            );
+          });
+
+        throw new AcpRuntimeError(
+          "ACP_SESSION_INIT_FAILED",
+          `Could not persist ACP metadata for ${sessionKey}.`,
+        );
       }
       this.setCachedRuntimeState(sessionKey, {
         runtime,
@@ -614,6 +701,19 @@ export class AcpSessionManager {
       async () => {
         const turnStartedAt = Date.now();
         const actorKey = normalizeActorKey(sessionKey);
+        const taskContext =
+          input.mode === "prompt"
+            ? this.resolveBackgroundTaskContext({
+                cfg: input.cfg,
+                sessionKey,
+                requestId: input.requestId,
+                text: input.text,
+              })
+            : null;
+        if (taskContext) {
+          this.createBackgroundTaskRecord(taskContext, turnStartedAt);
+        }
+        let taskProgressSummary = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           const resolution = this.resolveSession({
             cfg: input.cfg,
@@ -696,6 +796,19 @@ export class AcpSessionManager {
                   );
                 } else if (event.type === "text_delta" || event.type === "tool_call") {
                   sawTurnOutput = true;
+                  if (event.type === "text_delta" && event.stream !== "thought" && event.text) {
+                    taskProgressSummary = appendBackgroundTaskProgressSummary(
+                      taskProgressSummary,
+                      event.text,
+                    );
+                  }
+                  if (taskContext) {
+                    this.markBackgroundTaskRunning(taskContext.runId, {
+                      sessionKey,
+                      lastEventAt: Date.now(),
+                      progressSummary: taskProgressSummary || null,
+                    });
+                  }
                 }
                 if (input.onEvent) {
                   await input.onEvent(event);
@@ -734,6 +847,19 @@ export class AcpSessionManager {
             this.recordTurnCompletion({
               startedAt: turnStartedAt,
             });
+            if (taskContext) {
+              const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
+              this.markBackgroundTaskTerminal(taskContext.runId, {
+                sessionKey,
+                status: "succeeded",
+                endedAt: Date.now(),
+                lastEventAt: Date.now(),
+                error: undefined,
+                progressSummary: taskProgressSummary || null,
+                terminalSummary: terminalResult.terminalSummary ?? null,
+                terminalOutcome: terminalResult.terminalOutcome,
+              });
+            }
             await this.setSessionState({
               cfg: input.cfg,
               sessionKey,
@@ -762,6 +888,17 @@ export class AcpSessionManager {
               startedAt: turnStartedAt,
               errorCode: acpError.code,
             });
+            if (taskContext) {
+              this.markBackgroundTaskTerminal(taskContext.runId, {
+                sessionKey,
+                status: resolveBackgroundTaskFailureStatus(acpError),
+                endedAt: Date.now(),
+                lastEventAt: Date.now(),
+                error: acpError.message,
+                progressSummary: taskProgressSummary || null,
+                terminalSummary: null,
+              });
+            }
             await this.setSessionState({
               cfg: input.cfg,
               sessionKey,
@@ -1473,7 +1610,7 @@ export class AcpSessionManager {
   }
 
   private isRecoverableAcpxExitError(message: string): boolean {
-    return /^acpx exited with code \d+/i.test(message.trim());
+    return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
   }
 
   private async evictIdleRuntimeHandles(params: { cfg: OpenClawConfig }): Promise<void> {
@@ -1728,5 +1865,119 @@ export class AcpSessionManager {
       (a.backendSessionId ?? "") === (b.backendSessionId ?? "") &&
       (a.agentSessionId ?? "") === (b.agentSessionId ?? "")
     );
+  }
+
+  private resolveBackgroundTaskContext(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    requestId: string;
+    text: string;
+  }): BackgroundTaskContext | null {
+    const childEntry = this.deps.readSessionEntry({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    })?.entry;
+    const requesterSessionKey =
+      normalizeText(childEntry?.spawnedBy) ?? normalizeText(childEntry?.parentSessionKey);
+    if (!requesterSessionKey) {
+      return null;
+    }
+    const parentEntry = this.deps.readSessionEntry({
+      cfg: params.cfg,
+      sessionKey: requesterSessionKey,
+    })?.entry;
+    return {
+      requesterSessionKey,
+      requesterOrigin: parentEntry?.deliveryContext ?? childEntry?.deliveryContext,
+      childSessionKey: params.sessionKey,
+      runId: params.requestId,
+      label: normalizeText(childEntry?.label),
+      task: summarizeBackgroundTaskText(params.text),
+    };
+  }
+
+  private createBackgroundTaskRecord(context: BackgroundTaskContext, startedAt: number): void {
+    try {
+      createRunningTaskRun({
+        runtime: "acp",
+        sourceId: context.runId,
+        ownerKey: context.requesterSessionKey,
+        scopeKind: "session",
+        requesterOrigin: context.requesterOrigin,
+        childSessionKey: context.childSessionKey,
+        runId: context.runId,
+        label: context.label,
+        task: context.task,
+        startedAt,
+      });
+    } catch (error) {
+      logVerbose(
+        `acp-manager: failed creating background task for ${context.runId}: ${String(error)}`,
+      );
+    }
+  }
+
+  private markBackgroundTaskRunning(
+    runId: string,
+    params: {
+      sessionKey?: string;
+      lastEventAt?: number;
+      progressSummary?: string | null;
+    },
+  ): void {
+    try {
+      startTaskRunByRunId({
+        runId,
+        runtime: "acp",
+        sessionKey: params.sessionKey,
+        lastEventAt: params.lastEventAt,
+        progressSummary: params.progressSummary,
+      });
+    } catch (error) {
+      logVerbose(`acp-manager: failed updating background task for ${runId}: ${String(error)}`);
+    }
+  }
+
+  private markBackgroundTaskTerminal(
+    runId: string,
+    params: {
+      sessionKey?: string;
+      status: "succeeded" | "failed" | "timed_out";
+      endedAt: number;
+      lastEventAt?: number;
+      error?: string;
+      progressSummary?: string | null;
+      terminalSummary?: string | null;
+      terminalOutcome?: "succeeded" | "blocked" | null;
+    },
+  ): void {
+    try {
+      if (params.status === "succeeded") {
+        completeTaskRunByRunId({
+          runId,
+          runtime: "acp",
+          sessionKey: params.sessionKey,
+          endedAt: params.endedAt,
+          lastEventAt: params.lastEventAt,
+          progressSummary: params.progressSummary,
+          terminalSummary: params.terminalSummary,
+          terminalOutcome: params.terminalOutcome,
+        });
+        return;
+      }
+      failTaskRunByRunId({
+        runId,
+        runtime: "acp",
+        sessionKey: params.sessionKey,
+        status: params.status,
+        endedAt: params.endedAt,
+        lastEventAt: params.lastEventAt,
+        error: params.error,
+        progressSummary: params.progressSummary,
+        terminalSummary: params.terminalSummary,
+      });
+    } catch (error) {
+      logVerbose(`acp-manager: failed updating background task for ${runId}: ${String(error)}`);
+    }
   }
 }

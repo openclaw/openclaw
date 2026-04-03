@@ -23,6 +23,7 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "reply",
   "sendWithEffect",
   "sendAttachment",
+  "upload-file",
   "thread-create",
   "thread-reply",
   "sticker",
@@ -34,6 +35,7 @@ const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
   "reply",
   "sendWithEffect",
   "sendAttachment",
+  "upload-file",
   "thread-reply",
   "sticker",
 ]);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import plugin from "../index.js";
 import { __testing, createExaWebSearchProvider } from "./exa-web-search-provider.js";
 
 describe("exa web search provider", () => {
@@ -117,6 +118,26 @@ describe("exa web search provider", () => {
 
     expect(result).toMatchObject({
       error: "conflicting_time_filters",
+    });
+  });
+
+  it("returns validation errors for invalid date input", async () => {
+    const provider = createExaWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { exa: { apiKey: "exa-secret" } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({
+      query: "latest gpu news",
+      date_after: "2026-02-31",
+    });
+
+    expect(result).toMatchObject({
+      error: "invalid_date",
     });
   });
 });

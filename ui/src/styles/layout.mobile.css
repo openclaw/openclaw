@@ -77,7 +77,7 @@
     height: 38px;
     padding: 0;
     border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
     color: var(--muted);
     box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
@@ -152,7 +152,7 @@
     min-height: 40px;
     padding: 0 12px;
     font-size: 13px;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     white-space: nowrap;
     flex: 0 0 auto;
     width: auto;
@@ -164,7 +164,7 @@
     min-height: 44px;
     padding: 0;
     margin: 0 auto;
-    border-radius: 16px;
+    border-radius: var(--radius-lg);
   }
 
   .sidebar--collapsed .nav-item--active::before,
@@ -190,7 +190,7 @@
     top: 10px;
     bottom: 10px;
     width: 3px;
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: color-mix(in srgb, var(--accent) 86%, transparent);
     box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
   }
@@ -261,7 +261,7 @@
     height: 38px;
     padding: 0;
     border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
     color: var(--muted);
     box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
@@ -358,7 +358,7 @@
     z-index: 100;
     background: var(--card, #161b22);
     border: 1px solid var(--border, #30363d);
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     padding: 8px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
     flex-direction: column;
@@ -522,13 +522,13 @@
   }
 
   .agent-chat__input-btn,
-  .agent-chat__toolbar .btn-ghost {
+  .agent-chat__toolbar .btn--ghost {
     width: 28px;
     height: 28px;
   }
 
   .agent-chat__input-btn svg,
-  .agent-chat__toolbar .btn-ghost svg {
+  .agent-chat__toolbar .btn--ghost svg {
     width: 14px;
     height: 14px;
   }

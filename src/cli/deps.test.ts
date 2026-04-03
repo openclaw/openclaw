@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDefaultDeps } from "./deps.js";
+import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 
 const moduleLoads = vi.hoisted(() => ({
   whatsapp: vi.fn(),
@@ -50,6 +50,15 @@ vi.mock("./send-runtime/imessage.js", () => {
 });
 
 describe("createDefaultDeps", () => {
+  async function loadCreateDefaultDeps(scope: string) {
+    return (
+      await importFreshModule<typeof import("./deps.js")>(
+        import.meta.url,
+        `./deps.js?scope=${scope}`,
+      )
+    ).createDefaultDeps;
+  }
+
   function expectUnusedModulesNotLoaded(exclude: keyof typeof moduleLoads): void {
     const keys = Object.keys(moduleLoads) as Array<keyof typeof moduleLoads>;
     for (const key of keys) {
@@ -65,6 +74,7 @@ describe("createDefaultDeps", () => {
   });
 
   it("does not load provider modules until a dependency is used", async () => {
+    const createDefaultDeps = await loadCreateDefaultDeps("lazy-load");
     const deps = createDefaultDeps();
 
     expect(moduleLoads.whatsapp).not.toHaveBeenCalled();
@@ -83,6 +93,7 @@ describe("createDefaultDeps", () => {
   });
 
   it("reuses module cache after first dynamic import", async () => {
+    const createDefaultDeps = await loadCreateDefaultDeps("module-cache");
     const deps = createDefaultDeps();
     const sendDiscord = deps["discord"] as (...args: unknown[]) => Promise<unknown>;
 

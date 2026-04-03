@@ -276,6 +276,7 @@ async function runProviderAuthMethod(params: {
 
   const result = await params.method.run({
     config: params.config,
+    env: process.env,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     prompter: params.prompter,
@@ -359,6 +360,7 @@ export async function modelsAuthPasteTokenCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  const { agentDir } = await resolveModelsAuthContext();
   const rawProvider = opts.provider?.trim();
   if (!rawProvider) {
     throw new Error("Missing --provider.");
@@ -385,6 +387,7 @@ export async function modelsAuthPasteTokenCommand(
       token,
       ...(expires ? { expires } : {}),
     },
+    agentDir,
   });
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
@@ -533,6 +536,14 @@ function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" 
   return "oauth";
 }
 
+function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {
+  if (providerId !== "openai-codex") {
+    return;
+  }
+  runtime.log(
+    "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+  );
+}
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error("models auth login requires an interactive TTY.");
@@ -584,4 +595,5 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     prompter,
     setDefault: opts.setDefault,
   });
+  maybeLogOpenAICodexNativeSearchTip(runtime, selectedProvider.id);
 }

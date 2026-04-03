@@ -14,36 +14,38 @@ let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
-export function buildGatewaySnapshot(): Snapshot {
+export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Snapshot {
   const cfg = loadConfig();
-  const configPath = createConfigIO().configPath;
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const mainSessionKey = resolveMainSessionKey(cfg);
   const scope = cfg.session?.scope ?? "per-sender";
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
-  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
   const updateAvailable = getUpdateAvailable() ?? undefined;
   // Health is async; caller should await getHealthSnapshot and replace later if needed.
   const emptyHealth: unknown = {};
-  return {
+  const snapshot: Snapshot = {
     presence,
     health: emptyHealth,
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
-    // Surface resolved paths so UIs can display the true config location.
-    configPath,
-    stateDir: STATE_DIR,
     sessionDefaults: {
       defaultAgentId,
       mainKey,
       mainSessionKey,
       scope,
     },
-    authMode: auth.mode,
     updateAvailable,
   };
+  if (opts?.includeSensitive === true) {
+    const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
+    // Surface resolved paths only to admin callers that already have broader gateway access.
+    snapshot.configPath = createConfigIO().configPath;
+    snapshot.stateDir = STATE_DIR;
+    snapshot.authMode = auth.mode;
+  }
+  return snapshot;
 }
 
 export function getHealthCache(): HealthSummary | null {

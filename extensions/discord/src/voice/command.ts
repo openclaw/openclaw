@@ -10,22 +10,14 @@ import {
   ChannelType as DiscordChannelType,
   type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatMention } from "../mentions.js";
-import {
-  isDiscordGroupAllowedByPolicy,
-  normalizeDiscordSlug,
-  resolveDiscordOwnerAccess,
-  resolveDiscordChannelConfigWithFallback,
-  resolveDiscordGuildEntry,
-  resolveDiscordMemberAccessState,
-} from "../monitor/allow-list.js";
+import { normalizeDiscordSlug } from "../monitor/allow-list.js";
 import { resolveDiscordChannelInfo } from "../monitor/message-utils.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadParentInfo } from "../monitor/threading.js";
+import { authorizeDiscordVoiceIngress } from "./access.js";
 import type { DiscordVoiceManager } from "./manager.js";
 
 const VOICE_CHANNEL_TYPES: NonNullable<APIApplicationCommandChannelOption["channel_types"]> = [
@@ -105,87 +97,34 @@ async function authorizeVoiceCommand(
     parentSlug = parentName ? normalizeDiscordSlug(parentName) : undefined;
   }
 
-  const guildInfo = resolveDiscordGuildEntry({
-    guild: interaction.guild ?? undefined,
-    guildId: interaction.guild?.id ?? interaction.rawData.guild_id ?? undefined,
-    guildEntries: params.discordConfig.guilds,
-  });
-
-  const channelConfig = channelId
-    ? resolveDiscordChannelConfigWithFallback({
-        guildInfo,
-        channelId,
-        channelName,
-        channelSlug,
-        parentId,
-        parentName,
-        parentSlug,
-        scope: isThreadChannel ? "thread" : "channel",
-      })
-    : null;
-
-  if (channelConfig?.enabled === false) {
-    return { ok: false, message: "This channel is disabled." };
-  }
-
-  const channelAllowlistConfigured =
-    Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
-  const channelAllowed = channelConfig?.allowed !== false;
-  if (
-    !isDiscordGroupAllowedByPolicy({
-      groupPolicy: params.groupPolicy,
-      guildAllowlisted: Boolean(guildInfo),
-      channelAllowlistConfigured,
-      channelAllowed,
-    }) ||
-    channelConfig?.allowed === false
-  ) {
-    const channelId = channelOverride?.id ?? channel?.id;
-    const channelLabel = channelId ? formatMention({ channelId }) : "This channel";
-    return {
-      ok: false,
-      message: `${channelLabel} is not allowlisted for voice commands.`,
-    };
-  }
-
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
     : [];
   const sender = resolveDiscordSenderIdentity({ author: user, member: interaction.rawData.member });
-
-  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-    channelConfig,
-    guildInfo,
+  const access = await authorizeDiscordVoiceIngress({
+    cfg: params.cfg,
+    discordConfig: params.discordConfig,
+    groupPolicy: params.groupPolicy,
+    useAccessGroups: params.useAccessGroups,
+    guild: interaction.guild,
+    guildId: interaction.guild.id,
+    channelId,
+    channelName,
+    channelSlug,
+    parentId,
+    parentName,
+    parentSlug,
+    scope: isThreadChannel ? "thread" : "channel",
+    channelLabel: channelId ? formatMention({ channelId }) : "This channel",
     memberRoleIds,
-    sender,
-    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
-  });
-
-  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [],
     sender: {
       id: sender.id,
       name: sender.name,
       tag: sender.tag,
     },
-    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
   });
-
-  const authorizers = params.useAccessGroups
-    ? [
-        { configured: ownerAllowList != null, allowed: ownerOk },
-        { configured: hasAccessRestrictions, allowed: memberAllowed },
-      ]
-    : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
-
-  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups: params.useAccessGroups,
-    authorizers,
-    modeWhenAccessGroupsOff: "configured",
-  });
-
-  if (!commandAuthorized) {
-    return { ok: false, message: "You are not authorized to use this command." };
+  if (!access.ok) {
+    return { ok: false, message: access.message };
   }
 
   return { ok: true, guildId: interaction.guild.id };

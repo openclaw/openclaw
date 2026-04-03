@@ -18,7 +18,7 @@ import {
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
 import {
   isInboundPathAllowed,
@@ -536,3 +536,5 @@ export const __testing = {
   resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 };
+
+export const resolveIMessageRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 
 const loggerMocks = vi.hoisted(() => ({
@@ -18,10 +18,14 @@ let logAcceptedEnvOption: EnvModule["logAcceptedEnvOption"];
 let normalizeEnv: EnvModule["normalizeEnv"];
 let normalizeZaiEnv: EnvModule["normalizeZaiEnv"];
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
   ({ isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } =
     await import("./env.js"));
+});
+
+beforeEach(() => {
+  loggerMocks.info.mockClear();
 });
 
 describe("normalizeZaiEnv", () => {

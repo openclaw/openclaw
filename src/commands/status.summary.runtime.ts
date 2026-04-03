@@ -1,4 +1,7 @@
+import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolvePersistedModelRef } from "../agents/model-selection.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -85,22 +88,12 @@ function resolveConfiguredStatusModelRef(params: {
     }
   }
 
-  const configuredProviders = params.cfg.models?.providers;
-  if (configuredProviders && typeof configuredProviders === "object") {
-    const hasDefaultProvider = Boolean(configuredProviders[params.defaultProvider]);
-    if (!hasDefaultProvider) {
-      const availableProvider = Object.entries(configuredProviders).find(
-        ([, providerCfg]) =>
-          providerCfg &&
-          Array.isArray(providerCfg.models) &&
-          providerCfg.models.length > 0 &&
-          providerCfg.models[0]?.id,
-      );
-      if (availableProvider) {
-        const [providerName, providerCfg] = availableProvider;
-        return { provider: providerName, model: providerCfg.models[0].id };
-      }
-    }
+  const fallbackProvider = resolveConfiguredProviderFallback({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  if (fallbackProvider) {
+    return fallbackProvider;
   }
 
   return { provider: params.defaultProvider, model: params.defaultModel };
@@ -115,9 +108,9 @@ function resolveConfiguredProviderContextWindow(
   if (!providers || typeof providers !== "object") {
     return undefined;
   }
-  const providerKey = provider.trim().toLowerCase();
+  const providerKey = normalizeProviderId(provider);
   for (const [id, providerConfig] of Object.entries(providers)) {
-    if (id.trim().toLowerCase() !== providerKey || !Array.isArray(providerConfig?.models)) {
+    if (normalizeProviderId(id) !== providerKey || !Array.isArray(providerConfig?.models)) {
       continue;
     }
     for (const entry of providerConfig.models) {
@@ -163,38 +156,15 @@ function resolveSessionModelRef(
     defaultModel: DEFAULT_MODEL,
     agentId,
   });
-
-  let provider = resolved.provider;
-  let model = resolved.model;
-  const runtimeModel = entry?.model?.trim();
-  const runtimeProvider = entry?.modelProvider?.trim();
-  if (runtimeModel) {
-    if (runtimeProvider) {
-      return { provider: runtimeProvider, model: runtimeModel };
-    }
-    const parsedRuntime = parseStatusModelRef(runtimeModel, provider || DEFAULT_PROVIDER);
-    if (parsedRuntime) {
-      provider = parsedRuntime.provider;
-      model = parsedRuntime.model;
-    } else {
-      model = runtimeModel;
-    }
-    return { provider, model };
-  }
-
-  const storedModelOverride = entry?.modelOverride?.trim();
-  if (storedModelOverride) {
-    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
-    const parsedOverride = parseStatusModelRef(storedModelOverride, overrideProvider);
-    if (parsedOverride) {
-      provider = parsedOverride.provider;
-      model = parsedOverride.model;
-    } else {
-      provider = overrideProvider;
-      model = storedModelOverride;
-    }
-  }
-  return { provider, model };
+  return (
+    resolvePersistedModelRef({
+      defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+      runtimeProvider: entry?.modelProvider,
+      runtimeModel: entry?.model,
+      overrideProvider: entry?.providerOverride,
+      overrideModel: entry?.modelOverride,
+    }) ?? resolved
+  );
 }
 
 function resolveContextTokensForModel(params: {
@@ -226,4 +196,5 @@ export const statusSummaryRuntime = {
   resolveContextTokensForModel,
   classifySessionKey,
   resolveSessionModelRef,
+  resolveConfiguredStatusModelRef,
 };

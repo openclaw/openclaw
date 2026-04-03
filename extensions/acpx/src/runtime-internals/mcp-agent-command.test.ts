@@ -11,6 +11,48 @@ vi.mock("./process.js", () => ({
 import { __testing, resolveAcpxAgentCommand } from "./mcp-agent-command.js";
 
 describe("resolveAcpxAgentCommand", () => {
+  it.each([
+    ["cursor", "cursor-agent acp"],
+    ["gemini", "gemini --acp"],
+    ["openclaw", "openclaw acp"],
+    ["copilot", "copilot --acp --stdio"],
+    ["pi", "npx -y pi-acp@0.0.22"],
+    ["codex", "npx -y @zed-industries/codex-acp@0.9.5"],
+    ["claude", "npx -y @zed-industries/claude-agent-acp@0.21.0"],
+  ])("uses the current acpx built-in for %s by default", async (agent, expected) => {
+    spawnAndCollectMock.mockResolvedValueOnce({
+      stdout: JSON.stringify({ agents: {} }),
+      stderr: "",
+      code: 0,
+      error: null,
+    });
+
+    const command = await resolveAcpxAgentCommand({
+      acpxCommand: "/plugin/node_modules/.bin/acpx",
+      cwd: "/plugin",
+      agent,
+    });
+
+    expect(command).toBe(expected);
+  });
+
+  it("returns null for unknown agent ids instead of falling back to raw commands", async () => {
+    spawnAndCollectMock.mockResolvedValueOnce({
+      stdout: JSON.stringify({ agents: {} }),
+      stderr: "",
+      code: 0,
+      error: null,
+    });
+
+    const command = await resolveAcpxAgentCommand({
+      acpxCommand: "/plugin/node_modules/.bin/acpx",
+      cwd: "/plugin",
+      agent: "sh -c whoami",
+    });
+
+    expect(command).toBeNull();
+  });
+
   it("threads stripProviderAuthEnvVars through the config show probe", async () => {
     spawnAndCollectMock.mockResolvedValueOnce({
       stdout: JSON.stringify({

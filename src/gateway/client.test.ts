@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -110,8 +110,15 @@ vi.mock("../logger.js", async (importOriginal) => {
   };
 });
 
-const { GatewayClient } = await import("./client.js");
-type GatewayClientInstance = InstanceType<typeof GatewayClient>;
+type GatewayClientModule = typeof import("./client.js");
+type GatewayClientInstance = InstanceType<GatewayClientModule["GatewayClient"]>;
+
+let GatewayClient: GatewayClientModule["GatewayClient"];
+
+async function loadGatewayClientModule() {
+  vi.resetModules();
+  ({ GatewayClient } = await import("./client.js"));
+}
 
 function getLatestWs(): MockWebSocket {
   const ws = wsInstances.at(-1);
@@ -152,6 +159,10 @@ function expectSecurityConnectError(
     expect(error.message).toContain("Tailscale Serve/Funnel");
   }
 }
+
+beforeAll(async () => {
+  await loadGatewayClientModule();
+});
 
 describe("GatewayClient security checks", () => {
   const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);

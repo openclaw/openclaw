@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createPtyAdapterMock } = vi.hoisted(() => ({
   createPtyAdapterMock: vi.fn(),
@@ -35,9 +35,11 @@ function createStubPtyAdapter() {
 describe("process supervisor PTY command contract", () => {
   let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ createProcessSupervisor } = await import("./supervisor.js"));
+  });
+
+  beforeEach(() => {
     createPtyAdapterMock.mockClear();
   });
 

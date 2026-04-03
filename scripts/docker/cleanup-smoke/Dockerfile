@@ -19,6 +19,7 @@ COPY ui/package.json ./ui/package.json
 COPY packages ./packages
 COPY extensions ./extensions
 COPY patches ./patches
+COPY scripts/postinstall-bundled-plugins.mjs scripts/npm-runner.mjs ./scripts/
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
   corepack enable \
   && pnpm install --frozen-lockfile

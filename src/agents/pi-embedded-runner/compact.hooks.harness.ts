@@ -82,6 +82,48 @@ export const sessionMessages: unknown[] = [
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
 
+export function resetCompactSessionStateMocks(): void {
+  sanitizeSessionHistoryMock.mockReset();
+  sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
+    return params.messages;
+  });
+
+  getMemorySearchManagerMock.mockReset();
+  getMemorySearchManagerMock.mockResolvedValue({
+    manager: {
+      sync: vi.fn(async () => {}),
+    },
+  });
+  resolveMemorySearchConfigMock.mockReset();
+  resolveMemorySearchConfigMock.mockReturnValue({
+    sources: ["sessions"],
+    sync: {
+      sessions: {
+        postCompactionForce: true,
+      },
+    },
+  });
+  resolveSessionAgentIdMock.mockReset();
+  resolveSessionAgentIdMock.mockReturnValue("main");
+  estimateTokensMock.mockReset();
+  estimateTokensMock.mockReturnValue(10);
+  sessionMessages.splice(
+    0,
+    sessionMessages.length,
+    { role: "user", content: "hello", timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "exec",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 3,
+    },
+  );
+  sessionAbortCompactionMock.mockReset();
+}
+
 export function resetCompactHooksHarnessMocks(): void {
   hookRunner.hasHooks.mockReset();
   hookRunner.hasHooks.mockReturnValue(false);
@@ -122,45 +164,7 @@ export function resetCompactHooksHarnessMocks(): void {
   });
 
   triggerInternalHook.mockReset();
-  sanitizeSessionHistoryMock.mockReset();
-  sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
-    return params.messages;
-  });
-
-  getMemorySearchManagerMock.mockReset();
-  getMemorySearchManagerMock.mockResolvedValue({
-    manager: {
-      sync: vi.fn(async () => {}),
-    },
-  });
-  resolveMemorySearchConfigMock.mockReset();
-  resolveMemorySearchConfigMock.mockReturnValue({
-    sources: ["sessions"],
-    sync: {
-      sessions: {
-        postCompactionForce: true,
-      },
-    },
-  });
-  resolveSessionAgentIdMock.mockReset();
-  resolveSessionAgentIdMock.mockReturnValue("main");
-  estimateTokensMock.mockReset();
-  estimateTokensMock.mockReturnValue(10);
-  sessionMessages.splice(
-    0,
-    sessionMessages.length,
-    { role: "user", content: "hello", timestamp: 1 },
-    { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-    {
-      role: "toolResult",
-      toolCallId: "t1",
-      toolName: "exec",
-      content: [{ type: "text", text: "output" }],
-      isError: false,
-      timestamp: 3,
-    },
-  );
-  sessionAbortCompactionMock.mockReset();
+  resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
 }
@@ -255,6 +259,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../model-auth.js", () => ({
+    applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
     resolveModelAuthMode: vi.fn(() => "env"),
@@ -280,6 +285,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),
+    clearCommandLane: vi.fn(() => 0),
   }));
 
   vi.doMock("./lanes.js", () => ({
@@ -324,14 +330,59 @@ export async function loadCompactHooksHarness(): Promise<{
     createOpenClawCodingTools: createOpenClawCodingToolsMock,
   }));
 
-  vi.doMock("./google.js", () => ({
-    logToolSchemasForGoogle: vi.fn(),
+  vi.doMock("./replay-history.js", () => ({
     sanitizeSessionHistory: sanitizeSessionHistoryMock,
-    sanitizeToolsForGoogle: vi.fn(({ tools }: { tools: unknown[] }) => tools),
+    validateReplayTurns: vi.fn(async ({ messages }: { messages: unknown[] }) => messages),
+  }));
+
+  vi.doMock("./tool-schema-runtime.js", () => ({
+    logProviderToolSchemaDiagnostics: vi.fn(),
+    normalizeProviderToolSchemas: vi.fn(({ tools }: { tools: unknown[] }) => tools),
   }));
 
   vi.doMock("./tool-split.js", () => ({
     splitSdkTools: vi.fn(() => ({ builtInTools: [], customTools: [] })),
+  }));
+
+  vi.doMock("./compaction-safety-timeout.js", () => ({
+    compactWithSafetyTimeout: vi.fn(
+      async (
+        compact: () => Promise<unknown>,
+        _timeoutMs?: number,
+        opts?: { abortSignal?: AbortSignal; onCancel?: () => void },
+      ) => {
+        const abortSignal = opts?.abortSignal;
+        if (!abortSignal) {
+          return await compact();
+        }
+        const cancelAndCreateError = () => {
+          opts?.onCancel?.();
+          const reason = "reason" in abortSignal ? abortSignal.reason : undefined;
+          if (reason instanceof Error) {
+            return reason;
+          }
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          return err;
+        };
+        if (abortSignal.aborted) {
+          throw cancelAndCreateError();
+        }
+        return await Promise.race([
+          compact(),
+          new Promise<never>((_, reject) => {
+            abortSignal.addEventListener(
+              "abort",
+              () => {
+                reject(cancelAndCreateError());
+              },
+              { once: true },
+            );
+          }),
+        ]);
+      },
+    ),
+    resolveCompactionTimeoutMs: vi.fn(() => 30_000),
   }));
 
   vi.doMock("./wait-for-idle-before-flush.js", () => ({
@@ -375,8 +426,8 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveMemorySearchConfig: resolveMemorySearchConfigMock,
   }));
 
-  vi.doMock("../../memory/index.js", () => ({
-    getMemorySearchManager: getMemorySearchManagerMock,
+  vi.doMock("../../plugins/memory-runtime.js", () => ({
+    getActiveMemorySearchManager: getMemorySearchManagerMock,
   }));
 
   vi.doMock("../date-time.js", () => ({

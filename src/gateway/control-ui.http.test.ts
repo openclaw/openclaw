@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -26,7 +27,6 @@ describe("handleControlUiHttpRequest", () => {
       basePath: string;
       assistantName: string;
       assistantAvatar: string;
-      assistantAgentId: string;
     };
   }
 
@@ -131,6 +131,27 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("includes CSP hash for inline scripts in index.html", async () => {
+    const scriptContent = "(function(){ var x = 1; })();";
+    const html = `<html><head><script>${scriptContent}</script></head><body></body></html>\n`;
+    const expectedHash = createHash("sha256").update(scriptContent, "utf8").digest("base64");
+    await withControlUiRoot({
+      indexHtml: html,
+      fn: async (tmp) => {
+        const { res, setHeader } = makeMockHttpResponse();
+        handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
+          root: { kind: "resolved", path: tmp },
+        });
+        const cspCalls = setHeader.mock.calls.filter(
+          (call) => call[0] === "Content-Security-Policy",
+        );
+        const lastCsp = String(cspCalls[cspCalls.length - 1]?.[1] ?? "");
+        expect(lastCsp).toContain(`'sha256-${expectedHash}'`);
+        expect(lastCsp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+      },
+    });
+  });
+
   it("does not inject inline scripts into index.html", async () => {
     const html = "<html><head></head><body>Hello</body></html>\n";
     await withControlUiRoot({
@@ -174,7 +195,8 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.basePath).toBe("");
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
         expect(parsed.assistantAvatar).toBe("/avatar/main");
-        expect(parsed.assistantAgentId).toBe("main");
+        expect(parsed).not.toHaveProperty("assistantAgentId");
+        expect(parsed).not.toHaveProperty("serverVersion");
       },
     });
   });
@@ -200,7 +222,8 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.basePath).toBe("/openclaw");
         expect(parsed.assistantName).toBe("Ops");
         expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
-        expect(parsed.assistantAgentId).toBe("main");
+        expect(parsed).not.toHaveProperty("assistantAgentId");
+        expect(parsed).not.toHaveProperty("serverVersion");
       },
     });
   });

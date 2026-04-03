@@ -1,12 +1,23 @@
 {
   "name": "@openclaw/amazon-bedrock-provider",
-  "version": "2026.3.22",
+  "version": "2026.4.1-beta.1",
   "private": true,
   "description": "OpenClaw Amazon Bedrock provider plugin",
   "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-bedrock": "3.1020.0"
+  },
   "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "@aws-sdk/client-bedrock"
+      ]
+    }
   }
 }

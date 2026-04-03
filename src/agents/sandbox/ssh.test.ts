@@ -1,18 +1,27 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   type SshSandboxSession,
+  uploadDirectoryToSshTarget,
 } from "./ssh.js";
 
 const sessions: SshSandboxSession[] = [];
+const tempDirs: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
     sessions.splice(0).map(async (session) => {
       await disposeSshSandboxSession(session);
+    }),
+  );
+  await Promise.all(
+    tempDirs.splice(0).map(async (dir) => {
+      await fs.rm(dir, { recursive: true, force: true });
     }),
   );
 });
@@ -100,4 +109,50 @@ describe("sandbox ssh helpers", () => {
     expect(command).toContain(`'TOKEN=abc 123'`);
     expect(command).toContain(`'cd '"'"'/sandbox/project'"'"' && pwd && printenv TOKEN'`);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects upload trees with symlinks that escape the local workspace",
+    async () => {
+      const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-upload-"));
+      tempDirs.push(localDir);
+      await fs.symlink("/etc", path.join(localDir, "escape"));
+
+      await expect(
+        uploadDirectoryToSshTarget({
+          session: {
+            command: "ssh",
+            configPath: "/tmp/openclaw-test-ssh-config",
+            host: "openclaw-sandbox",
+          },
+          localDir,
+          remoteDir: "/remote/workspace",
+        }),
+      ).rejects.toThrow(/refuses symlink escaping the workspace: escape/i);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows in-workspace symlinks that point to hardlinked files",
+    async () => {
+      const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-upload-safe-"));
+      tempDirs.push(localDir);
+      const fakeSsh = path.join(localDir, "fake-ssh.sh");
+      await fs.writeFile(fakeSsh, "#!/bin/sh\ncat >/dev/null\n", { mode: 0o755 });
+      await fs.writeFile(path.join(localDir, "source.txt"), "hello");
+      await fs.link(path.join(localDir, "source.txt"), path.join(localDir, "hardlinked.txt"));
+      await fs.symlink("source.txt", path.join(localDir, "link.txt"));
+
+      await expect(
+        uploadDirectoryToSshTarget({
+          session: {
+            command: fakeSsh,
+            configPath: "/tmp/openclaw-test-ssh-config",
+            host: "openclaw-sandbox",
+          },
+          localDir,
+          remoteDir: "/remote/workspace",
+        }),
+      ).resolves.toBeUndefined();
+    },
+  );
 });

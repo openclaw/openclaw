@@ -1,15 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installedPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
+import { createPluginRecord, createPluginStatusReport } from "../../plugins/status.test-helpers.js";
+
+const WORKSPACE_PLUGIN_ROOT = installedPluginRoot("/tmp/workspace/.openclaw", "superpowers");
 
 const {
   readConfigFileSnapshotMock,
   validateConfigObjectWithPluginsMock,
   writeConfigFileMock,
-  buildPluginStatusReportMock,
+  buildPluginSnapshotReportMock,
+  buildPluginDiagnosticsReportMock,
 } = vi.hoisted(() => ({
   readConfigFileSnapshotMock: vi.fn(),
   validateConfigObjectWithPluginsMock: vi.fn(),
   writeConfigFileMock: vi.fn(),
-  buildPluginStatusReportMock: vi.fn(),
+  buildPluginSnapshotReportMock: vi.fn(),
+  buildPluginDiagnosticsReportMock: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -28,7 +34,8 @@ vi.mock("../../plugins/status.js", async () => {
     await vi.importActual<typeof import("../../plugins/status.js")>("../../plugins/status.js");
   return {
     ...actual,
-    buildPluginStatusReport: buildPluginStatusReportMock,
+    buildPluginSnapshotReport: buildPluginSnapshotReportMock,
+    buildPluginDiagnosticsReport: buildPluginDiagnosticsReportMock,
   };
 });
 
@@ -52,7 +59,8 @@ describe("handleCommands /plugins toggle", () => {
     readConfigFileSnapshotMock.mockReset();
     validateConfigObjectWithPluginsMock.mockReset();
     writeConfigFileMock.mockReset();
-    buildPluginStatusReportMock.mockReset();
+    buildPluginSnapshotReportMock.mockReset();
+    buildPluginDiagnosticsReportMock.mockReset();
   });
 
   it("enables a discovered plugin", async () => {
@@ -62,36 +70,20 @@ describe("handleCommands /plugins toggle", () => {
       path: "/tmp/openclaw.json",
       resolved: config,
     });
-    buildPluginStatusReportMock.mockReturnValue({
-      workspaceDir: "/tmp/workspace",
-      plugins: [
-        {
-          id: "superpowers",
-          name: "superpowers",
-          format: "bundle",
-          source: "/tmp/workspace/.openclaw/extensions/superpowers",
-          origin: "workspace",
-          enabled: false,
-          status: "disabled",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
-          providerIds: [],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
-      ],
-      diagnostics: [],
-    });
+    buildPluginDiagnosticsReportMock.mockReturnValue(
+      createPluginStatusReport({
+        workspaceDir: "/tmp/workspace",
+        plugins: [
+          createPluginRecord({
+            id: "superpowers",
+            format: "bundle",
+            source: WORKSPACE_PLUGIN_ROOT,
+            enabled: false,
+            status: "disabled",
+          }),
+        ],
+      }),
+    );
     validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
     writeConfigFileMock.mockResolvedValue(undefined);
 
@@ -118,36 +110,19 @@ describe("handleCommands /plugins toggle", () => {
       path: "/tmp/openclaw.json",
       resolved: config,
     });
-    buildPluginStatusReportMock.mockReturnValue({
-      workspaceDir: "/tmp/workspace",
-      plugins: [
-        {
-          id: "superpowers",
-          name: "superpowers",
-          format: "bundle",
-          source: "/tmp/workspace/.openclaw/extensions/superpowers",
-          origin: "workspace",
-          enabled: true,
-          status: "loaded",
-          toolNames: [],
-          hookNames: [],
-          channelIds: [],
-          providerIds: [],
-          speechProviderIds: [],
-          mediaUnderstandingProviderIds: [],
-          imageGenerationProviderIds: [],
-          webSearchProviderIds: [],
-          gatewayMethods: [],
-          cliCommands: [],
-          services: [],
-          commands: [],
-          httpRoutes: 0,
-          hookCount: 0,
-          configSchema: false,
-        },
-      ],
-      diagnostics: [],
-    });
+    buildPluginDiagnosticsReportMock.mockReturnValue(
+      createPluginStatusReport({
+        workspaceDir: "/tmp/workspace",
+        plugins: [
+          createPluginRecord({
+            id: "superpowers",
+            format: "bundle",
+            source: WORKSPACE_PLUGIN_ROOT,
+            enabled: true,
+          }),
+        ],
+      }),
+    );
     validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
     writeConfigFileMock.mockResolvedValue(undefined);
 
@@ -165,5 +140,54 @@ describe("handleCommands /plugins toggle", () => {
         }),
       }),
     );
+  });
+
+  it("resolves write targets by runtime-derived plugin name", async () => {
+    const config = buildCfg();
+    readConfigFileSnapshotMock.mockResolvedValue({
+      valid: true,
+      path: "/tmp/openclaw.json",
+      resolved: config,
+    });
+    buildPluginSnapshotReportMock.mockReturnValue(
+      createPluginStatusReport({
+        workspaceDir: "/tmp/workspace",
+        plugins: [
+          createPluginRecord({
+            id: "superpowers",
+            name: "superpowers",
+            format: "bundle",
+            source: WORKSPACE_PLUGIN_ROOT,
+            enabled: false,
+            status: "disabled",
+          }),
+        ],
+      }),
+    );
+    buildPluginDiagnosticsReportMock.mockReturnValue(
+      createPluginStatusReport({
+        workspaceDir: "/tmp/workspace",
+        plugins: [
+          createPluginRecord({
+            id: "superpowers",
+            name: "Super Powers",
+            format: "bundle",
+            source: WORKSPACE_PLUGIN_ROOT,
+            enabled: false,
+            status: "disabled",
+          }),
+        ],
+      }),
+    );
+    validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
+    writeConfigFileMock.mockResolvedValue(undefined);
+
+    const params = buildCommandTestParams("/plugins enable Super Powers", buildCfg());
+    params.command.senderIsOwner = true;
+
+    const result = await handleCommands(params);
+    expect(result.reply?.text).toContain('Plugin "superpowers" enabled');
+    expect(buildPluginDiagnosticsReportMock).toHaveBeenCalled();
+    expect(buildPluginSnapshotReportMock).not.toHaveBeenCalled();
   });
 });

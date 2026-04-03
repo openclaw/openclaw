@@ -1,13 +1,64 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearMemoryEmbeddingProviders,
+  registerMemoryEmbeddingProvider,
+} from "../plugins/memory-embedding-providers.js";
 import { resolveMemorySearchConfig } from "./memory-search.js";
 
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
 
 describe("memory search config", () => {
-  function configWithDefaultProvider(
-    provider: "openai" | "local" | "gemini" | "mistral" | "ollama",
-  ): OpenClawConfig {
+  beforeEach(() => {
+    clearMemoryEmbeddingProviders();
+    registerMemoryEmbeddingProvider({
+      id: "openai",
+      defaultModel: "text-embedding-3-small",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
+    registerMemoryEmbeddingProvider({
+      id: "local",
+      defaultModel: "local-default",
+      transport: "local",
+      create: async () => ({ provider: null }),
+    });
+    registerMemoryEmbeddingProvider({
+      id: "gemini",
+      defaultModel: "gemini-embedding-001",
+      transport: "remote",
+      supportsMultimodalEmbeddings: ({ model }) =>
+        model
+          .trim()
+          .replace(/^models\//, "")
+          .replace(/^(gemini|google)\//, "") === "gemini-embedding-2-preview",
+      create: async () => ({ provider: null }),
+    });
+    registerMemoryEmbeddingProvider({
+      id: "voyage",
+      defaultModel: "voyage-4-large",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
+    registerMemoryEmbeddingProvider({
+      id: "mistral",
+      defaultModel: "mistral-embed",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
+    registerMemoryEmbeddingProvider({
+      id: "ollama",
+      defaultModel: "nomic-embed-text",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
+  });
+
+  afterEach(() => {
+    clearMemoryEmbeddingProviders();
+  });
+
+  function configWithDefaultProvider(provider: string): OpenClawConfig {
     return asConfig({
       agents: {
         defaults: {
@@ -258,7 +309,7 @@ describe("memory search config", () => {
       },
     });
     expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
-      /memorySearch\.multimodal requires memorySearch\.provider = "gemini"/,
+      /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
     );
   });
 

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   evaluateMattermostMentionGate,
+  resolveMattermostReactionChannelId,
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
@@ -272,5 +273,28 @@ describe("resolveMattermostThreadSessionContext", () => {
       sessionKey: "agent:main:mattermost:default:user-1",
       parentSessionKey: undefined,
     });
+  });
+});
+
+describe("resolveMattermostReactionChannelId", () => {
+  it("prefers broadcast channel_id when present", () => {
+    expect(
+      resolveMattermostReactionChannelId({
+        broadcast: { channel_id: "chan-broadcast" },
+        data: { channel_id: "chan-data" },
+      }),
+    ).toBe("chan-broadcast");
+  });
+
+  it("falls back to data.channel_id when broadcast channel_id is missing", () => {
+    expect(
+      resolveMattermostReactionChannelId({
+        data: { channel_id: "chan-data" },
+      }),
+    ).toBe("chan-data");
+  });
+
+  it("returns undefined when neither payload location includes channel_id", () => {
+    expect(resolveMattermostReactionChannelId({})).toBeUndefined();
   });
 });

@@ -3,9 +3,10 @@ import {
   buildCatchallMultiAccountChannelSchema,
   DmPolicySchema,
   GroupPolicySchema,
+  MarkdownConfigSchema,
+  ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { z } from "zod";
-import { MarkdownConfigSchema, ToolPolicySchema } from "../runtime-api.js";
+import { z } from "openclaw/plugin-sdk/zod";
 
 const groupConfigSchema = z.object({
   allow: z.boolean().optional(),

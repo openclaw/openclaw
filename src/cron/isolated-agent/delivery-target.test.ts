@@ -1,13 +1,26 @@
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
-vi.mock("../../config/sessions.js", () => ({
-  loadSessionStore: vi.fn().mockReturnValue({}),
+const whatsappAccountMocks = vi.hoisted(() => ({
+  resolveWhatsAppAccount: vi.fn<() => { allowFrom: string[] }>(() => ({ allowFrom: [] })),
+}));
+
+vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
+}));
+
+vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../infra/outbound/channel-selection.js", () => ({
+vi.mock("../../config/sessions/store-load.js", () => ({
+  loadSessionStore: vi.fn().mockReturnValue({}),
+}));
+
+vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
   resolveMessageChannelSelection: vi
     .fn()
     .mockResolvedValue({ channel: "telegram", configured: ["telegram"] }),
@@ -21,22 +34,28 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStoreSync: vi.fn(() => []),
 }));
 
-vi.mock("../../../extensions/whatsapp/src/accounts.js", () => ({
-  resolveWhatsAppAccount: vi.fn(() => ({ allowFrom: [] })),
+vi.mock("../../plugin-sdk/whatsapp-surface.js", () => ({
+  resolveWhatsAppAccount: whatsappAccountMocks.resolveWhatsAppAccount,
 }));
 
+vi.mock("../../infra/outbound/targets.runtime.js", () => ({
+  resolveOutboundTarget: vi.fn(),
+}));
 const mockedModuleIds = [
-  "../../config/sessions.js",
-  "../../infra/outbound/channel-selection.js",
+  "../../config/sessions/main-session.js",
+  "../../config/sessions/paths.js",
+  "../../config/sessions/store-load.js",
+  "../../infra/outbound/channel-selection.runtime.js",
+  "../../infra/outbound/targets.runtime.js",
   "../../infra/outbound/target-resolver.js",
   "../../pairing/pairing-store.js",
-  "../../../extensions/whatsapp/src/accounts.js",
+  "../../plugin-sdk/whatsapp-surface.js",
 ];
 
-import { resolveWhatsAppAccount } from "../../../extensions/whatsapp/src/accounts.js";
-import { loadSessionStore } from "../../config/sessions.js";
-import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
+import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 
@@ -45,6 +64,71 @@ afterAll(() => {
     vi.doUnmock(id);
   }
   vi.resetModules();
+});
+
+function createStubOutbound(label: string): ChannelOutboundAdapter {
+  return {
+    deliveryMode: "gateway",
+    resolveTarget: ({ to }) => {
+      const trimmed = typeof to === "string" ? to.trim() : "";
+      return trimmed
+        ? { ok: true, to: trimmed }
+        : { ok: false, error: new Error(`${label} requires target`) };
+    },
+  };
+}
+
+function createAllowlistAwareStubOutbound(label: string): ChannelOutboundAdapter {
+  return {
+    deliveryMode: "gateway",
+    resolveTarget: ({ to, allowFrom }) => {
+      const trimmed = typeof to === "string" ? to.trim() : "";
+      if (!trimmed) {
+        return { ok: false, error: new Error(`${label} requires target`) };
+      }
+      if (allowFrom && allowFrom.length > 0 && !allowFrom.includes(trimmed)) {
+        return { ok: false, error: new Error(`${label} target blocked`) };
+      }
+      return { ok: true, to: trimmed };
+    },
+  };
+}
+
+beforeEach(() => {
+  resetPluginRuntimeStateForTest();
+  vi.mocked(resolveOutboundTarget).mockReset();
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: createOutboundTestPlugin({
+          id: "telegram",
+          outbound: createStubOutbound("Telegram"),
+        }),
+        source: "test",
+      },
+      {
+        pluginId: "whatsapp",
+        plugin: {
+          ...createOutboundTestPlugin({
+            id: "whatsapp",
+            outbound: createAllowlistAwareStubOutbound("WhatsApp"),
+          }),
+          config: {
+            listAccountIds: () => [],
+            resolveAccount: () => ({}),
+            resolveAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
+              (cfg.channels?.whatsapp as { allowFrom?: string[] } | undefined)?.allowFrom,
+          },
+        },
+        source: "test",
+      },
+    ]),
+  );
+});
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
 });
 
 function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
@@ -96,12 +180,6 @@ function setLastSessionEntry(params: {
   });
 }
 
-function setWhatsAppAllowFrom(allowFrom: string[]) {
-  vi.mocked(resolveWhatsAppAccount).mockReturnValue({
-    allowFrom,
-  } as unknown as ReturnType<typeof resolveWhatsAppAccount>);
-}
-
 function setStoredWhatsAppAllowFrom(allowFrom: string[]) {
   vi.mocked(readChannelAllowFromStoreSync).mockReturnValue(allowFrom);
 }
@@ -132,10 +210,9 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "whatsapp",
       lastTo: "+15550000099",
     });
-    setWhatsAppAllowFrom([]);
     setStoredWhatsAppAllowFrom(["+15550000001"]);
 
-    const cfg = makeCfg({ bindings: [] });
+    const cfg = makeCfg({ bindings: [], channels: { whatsapp: { allowFrom: [] } } });
     const result = await resolveLastTarget(cfg);
 
     expect(result.channel).toBe("whatsapp");
@@ -148,10 +225,9 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "whatsapp",
       lastTo: "+15550000099",
     });
-    setWhatsAppAllowFrom([]);
     setStoredWhatsAppAllowFrom(["+15550000001"]);
 
-    const cfg = makeCfg({ bindings: [] });
+    const cfg = makeCfg({ bindings: [], channels: { whatsapp: { allowFrom: [] } } });
     const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
       channel: "whatsapp",
       to: "+15550000099",
@@ -214,6 +290,42 @@ describe("resolveDeliveryTarget", () => {
       expect.objectContaining({
         channel: "telegram",
         input: "123456789",
+      }),
+    );
+  });
+
+  it("falls back to the runtime target resolver when the channel plugin is not already loaded", async () => {
+    setMainSessionEntry(undefined);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          plugin: createOutboundTestPlugin({
+            id: "whatsapp",
+            outbound: createStubOutbound("WhatsApp"),
+          }),
+          source: "test",
+        },
+      ]),
+    );
+    vi.mocked(resolveOutboundTarget).mockReturnValueOnce({ ok: true, to: "123456" });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "123456",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        channel: "telegram",
+        to: "123456",
+      }),
+    );
+    expect(resolveOutboundTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456",
       }),
     );
   });

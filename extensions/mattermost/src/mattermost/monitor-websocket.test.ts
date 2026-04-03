@@ -227,6 +227,191 @@ describe("mattermost websocket monitor", () => {
         emoji_name: "thumbsup",
       }),
     );
-    expect(payload.data?.reaction).toBeDefined();
+  });
+
+  it("terminates when bot update_at changes (disable/enable cycle)", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const runtime = testRuntime();
+    let updateAt = 1000;
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => updateAt,
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    // Let initial getBotUpdateAt resolve
+    await vi.advanceTimersByTimeAsync(0);
+
+    // update_at unchanged — no terminate
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(0);
+
+    // Simulate disable/enable — update_at changes
+    updateAt = 2000;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
+    );
+
+    socket.emitClose(1006);
+    await connected;
+    vi.useRealTimers();
+  });
+
+  it("keeps connection alive when update_at stays the same", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => 1000,
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(socket.terminateCalls).toBe(0);
+
+    socket.emitClose(1000);
+    await connected;
+    vi.useRealTimers();
+  });
+
+  it("does not terminate when getBotUpdateAt throws", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const runtime = testRuntime();
+    let shouldThrow = false;
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => {
+        if (shouldThrow) throw new Error("network error");
+        return 1000;
+      },
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    // API error — should log but not terminate
+    shouldThrow = true;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(0);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost: health check error: Error: network error",
+    );
+
+    socket.emitClose(1000);
+    await connected;
+    vi.useRealTimers();
+  });
+
+  it("keeps polling when the initial getBotUpdateAt call fails", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const runtime = testRuntime();
+    const responses: Array<number | Error> = [new Error("network error"), 1000, 2000];
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => {
+        const next = responses.shift();
+        if (next instanceof Error) {
+          throw next;
+        }
+        return next ?? 2000;
+      },
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost: failed to get initial update_at: Error: network error",
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
+    );
+
+    socket.emitClose(1006);
+    await connected;
+    vi.useRealTimers();
+  });
+
+  it("does not overlap health checks when a prior poll is still running", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const resolvers: Array<(value: number) => void> = [];
+    let pollCount = 0;
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => {
+        pollCount++;
+        return await new Promise<number>((resolve) => {
+          resolvers.push(resolve);
+        });
+      },
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pollCount).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(pollCount).toBe(1);
+
+    resolvers[0]?.(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(pollCount).toBe(2);
+
+    socket.emitClose(1000);
+    await connected;
+    vi.useRealTimers();
   });
 });

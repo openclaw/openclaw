@@ -1,31 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
-const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./accounts.js", () => ({
-  resolveFeishuAccount: resolveFeishuAccountMock,
-}));
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-import {
+const freshDirectoryModulePath = "./directory.js?directory-test";
+const {
   listFeishuDirectoryGroups,
   listFeishuDirectoryGroupsLive,
   listFeishuDirectoryPeers,
   listFeishuDirectoryPeersLive,
-} from "./directory.js";
+} = await import(freshDirectoryModulePath);
 
-describe("feishu directory (config-backed)", () => {
-  const cfg = {} as ClawdbotConfig;
-
-  function makeStaticAccount() {
-    return {
-      configured: false,
-      config: {
+function makeStaticCfg(): ClawdbotConfig {
+  return {
+    channels: {
+      feishu: {
         allowFrom: ["user:alice", "user:bob"],
         dms: {
           "user:carla": {},
@@ -35,13 +28,29 @@ describe("feishu directory (config-backed)", () => {
         },
         groupAllowFrom: ["chat-2"],
       },
-    };
-  }
+    },
+  } as ClawdbotConfig;
+}
 
-  resolveFeishuAccountMock.mockImplementation(() => makeStaticAccount());
+function makeConfiguredCfg(): ClawdbotConfig {
+  return {
+    channels: {
+      feishu: {
+        ...makeStaticCfg().channels?.feishu,
+        appId: "cli_test_app_id",
+        appSecret: "cli_test_app_secret",
+      },
+    },
+  } as ClawdbotConfig;
+}
+
+describe("feishu directory (config-backed)", () => {
+  beforeEach(() => {
+    createFeishuClientMock.mockReset();
+  });
 
   it("merges allowFrom + dms into peer entries", async () => {
-    const peers = await listFeishuDirectoryPeers({ cfg, query: "a" });
+    const peers = await listFeishuDirectoryPeers({ cfg: makeStaticCfg(), query: "a" });
     expect(peers).toEqual([
       { kind: "user", id: "alice" },
       { kind: "user", id: "carla" },
@@ -49,17 +58,18 @@ describe("feishu directory (config-backed)", () => {
   });
 
   it("normalizes spaced provider-prefixed peer entries", async () => {
-    resolveFeishuAccountMock.mockReturnValueOnce({
-      configured: false,
-      config: {
-        allowFrom: [" feishu:user:ou_alice "],
-        dms: {
-          " lark:dm:ou_carla ": {},
+    const cfg = {
+      channels: {
+        feishu: {
+          allowFrom: [" feishu:user:ou_alice "],
+          dms: {
+            " lark:dm:ou_carla ": {},
+          },
+          groups: {},
+          groupAllowFrom: [],
         },
-        groups: {},
-        groupAllowFrom: [],
       },
-    });
+    } as ClawdbotConfig;
 
     const peers = await listFeishuDirectoryPeers({ cfg });
     expect(peers).toEqual([
@@ -69,7 +79,7 @@ describe("feishu directory (config-backed)", () => {
   });
 
   it("merges groups map + groupAllowFrom into group entries", async () => {
-    const groups = await listFeishuDirectoryGroups({ cfg });
+    const groups = await listFeishuDirectoryGroups({ cfg: makeStaticCfg() });
     expect(groups).toEqual([
       { kind: "group", id: "chat-1" },
       { kind: "group", id: "chat-2" },
@@ -77,10 +87,6 @@ describe("feishu directory (config-backed)", () => {
   });
 
   it("falls back to static peers on live lookup failure by default", async () => {
-    resolveFeishuAccountMock.mockReturnValueOnce({
-      ...makeStaticAccount(),
-      configured: true,
-    });
     createFeishuClientMock.mockReturnValueOnce({
       contact: {
         user: {
@@ -91,7 +97,7 @@ describe("feishu directory (config-backed)", () => {
       },
     });
 
-    const peers = await listFeishuDirectoryPeersLive({ cfg, query: "a" });
+    const peers = await listFeishuDirectoryPeersLive({ cfg: makeConfiguredCfg(), query: "a" });
     expect(peers).toEqual([
       { kind: "user", id: "alice" },
       { kind: "user", id: "carla" },
@@ -99,10 +105,6 @@ describe("feishu directory (config-backed)", () => {
   });
 
   it("surfaces live peer lookup failures when fallback is disabled", async () => {
-    resolveFeishuAccountMock.mockReturnValueOnce({
-      ...makeStaticAccount(),
-      configured: true,
-    });
     createFeishuClientMock.mockReturnValueOnce({
       contact: {
         user: {
@@ -113,16 +115,12 @@ describe("feishu directory (config-backed)", () => {
       },
     });
 
-    await expect(listFeishuDirectoryPeersLive({ cfg, fallbackToStatic: false })).rejects.toThrow(
-      "token expired",
-    );
+    await expect(
+      listFeishuDirectoryPeersLive({ cfg: makeConfiguredCfg(), fallbackToStatic: false }),
+    ).rejects.toThrow("token expired");
   });
 
   it("surfaces live group lookup failures when fallback is disabled", async () => {
-    resolveFeishuAccountMock.mockReturnValueOnce({
-      ...makeStaticAccount(),
-      configured: true,
-    });
     createFeishuClientMock.mockReturnValueOnce({
       im: {
         chat: {
@@ -131,8 +129,8 @@ describe("feishu directory (config-backed)", () => {
       },
     });
 
-    await expect(listFeishuDirectoryGroupsLive({ cfg, fallbackToStatic: false })).rejects.toThrow(
-      "forbidden",
-    );
+    await expect(
+      listFeishuDirectoryGroupsLive({ cfg: makeConfiguredCfg(), fallbackToStatic: false }),
+    ).rejects.toThrow("forbidden");
   });
 });

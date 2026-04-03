@@ -11,7 +11,7 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 type SessionEventHandler = (evt: unknown) => void;
 
 describe("subscribeEmbeddedPiSession", () => {
-  it("splits long single-line fenced blocks with reopen/close", () => {
+  it("splits long single-line fenced blocks with reopen/close", async () => {
     const onBlockReply = vi.fn();
     const { emit } = createParagraphChunkedBlockReplyHarness({
       onBlockReply,
@@ -23,6 +23,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     const text = `\`\`\`json\n${"x".repeat(120)}\n\`\`\``;
     emitAssistantTextDeltaAndEnd({ emit, text });
+    await Promise.resolve();
     expectFencedChunks(onBlockReply.mock.calls, "```json");
   });
   it("waits for auto-compaction retry and clears buffered text", async () => {

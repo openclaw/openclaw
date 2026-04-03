@@ -129,4 +129,26 @@ describe("subagents utils", () => {
     ];
     expect(resolveTarget(runs, "dup").error).toBe("ambiguous-label:dup");
   });
+
+  it("prefers the current live row when stale and current runs share a label on one child session", () => {
+    const runs = [
+      makeRun({
+        runId: "run-old",
+        childSessionKey: "agent:main:subagent:worker",
+        label: "same worker",
+        createdAt: NOW_MS - 10_000,
+        startedAt: NOW_MS - 10_000,
+        endedAt: NOW_MS - 5_000,
+      }),
+      makeRun({
+        runId: "run-new",
+        childSessionKey: "agent:main:subagent:worker",
+        label: "same worker",
+        createdAt: NOW_MS - 1_000,
+        startedAt: NOW_MS - 1_000,
+      }),
+    ];
+
+    expect(resolveTarget(runs, "same worker").entry?.runId).toBe("run-new");
+  });
 });

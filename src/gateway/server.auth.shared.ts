@@ -212,7 +212,9 @@ async function approvePendingPairingIfNeeded() {
   const pending = list.pending.at(0);
   expect(pending?.requestId).toBeDefined();
   if (pending?.requestId) {
-    await approveDevicePairing(pending.requestId);
+    await approveDevicePairing(pending.requestId, {
+      callerScopes: pending.scopes ?? ["operator.admin"],
+    });
   }
 }
 
@@ -390,6 +392,6 @@ export {
   writeTrustedProxyControlUiConfig,
 };
 export { ConnectErrorDetailCodes } from "./protocol/connect-error-details.js";
-export { getHandshakeTimeoutMs } from "./server-constants.js";
+export { getPreauthHandshakeTimeoutMsFromEnv } from "./handshake-timeouts.js";
 export { PROTOCOL_VERSION } from "./protocol/index.js";
 export { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";

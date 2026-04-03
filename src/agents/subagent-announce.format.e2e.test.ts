@@ -15,7 +15,7 @@ import {
 import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as piEmbedded from "./pi-embedded.js";
 import * as agentStep from "./tools/agent-step.js";
 
@@ -94,6 +94,9 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRunsExcludingRun: vi.fn((_sessionKey: string, _runId: string) => 0),
+    getLatestSubagentRunByChildSessionKey: vi.fn(
+      (_childSessionKey: string): MockSubagentRun | undefined => undefined,
+    ),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
     ),
@@ -187,7 +190,6 @@ vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
-  let matrixPlugin: (typeof import("../../extensions/matrix/src/channel.js"))["matrixPlugin"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -196,7 +198,6 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ matrixPlugin } = await import("../../extensions/matrix/src/channel.js"));
     ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
   });
 
@@ -290,6 +291,9 @@ describe("subagent announce formatting", () => {
       .mockImplementation((sessionKey: string, _runId: string) =>
         subagentRegistryMock.countPendingDescendantRuns(sessionKey),
       );
+    subagentRegistryMock.getLatestSubagentRunByChildSessionKey
+      .mockClear()
+      .mockReturnValue(undefined);
     subagentRegistryMock.listSubagentRunsForRequester.mockClear().mockReturnValue([]);
     subagentRegistryMock.replaceSubagentRunAfterSteer.mockClear().mockReturnValue(true);
     subagentRegistryMock.resolveRequesterForChildSession.mockClear().mockReturnValue(null);
@@ -298,11 +302,25 @@ describe("subagent announce formatting", () => {
     hookRunSubagentDeliveryTargetMock.mockClear();
     subagentDeliveryTargetHookMock.mockReset().mockResolvedValue(undefined);
     readLatestAssistantReplyMock.mockClear().mockResolvedValue("raw subagent reply");
-    chatHistoryMock.mockReset().mockResolvedValue({ messages: [] });
+    chatHistoryMock.mockReset().mockImplementation(async (sessionKey?: string) => {
+      const text = await readLatestAssistantReplyMock(sessionKey);
+      if (!text?.trim()) {
+        return { messages: [] };
+      }
+      return {
+        messages: [{ role: "assistant", content: [{ type: "text", text }] }],
+      };
+    });
     sessionStore = {};
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "matrix", plugin: matrixPlugin, source: "test" }]),
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          plugin: createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+          source: "test",
+        },
+      ]),
     );
     setConfigOverride({
       session: {
@@ -373,6 +391,63 @@ describe("subagent announce formatting", () => {
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
     expect(msg).toContain("completed successfully");
+  });
+
+  it("rechecks timed-out waits before announcing timeout when the run finishes immediately after", async () => {
+    const waitStatuses = [
+      { status: "timeout", startedAt: 10, endedAt: 20 },
+      { status: "ok", startedAt: 10, endedAt: 30 },
+    ];
+    callGatewaySpy.mockImplementation(async (req: unknown) => {
+      const typed = req as { method?: string; params?: { sessionKey?: string } };
+      if (typed.method === "agent") {
+        return await agentSpy(typed);
+      }
+      if (typed.method === "send") {
+        return await sendSpy(typed);
+      }
+      if (typed.method === "agent.wait") {
+        return waitStatuses.shift() ?? { status: "ok", startedAt: 10, endedAt: 30 };
+      }
+      if (typed.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Worker executed successfully" }],
+            },
+          ],
+        };
+      }
+      if (typed.method === "sessions.patch" || typed.method === "sessions.delete") {
+        return {};
+      }
+      return {};
+    });
+    readLatestAssistantReplyMock.mockResolvedValue("Worker executed successfully");
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-timeout-race",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: true,
+      startedAt: 10,
+      endedAt: 20,
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        message?: string;
+        internalEvents?: Array<{ status?: string; statusLabel?: string; result?: string }>;
+      };
+    };
+    expect(call?.params?.internalEvents?.[0]?.status).toBe("ok");
+    expect(call?.params?.internalEvents?.[0]?.statusLabel).toBe("completed successfully");
+    expect(call?.params?.internalEvents?.[0]?.result).toContain("Worker executed successfully");
   });
 
   it("uses child-run announce identity for direct idempotency", async () => {
@@ -533,6 +608,27 @@ describe("subagent announce formatting", () => {
     });
     expect(msg).toContain("final answer: 2");
     expect(msg).not.toContain("✅ Subagent");
+  });
+
+  it("keeps completion delivery enabled for extension channels captured from requester origin", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-bluebubbles",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "bluebubbles", to: "+1234567890", accountId: "acct-bb" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.to).toBe("+1234567890");
+    expect(call?.params?.accountId).toBe("acct-bb");
   });
 
   it("keeps direct completion announce delivery immediate even when sibling counters are non-zero", async () => {
@@ -1276,6 +1372,41 @@ describe("subagent announce formatting", () => {
     }
   });
 
+  it("uses hook-provided extension channel targets for completion delivery", async () => {
+    hasSubagentDeliveryTargetHook = true;
+    subagentDeliveryTargetHookMock.mockResolvedValueOnce({
+      origin: {
+        channel: "bluebubbles",
+        accountId: "acct-bb",
+        to: "+1234567890",
+      },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-hook-bluebubbles",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:12345",
+        accountId: "acct-1",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.to).toBe("+1234567890");
+    expect(call?.params?.accountId).toBe("acct-bb");
+  });
+
   it.each([
     {
       name: "delivery-target hook returns no override",
@@ -1283,7 +1414,7 @@ describe("subagent announce formatting", () => {
       hookResult: undefined,
     },
     {
-      name: "delivery-target hook returns non-deliverable channel",
+      name: "delivery-target hook returns internal channel",
       childRunId: "run-direct-thread-multi-no-origin",
       hookResult: {
         origin: {
@@ -1402,6 +1533,60 @@ describe("subagent announce formatting", () => {
 
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not report queued delivery when active announce queue drops a new item", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-drop-new",
+        lastChannel: "telegram",
+        lastTo: "123",
+        queueMode: "followup",
+        queueDebounceMs: 0,
+        queueCap: 1,
+        queueDrop: "new",
+      },
+    };
+
+    let resolveFirstSend = () => {};
+    const firstSendPending = new Promise<void>((resolve) => {
+      resolveFirstSend = resolve;
+    });
+    agentSpy.mockImplementation(async (_req: AgentCallRequest) => {
+      await firstSendPending;
+      return { runId: "run-main", status: "ok" };
+    });
+
+    const firstDidAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-queued-first",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      announceType: "subagent task",
+      ...defaultOutcomeAnnounce,
+    });
+
+    await vi.waitFor(() => {
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+    });
+
+    const secondDidAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-queued-dropped",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      announceType: "subagent task",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(firstDidAnnounce).toBe(true);
+    expect(secondDidAnnounce).toBe(false);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+
+    resolveFirstSend();
+    await Promise.resolve();
   });
 
   it("keeps queued idempotency unique for same-ms distinct child runs", async () => {
@@ -1834,6 +2019,33 @@ describe("subagent announce formatting", () => {
     expect(call?.expectFinal).toBe(true);
   });
 
+  it("keeps direct announce delivery enabled for extension channels", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-bluebubbles",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "bluebubbles", accountId: "acct-bb", to: "+1234567890" },
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: Record<string, unknown>;
+      expectFinal?: boolean;
+    };
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.to).toBe("+1234567890");
+    expect(call?.params?.accountId).toBe("acct-bb");
+    expect(call?.expectFinal).toBe(true);
+  });
+
   it("injects direct announce into requester subagent session as a user-turn agent call", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
@@ -2124,6 +2336,151 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("result from child b");
     expect(msg).not.toContain("stale result that should be filtered");
     expect(msg).not.toContain("placeholder waiting text that should be ignored");
+  });
+
+  it("dedupes stale direct-child rows before building child completion findings", async () => {
+    subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(
+      (sessionKey: string, scope?: { requesterRunId?: string }) => {
+        if (sessionKey !== "agent:main:subagent:parent") {
+          return [];
+        }
+        if (scope?.requesterRunId !== "run-parent-dedupe") {
+          return [];
+        }
+        return [
+          {
+            runId: "run-child-stale",
+            childSessionKey: "agent:main:subagent:parent:subagent:a",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task a",
+            label: "child-a",
+            cleanup: "keep",
+            createdAt: 10,
+            endedAt: 20,
+            cleanupCompletedAt: 21,
+            frozenResultText: "stale result from child a",
+            outcome: { status: "ok" },
+          },
+          {
+            runId: "run-child-current",
+            childSessionKey: "agent:main:subagent:parent:subagent:a",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task a",
+            label: "child-a",
+            cleanup: "keep",
+            createdAt: 11,
+            endedAt: 22,
+            cleanupCompletedAt: 23,
+            frozenResultText: "current result from child a",
+            outcome: { status: "ok" },
+          },
+          {
+            runId: "run-child-b",
+            childSessionKey: "agent:main:subagent:parent:subagent:b",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "child task b",
+            label: "child-b",
+            cleanup: "keep",
+            createdAt: 12,
+            endedAt: 24,
+            cleanupCompletedAt: 25,
+            frozenResultText: "result from child b",
+            outcome: { status: "ok" },
+          },
+        ];
+      },
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-dedupe",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "placeholder waiting text that should be ignored",
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message ?? "";
+    expect(msg).toContain("current result from child a");
+    expect(msg).toContain("result from child b");
+    expect(msg).not.toContain("stale result from child a");
+    expect(msg.match(/1\. child-a/g)?.length ?? 0).toBe(1);
+  });
+
+  it("does not announce a direct child that moved to a newer parent", async () => {
+    subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(
+      (sessionKey: string, scope?: { requesterRunId?: string }) => {
+        if (sessionKey !== "agent:main:subagent:old-parent") {
+          return [];
+        }
+        if (scope?.requesterRunId !== "run-old-parent-settled") {
+          return [];
+        }
+        return [
+          {
+            runId: "run-child-old-parent",
+            childSessionKey: "agent:main:subagent:shared-child",
+            requesterSessionKey: "agent:main:subagent:old-parent",
+            requesterDisplayKey: "old-parent",
+            task: "shared child task",
+            label: "shared-child",
+            cleanup: "keep",
+            createdAt: 10,
+            endedAt: 20,
+            cleanupCompletedAt: 21,
+            frozenResultText: "stale old parent result",
+            outcome: { status: "ok" },
+          },
+        ];
+      },
+    );
+    subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockImplementation(
+      (childSessionKey: string) => {
+        if (childSessionKey !== "agent:main:subagent:shared-child") {
+          return undefined;
+        }
+        return {
+          runId: "run-child-new-parent",
+          childSessionKey,
+          requesterSessionKey: "agent:main:subagent:new-parent",
+          requesterDisplayKey: "new-parent",
+          task: "shared child task",
+          label: "shared-child",
+          cleanup: "keep",
+          createdAt: 11,
+          endedAt: 22,
+          cleanupCompletedAt: 23,
+          frozenResultText: "current new parent result",
+          outcome: { status: "ok" },
+        };
+      },
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:old-parent",
+      childRunId: "run-old-parent-settled",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "old parent fallback reply",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message ?? "";
+    expect(msg).not.toContain("Child completion results:");
+    expect(msg).not.toContain("stale old parent result");
+    expect(msg).toContain("old parent fallback reply");
   });
 
   it("wakes an ended orchestrator run with settled child results before any upward announce", async () => {
@@ -2543,7 +2900,7 @@ describe("subagent announce formatting", () => {
           },
         },
         expectedSessionKey: "agent:main:main",
-        expectedDeliver: true,
+        expectedDeliver: false,
         expectedChannel: "discord",
       },
       {
@@ -2565,7 +2922,7 @@ describe("subagent announce formatting", () => {
           },
         },
         expectedSessionKey: "agent:main:main",
-        expectedDeliver: true,
+        expectedDeliver: false,
         expectedChannel: "discord",
       },
     ] as const;

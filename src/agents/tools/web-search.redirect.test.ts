@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { withStrictWebToolsEndpointMock } = vi.hoisted(() => ({
   withStrictWebToolsEndpointMock: vi.fn(),
@@ -8,19 +8,19 @@ vi.mock("./web-guarded-fetch.js", () => ({
   withStrictWebToolsEndpoint: withStrictWebToolsEndpointMock,
 }));
 
+let resolveCitationRedirectUrl: typeof import("./web-search-citation-redirect.js").resolveCitationRedirectUrl;
+
 describe("web_search redirect resolution hardening", () => {
-  async function resolveRedirectUrl() {
-    const module = await import("./web-search-citation-redirect.js");
-    return module.resolveCitationRedirectUrl;
-  }
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ resolveCitationRedirectUrl } = await import("./web-search-citation-redirect.js"));
+  });
 
   beforeEach(() => {
-    vi.resetModules();
     withStrictWebToolsEndpointMock.mockReset();
   });
 
   it("resolves redirects via SSRF-guarded HEAD requests", async () => {
-    const resolve = await resolveRedirectUrl();
     withStrictWebToolsEndpointMock.mockImplementation(async (_params, run) => {
       return await run({
         response: new Response(null, { status: 200 }),
@@ -28,7 +28,7 @@ describe("web_search redirect resolution hardening", () => {
       });
     });
 
-    const resolved = await resolve("https://example.com/start");
+    const resolved = await resolveCitationRedirectUrl("https://example.com/start");
     expect(resolved).toBe("https://example.com/final");
     expect(withStrictWebToolsEndpointMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -41,8 +41,9 @@ describe("web_search redirect resolution hardening", () => {
   });
 
   it("falls back to the original URL when guarded resolution fails", async () => {
-    const resolve = await resolveRedirectUrl();
     withStrictWebToolsEndpointMock.mockRejectedValue(new Error("blocked"));
-    await expect(resolve("https://example.com/start")).resolves.toBe("https://example.com/start");
+    await expect(resolveCitationRedirectUrl("https://example.com/start")).resolves.toBe(
+      "https://example.com/start",
+    );
   });
 });

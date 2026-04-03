@@ -1,54 +1,51 @@
-import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMatrixMigrationAccountTarget } from "./matrix-migration-config.js";
+import {
+  MATRIX_OPS_ACCESS_TOKEN,
+  MATRIX_OPS_ACCOUNT_ID,
+  MATRIX_OPS_USER_ID,
+  MATRIX_TEST_HOMESERVER,
+  writeMatrixCredentials,
+} from "./matrix.test-helpers.js";
 
-function writeFile(filePath: string, value: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, value, "utf8");
+function resolveOpsTarget(cfg: OpenClawConfig, env = process.env) {
+  return resolveMatrixMigrationAccountTarget({
+    cfg,
+    env,
+    accountId: MATRIX_OPS_ACCOUNT_ID,
+  });
 }
 
 describe("resolveMatrixMigrationAccountTarget", () => {
   it("reuses stored user identity for token-only configs when the access token matches", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
-      writeFile(
-        path.join(stateDir, "credentials", "matrix", "credentials-ops.json"),
-        JSON.stringify(
-          {
-            homeserver: "https://matrix.example.org",
-            userId: "@ops-bot:example.org",
-            accessToken: "tok-ops",
-            deviceId: "DEVICE-OPS",
-          },
-          null,
-          2,
-        ),
-      );
+      writeMatrixCredentials(stateDir, {
+        accountId: MATRIX_OPS_ACCOUNT_ID,
+        deviceId: "DEVICE-OPS",
+        accessToken: MATRIX_OPS_ACCESS_TOKEN,
+      });
 
       const cfg: OpenClawConfig = {
         channels: {
           matrix: {
             accounts: {
               ops: {
-                homeserver: "https://matrix.example.org",
-                accessToken: "tok-ops",
+                homeserver: MATRIX_TEST_HOMESERVER,
+                accessToken: MATRIX_OPS_ACCESS_TOKEN,
               },
             },
           },
         },
       };
 
-      const target = resolveMatrixMigrationAccountTarget({
-        cfg,
-        env: process.env,
-        accountId: "ops",
-      });
+      const target = resolveOpsTarget(cfg);
 
       expect(target).not.toBeNull();
-      expect(target?.userId).toBe("@ops-bot:example.org");
+      expect(target?.userId).toBe(MATRIX_OPS_USER_ID);
       expect(target?.storedDeviceId).toBe("DEVICE-OPS");
     });
   });
@@ -56,26 +53,19 @@ describe("resolveMatrixMigrationAccountTarget", () => {
   it("ignores stored device IDs from stale cached Matrix credentials", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
-      writeFile(
-        path.join(stateDir, "credentials", "matrix", "credentials-ops.json"),
-        JSON.stringify(
-          {
-            homeserver: "https://matrix.example.org",
-            userId: "@old-bot:example.org",
-            accessToken: "tok-old",
-            deviceId: "DEVICE-OLD",
-          },
-          null,
-          2,
-        ),
-      );
+      writeMatrixCredentials(stateDir, {
+        accountId: MATRIX_OPS_ACCOUNT_ID,
+        userId: "@old-bot:example.org",
+        accessToken: "tok-old",
+        deviceId: "DEVICE-OLD",
+      });
 
       const cfg: OpenClawConfig = {
         channels: {
           matrix: {
             accounts: {
               ops: {
-                homeserver: "https://matrix.example.org",
+                homeserver: MATRIX_TEST_HOMESERVER,
                 userId: "@new-bot:example.org",
                 accessToken: "tok-new",
               },
@@ -84,11 +74,7 @@ describe("resolveMatrixMigrationAccountTarget", () => {
         },
       };
 
-      const target = resolveMatrixMigrationAccountTarget({
-        cfg,
-        env: process.env,
-        accountId: "ops",
-      });
+      const target = resolveOpsTarget(cfg);
 
       expect(target).not.toBeNull();
       expect(target?.userId).toBe("@new-bot:example.org");
@@ -100,26 +86,19 @@ describe("resolveMatrixMigrationAccountTarget", () => {
   it("does not trust stale stored creds on the same homeserver when the token changes", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
-      writeFile(
-        path.join(stateDir, "credentials", "matrix", "credentials-ops.json"),
-        JSON.stringify(
-          {
-            homeserver: "https://matrix.example.org",
-            userId: "@old-bot:example.org",
-            accessToken: "tok-old",
-            deviceId: "DEVICE-OLD",
-          },
-          null,
-          2,
-        ),
-      );
+      writeMatrixCredentials(stateDir, {
+        accountId: MATRIX_OPS_ACCOUNT_ID,
+        userId: "@old-bot:example.org",
+        accessToken: "tok-old",
+        deviceId: "DEVICE-OLD",
+      });
 
       const cfg: OpenClawConfig = {
         channels: {
           matrix: {
             accounts: {
               ops: {
-                homeserver: "https://matrix.example.org",
+                homeserver: MATRIX_TEST_HOMESERVER,
                 accessToken: "tok-new",
               },
             },
@@ -127,11 +106,7 @@ describe("resolveMatrixMigrationAccountTarget", () => {
         },
       };
 
-      const target = resolveMatrixMigrationAccountTarget({
-        cfg,
-        env: process.env,
-        accountId: "ops",
-      });
+      const target = resolveOpsTarget(cfg);
 
       expect(target).toBeNull();
     });
@@ -140,43 +115,31 @@ describe("resolveMatrixMigrationAccountTarget", () => {
   it("does not inherit the base userId for non-default token-only accounts", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
-      writeFile(
-        path.join(stateDir, "credentials", "matrix", "credentials-ops.json"),
-        JSON.stringify(
-          {
-            homeserver: "https://matrix.example.org",
-            userId: "@ops-bot:example.org",
-            accessToken: "tok-ops",
-            deviceId: "DEVICE-OPS",
-          },
-          null,
-          2,
-        ),
-      );
+      writeMatrixCredentials(stateDir, {
+        accountId: MATRIX_OPS_ACCOUNT_ID,
+        deviceId: "DEVICE-OPS",
+        accessToken: MATRIX_OPS_ACCESS_TOKEN,
+      });
 
       const cfg: OpenClawConfig = {
         channels: {
           matrix: {
-            homeserver: "https://matrix.example.org",
+            homeserver: MATRIX_TEST_HOMESERVER,
             userId: "@base-bot:example.org",
             accounts: {
               ops: {
-                homeserver: "https://matrix.example.org",
-                accessToken: "tok-ops",
+                homeserver: MATRIX_TEST_HOMESERVER,
+                accessToken: MATRIX_OPS_ACCESS_TOKEN,
               },
             },
           },
         },
       };
 
-      const target = resolveMatrixMigrationAccountTarget({
-        cfg,
-        env: process.env,
-        accountId: "ops",
-      });
+      const target = resolveOpsTarget(cfg);
 
       expect(target).not.toBeNull();
-      expect(target?.userId).toBe("@ops-bot:example.org");
+      expect(target?.userId).toBe(MATRIX_OPS_USER_ID);
       expect(target?.storedDeviceId).toBe("DEVICE-OPS");
     });
   });
@@ -186,24 +149,20 @@ describe("resolveMatrixMigrationAccountTarget", () => {
       const cfg: OpenClawConfig = {
         channels: {
           matrix: {
-            homeserver: "https://matrix.example.org",
+            homeserver: MATRIX_TEST_HOMESERVER,
             userId: "@base-bot:example.org",
             accessToken: "tok-base",
             accounts: {
               ops: {
-                homeserver: "https://matrix.example.org",
-                userId: "@ops-bot:example.org",
+                homeserver: MATRIX_TEST_HOMESERVER,
+                userId: MATRIX_OPS_USER_ID,
               },
             },
           },
         },
       };
 
-      const target = resolveMatrixMigrationAccountTarget({
-        cfg,
-        env: process.env,
-        accountId: "ops",
-      });
+      const target = resolveOpsTarget(cfg);
 
       expect(target).toBeNull();
     });
@@ -217,19 +176,15 @@ describe("resolveMatrixMigrationAccountTarget", () => {
             matrix: {
               accounts: {
                 ops: {
-                  homeserver: "https://matrix.example.org",
-                  userId: "@ops-bot:example.org",
+                  homeserver: MATRIX_TEST_HOMESERVER,
+                  userId: MATRIX_OPS_USER_ID,
                 },
               },
             },
           },
         };
 
-        const target = resolveMatrixMigrationAccountTarget({
-          cfg,
-          env: process.env,
-          accountId: "ops",
-        });
+        const target = resolveOpsTarget(cfg);
 
         expect(target).toBeNull();
       },

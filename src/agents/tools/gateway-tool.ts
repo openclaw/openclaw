@@ -1,7 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveConfigSnapshotHash } from "../../config/io.js";
+import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
+import { applyLegacyMigrations } from "../../config/legacy.js";
+import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -17,6 +19,7 @@ import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
+const PROTECTED_GATEWAY_CONFIG_PATHS = ["tools.exec.ask", "tools.exec.security"] as const;
 
 function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   if (!snapshot || typeof snapshot !== "object") {
@@ -29,6 +32,71 @@ function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
     raw: typeof rawValue === "string" ? rawValue : undefined,
   });
   return hash ?? undefined;
+}
+
+function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
+  if (!snapshot || typeof snapshot !== "object") {
+    throw new Error("config.get response is not an object.");
+  }
+  const config = (snapshot as { config?: unknown }).config;
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error("config.get response is missing a config object.");
+  }
+  return config as Record<string, unknown>;
+}
+
+function parseGatewayConfigMutationRaw(
+  raw: string,
+  action: "config.apply" | "config.patch",
+): unknown {
+  const parsedRes = parseConfigJson5(raw);
+  if (!parsedRes.ok) {
+    throw new Error(parsedRes.error);
+  }
+  if (
+    !parsedRes.parsed ||
+    typeof parsedRes.parsed !== "object" ||
+    Array.isArray(parsedRes.parsed)
+  ) {
+    throw new Error(`${action} raw must be an object.`);
+  }
+  return parsedRes.parsed;
+}
+
+function getValueAtPath(config: Record<string, unknown>, path: string): unknown {
+  let current: unknown = config;
+  for (const part of path.split(".")) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function assertGatewayConfigMutationAllowed(params: {
+  action: "config.apply" | "config.patch";
+  currentConfig: Record<string, unknown>;
+  raw: string;
+}): void {
+  const parsed = parseGatewayConfigMutationRaw(params.raw, params.action);
+  const nextConfig =
+    params.action === "config.apply"
+      ? (parsed as Record<string, unknown>)
+      : (applyMergePatch(params.currentConfig, parsed, {
+          mergeObjectArraysById: true,
+        }) as Record<string, unknown>);
+  const migratedNextConfig = applyLegacyMigrations(nextConfig).next ?? nextConfig;
+  const changedProtectedPaths = PROTECTED_GATEWAY_CONFIG_PATHS.filter(
+    (path) =>
+      getValueAtPath(params.currentConfig, path) !== getValueAtPath(migratedNextConfig, path),
+  );
+  if (changedProtectedPaths.length === 0) {
+    return;
+  }
+  throw new Error(
+    `gateway ${params.action} cannot change protected config paths: ${changedProtectedPaths.join(", ")}`,
+  );
 }
 
 const GATEWAY_ACTIONS = [
@@ -99,8 +167,8 @@ export function createGatewayTool(opts?: {
             : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
-        // Extract channel + threadId for routing after restart
-        // Supports both :thread: (most channels) and :topic: (Telegram)
+        // Extract channel + threadId for routing after restart.
+        // Uses generic :thread: parsing plus plugin-owned session grammars.
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
         const payload: RestartSentinelPayload = {
           kind: "restart",
@@ -154,20 +222,24 @@ export function createGatewayTool(opts?: {
       const resolveConfigWriteParams = async (): Promise<{
         raw: string;
         baseHash: string;
+        snapshotConfig: Record<string, unknown>;
         sessionKey: string | undefined;
         note: string | undefined;
         restartDelayMs: number | undefined;
       }> => {
         const raw = readStringParam(params, "raw", { required: true });
+        const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
+        // Always fetch config.get so we can compare protected exec settings
+        // against the current snapshot before forwarding any write RPC.
+        const snapshotConfig = getSnapshotConfig(snapshot);
         let baseHash = readStringParam(params, "baseHash");
         if (!baseHash) {
-          const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
           baseHash = resolveBaseHashFromSnapshot(snapshot);
         }
         if (!baseHash) {
           throw new Error("Missing baseHash from config snapshot.");
         }
-        return { raw, baseHash, ...resolveGatewayWriteMeta() };
+        return { raw, baseHash, snapshotConfig, ...resolveGatewayWriteMeta() };
       };
 
       if (action === "config.get") {
@@ -183,8 +255,13 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result });
       }
       if (action === "config.apply") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+        const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs } =
           await resolveConfigWriteParams();
+        assertGatewayConfigMutationAllowed({
+          action: "config.apply",
+          currentConfig: snapshotConfig,
+          raw,
+        });
         const result = await callGatewayTool("config.apply", gatewayOpts, {
           raw,
           baseHash,
@@ -195,8 +272,13 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result });
       }
       if (action === "config.patch") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+        const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs } =
           await resolveConfigWriteParams();
+        assertGatewayConfigMutationAllowed({
+          action: "config.patch",
+          currentConfig: snapshotConfig,
+          raw,
+        });
         const result = await callGatewayTool("config.patch", gatewayOpts, {
           raw,
           baseHash,

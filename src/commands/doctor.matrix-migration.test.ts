@@ -1,23 +1,19 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createDoctorRuntime,
   mockDoctorConfigSnapshot,
   runStartupMatrixMigration,
 } from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
+import { doctorCommand } from "./doctor.js";
 
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders: vi.fn(() => []),
 }));
 
 const DOCTOR_MIGRATION_TIMEOUT_MS = process.platform === "win32" ? 60_000 : 45_000;
-let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
 describe("doctor command", () => {
-  beforeAll(async () => {
-    ({ doctorCommand } = await import("./doctor.js"));
-  });
-
   it(
     "runs Matrix startup migration during repair flows",
     { timeout: DOCTOR_MIGRATION_TIMEOUT_MS },

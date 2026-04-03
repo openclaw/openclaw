@@ -9,6 +9,11 @@ import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
+  isDangerousHostEnvOverrideVarName,
+  isDangerousHostEnvVarName,
+  normalizeEnvVarKey,
+} from "../infra/host-env-security.js";
+import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonNodeBinDir,
@@ -27,6 +32,7 @@ export type GatewayInstallPlan = {
 function collectAuthProfileServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   authStore?: AuthProfileStore;
+  warn?: DaemonInstallWarnFn;
 }): Record<string, string> {
   const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
   const entries: Record<string, string> = {};
@@ -41,11 +47,22 @@ function collectAuthProfileServiceEnvVars(params: {
     if (!ref || ref.source !== "env") {
       continue;
     }
-    const value = params.env[ref.id]?.trim();
+    const key = normalizeEnvVarKey(ref.id, { portable: true });
+    if (!key) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      params.warn?.(
+        `Auth profile env ref "${key}" blocked by host-env security policy`,
+        "Auth profile",
+      );
+      continue;
+    }
+    const value = params.env[key]?.trim();
     if (!value) {
       continue;
     }
-    entries[ref.id] = value;
+    entries[key] = value;
   }
 
   return entries;
@@ -55,6 +72,7 @@ function buildGatewayInstallEnvironment(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
+  warn?: DaemonInstallWarnFn;
   serviceEnvironment: Record<string, string | undefined>;
 }): Record<string, string | undefined> {
   const environment: Record<string, string | undefined> = {
@@ -65,6 +83,7 @@ function buildGatewayInstallEnvironment(params: {
     ...collectAuthProfileServiceEnvVars({
       env: params.env,
       authStore: params.authStore,
+      warn: params.warn,
     }),
   };
   Object.assign(environment, params.serviceEnvironment);
@@ -125,6 +144,7 @@ export async function buildGatewayInstallPlan(params: {
       env: params.env,
       config: params.config,
       authStore: params.authStore,
+      warn: params.warn,
       serviceEnvironment,
     }),
   };

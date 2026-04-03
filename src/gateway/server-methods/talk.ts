@@ -2,8 +2,8 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { buildTalkConfigResponse, resolveActiveTalkProviderConfig } from "../../config/talk.js";
 import type { TalkProviderConfig } from "../../config/types.gateway.js";
-import type { OpenClawConfig, TtsConfig } from "../../config/types.js";
-import { normalizeSpeechProviderId } from "../../tts/provider-registry.js";
+import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
+import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../tts/provider-registry.js";
 import { synthesizeSpeech, type TtsDirectiveOverrides } from "../../tts/tts.js";
 import {
   ErrorCodes,
@@ -18,7 +18,6 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
 const TALK_SECRETS_SCOPE = "operator.talk.secrets";
-type ElevenLabsVoiceSettings = NonNullable<NonNullable<TtsConfig["elevenlabs"]>["voiceSettings"]>;
 
 function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -33,24 +32,9 @@ function trimString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function finiteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function optionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function plainObject(value: unknown): Record<string, unknown> | undefined {
+function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function normalizeTextNormalization(value: unknown): "auto" | "on" | "off" | undefined {
-  const normalized = trimString(value)?.toLowerCase();
-  return normalized === "auto" || normalized === "on" || normalized === "off"
-    ? normalized
     : undefined;
 }
 
@@ -78,100 +62,42 @@ function resolveTalkVoiceId(
   return requested;
 }
 
-function readTalkVoiceSettings(
-  providerConfig: TalkProviderConfig,
-): ElevenLabsVoiceSettings | undefined {
-  const source = plainObject(providerConfig.voiceSettings);
-  if (!source) {
-    return undefined;
-  }
-  const stability = finiteNumber(source.stability);
-  const similarityBoost = finiteNumber(source.similarityBoost);
-  const style = finiteNumber(source.style);
-  const useSpeakerBoost = optionalBoolean(source.useSpeakerBoost);
-  const speed = finiteNumber(source.speed);
-  const voiceSettings = {
-    ...(stability == null ? {} : { stability }),
-    ...(similarityBoost == null ? {} : { similarityBoost }),
-    ...(style == null ? {} : { style }),
-    ...(useSpeakerBoost == null ? {} : { useSpeakerBoost }),
-    ...(speed == null ? {} : { speed }),
-  };
-  return Object.keys(voiceSettings).length > 0 ? voiceSettings : undefined;
-}
-
 function buildTalkTtsConfig(
   config: OpenClawConfig,
 ):
   | { cfg: OpenClawConfig; provider: string; providerConfig: TalkProviderConfig }
   | { error: string } {
   const resolved = resolveActiveTalkProviderConfig(config.talk);
-  const provider = normalizeSpeechProviderId(resolved?.provider);
+  const provider = canonicalizeSpeechProviderId(resolved?.provider, config);
   if (!resolved || !provider) {
     return { error: "talk.speak unavailable: talk provider not configured" };
   }
 
+  const speechProvider = getSpeechProvider(provider, config);
+  if (!speechProvider) {
+    return {
+      error: `talk.speak unavailable: speech provider "${provider}" does not support Talk mode`,
+    };
+  }
+
   const baseTts = config.messages?.tts ?? {};
   const providerConfig = resolved.config;
+  const resolvedProviderConfig =
+    speechProvider.resolveTalkConfig?.({
+      cfg: config,
+      baseTtsConfig: baseTts as Record<string, unknown>,
+      talkProviderConfig: providerConfig,
+      timeoutMs: baseTts.timeoutMs ?? 30_000,
+    }) ?? providerConfig;
   const talkTts: TtsConfig = {
     ...baseTts,
     auto: "always",
     provider,
+    providers: {
+      ...((asRecord(baseTts.providers) ?? {}) as TtsProviderConfigMap),
+      [provider]: resolvedProviderConfig,
+    },
   };
-  const baseUrl = trimString(providerConfig.baseUrl);
-  const voiceId = trimString(providerConfig.voiceId);
-  const modelId = trimString(providerConfig.modelId);
-  const languageCode = trimString(providerConfig.languageCode);
-
-  if (provider === "elevenlabs") {
-    const seed = finiteNumber(providerConfig.seed);
-    const applyTextNormalization = normalizeTextNormalization(
-      providerConfig.applyTextNormalization,
-    );
-    const voiceSettings = readTalkVoiceSettings(providerConfig);
-    talkTts.elevenlabs = {
-      ...baseTts.elevenlabs,
-      ...(providerConfig.apiKey === undefined ? {} : { apiKey: providerConfig.apiKey }),
-      ...(baseUrl == null ? {} : { baseUrl }),
-      ...(voiceId == null ? {} : { voiceId }),
-      ...(modelId == null ? {} : { modelId }),
-      ...(seed == null ? {} : { seed }),
-      ...(applyTextNormalization == null ? {} : { applyTextNormalization }),
-      ...(languageCode == null ? {} : { languageCode }),
-      ...(voiceSettings == null ? {} : { voiceSettings }),
-    };
-  } else if (provider === "openai") {
-    const speed = finiteNumber(providerConfig.speed);
-    const instructions = trimString(providerConfig.instructions);
-    talkTts.openai = {
-      ...baseTts.openai,
-      ...(providerConfig.apiKey === undefined ? {} : { apiKey: providerConfig.apiKey }),
-      ...(baseUrl == null ? {} : { baseUrl }),
-      ...(modelId == null ? {} : { model: modelId }),
-      ...(voiceId == null ? {} : { voice: voiceId }),
-      ...(speed == null ? {} : { speed }),
-      ...(instructions == null ? {} : { instructions }),
-    };
-  } else if (provider === "microsoft") {
-    const outputFormat = trimString(providerConfig.outputFormat);
-    const pitch = trimString(providerConfig.pitch);
-    const rate = trimString(providerConfig.rate);
-    const volume = trimString(providerConfig.volume);
-    const proxy = trimString(providerConfig.proxy);
-    const timeoutMs = finiteNumber(providerConfig.timeoutMs);
-    talkTts.microsoft = {
-      ...baseTts.microsoft,
-      enabled: true,
-      ...(voiceId == null ? {} : { voice: voiceId }),
-      ...(languageCode == null ? {} : { lang: languageCode }),
-      ...(outputFormat == null ? {} : { outputFormat }),
-      ...(pitch == null ? {} : { pitch }),
-      ...(rate == null ? {} : { rate }),
-      ...(volume == null ? {} : { volume }),
-      ...(proxy == null ? {} : { proxy }),
-      ...(timeoutMs == null ? {} : { timeoutMs }),
-    };
-  }
 
   return {
     provider,
@@ -189,60 +115,31 @@ function buildTalkTtsConfig(
 function buildTalkSpeakOverrides(
   provider: string,
   providerConfig: TalkProviderConfig,
+  config: OpenClawConfig,
   params: Record<string, unknown>,
 ): TtsDirectiveOverrides {
-  const voiceId = resolveTalkVoiceId(providerConfig, trimString(params.voiceId));
-  const modelId = trimString(params.modelId);
-  const outputFormat = trimString(params.outputFormat);
-  const speed = finiteNumber(params.speed);
-  const seed = finiteNumber(params.seed);
-  const normalize = normalizeTextNormalization(params.normalize);
-  const language = trimString(params.language)?.toLowerCase();
-  const overrides: TtsDirectiveOverrides = { provider };
-
-  if (provider === "elevenlabs") {
-    const voiceSettings = {
-      ...(speed == null ? {} : { speed }),
-      ...(finiteNumber(params.stability) == null
-        ? {}
-        : { stability: finiteNumber(params.stability) }),
-      ...(finiteNumber(params.similarity) == null
-        ? {}
-        : { similarityBoost: finiteNumber(params.similarity) }),
-      ...(finiteNumber(params.style) == null ? {} : { style: finiteNumber(params.style) }),
-      ...(optionalBoolean(params.speakerBoost) == null
-        ? {}
-        : { useSpeakerBoost: optionalBoolean(params.speakerBoost) }),
-    };
-    overrides.elevenlabs = {
-      ...(voiceId == null ? {} : { voiceId }),
-      ...(modelId == null ? {} : { modelId }),
-      ...(outputFormat == null ? {} : { outputFormat }),
-      ...(seed == null ? {} : { seed }),
-      ...(normalize == null ? {} : { applyTextNormalization: normalize }),
-      ...(language == null ? {} : { languageCode: language }),
-      ...(Object.keys(voiceSettings).length === 0 ? {} : { voiceSettings }),
-    };
-    return overrides;
+  const speechProvider = getSpeechProvider(provider, config);
+  if (!speechProvider?.resolveTalkOverrides) {
+    return { provider };
   }
-
-  if (provider === "openai") {
-    overrides.openai = {
-      ...(voiceId == null ? {} : { voice: voiceId }),
-      ...(modelId == null ? {} : { model: modelId }),
-      ...(speed == null ? {} : { speed }),
-    };
-    return overrides;
+  const providerOverrides = speechProvider.resolveTalkOverrides({
+    talkProviderConfig: providerConfig,
+    params: {
+      ...params,
+      ...(resolveTalkVoiceId(providerConfig, trimString(params.voiceId)) == null
+        ? {}
+        : { voiceId: resolveTalkVoiceId(providerConfig, trimString(params.voiceId)) }),
+    },
+  });
+  if (!providerOverrides || Object.keys(providerOverrides).length === 0) {
+    return { provider };
   }
-
-  if (provider === "microsoft") {
-    overrides.microsoft = {
-      ...(voiceId == null ? {} : { voice: voiceId }),
-      ...(outputFormat == null ? {} : { outputFormat }),
-    };
-  }
-
-  return overrides;
+  return {
+    provider,
+    providerOverrides: {
+      [provider]: providerOverrides,
+    },
+  };
 }
 
 function inferMimeType(
@@ -350,7 +247,12 @@ export const talkHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      const overrides = buildTalkSpeakOverrides(setup.provider, setup.providerConfig, params);
+      const overrides = buildTalkSpeakOverrides(
+        setup.provider,
+        setup.providerConfig,
+        snapshot.config,
+        params,
+      );
       const result = await synthesizeSpeech({
         text,
         cfg: setup.cfg,

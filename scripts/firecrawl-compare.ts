@@ -1,4 +1,5 @@
-import { extractReadableContent, fetchFirecrawlContent } from "../src/agents/tools/web-tools.js";
+import { fetchFirecrawlContent } from "../extensions/firecrawl/api.ts";
+import { extractReadableContent } from "../src/agents/tools/web-tools.js";
 
 const DEFAULT_URLS = [
   "https://en.wikipedia.org/wiki/Web_scraping",

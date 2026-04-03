@@ -329,7 +329,6 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 - `status`、`describe`
 - `pending`、`approve`、`reject`（配对）
 - `notify`（macOS `system.notify`）
-- `run`（macOS `system.run`）
 - `camera_snap`、`camera_clip`、`screen_record`
 - `location_get`
 
@@ -339,9 +338,9 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 - 图像返回图像块 + `MEDIA:<path>`。
 - 视频返回 `FILE:<path>`（mp4）。
 - 位置返回 JSON 负载（lat/lon/accuracy/timestamp）。
-- `run` 参数：`command` argv 数组；可选的 `cwd`、`env`（`KEY=VAL`）、`commandTimeoutMs`、`invokeTimeoutMs`、`needsScreenRecording`。
+- 节点 shell 执行现在统一通过带 `host=node` 的 `exec` 工具；`nodes` 保持为显式节点命令的 RPC 表面。
 
-示例（`run`）：
+示例（节点能力）：
 
 ```json
 {
@@ -496,11 +495,11 @@ Canvas 渲染：
 
 1. `nodes` → `status`
 2. 在选定的节点上 `describe`
-3. `notify` / `run` / `camera_snap` / `screen_record`
+3. `notify` / `invoke` / `camera_snap` / `screen_record`
 
 ## 安全性
 
-- 避免直接 `system.run`；仅在用户明确同意时使用 `nodes` → `run`。
+- 避免直接 `system.run`；仅在用户明确同意时使用带 `host=node` 的 `exec` 工具。
 - 尊重用户对摄像头/屏幕捕获的同意。
 - 在调用媒体命令前使用 `status/describe` 确保权限。
 

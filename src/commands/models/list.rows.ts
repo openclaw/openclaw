@@ -4,6 +4,7 @@ import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
 import { resolveModelWithRegistry } from "../../agents/pi-embedded-runner/model.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
@@ -26,7 +27,7 @@ type RowBuilderContext = {
 };
 
 function matchesRowFilter(filter: RowFilter, model: { provider: string; baseUrl?: string }) {
-  if (filter.provider && model.provider.toLowerCase() !== filter.provider) {
+  if (filter.provider && normalizeProviderId(model.provider) !== filter.provider) {
     return false;
   }
   if (filter.local && !isLocalBaseUrl(model.baseUrl ?? "")) {
@@ -110,7 +111,7 @@ export async function appendCatalogSupplementRows(params: {
   for (const entry of catalog) {
     if (
       params.context.filter.provider &&
-      entry.provider.toLowerCase() !== params.context.filter.provider
+      normalizeProviderId(entry.provider) !== params.context.filter.provider
     ) {
       continue;
     }
@@ -148,7 +149,7 @@ export function appendConfiguredRows(params: {
   for (const entry of params.entries) {
     if (
       params.context.filter.provider &&
-      entry.ref.provider.toLowerCase() !== params.context.filter.provider
+      normalizeProviderId(entry.ref.provider) !== params.context.filter.provider
     ) {
       continue;
     }

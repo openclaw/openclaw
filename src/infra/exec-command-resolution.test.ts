@@ -4,11 +4,14 @@ import { describe, expect, it } from "vitest";
 import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   evaluateExecAllowlist,
+  resolvePlannedSegmentArgv,
   normalizeSafeBins,
   parseExecArgvToken,
-  resolveAllowlistCandidatePath,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
+  resolveAllowlistCandidatePath,
+  resolveExecutionTargetCandidatePath,
+  resolvePolicyTargetCandidatePath,
 } from "./exec-approvals.js";
 
 function buildNestedEnvShellCommand(params: {
@@ -59,70 +62,99 @@ function createPathExecutableFixture(params?: { executable?: string }): {
   return { exeName, exePath, binDir };
 }
 
-describe("exec-command-resolution", () => {
-  it("resolves PATH, relative, and quoted executables", () => {
-    const cases = [
-      {
-        name: "PATH executable",
-        setup: () => {
-          const fixture = createPathExecutableFixture();
-          return {
-            command: "rg -n foo",
-            cwd: undefined as string | undefined,
-            envPath: makePathEnv(fixture.binDir),
-            expectedPath: fixture.exePath,
-            expectedExecutableName: fixture.exeName,
-          };
-        },
-      },
-      {
-        name: "relative executable",
-        setup: () => {
-          const dir = makeTempDir();
-          const cwd = path.join(dir, "project");
-          const scriptName = process.platform === "win32" ? "run.cmd" : "run.sh";
-          const script = path.join(cwd, "scripts", scriptName);
-          fs.mkdirSync(path.dirname(script), { recursive: true });
-          fs.writeFileSync(script, "");
-          fs.chmodSync(script, 0o755);
-          return {
-            command: `./scripts/${scriptName} --flag`,
-            cwd,
-            envPath: undefined as NodeJS.ProcessEnv | undefined,
-            expectedPath: script,
-            expectedExecutableName: undefined,
-          };
-        },
-      },
-      {
-        name: "quoted executable",
-        setup: () => {
-          const dir = makeTempDir();
-          const cwd = path.join(dir, "project");
-          const scriptName = process.platform === "win32" ? "tool.cmd" : "tool";
-          const script = path.join(cwd, "bin", scriptName);
-          fs.mkdirSync(path.dirname(script), { recursive: true });
-          fs.writeFileSync(script, "");
-          fs.chmodSync(script, 0o755);
-          return {
-            command: `"./bin/${scriptName}" --version`,
-            cwd,
-            envPath: undefined as NodeJS.ProcessEnv | undefined,
-            expectedPath: script,
-            expectedExecutableName: undefined,
-          };
-        },
-      },
-    ] as const;
+function expectResolutionPathCase(params: {
+  name: string;
+  resolution: ReturnType<typeof resolveCommandResolution>;
+  cwd?: string;
+  expectedExecutionPath: string;
+  expectedPolicyPath?: string;
+  expectedExecutableName?: string;
+}): void {
+  expect(
+    resolveExecutionTargetCandidatePath(params.resolution ?? null, params.cwd),
+    `${params.name} execution`,
+  ).toBe(params.expectedExecutionPath);
+  if (params.expectedPolicyPath !== undefined) {
+    expect(
+      resolvePolicyTargetCandidatePath(params.resolution ?? null, params.cwd),
+      `${params.name} policy`,
+    ).toBe(params.expectedPolicyPath);
+  }
+  if (params.expectedExecutableName) {
+    expect(params.resolution?.execution.executableName, params.name).toBe(
+      params.expectedExecutableName,
+    );
+  }
+}
 
-    for (const testCase of cases) {
-      const setup = testCase.setup();
-      const res = resolveCommandResolution(setup.command, setup.cwd, setup.envPath);
-      expect(res?.resolvedPath, testCase.name).toBe(setup.expectedPath);
-      if (setup.expectedExecutableName) {
-        expect(res?.executableName, testCase.name).toBe(setup.expectedExecutableName);
-      }
-    }
+type CommandResolutionFixture = {
+  command: string;
+  cwd?: string;
+  envPath?: NodeJS.ProcessEnv;
+  expectedExecutionPath: string;
+  expectedExecutableName?: string;
+};
+
+describe("exec-command-resolution", () => {
+  it.each([
+    {
+      name: "PATH executable",
+      setup: (): CommandResolutionFixture => {
+        const fixture = createPathExecutableFixture();
+        return {
+          command: "rg -n foo",
+          cwd: undefined,
+          envPath: makePathEnv(fixture.binDir),
+          expectedExecutionPath: fixture.exePath,
+          expectedExecutableName: fixture.exeName,
+        };
+      },
+    },
+    {
+      name: "relative executable",
+      setup: (): CommandResolutionFixture => {
+        const dir = makeTempDir();
+        const cwd = path.join(dir, "project");
+        const scriptName = process.platform === "win32" ? "run.cmd" : "run.sh";
+        const script = path.join(cwd, "scripts", scriptName);
+        fs.mkdirSync(path.dirname(script), { recursive: true });
+        fs.writeFileSync(script, "");
+        fs.chmodSync(script, 0o755);
+        return {
+          command: `./scripts/${scriptName} --flag`,
+          cwd,
+          envPath: undefined,
+          expectedExecutionPath: script,
+        };
+      },
+    },
+    {
+      name: "quoted executable",
+      setup: (): CommandResolutionFixture => {
+        const dir = makeTempDir();
+        const cwd = path.join(dir, "project");
+        const scriptName = process.platform === "win32" ? "tool.cmd" : "tool";
+        const script = path.join(cwd, "bin", scriptName);
+        fs.mkdirSync(path.dirname(script), { recursive: true });
+        fs.writeFileSync(script, "");
+        fs.chmodSync(script, 0o755);
+        return {
+          command: `"./bin/${scriptName}" --version`,
+          cwd,
+          envPath: undefined,
+          expectedExecutionPath: script,
+        };
+      },
+    },
+  ])("resolves $name", ({ setup }) => {
+    const params = setup();
+    expectResolutionPathCase({
+      name: params.command,
+      resolution: resolveCommandResolution(params.command, params.cwd, params.envPath),
+      cwd: params.cwd,
+      expectedExecutionPath: params.expectedExecutionPath,
+      expectedExecutableName: params.expectedExecutableName,
+    });
   });
 
   it("unwraps transparent env and nice wrappers to the effective executable", () => {
@@ -133,8 +165,8 @@ describe("exec-command-resolution", () => {
       undefined,
       makePathEnv(fixture.binDir),
     );
-    expect(envResolution?.resolvedPath).toBe(fixture.exePath);
-    expect(envResolution?.executableName).toBe(fixture.exeName);
+    expect(envResolution?.execution.resolvedPath).toBe(fixture.exePath);
+    expect(envResolution?.execution.executableName).toBe(fixture.exeName);
 
     const niceResolution = resolveCommandResolutionFromArgv([
       "/usr/bin/nice",
@@ -142,19 +174,19 @@ describe("exec-command-resolution", () => {
       "-lc",
       "echo hi",
     ]);
-    expect(niceResolution?.rawExecutable).toBe("bash");
-    expect(niceResolution?.executableName.toLowerCase()).toContain("bash");
+    expect(niceResolution?.execution.rawExecutable).toBe("bash");
+    expect(niceResolution?.execution.executableName.toLowerCase()).toContain("bash");
 
     const timeResolution = resolveCommandResolutionFromArgv(
       ["/usr/bin/time", "-p", "rg", "-n", "needle"],
       undefined,
       makePathEnv(fixture.binDir),
     );
-    expect(timeResolution?.resolvedPath).toBe(fixture.exePath);
-    expect(timeResolution?.executableName).toBe(fixture.exeName);
+    expect(timeResolution?.execution.resolvedPath).toBe(fixture.exePath);
+    expect(timeResolution?.execution.executableName).toBe(fixture.exeName);
   });
 
-  it("unwraps shell multiplexers before resolving the effective executable", () => {
+  it("keeps shell multiplexer wrappers as a separate policy target", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -164,9 +196,45 @@ describe("exec-command-resolution", () => {
     fs.chmodSync(busybox, 0o755);
 
     const resolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
-    expect(resolution?.rawExecutable).toBe("sh");
+    expect(resolution?.execution.rawExecutable).toBe("sh");
+    expect(resolution?.effectiveArgv).toEqual(["sh", "-lc", "echo hi"]);
     expect(resolution?.wrapperChain).toEqual(["busybox"]);
-    expect(resolution?.executableName.toLowerCase()).toContain("sh");
+    expect(resolution?.policy.rawExecutable).toBe(busybox);
+    expect(resolution?.policy.resolvedPath).toBe(busybox);
+    expect(resolvePolicyTargetCandidatePath(resolution ?? null, dir)).toBe(busybox);
+    expect(resolution?.execution.executableName.toLowerCase()).toContain("sh");
+  });
+
+  it("does not satisfy inner-shell allowlists when invoked through busybox wrappers", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const busybox = path.join(dir, "busybox");
+    fs.writeFileSync(busybox, "");
+    fs.chmodSync(busybox, 0o755);
+
+    const shellResolution = resolveCommandResolutionFromArgv(["sh", "-lc", "echo hi"]);
+    expect(shellResolution?.execution.resolvedPath).toBeTruthy();
+
+    const wrappedResolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
+    const evalResult = evaluateExecAllowlist({
+      analysis: {
+        ok: true,
+        segments: [
+          {
+            raw: `${busybox} sh -lc echo hi`,
+            argv: [busybox, "sh", "-lc", "echo hi"],
+            resolution: wrappedResolution,
+          },
+        ],
+      },
+      allowlist: [{ pattern: shellResolution?.execution.resolvedPath ?? "" }],
+      safeBins: normalizeSafeBins([]),
+      cwd: dir,
+    });
+
+    expect(evalResult.allowlistSatisfied).toBe(false);
   });
 
   it("blocks semantic env wrappers, env -S, and deep transparent-wrapper chains", () => {
@@ -178,7 +246,7 @@ describe("exec-command-resolution", () => {
       "needle",
     ]);
     expect(blockedEnv?.policyBlocked).toBe(true);
-    expect(blockedEnv?.rawExecutable).toBe("/usr/bin/env");
+    expect(blockedEnv?.execution.rawExecutable).toBe("/usr/bin/env");
 
     if (process.platform === "win32") {
       return;
@@ -215,7 +283,7 @@ describe("exec-command-resolution", () => {
 
   it("resolves allowlist candidate paths from unresolved raw executables", () => {
     expect(
-      resolveAllowlistCandidatePath(
+      resolveExecutionTargetCandidatePath(
         {
           rawExecutable: "~/bin/tool",
           executableName: "tool",
@@ -225,7 +293,7 @@ describe("exec-command-resolution", () => {
     ).toContain("/bin/tool");
 
     expect(
-      resolveAllowlistCandidatePath(
+      resolveExecutionTargetCandidatePath(
         {
           rawExecutable: "./scripts/run.sh",
           executableName: "run.sh",
@@ -235,7 +303,7 @@ describe("exec-command-resolution", () => {
     ).toBe(path.resolve("/repo", "./scripts/run.sh"));
 
     expect(
-      resolveAllowlistCandidatePath(
+      resolveExecutionTargetCandidatePath(
         {
           rawExecutable: "rg",
           executableName: "rg",
@@ -244,6 +312,103 @@ describe("exec-command-resolution", () => {
       ),
     ).toBeUndefined();
   });
+
+  it.runIf(process.platform !== "win32").each([
+    {
+      name: "transparent env wrapper",
+      argvFactory: ({ envPath }: { envPath: string }) => [envPath, "rg", "-n", "needle"],
+      envFactory: ({ binDir }: { binDir: string }) => makePathEnv(binDir),
+      expectedExecutionPathFactory: ({ rgPath }: { rgPath: string }) => rgPath,
+      expectedPolicyPathFactory: ({ rgPath }: { rgPath: string }) => rgPath,
+      expectedPlannedArgvFactory: ({ rgPath }: { rgPath: string }) => [
+        fs.realpathSync(rgPath),
+        "-n",
+        "needle",
+      ],
+      allowlistPatternFactory: ({ rgPath }: { rgPath: string }) => rgPath,
+      allowlistSatisfied: true,
+    },
+    {
+      name: "busybox shell multiplexer",
+      argvFactory: ({ busybox }: { busybox: string }) => [busybox, "sh", "-lc", "echo hi"],
+      envFactory: ({ binDir }: { binDir: string }) => ({
+        PATH: `${binDir}${path.delimiter}/bin:/usr/bin`,
+      }),
+      expectedExecutionPathFactory: () => "/bin/sh",
+      expectedPolicyPathFactory: ({ busybox }: { busybox: string }) => busybox,
+      expectedPlannedArgvFactory: () => [fs.realpathSync("/bin/sh"), "-lc", "echo hi"],
+      allowlistPatternFactory: ({ busybox }: { busybox: string }) => busybox,
+      allowlistSatisfied: true,
+    },
+    {
+      name: "semantic env wrapper",
+      argvFactory: ({ envPath }: { envPath: string }) => [envPath, "FOO=bar", "rg", "-n", "needle"],
+      envFactory: ({ binDir }: { binDir: string }) => makePathEnv(binDir),
+      expectedExecutionPathFactory: ({ envPath }: { envPath: string }) => envPath,
+      expectedPolicyPathFactory: ({ envPath }: { envPath: string }) => envPath,
+      expectedPlannedArgvFactory: () => null,
+      allowlistPatternFactory: ({ envPath }: { envPath: string }) => envPath,
+      allowlistSatisfied: false,
+    },
+    {
+      name: "wrapper depth overflow",
+      argvFactory: ({ envPath }: { envPath: string }) =>
+        buildNestedEnvShellCommand({
+          envExecutable: envPath,
+          depth: 5,
+          payload: "echo hi",
+        }),
+      envFactory: ({ binDir }: { binDir: string }) => makePathEnv(binDir),
+      expectedExecutionPathFactory: ({ envPath }: { envPath: string }) => envPath,
+      expectedPolicyPathFactory: ({ envPath }: { envPath: string }) => envPath,
+      expectedPlannedArgvFactory: () => null,
+      allowlistPatternFactory: ({ envPath }: { envPath: string }) => envPath,
+      allowlistSatisfied: false,
+    },
+  ] as const)(
+    "keeps execution and policy targets coherent across wrapper classes: $name",
+    (testCase) => {
+      const dir = makeTempDir();
+      const binDir = path.join(dir, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const envPath = path.join(binDir, "env");
+      const rgPath = path.join(binDir, "rg");
+      const busybox = path.join(dir, "busybox");
+      for (const file of [envPath, rgPath, busybox]) {
+        fs.writeFileSync(file, "");
+        fs.chmodSync(file, 0o755);
+      }
+      const fixture = { binDir, envPath, rgPath, busybox } as const;
+      const argv = [...testCase.argvFactory(fixture)];
+      const env = testCase.envFactory(fixture);
+      const resolution = resolveCommandResolutionFromArgv(argv, dir, env);
+      const segment = {
+        raw: argv.join(" "),
+        argv,
+        resolution,
+      };
+      expectResolutionPathCase({
+        name: testCase.name,
+        resolution,
+        cwd: dir,
+        expectedExecutionPath: testCase.expectedExecutionPathFactory(fixture),
+        expectedPolicyPath: testCase.expectedPolicyPathFactory(fixture),
+      });
+      expect(resolvePlannedSegmentArgv(segment), `${testCase.name} planned argv`).toEqual(
+        testCase.expectedPlannedArgvFactory(fixture),
+      );
+      const evaluation = evaluateExecAllowlist({
+        analysis: { ok: true, segments: [segment] },
+        allowlist: [{ pattern: testCase.allowlistPatternFactory(fixture) }],
+        safeBins: normalizeSafeBins([]),
+        cwd: dir,
+        env,
+      });
+      expect(evaluation.allowlistSatisfied, `${testCase.name} allowlist`).toBe(
+        testCase.allowlistSatisfied,
+      );
+    },
+  );
 
   it("normalizes argv tokens for short clusters, long options, and special sentinels", () => {
     expect(parseExecArgvToken("")).toEqual({ kind: "empty", raw: "" });
@@ -264,5 +429,30 @@ describe("exec-command-resolution", () => {
       expect(long.flag).toBe("--output");
       expect(long.inlineValue).toBe("blocked.txt");
     }
+  });
+
+  it("does not synthesize cwd-joined allowlist candidates from drive-less windows roots", () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    expect(
+      resolveAllowlistCandidatePath(
+        {
+          rawExecutable: String.raw`:\Users\demo\AI\system\openclaw`,
+          executableName: "openclaw",
+        },
+        String.raw`C:\Users\demo\AI\system\openclaw`,
+      ),
+    ).toBeUndefined();
+    expect(
+      resolveAllowlistCandidatePath(
+        {
+          rawExecutable: String.raw`:/Users/demo/AI/system/openclaw`,
+          executableName: "openclaw",
+        },
+        String.raw`C:\Users\demo\AI\system\openclaw`,
+      ),
+    ).toBeUndefined();
   });
 });

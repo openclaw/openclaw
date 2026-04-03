@@ -40,6 +40,11 @@ type ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit> = {
 type ComputedAccountStatusSnapshot<TExtra extends StatusSnapshotExtra = StatusSnapshotExtra> =
   ComputedAccountStatusBase & { extra?: TExtra };
 
+type ConfigIssueAccount = {
+  accountId?: string | null;
+  configured?: boolean | null;
+} & Record<string, unknown>;
+
 /** Create the baseline runtime snapshot shape used by channel/account status stores. */
 export function createDefaultChannelRuntimeState<T extends Record<string, unknown>>(
   accountId: string,
@@ -100,6 +105,24 @@ export function buildProbeChannelStatusSummary<TExtra extends Record<string, unk
     probe: snapshot.probe,
     lastProbeAt: snapshot.lastProbeAt ?? null,
   };
+}
+
+/** Build webhook channel summaries with a stable default mode. */
+export function buildWebhookChannelStatusSummary<TExtra extends StatusSnapshotExtra>(
+  snapshot: {
+    configured?: boolean | null;
+    mode?: string | null;
+    running?: boolean | null;
+    lastStartAt?: number | null;
+    lastStopAt?: number | null;
+    lastError?: string | null;
+  },
+  extra?: TExtra,
+) {
+  return buildBaseChannelStatusSummary(snapshot, {
+    mode: snapshot.mode ?? "webhook",
+    ...(extra ?? ({} as TExtra)),
+  });
 }
 
 /** Build the standard per-account status payload from config metadata plus runtime state. */
@@ -288,6 +311,36 @@ export function buildTokenChannelStatusSummary(
     ...base,
     mode: snapshot.mode ?? null,
   };
+}
+
+/** Build a config-issue collector from snapshot-safe source metadata only. */
+export function createDependentCredentialStatusIssueCollector(options: {
+  channel: string;
+  dependencySourceKey: string;
+  missingPrimaryMessage: string;
+  missingDependentMessage: string;
+  isDependencyConfigured?: ((value: unknown) => boolean) | undefined;
+}) {
+  const isDependencyConfigured =
+    options.isDependencyConfigured ??
+    ((value: unknown) => typeof value === "string" && value.trim().length > 0 && value !== "none");
+
+  return (accounts: ConfigIssueAccount[]): ChannelStatusIssue[] =>
+    accounts.flatMap((account) => {
+      if (account.configured !== false) {
+        return [];
+      }
+      return [
+        {
+          channel: options.channel,
+          accountId: account.accountId ?? "",
+          kind: "config",
+          message: isDependencyConfigured(account[options.dependencySourceKey])
+            ? options.missingDependentMessage
+            : options.missingPrimaryMessage,
+        },
+      ];
+    });
 }
 
 /** Convert account runtime errors into the generic channel status issue format. */

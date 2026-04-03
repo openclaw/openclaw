@@ -24,5 +24,8 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
   if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
     enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
   }
+  if (cfg.plugins?.entries?.acpx?.config?.permissionMode === "approve-all") {
+    enabledFlags.push("plugins.entries.acpx.config.permissionMode=approve-all");
+  }
   return enabledFlags;
 }

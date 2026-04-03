@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import {
   clearDeviceAuthTokenFromStore,
@@ -8,8 +9,14 @@ import {
   storeDeviceAuthTokenInStore,
 } from "../shared/device-auth-store.js";
 import type { DeviceAuthStore } from "../shared/device-auth.js";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 
 const DEVICE_AUTH_FILE = "device-auth.json";
+const DeviceAuthStoreSchema = z.object({
+  version: z.literal(1),
+  deviceId: z.string(),
+  tokens: z.record(z.string(), z.unknown()),
+}) as z.ZodType<DeviceAuthStore>;
 
 function resolveDeviceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "identity", DEVICE_AUTH_FILE);
@@ -21,14 +28,7 @@ function readStore(filePath: string): DeviceAuthStore | null {
       return null;
     }
     const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as DeviceAuthStore;
-    if (parsed?.version !== 1 || typeof parsed.deviceId !== "string") {
-      return null;
-    }
-    if (!parsed.tokens || typeof parsed.tokens !== "object") {
-      return null;
-    }
-    return parsed;
+    return safeParseJsonWithSchema(DeviceAuthStoreSchema, raw);
   } catch {
     return null;
   }

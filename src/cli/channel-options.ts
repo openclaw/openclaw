@@ -51,3 +51,9 @@ export function resolveCliChannelOptions(): string[] {
 export function formatCliChannelOptions(extra: string[] = []): string {
   return [...extra, ...resolveCliChannelOptions()].join("|");
 }
+
+export const __testing = {
+  resetPrecomputedChannelOptionsForTests(): void {
+    precomputedChannelOptions = undefined;
+  },
+};

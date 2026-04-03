@@ -1,4 +1,5 @@
 import {
+  createSetupInputPresenceValidator,
   createTopLevelChannelDmPolicySetter,
   normalizeAccountId,
   patchScopedAccountConfig,
@@ -42,18 +43,20 @@ export const blueBubblesSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: ({ input }) => {
-    if (!input.httpUrl && !input.password) {
-      return "BlueBubbles requires --http-url and --password.";
-    }
-    if (!input.httpUrl) {
-      return "BlueBubbles requires --http-url.";
-    }
-    if (!input.password) {
-      return "BlueBubbles requires --password.";
-    }
-    return null;
-  },
+  validateInput: createSetupInputPresenceValidator({
+    validate: ({ input }) => {
+      if (!input.httpUrl && !input.password) {
+        return "BlueBubbles requires --http-url and --password.";
+      }
+      if (!input.httpUrl) {
+        return "BlueBubbles requires --http-url.";
+      }
+      if (!input.password) {
+        return "BlueBubbles requires --password.";
+      }
+      return null;
+    },
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const next = prepareScopedSetupConfig({
       cfg,

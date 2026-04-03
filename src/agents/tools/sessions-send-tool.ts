@@ -32,13 +32,38 @@ const SessionsSendToolSchema = Type.Object({
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
+type GatewayCaller = typeof callGateway;
+const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+
+function resolveLatestAssistantReplySnapshot(messages: unknown[]): {
+  text?: string;
+  fingerprint?: string;
+} {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const text = extractAssistantText(message);
+    if (!text) {
+      continue;
+    }
+    let fingerprint: string | undefined;
+    try {
+      fingerprint = JSON.stringify(message);
+    } catch {
+      fingerprint = text;
+    }
+    return { text, fingerprint };
+  }
+  return {};
+}
+
 async function startAgentRun(params: {
+  callGateway: GatewayCaller;
   runId: string;
   sendParams: Record<string, unknown>;
   sessionKey: string;
 }): Promise<{ ok: true; runId: string } | { ok: false; result: ReturnType<typeof jsonResult> }> {
   try {
-    const response = await callGateway<{ runId: string }>({
+    const response = await params.callGateway<{ runId: string }>({
       method: "agent",
       params: params.sendParams,
       timeoutMs: 10_000,
@@ -67,6 +92,7 @@ export function createSessionsSendTool(opts?: {
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  callGateway?: GatewayCaller;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -76,6 +102,7 @@ export function createSessionsSendTool(opts?: {
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const gatewayCall = opts?.callGateway ?? callGateway;
       const message = readStringParam(params, "message", { required: true });
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
@@ -137,7 +164,7 @@ export function createSessionsSendTool(opts?: {
         };
         let resolvedKey = "";
         try {
-          const resolved = await callGateway<{ key: string }>({
+          const resolved = await gatewayCall<{ key: string }>({
             method: "sessions.resolve",
             params: resolveParams,
             timeoutMs: 10_000,
@@ -278,6 +305,7 @@ export function createSessionsSendTool(opts?: {
 
       if (timeoutSeconds === 0) {
         const start = await startAgentRun({
+          callGateway: gatewayCall,
           runId,
           sendParams,
           sessionKey: displayKey,
@@ -296,6 +324,7 @@ export function createSessionsSendTool(opts?: {
       }
 
       const start = await startAgentRun({
+        callGateway: gatewayCall,
         runId,
         sendParams,
         sessionKey: displayKey,
@@ -305,10 +334,18 @@ export function createSessionsSendTool(opts?: {
       }
       runId = start.runId;
 
+      const historyBefore = await gatewayCall<{ messages: Array<unknown> }>({
+        method: "chat.history",
+        params: { sessionKey: resolvedKey, limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT },
+      });
+      const baselineReply = resolveLatestAssistantReplySnapshot(
+        stripToolMessages(Array.isArray(historyBefore?.messages) ? historyBefore.messages : []),
+      );
+
       let waitStatus: string | undefined;
       let waitError: string | undefined;
       try {
-        const wait = await callGateway<{ status?: string; error?: string }>({
+        const wait = await gatewayCall<{ status?: string; error?: string }>({
           method: "agent.wait",
           params: {
             runId,
@@ -346,13 +383,17 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
-      const history = await callGateway<{ messages: Array<unknown> }>({
+      const history = await gatewayCall<{ messages: Array<unknown> }>({
         method: "chat.history",
-        params: { sessionKey: resolvedKey, limit: 50 },
+        params: { sessionKey: resolvedKey, limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT },
       });
-      const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
-      const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
-      const reply = last ? extractAssistantText(last) : undefined;
+      const latestReply = resolveLatestAssistantReplySnapshot(
+        stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
+      );
+      const reply =
+        latestReply.text && latestReply.fingerprint !== baselineReply.fingerprint
+          ? latestReply.text
+          : undefined;
       startA2AFlow(reply ?? undefined);
 
       return jsonResult({

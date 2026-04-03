@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import type { DeviceIdentity } from "./device-identity.ts";
 
@@ -91,28 +92,14 @@ type ConnectFrame = {
   };
 };
 
-function createStorageMock(): Storage {
-  const store = new Map<string, string>();
-  return {
-    get length() {
-      return store.size;
-    },
-    clear() {
-      store.clear();
-    },
-    getItem(key: string) {
-      return store.get(key) ?? null;
-    },
-    key(index: number) {
-      return Array.from(store.keys())[index] ?? null;
-    },
-    removeItem(key: string) {
-      store.delete(key);
-    },
-    setItem(key: string, value: string) {
-      store.set(key, String(value));
-    },
-  };
+function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {
+  vi.stubGlobal("window", {
+    location: { href: "http://127.0.0.1:18789/" },
+    localStorage: storage,
+    setTimeout: (handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) =>
+      globalThis.setTimeout(() => handler(...args), timeout),
+    clearTimeout: (timeoutId: number | undefined) => globalThis.clearTimeout(timeoutId),
+  });
 }
 
 function getLatestWebSocket(): MockWebSocket {
@@ -133,9 +120,7 @@ function parseLatestConnectFrame(ws: MockWebSocket): ConnectFrame {
   return JSON.parse(ws.sent.at(-1) ?? "{}") as ConnectFrame;
 }
 
-async function startConnect(client: InstanceType<typeof GatewayBrowserClient>, nonce = "nonce-1") {
-  client.start();
-  const ws = getLatestWebSocket();
+async function continueConnect(ws: MockWebSocket, nonce = "nonce-1") {
   ws.emitOpen();
   ws.emitMessage({
     type: "event",
@@ -144,6 +129,54 @@ async function startConnect(client: InstanceType<typeof GatewayBrowserClient>, n
   });
   await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
   return { ws, connectFrame: parseLatestConnectFrame(ws) };
+}
+
+async function startConnect(client: InstanceType<typeof GatewayBrowserClient>, nonce = "nonce-1") {
+  client.start();
+  return await continueConnect(getLatestWebSocket(), nonce);
+}
+
+function emitRetryableTokenMismatch(ws: MockWebSocket, connectId: string | undefined) {
+  ws.emitMessage({
+    type: "res",
+    id: connectId,
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "unauthorized",
+      details: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
+    },
+  });
+}
+
+async function startRetriedDeviceTokenConnect(params: {
+  url: string;
+  token: string;
+  retryNonce?: string;
+}) {
+  const client = new GatewayBrowserClient({
+    url: params.url,
+    token: params.token,
+  });
+  const { ws: firstWs, connectFrame: firstConnect } = await startConnect(client);
+  expect(firstConnect.params?.auth?.token).toBe(params.token);
+  expect(firstConnect.params?.auth?.deviceToken).toBeUndefined();
+
+  emitRetryableTokenMismatch(firstWs, firstConnect.id);
+  await vi.waitFor(() => expect(firstWs.readyState).toBe(3));
+  firstWs.emitClose(4008, "connect failed");
+
+  await vi.advanceTimersByTimeAsync(800);
+  const secondWs = getLatestWebSocket();
+  expect(secondWs).not.toBe(firstWs);
+  const { connectFrame: secondConnect } = await continueConnect(
+    secondWs,
+    params.retryNonce ?? "nonce-2",
+  );
+  expect(secondConnect.params?.auth?.token).toBe(params.token);
+  expect(secondConnect.params?.auth?.deviceToken).toBe("stored-device-token");
+
+  return { client, firstWs, secondWs, firstConnect, secondConnect };
 }
 
 describe("GatewayBrowserClient", () => {
@@ -159,10 +192,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     vi.stubGlobal("localStorage", storage);
-    Object.defineProperty(window, "localStorage", {
-      configurable: true,
-      value: storage,
-    });
+    stubWindowGlobals(storage);
     localStorage.clear();
     vi.stubGlobal("WebSocket", MockWebSocket);
 
@@ -263,45 +293,35 @@ describe("GatewayBrowserClient", () => {
     expect(signedPayload).toContain("|stored-device-token|nonce-1");
   });
 
+  it("ignores cached operator device tokens that do not include read access", async () => {
+    localStorage.clear();
+    storeDeviceAuthToken({
+      deviceId: "device-1",
+      role: "operator",
+      token: "under-scoped-device-token",
+      scopes: [],
+    });
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.method).toBe("connect");
+    expect(connectFrame.params?.auth?.token).toBeUndefined();
+    const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
+    expect(signedPayload).not.toContain("under-scoped-device-token");
+  });
+
   it("retries once with device token after token mismatch when shared token is explicit", async () => {
     vi.useFakeTimers();
-    const client = new GatewayBrowserClient({
+    const { secondWs, secondConnect } = await startRetriedDeviceTokenConnect({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
     });
 
-    const { ws: ws1, connectFrame: firstConnect } = await startConnect(client);
-    expect(firstConnect.params?.auth?.token).toBe("shared-auth-token");
-    expect(firstConnect.params?.auth?.deviceToken).toBeUndefined();
-
-    ws1.emitMessage({
-      type: "res",
-      id: firstConnect.id,
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "unauthorized",
-        details: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
-      },
-    });
-    await vi.waitFor(() => expect(ws1.readyState).toBe(3));
-    ws1.emitClose(4008, "connect failed");
-
-    await vi.advanceTimersByTimeAsync(800);
-    const ws2 = getLatestWebSocket();
-    expect(ws2).not.toBe(ws1);
-    ws2.emitOpen();
-    ws2.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "nonce-2" },
-    });
-    await vi.waitFor(() => expect(ws2.sent.length).toBeGreaterThan(0));
-    const secondConnect = parseLatestConnectFrame(ws2);
-    expect(secondConnect.params?.auth?.token).toBe("shared-auth-token");
-    expect(secondConnect.params?.auth?.deviceToken).toBe("stored-device-token");
-
-    ws2.emitMessage({
+    secondWs.emitMessage({
       type: "res",
       id: secondConnect.id,
       ok: false,
@@ -311,8 +331,8 @@ describe("GatewayBrowserClient", () => {
         details: { code: "AUTH_TOKEN_MISMATCH" },
       },
     });
-    await vi.waitFor(() => expect(ws2.readyState).toBe(3));
-    ws2.emitClose(4008, "connect failed");
+    await vi.waitFor(() => expect(secondWs.readyState).toBe(3));
+    secondWs.emitClose(4008, "connect failed");
     expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.token).toBe(
       "stored-device-token",
     );
@@ -324,41 +344,10 @@ describe("GatewayBrowserClient", () => {
 
   it("treats IPv6 loopback as trusted for bounded device-token retry", async () => {
     vi.useFakeTimers();
-    const client = new GatewayBrowserClient({
+    const { client } = await startRetriedDeviceTokenConnect({
       url: "ws://[::1]:18789",
       token: "shared-auth-token",
     });
-
-    const { ws: ws1, connectFrame: firstConnect } = await startConnect(client);
-    expect(firstConnect.params?.auth?.token).toBe("shared-auth-token");
-    expect(firstConnect.params?.auth?.deviceToken).toBeUndefined();
-
-    ws1.emitMessage({
-      type: "res",
-      id: firstConnect.id,
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "unauthorized",
-        details: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
-      },
-    });
-    await vi.waitFor(() => expect(ws1.readyState).toBe(3));
-    ws1.emitClose(4008, "connect failed");
-
-    await vi.advanceTimersByTimeAsync(800);
-    const ws2 = getLatestWebSocket();
-    expect(ws2).not.toBe(ws1);
-    ws2.emitOpen();
-    ws2.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "nonce-2" },
-    });
-    await vi.waitFor(() => expect(ws2.sent.length).toBeGreaterThan(0));
-    const secondConnect = parseLatestConnectFrame(ws2);
-    expect(secondConnect.params?.auth?.token).toBe("shared-auth-token");
-    expect(secondConnect.params?.auth?.deviceToken).toBe("stored-device-token");
 
     client.stop();
     vi.useRealTimers();
@@ -395,6 +384,26 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
+  it("cancels a queued connect send when stopped before the timeout fires", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+
+    client.stop();
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(ws.sent).toHaveLength(0);
+
+    vi.useRealTimers();
+  });
+
   it("does not auto-reconnect on AUTH_TOKEN_MISSING", async () => {
     vi.useFakeTimers();
     localStorage.clear();
@@ -426,6 +435,14 @@ describe("GatewayBrowserClient", () => {
 });
 
 describe("shouldRetryWithDeviceToken", () => {
+  beforeEach(() => {
+    stubWindowGlobals();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("allows a bounded retry for trusted loopback endpoints", () => {
     expect(
       shouldRetryWithDeviceToken({

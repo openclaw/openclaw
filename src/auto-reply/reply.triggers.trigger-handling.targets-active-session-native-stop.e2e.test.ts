@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
-import { getReplyFromConfig } from "./reply.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import {
@@ -10,7 +9,7 @@ import {
   getAbortEmbeddedPiRunMock,
   getCompactEmbeddedPiSessionMock,
   getRunEmbeddedPiAgentMock,
-  installTriggerHandlingE2eTestHooks,
+  installTriggerHandlingReplyHarness,
   MAIN_SESSION_KEY,
   makeCfg,
   mockRunEmbeddedPiAgentOk,
@@ -20,6 +19,8 @@ import {
 } from "./reply.triggers.trigger-handling.test-harness.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
+
+type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
 
 vi.mock("./reply/agent-runner.runtime.js", () => ({
   runReplyAgent: async (params: {
@@ -75,7 +76,10 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
   },
 }));
 
-installTriggerHandlingE2eTestHooks();
+let getReplyFromConfig!: GetReplyFromConfig;
+installTriggerHandlingReplyHarness((impl) => {
+  getReplyFromConfig = impl;
+});
 
 const BASE_MESSAGE = {
   Body: "hello",
@@ -83,7 +87,7 @@ const BASE_MESSAGE = {
   To: "+2000",
 } as const;
 
-function maybeReplyText(reply: Awaited<ReturnType<typeof getReplyFromConfig>>) {
+function maybeReplyText(reply: Awaited<ReturnType<GetReplyFromConfig>>) {
   return Array.isArray(reply) ? reply[0]?.text : reply?.text;
 }
 
@@ -140,6 +144,10 @@ async function expectResetBlockedForNonOwner(params: { home: string }): Promise<
   cfg.channels.whatsapp = {
     ...cfg.channels.whatsapp,
     allowFrom: ["+1999"],
+  };
+  cfg.commands = {
+    ...cfg.commands,
+    ownerAllowFrom: ["whatsapp:+1999"],
   };
   cfg.session = {
     ...cfg.session,

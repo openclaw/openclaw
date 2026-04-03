@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { bundledPluginFile } from "../../../test/helpers/bundled-plugin-paths.js";
 
 const thisFilePath = fileURLToPath(import.meta.url);
 const thisDir = path.dirname(thisFilePath);
@@ -48,7 +49,7 @@ function listExtensionFiles(): {
       continue;
     }
     const source = readFileSync(channelPath, "utf8");
-    if (source.includes("outbound:")) {
+    if (/\boutbound\s*:\s*\{/.test(source)) {
       inlineChannelEntrypoints.push(toPosix(path.join("extensions", entry.name, "src/channel.ts")));
     }
   }
@@ -61,10 +62,10 @@ function listExtensionFiles(): {
 
 function listHighRiskRuntimeCfgFiles(): string[] {
   return [
-    "extensions/telegram/src/action-runtime.ts",
-    "extensions/discord/src/monitor/reply-delivery.ts",
-    "extensions/discord/src/monitor/thread-bindings.discord-api.ts",
-    "extensions/discord/src/monitor/thread-bindings.manager.ts",
+    bundledPluginFile("telegram", "src/action-runtime.ts"),
+    bundledPluginFile("discord", "src/monitor/reply-delivery.ts"),
+    bundledPluginFile("discord", "src/monitor/thread-bindings.discord-api.ts"),
+    bundledPluginFile("discord", "src/monitor/thread-bindings.manager.ts"),
   ];
 }
 

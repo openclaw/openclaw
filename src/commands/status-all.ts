@@ -35,6 +35,7 @@ import { buildChannelsTable } from "./status-all/channels.js";
 import { formatDurationPrecise, formatGatewayAuthUsed } from "./status-all/format.js";
 import { pickGatewaySelfPresence } from "./status-all/gateway.js";
 import { buildStatusAllReportLines } from "./status-all/report-lines.js";
+import { resolveNodeOnlyGatewayInfo } from "./status.node-mode.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 import { formatUpdateOneLiner } from "./status.update.js";
 
@@ -147,6 +148,7 @@ export async function statusAllCommand(
         return {
           label: summary.label,
           installed: summary.installed,
+          externallyManaged: summary.externallyManaged,
           managedByOpenClaw: summary.managedByOpenClaw,
           loaded: summary.loaded,
           loadedText: summary.loadedText,
@@ -158,6 +160,13 @@ export async function statusAllCommand(
     };
     const daemon = await readServiceSummary(resolveGatewayService());
     const nodeService = await readServiceSummary(resolveNodeService());
+    const nodeOnlyGateway =
+      daemon && nodeService
+        ? await resolveNodeOnlyGatewayInfo({
+            daemon,
+            node: nodeService,
+          })
+        : null;
     progress.tick();
 
     progress.setLabel("Scanning agents…");
@@ -171,6 +180,9 @@ export async function statusAllCommand(
     progress.tick();
 
     const connectionDetailsForReport = (() => {
+      if (nodeOnlyGateway) {
+        return nodeOnlyGateway.connectionDetails;
+      }
       if (!remoteUrlMissing) {
         return connection.message;
       }
@@ -195,14 +207,16 @@ export async function statusAllCommand(
       : {};
 
     progress.setLabel("Querying gateway…");
-    const health = gatewayReachable
-      ? await callGateway({
-          config: cfg,
-          method: "health",
-          timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
-          ...callOverrides,
-        }).catch((err) => ({ error: String(err) }))
-      : { error: gatewayProbe?.error ?? "gateway unreachable" };
+    const health = nodeOnlyGateway
+      ? undefined
+      : gatewayReachable
+        ? await callGateway({
+            config: cfg,
+            method: "health",
+            timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
+            ...callOverrides,
+          }).catch((err) => ({ error: String(err) }))
+        : { error: gatewayProbe?.error ?? "gateway unreachable" };
 
     const channelsStatus = gatewayReachable
       ? await callGateway({
@@ -261,6 +275,9 @@ export async function statusAllCommand(
         ? `unreachable (${gatewayProbe.error})`
         : "unreachable";
     const gatewayAuth = gatewayReachable ? ` · auth ${formatGatewayAuthUsed(probeAuth)}` : "";
+    const gatewayValue =
+      nodeOnlyGateway?.gatewayValue ??
+      `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`;
     const gatewaySelfLine =
       gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform
         ? [
@@ -303,7 +320,7 @@ export async function statusAllCommand(
       { Item: "Update", Value: updateLine },
       {
         Item: "Gateway",
-        Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`,
+        Value: gatewayValue,
       },
       ...(probeAuthResolution.warning
         ? [{ Item: "Gateway auth warning", Value: probeAuthResolution.warning }]
@@ -368,6 +385,7 @@ export async function statusAllCommand(
         channelIssues,
         gatewayReachable,
         health,
+        nodeOnlyGateway,
       },
     });
 

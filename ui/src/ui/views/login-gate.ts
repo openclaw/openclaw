@@ -4,6 +4,7 @@ import type { AppViewState } from "../app-view-state.ts";
 import { icons } from "../icons.ts";
 import { normalizeBasePath } from "../navigation.ts";
 import { agentLogoUrl } from "./agents-utils.ts";
+import { renderConnectCommand } from "./connect-command.ts";
 
 export function renderLoginGate(state: AppViewState) {
   const basePath = normalizeBasePath(state.basePath ?? "");
@@ -95,25 +96,22 @@ export function renderLoginGate(state: AppViewState) {
               </button>
             </div>
           </label>
-          <button
-            class="btn primary login-gate__connect"
-            @click=${() => state.connect()}
-          >
+          <button class="btn primary login-gate__connect" @click=${() => state.connect()}>
             ${t("common.connect")}
           </button>
         </div>
-        ${
-          state.lastError
-            ? html`<div class="callout danger" style="margin-top: 14px;">
-                <div>${state.lastError}</div>
-              </div>`
-            : ""
-        }
+        ${state.lastError
+          ? html`<div class="callout danger" style="margin-top: 14px;">
+              <div>${state.lastError}</div>
+            </div>`
+          : ""}
         <div class="login-gate__help">
           <div class="login-gate__help-title">${t("overview.connection.title")}</div>
           <ol class="login-gate__steps">
-            <li>${t("overview.connection.step1")}<code>openclaw gateway run</code></li>
-            <li>${t("overview.connection.step2")}<code>openclaw dashboard --no-open</code></li>
+            <li>
+              ${t("overview.connection.step1")}${renderConnectCommand("openclaw gateway run")}
+            </li>
+            <li>${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}</li>
             <li>${t("overview.connection.step3")}</li>
           </ol>
           <div class="login-gate__docs">
@@ -122,7 +120,8 @@ export function renderLoginGate(state: AppViewState) {
               href="https://docs.openclaw.ai/web/dashboard"
               target="_blank"
               rel="noreferrer"
-            >${t("overview.connection.docsLink")}</a>
+              >${t("overview.connection.docsLink")}</a
+            >
           </div>
         </div>
       </div>

@@ -44,7 +44,11 @@ const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
 const SCOPE_KEY_ALPHA = "agent:alpha";
 const SCOPE_KEY_BETA = "agent:beta";
-const TEST_EXEC_DEFAULTS = { security: "full" as const, ask: "off" as const };
+const TEST_EXEC_DEFAULTS = {
+  host: "gateway" as const,
+  security: "full" as const,
+  ask: "off" as const,
+};
 const DEFAULT_NOTIFY_SESSION_KEY = "agent:main:main";
 const ECHO_HI_COMMAND = shellEcho("hi");
 let callIdCounter = 0;

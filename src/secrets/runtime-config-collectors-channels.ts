@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { getMatrixScopedEnvVarNames } from "../infra/matrix-config-helpers.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/account-id.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import {
   collectSecretInputAssignment,
@@ -31,6 +33,34 @@ type ChannelAccountSurface = {
   channelEnabled: boolean;
   accounts: ChannelAccountEntry[];
 };
+
+type ChannelAccountPredicate = (entry: ChannelAccountEntry) => boolean;
+
+function getChannelRecord(
+  config: OpenClawConfig,
+  channelKey: string,
+): Record<string, unknown> | undefined {
+  const channels = config.channels as Record<string, unknown> | undefined;
+  if (!isRecord(channels)) {
+    return undefined;
+  }
+  const channel = channels[channelKey];
+  return isRecord(channel) ? channel : undefined;
+}
+
+function getChannelSurface(
+  config: OpenClawConfig,
+  channelKey: string,
+): { channel: Record<string, unknown>; surface: ChannelAccountSurface } | null {
+  const channel = getChannelRecord(config, channelKey);
+  if (!channel) {
+    return null;
+  }
+  return {
+    channel,
+    surface: resolveChannelAccountSurface(channel),
+  };
+}
 
 function resolveChannelAccountSurface(channel: Record<string, unknown>): ChannelAccountSurface {
   const channelEnabled = isEnabledFlag(channel);
@@ -130,123 +160,232 @@ function collectSimpleChannelFieldAssignments(params: {
   }
 }
 
+function isConditionalTopLevelFieldActive(params: {
+  surface: ChannelAccountSurface;
+  activeWithoutAccounts: boolean;
+  inheritedAccountActive: ChannelAccountPredicate;
+}): boolean {
+  if (!params.surface.channelEnabled) {
+    return false;
+  }
+  if (!params.surface.hasExplicitAccounts) {
+    return params.activeWithoutAccounts;
+  }
+  return params.surface.accounts.some(params.inheritedAccountActive);
+}
+
+function collectConditionalChannelFieldAssignments(params: {
+  channelKey: string;
+  field: string;
+  channel: Record<string, unknown>;
+  surface: ChannelAccountSurface;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  topLevelActiveWithoutAccounts: boolean;
+  topLevelInheritedAccountActive: ChannelAccountPredicate;
+  accountActive: ChannelAccountPredicate;
+  topInactiveReason: string;
+  accountInactiveReason: string | ((entry: ChannelAccountEntry) => string);
+}): void {
+  collectSecretInputAssignment({
+    value: params.channel[params.field],
+    path: `channels.${params.channelKey}.${params.field}`,
+    expected: "string",
+    defaults: params.defaults,
+    context: params.context,
+    active: isConditionalTopLevelFieldActive({
+      surface: params.surface,
+      activeWithoutAccounts: params.topLevelActiveWithoutAccounts,
+      inheritedAccountActive: params.topLevelInheritedAccountActive,
+    }),
+    inactiveReason: params.topInactiveReason,
+    apply: (value) => {
+      params.channel[params.field] = value;
+    },
+  });
+  if (!params.surface.hasExplicitAccounts) {
+    return;
+  }
+  for (const entry of params.surface.accounts) {
+    if (!hasOwnProperty(entry.account, params.field)) {
+      continue;
+    }
+    collectSecretInputAssignment({
+      value: entry.account[params.field],
+      path: `channels.${params.channelKey}.accounts.${entry.accountId}.${params.field}`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.accountActive(entry),
+      inactiveReason:
+        typeof params.accountInactiveReason === "function"
+          ? params.accountInactiveReason(entry)
+          : params.accountInactiveReason,
+      apply: (value) => {
+        entry.account[params.field] = value;
+      },
+    });
+  }
+}
+
+function collectNestedChannelFieldAssignments(params: {
+  channelKey: string;
+  nestedKey: string;
+  field: string;
+  channel: Record<string, unknown>;
+  surface: ChannelAccountSurface;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  topLevelActive: boolean;
+  topInactiveReason: string;
+  accountActive: ChannelAccountPredicate;
+  accountInactiveReason: string | ((entry: ChannelAccountEntry) => string);
+}): void {
+  const topLevelNested = params.channel[params.nestedKey];
+  if (isRecord(topLevelNested)) {
+    collectSecretInputAssignment({
+      value: topLevelNested[params.field],
+      path: `channels.${params.channelKey}.${params.nestedKey}.${params.field}`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.topLevelActive,
+      inactiveReason: params.topInactiveReason,
+      apply: (value) => {
+        topLevelNested[params.field] = value;
+      },
+    });
+  }
+  if (!params.surface.hasExplicitAccounts) {
+    return;
+  }
+  for (const entry of params.surface.accounts) {
+    const nested = entry.account[params.nestedKey];
+    if (!isRecord(nested)) {
+      continue;
+    }
+    collectSecretInputAssignment({
+      value: nested[params.field],
+      path: `channels.${params.channelKey}.accounts.${entry.accountId}.${params.nestedKey}.${params.field}`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.accountActive(entry),
+      inactiveReason:
+        typeof params.accountInactiveReason === "function"
+          ? params.accountInactiveReason(entry)
+          : params.accountInactiveReason,
+      apply: (value) => {
+        nested[params.field] = value;
+      },
+    });
+  }
+}
+
+function collectNestedChannelTtsAssignments(params: {
+  channelKey: string;
+  nestedKey: string;
+  channel: Record<string, unknown>;
+  surface: ChannelAccountSurface;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  topLevelActive: boolean;
+  topInactiveReason: string;
+  accountActive: ChannelAccountPredicate;
+  accountInactiveReason: string | ((entry: ChannelAccountEntry) => string);
+}): void {
+  const topLevelNested = params.channel[params.nestedKey];
+  if (isRecord(topLevelNested) && isRecord(topLevelNested.tts)) {
+    collectTtsApiKeyAssignments({
+      tts: topLevelNested.tts,
+      pathPrefix: `channels.${params.channelKey}.${params.nestedKey}.tts`,
+      defaults: params.defaults,
+      context: params.context,
+      active: params.topLevelActive,
+      inactiveReason: params.topInactiveReason,
+    });
+  }
+  if (!params.surface.hasExplicitAccounts) {
+    return;
+  }
+  for (const entry of params.surface.accounts) {
+    const nested = entry.account[params.nestedKey];
+    if (!isRecord(nested) || !isRecord(nested.tts)) {
+      continue;
+    }
+    collectTtsApiKeyAssignments({
+      tts: nested.tts,
+      pathPrefix: `channels.${params.channelKey}.accounts.${entry.accountId}.${params.nestedKey}.tts`,
+      defaults: params.defaults,
+      context: params.context,
+      active: params.accountActive(entry),
+      inactiveReason:
+        typeof params.accountInactiveReason === "function"
+          ? params.accountInactiveReason(entry)
+          : params.accountInactiveReason,
+    });
+  }
+}
+
 function collectTelegramAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const channels = params.config.channels as Record<string, unknown> | undefined;
-  if (!isRecord(channels)) {
+  const resolved = getChannelSurface(params.config, "telegram");
+  if (!resolved) {
     return;
   }
-  const telegram = channels.telegram;
-  if (!isRecord(telegram)) {
-    return;
-  }
-  const surface = resolveChannelAccountSurface(telegram);
+  const { channel: telegram, surface } = resolved;
   const baseTokenFile = typeof telegram.tokenFile === "string" ? telegram.tokenFile.trim() : "";
-  const topLevelBotTokenActive = !surface.channelEnabled
-    ? false
-    : !surface.hasExplicitAccounts
-      ? baseTokenFile.length === 0
-      : surface.accounts.some(({ account, enabled }) => {
-          if (!enabled || baseTokenFile.length > 0) {
-            return false;
-          }
-          const accountBotTokenConfigured = hasConfiguredSecretInputValue(
-            account.botToken,
-            params.defaults,
-          );
-          const accountTokenFileConfigured =
-            typeof account.tokenFile === "string" && account.tokenFile.trim().length > 0;
-          return !accountBotTokenConfigured && !accountTokenFileConfigured;
-        });
-  collectSecretInputAssignment({
-    value: telegram.botToken,
-    path: "channels.telegram.botToken",
-    expected: "string",
+  const accountTokenFile = (account: Record<string, unknown>) =>
+    typeof account.tokenFile === "string" ? account.tokenFile.trim() : "";
+  collectConditionalChannelFieldAssignments({
+    channelKey: "telegram",
+    field: "botToken",
+    channel: telegram,
+    surface,
     defaults: params.defaults,
     context: params.context,
-    active: topLevelBotTokenActive,
-    inactiveReason:
-      "no enabled Telegram surface inherits this top-level botToken (tokenFile is configured).",
-    apply: (value) => {
-      telegram.botToken = value;
-    },
-  });
-  if (surface.hasExplicitAccounts) {
-    for (const { accountId, account, enabled } of surface.accounts) {
-      if (!hasOwnProperty(account, "botToken")) {
-        continue;
+    topLevelActiveWithoutAccounts: baseTokenFile.length === 0,
+    topLevelInheritedAccountActive: ({ account, enabled }) => {
+      if (!enabled || baseTokenFile.length > 0) {
+        return false;
       }
-      const accountTokenFile =
-        typeof account.tokenFile === "string" ? account.tokenFile.trim() : "";
-      collectSecretInputAssignment({
-        value: account.botToken,
-        path: `channels.telegram.accounts.${accountId}.botToken`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled && accountTokenFile.length === 0,
-        inactiveReason: "Telegram account is disabled or tokenFile is configured.",
-        apply: (value) => {
-          account.botToken = value;
-        },
-      });
-    }
-  }
-  const baseWebhookUrl = typeof telegram.webhookUrl === "string" ? telegram.webhookUrl.trim() : "";
-  const topLevelWebhookSecretActive = !surface.channelEnabled
-    ? false
-    : !surface.hasExplicitAccounts
-      ? baseWebhookUrl.length > 0
-      : surface.accounts.some(
-          ({ account, enabled }) =>
-            enabled &&
-            !hasOwnProperty(account, "webhookSecret") &&
-            (hasOwnProperty(account, "webhookUrl")
-              ? typeof account.webhookUrl === "string" && account.webhookUrl.trim().length > 0
-              : baseWebhookUrl.length > 0),
-        );
-  collectSecretInputAssignment({
-    value: telegram.webhookSecret,
-    path: "channels.telegram.webhookSecret",
-    expected: "string",
-    defaults: params.defaults,
-    context: params.context,
-    active: topLevelWebhookSecretActive,
-    inactiveReason:
-      "no enabled Telegram webhook surface inherits this top-level webhookSecret (webhook mode is not active).",
-    apply: (value) => {
-      telegram.webhookSecret = value;
+      const accountBotTokenConfigured = hasConfiguredSecretInputValue(
+        account.botToken,
+        params.defaults,
+      );
+      return !accountBotTokenConfigured && accountTokenFile(account).length === 0;
     },
+    accountActive: ({ account, enabled }) => enabled && accountTokenFile(account).length === 0,
+    topInactiveReason:
+      "no enabled Telegram surface inherits this top-level botToken (tokenFile is configured).",
+    accountInactiveReason: "Telegram account is disabled or tokenFile is configured.",
   });
-  if (!surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const { accountId, account, enabled } of surface.accounts) {
-    if (!hasOwnProperty(account, "webhookSecret")) {
-      continue;
-    }
-    const accountWebhookUrl = hasOwnProperty(account, "webhookUrl")
+  const baseWebhookUrl = typeof telegram.webhookUrl === "string" ? telegram.webhookUrl.trim() : "";
+  const accountWebhookUrl = (account: Record<string, unknown>) =>
+    hasOwnProperty(account, "webhookUrl")
       ? typeof account.webhookUrl === "string"
         ? account.webhookUrl.trim()
         : ""
       : baseWebhookUrl;
-    collectSecretInputAssignment({
-      value: account.webhookSecret,
-      path: `channels.telegram.accounts.${accountId}.webhookSecret`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: enabled && accountWebhookUrl.length > 0,
-      inactiveReason:
-        "Telegram account is disabled or webhook mode is not active for this account.",
-      apply: (value) => {
-        account.webhookSecret = value;
-      },
-    });
-  }
+  collectConditionalChannelFieldAssignments({
+    channelKey: "telegram",
+    field: "webhookSecret",
+    channel: telegram,
+    surface,
+    defaults: params.defaults,
+    context: params.context,
+    topLevelActiveWithoutAccounts: baseWebhookUrl.length > 0,
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && !hasOwnProperty(account, "webhookSecret") && accountWebhookUrl(account).length > 0,
+    accountActive: ({ account, enabled }) => enabled && accountWebhookUrl(account).length > 0,
+    topInactiveReason:
+      "no enabled Telegram webhook surface inherits this top-level webhookSecret (webhook mode is not active).",
+    accountInactiveReason:
+      "Telegram account is disabled or webhook mode is not active for this account.",
+  });
 }
 
 function collectSlackAssignments(params: {
@@ -254,15 +393,11 @@ function collectSlackAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const channels = params.config.channels as Record<string, unknown> | undefined;
-  if (!isRecord(channels)) {
+  const resolved = getChannelSurface(params.config, "slack");
+  if (!resolved) {
     return;
   }
-  const slack = channels.slack;
-  if (!isRecord(slack)) {
-    return;
-  }
-  const surface = resolveChannelAccountSurface(slack);
+  const { channel: slack, surface } = resolved;
   const baseMode = slack.mode === "http" || slack.mode === "socket" ? slack.mode : "socket";
   const fields = ["botToken", "userToken"] as const;
   for (const field of fields) {
@@ -277,90 +412,38 @@ function collectSlackAssignments(params: {
       accountInactiveReason: "Slack account is disabled.",
     });
   }
-  const topLevelAppTokenActive = !surface.channelEnabled
-    ? false
-    : !surface.hasExplicitAccounts
-      ? baseMode !== "http"
-      : surface.accounts.some(({ account, enabled }) => {
-          if (!enabled || hasOwnProperty(account, "appToken")) {
-            return false;
-          }
-          const accountMode =
-            account.mode === "http" || account.mode === "socket" ? account.mode : baseMode;
-          return accountMode !== "http";
-        });
-  collectSecretInputAssignment({
-    value: slack.appToken,
-    path: "channels.slack.appToken",
-    expected: "string",
+  const resolveAccountMode = (account: Record<string, unknown>) =>
+    account.mode === "http" || account.mode === "socket" ? account.mode : baseMode;
+  collectConditionalChannelFieldAssignments({
+    channelKey: "slack",
+    field: "appToken",
+    channel: slack,
+    surface,
     defaults: params.defaults,
     context: params.context,
-    active: topLevelAppTokenActive,
-    inactiveReason: "no enabled Slack socket-mode surface inherits this top-level appToken.",
-    apply: (value) => {
-      slack.appToken = value;
-    },
+    topLevelActiveWithoutAccounts: baseMode !== "http",
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && !hasOwnProperty(account, "appToken") && resolveAccountMode(account) !== "http",
+    accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) !== "http",
+    topInactiveReason: "no enabled Slack socket-mode surface inherits this top-level appToken.",
+    accountInactiveReason: "Slack account is disabled or not running in socket mode.",
   });
-  const topLevelSigningSecretActive = !surface.channelEnabled
-    ? false
-    : !surface.hasExplicitAccounts
-      ? baseMode === "http"
-      : surface.accounts.some(({ account, enabled }) => {
-          if (!enabled || hasOwnProperty(account, "signingSecret")) {
-            return false;
-          }
-          const accountMode =
-            account.mode === "http" || account.mode === "socket" ? account.mode : baseMode;
-          return accountMode === "http";
-        });
-  collectSecretInputAssignment({
-    value: slack.signingSecret,
-    path: "channels.slack.signingSecret",
-    expected: "string",
+  collectConditionalChannelFieldAssignments({
+    channelKey: "slack",
+    field: "signingSecret",
+    channel: slack,
+    surface,
     defaults: params.defaults,
     context: params.context,
-    active: topLevelSigningSecretActive,
-    inactiveReason: "no enabled Slack HTTP-mode surface inherits this top-level signingSecret.",
-    apply: (value) => {
-      slack.signingSecret = value;
-    },
+    topLevelActiveWithoutAccounts: baseMode === "http",
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled &&
+      !hasOwnProperty(account, "signingSecret") &&
+      resolveAccountMode(account) === "http",
+    accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "http",
+    topInactiveReason: "no enabled Slack HTTP-mode surface inherits this top-level signingSecret.",
+    accountInactiveReason: "Slack account is disabled or not running in HTTP mode.",
   });
-  if (!surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const { accountId, account, enabled } of surface.accounts) {
-    const accountMode =
-      account.mode === "http" || account.mode === "socket" ? account.mode : baseMode;
-    if (hasOwnProperty(account, "appToken")) {
-      collectSecretInputAssignment({
-        value: account.appToken,
-        path: `channels.slack.accounts.${accountId}.appToken`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled && accountMode !== "http",
-        inactiveReason: "Slack account is disabled or not running in socket mode.",
-        apply: (value) => {
-          account.appToken = value;
-        },
-      });
-    }
-    if (!hasOwnProperty(account, "signingSecret")) {
-      continue;
-    }
-    collectSecretInputAssignment({
-      value: account.signingSecret,
-      path: `channels.slack.accounts.${accountId}.signingSecret`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: enabled && accountMode === "http",
-      inactiveReason: "Slack account is disabled or not running in HTTP mode.",
-      apply: (value) => {
-        account.signingSecret = value;
-      },
-    });
-  }
 }
 
 function collectDiscordAssignments(params: {
@@ -368,15 +451,11 @@ function collectDiscordAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const channels = params.config.channels as Record<string, unknown> | undefined;
-  if (!isRecord(channels)) {
+  const resolved = getChannelSurface(params.config, "discord");
+  if (!resolved) {
     return;
   }
-  const discord = channels.discord;
-  if (!isRecord(discord)) {
-    return;
-  }
-  const surface = resolveChannelAccountSurface(discord);
+  const { channel: discord, surface } = resolved;
   collectSimpleChannelFieldAssignments({
     channelKey: "discord",
     field: "token",
@@ -387,67 +466,41 @@ function collectDiscordAssignments(params: {
     topInactiveReason: "no enabled account inherits this top-level Discord token.",
     accountInactiveReason: "Discord account is disabled.",
   });
-  if (isRecord(discord.pluralkit)) {
-    const pluralkit = discord.pluralkit;
-    collectSecretInputAssignment({
-      value: pluralkit.token,
-      path: "channels.discord.pluralkit.token",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: isBaseFieldActiveForChannelSurface(surface, "pluralkit") && isEnabledFlag(pluralkit),
-      inactiveReason:
-        "no enabled Discord surface inherits this top-level PluralKit config or PluralKit is disabled.",
-      apply: (value) => {
-        pluralkit.token = value;
-      },
-    });
-  }
-  if (isRecord(discord.voice) && isRecord(discord.voice.tts)) {
-    collectTtsApiKeyAssignments({
-      tts: discord.voice.tts,
-      pathPrefix: "channels.discord.voice.tts",
-      defaults: params.defaults,
-      context: params.context,
-      active: isBaseFieldActiveForChannelSurface(surface, "voice") && isEnabledFlag(discord.voice),
-      inactiveReason:
-        "no enabled Discord surface inherits this top-level voice config or voice is disabled.",
-    });
-  }
-  if (!surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const { accountId, account, enabled } of surface.accounts) {
-    if (hasOwnProperty(account, "pluralkit") && isRecord(account.pluralkit)) {
-      const pluralkit = account.pluralkit;
-      collectSecretInputAssignment({
-        value: pluralkit.token,
-        path: `channels.discord.accounts.${accountId}.pluralkit.token`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled && isEnabledFlag(pluralkit),
-        inactiveReason: "Discord account is disabled or PluralKit is disabled for this account.",
-        apply: (value) => {
-          pluralkit.token = value;
-        },
-      });
-    }
-    if (
-      hasOwnProperty(account, "voice") &&
-      isRecord(account.voice) &&
-      isRecord(account.voice.tts)
-    ) {
-      collectTtsApiKeyAssignments({
-        tts: account.voice.tts,
-        pathPrefix: `channels.discord.accounts.${accountId}.voice.tts`,
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled && isEnabledFlag(account.voice),
-        inactiveReason: "Discord account is disabled or voice is disabled for this account.",
-      });
-    }
-  }
+  collectNestedChannelFieldAssignments({
+    channelKey: "discord",
+    nestedKey: "pluralkit",
+    field: "token",
+    channel: discord,
+    surface,
+    defaults: params.defaults,
+    context: params.context,
+    topLevelActive:
+      isBaseFieldActiveForChannelSurface(surface, "pluralkit") &&
+      isRecord(discord.pluralkit) &&
+      isEnabledFlag(discord.pluralkit),
+    topInactiveReason:
+      "no enabled Discord surface inherits this top-level PluralKit config or PluralKit is disabled.",
+    accountActive: ({ account, enabled }) =>
+      enabled && isRecord(account.pluralkit) && isEnabledFlag(account.pluralkit),
+    accountInactiveReason: "Discord account is disabled or PluralKit is disabled for this account.",
+  });
+  collectNestedChannelTtsAssignments({
+    channelKey: "discord",
+    nestedKey: "voice",
+    channel: discord,
+    surface,
+    defaults: params.defaults,
+    context: params.context,
+    topLevelActive:
+      isBaseFieldActiveForChannelSurface(surface, "voice") &&
+      isRecord(discord.voice) &&
+      isEnabledFlag(discord.voice),
+    topInactiveReason:
+      "no enabled Discord surface inherits this top-level voice config or voice is disabled.",
+    accountActive: ({ account, enabled }) =>
+      enabled && isRecord(account.voice) && isEnabledFlag(account.voice),
+    accountInactiveReason: "Discord account is disabled or voice is disabled for this account.",
+  });
 }
 
 function collectIrcAssignments(params: {
@@ -455,15 +508,11 @@ function collectIrcAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const channels = params.config.channels as Record<string, unknown> | undefined;
-  if (!isRecord(channels)) {
+  const resolved = getChannelSurface(params.config, "irc");
+  if (!resolved) {
     return;
   }
-  const irc = channels.irc;
-  if (!isRecord(irc)) {
-    return;
-  }
-  const surface = resolveChannelAccountSurface(irc);
+  const { channel: irc, surface } = resolved;
   collectSimpleChannelFieldAssignments({
     channelKey: "irc",
     field: "password",
@@ -474,42 +523,24 @@ function collectIrcAssignments(params: {
     topInactiveReason: "no enabled account inherits this top-level IRC password.",
     accountInactiveReason: "IRC account is disabled.",
   });
-  if (isRecord(irc.nickserv)) {
-    const nickserv = irc.nickserv;
-    collectSecretInputAssignment({
-      value: nickserv.password,
-      path: "channels.irc.nickserv.password",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: isBaseFieldActiveForChannelSurface(surface, "nickserv") && isEnabledFlag(nickserv),
-      inactiveReason:
-        "no enabled account inherits this top-level IRC nickserv config or NickServ is disabled.",
-      apply: (value) => {
-        nickserv.password = value;
-      },
-    });
-  }
-  if (!surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const { accountId, account, enabled } of surface.accounts) {
-    if (hasOwnProperty(account, "nickserv") && isRecord(account.nickserv)) {
-      const nickserv = account.nickserv;
-      collectSecretInputAssignment({
-        value: nickserv.password,
-        path: `channels.irc.accounts.${accountId}.nickserv.password`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled && isEnabledFlag(nickserv),
-        inactiveReason: "IRC account is disabled or NickServ is disabled for this account.",
-        apply: (value) => {
-          nickserv.password = value;
-        },
-      });
-    }
-  }
+  collectNestedChannelFieldAssignments({
+    channelKey: "irc",
+    nestedKey: "nickserv",
+    field: "password",
+    channel: irc,
+    surface,
+    defaults: params.defaults,
+    context: params.context,
+    topLevelActive:
+      isBaseFieldActiveForChannelSurface(surface, "nickserv") &&
+      isRecord(irc.nickserv) &&
+      isEnabledFlag(irc.nickserv),
+    topInactiveReason:
+      "no enabled account inherits this top-level IRC nickserv config or NickServ is disabled.",
+    accountActive: ({ account, enabled }) =>
+      enabled && isRecord(account.nickserv) && isEnabledFlag(account.nickserv),
+    accountInactiveReason: "IRC account is disabled or NickServ is disabled for this account.",
+  });
 }
 
 function collectBlueBubblesAssignments(params: {
@@ -517,15 +548,11 @@ function collectBlueBubblesAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const channels = params.config.channels as Record<string, unknown> | undefined;
-  if (!isRecord(channels)) {
+  const resolved = getChannelSurface(params.config, "bluebubbles");
+  if (!resolved) {
     return;
   }
-  const bluebubbles = channels.bluebubbles;
-  if (!isRecord(bluebubbles)) {
-    return;
-  }
-  const surface = resolveChannelAccountSurface(bluebubbles);
+  const { channel: bluebubbles, surface } = resolved;
   collectSimpleChannelFieldAssignments({
     channelKey: "bluebubbles",
     field: "password",
@@ -543,12 +570,8 @@ function collectMSTeamsAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const channels = params.config.channels as Record<string, unknown> | undefined;
-  if (!isRecord(channels)) {
-    return;
-  }
-  const msteams = channels.msteams;
-  if (!isRecord(msteams)) {
+  const msteams = getChannelRecord(params.config, "msteams");
+  if (!msteams) {
     return;
   }
   collectSecretInputAssignment({
@@ -570,15 +593,11 @@ function collectMattermostAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const channels = params.config.channels as Record<string, unknown> | undefined;
-  if (!isRecord(channels)) {
+  const resolved = getChannelSurface(params.config, "mattermost");
+  if (!resolved) {
     return;
   }
-  const mattermost = channels.mattermost;
-  if (!isRecord(mattermost)) {
-    return;
-  }
-  const surface = resolveChannelAccountSurface(mattermost);
+  const { channel: mattermost, surface } = resolved;
   collectSimpleChannelFieldAssignments({
     channelKey: "mattermost",
     field: "botToken",
@@ -596,41 +615,54 @@ function collectMatrixAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const channels = params.config.channels as Record<string, unknown> | undefined;
-  if (!isRecord(channels)) {
+  const resolved = getChannelSurface(params.config, "matrix");
+  if (!resolved) {
     return;
   }
-  const matrix = channels.matrix;
-  if (!isRecord(matrix)) {
-    return;
-  }
-  const surface = resolveChannelAccountSurface(matrix);
+  const { channel: matrix, surface } = resolved;
   const envAccessTokenConfigured =
     normalizeSecretStringValue(params.context.env.MATRIX_ACCESS_TOKEN).length > 0;
+  const defaultScopedAccessTokenConfigured =
+    normalizeSecretStringValue(
+      params.context.env[getMatrixScopedEnvVarNames("default").accessToken],
+    ).length > 0;
+  const defaultAccountAccessTokenConfigured = surface.accounts.some(
+    ({ accountId, account }) =>
+      normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID &&
+      hasConfiguredSecretInputValue(account.accessToken, params.defaults),
+  );
   const baseAccessTokenConfigured = hasConfiguredSecretInputValue(
     matrix.accessToken,
     params.defaults,
   );
-  const topLevelPasswordActive = !surface.channelEnabled
-    ? false
-    : !surface.hasExplicitAccounts
-      ? !(baseAccessTokenConfigured || envAccessTokenConfigured)
-      : surface.accounts.some(
-          ({ account, enabled }) =>
-            enabled &&
-            !hasOwnProperty(account, "password") &&
-            !hasConfiguredSecretInputValue(account.accessToken, params.defaults) &&
-            !(baseAccessTokenConfigured || envAccessTokenConfigured),
-        );
+  collectSecretInputAssignment({
+    value: matrix.accessToken,
+    path: "channels.matrix.accessToken",
+    expected: "string",
+    defaults: params.defaults,
+    context: params.context,
+    active: surface.channelEnabled,
+    inactiveReason: "Matrix channel is disabled.",
+    apply: (value) => {
+      matrix.accessToken = value;
+    },
+  });
   collectSecretInputAssignment({
     value: matrix.password,
     path: "channels.matrix.password",
     expected: "string",
     defaults: params.defaults,
     context: params.context,
-    active: topLevelPasswordActive,
+    active:
+      surface.channelEnabled &&
+      !(
+        baseAccessTokenConfigured ||
+        envAccessTokenConfigured ||
+        defaultScopedAccessTokenConfigured ||
+        defaultAccountAccessTokenConfigured
+      ),
     inactiveReason:
-      "no enabled Matrix surface inherits this top-level password (an accessToken is configured).",
+      "Matrix channel is disabled or access-token auth is configured for the default Matrix account.",
     apply: (value) => {
       matrix.password = value;
     },
@@ -639,6 +671,20 @@ function collectMatrixAssignments(params: {
     return;
   }
   for (const { accountId, account, enabled } of surface.accounts) {
+    if (hasOwnProperty(account, "accessToken")) {
+      collectSecretInputAssignment({
+        value: account.accessToken,
+        path: `channels.matrix.accounts.${accountId}.accessToken`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: enabled,
+        inactiveReason: "Matrix account is disabled.",
+        apply: (value) => {
+          account.accessToken = value;
+        },
+      });
+    }
     if (!hasOwnProperty(account, "password")) {
       continue;
     }
@@ -646,8 +692,12 @@ function collectMatrixAssignments(params: {
       account.accessToken,
       params.defaults,
     );
-    const inheritedAccessTokenConfigured =
-      !hasOwnProperty(account, "accessToken") &&
+    const scopedEnvAccessTokenConfigured =
+      normalizeSecretStringValue(
+        params.context.env[getMatrixScopedEnvVarNames(accountId).accessToken],
+      ).length > 0;
+    const inheritedDefaultAccountAccessTokenConfigured =
+      normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID &&
       (baseAccessTokenConfigured || envAccessTokenConfigured);
     collectSecretInputAssignment({
       value: account.password,
@@ -655,8 +705,14 @@ function collectMatrixAssignments(params: {
       expected: "string",
       defaults: params.defaults,
       context: params.context,
-      active: enabled && !(accountAccessTokenConfigured || inheritedAccessTokenConfigured),
-      inactiveReason: "Matrix account is disabled or an accessToken is configured.",
+      active:
+        enabled &&
+        !(
+          accountAccessTokenConfigured ||
+          scopedEnvAccessTokenConfigured ||
+          inheritedDefaultAccountAccessTokenConfigured
+        ),
+      inactiveReason: "Matrix account is disabled or this account has an accessToken configured.",
       apply: (value) => {
         account.password = value;
       },
@@ -669,97 +725,49 @@ function collectZaloAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const channels = params.config.channels as Record<string, unknown> | undefined;
-  if (!isRecord(channels)) {
+  const resolved = getChannelSurface(params.config, "zalo");
+  if (!resolved) {
     return;
   }
-  const zalo = channels.zalo;
-  if (!isRecord(zalo)) {
-    return;
-  }
-  const surface = resolveChannelAccountSurface(zalo);
-  const topLevelBotTokenActive = !surface.channelEnabled
-    ? false
-    : !surface.hasExplicitAccounts
-      ? true
-      : surface.accounts.some(
-          ({ account, enabled }) => enabled && !hasOwnProperty(account, "botToken"),
-        );
-  collectSecretInputAssignment({
-    value: zalo.botToken,
-    path: "channels.zalo.botToken",
-    expected: "string",
+  const { channel: zalo, surface } = resolved;
+  collectConditionalChannelFieldAssignments({
+    channelKey: "zalo",
+    field: "botToken",
+    channel: zalo,
+    surface,
     defaults: params.defaults,
     context: params.context,
-    active: topLevelBotTokenActive,
-    inactiveReason: "no enabled Zalo surface inherits this top-level botToken.",
-    apply: (value) => {
-      zalo.botToken = value;
-    },
+    topLevelActiveWithoutAccounts: true,
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && !hasOwnProperty(account, "botToken"),
+    accountActive: ({ enabled }) => enabled,
+    topInactiveReason: "no enabled Zalo surface inherits this top-level botToken.",
+    accountInactiveReason: "Zalo account is disabled.",
   });
   const baseWebhookUrl = normalizeSecretStringValue(zalo.webhookUrl);
-  const topLevelWebhookSecretActive = !surface.channelEnabled
-    ? false
-    : !surface.hasExplicitAccounts
-      ? baseWebhookUrl.length > 0
-      : surface.accounts.some(({ account, enabled }) => {
-          if (!enabled || hasOwnProperty(account, "webhookSecret")) {
-            return false;
-          }
-          const accountWebhookUrl = hasOwnProperty(account, "webhookUrl")
-            ? normalizeSecretStringValue(account.webhookUrl)
-            : baseWebhookUrl;
-          return accountWebhookUrl.length > 0;
-        });
-  collectSecretInputAssignment({
-    value: zalo.webhookSecret,
-    path: "channels.zalo.webhookSecret",
-    expected: "string",
+  const resolveAccountWebhookUrl = (account: Record<string, unknown>) =>
+    hasOwnProperty(account, "webhookUrl")
+      ? normalizeSecretStringValue(account.webhookUrl)
+      : baseWebhookUrl;
+  collectConditionalChannelFieldAssignments({
+    channelKey: "zalo",
+    field: "webhookSecret",
+    channel: zalo,
+    surface,
     defaults: params.defaults,
     context: params.context,
-    active: topLevelWebhookSecretActive,
-    inactiveReason:
+    topLevelActiveWithoutAccounts: baseWebhookUrl.length > 0,
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled &&
+      !hasOwnProperty(account, "webhookSecret") &&
+      resolveAccountWebhookUrl(account).length > 0,
+    accountActive: ({ account, enabled }) =>
+      enabled && resolveAccountWebhookUrl(account).length > 0,
+    topInactiveReason:
       "no enabled Zalo webhook surface inherits this top-level webhookSecret (webhook mode is not active).",
-    apply: (value) => {
-      zalo.webhookSecret = value;
-    },
+    accountInactiveReason:
+      "Zalo account is disabled or webhook mode is not active for this account.",
   });
-  if (!surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const { accountId, account, enabled } of surface.accounts) {
-    if (hasOwnProperty(account, "botToken")) {
-      collectSecretInputAssignment({
-        value: account.botToken,
-        path: `channels.zalo.accounts.${accountId}.botToken`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled,
-        inactiveReason: "Zalo account is disabled.",
-        apply: (value) => {
-          account.botToken = value;
-        },
-      });
-    }
-    if (hasOwnProperty(account, "webhookSecret")) {
-      const accountWebhookUrl = hasOwnProperty(account, "webhookUrl")
-        ? normalizeSecretStringValue(account.webhookUrl)
-        : baseWebhookUrl;
-      collectSecretInputAssignment({
-        value: account.webhookSecret,
-        path: `channels.zalo.accounts.${accountId}.webhookSecret`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled && accountWebhookUrl.length > 0,
-        inactiveReason: "Zalo account is disabled or webhook mode is not active for this account.",
-        apply: (value) => {
-          account.webhookSecret = value;
-        },
-      });
-    }
-  }
 }
 
 function collectFeishuAssignments(params: {
@@ -767,15 +775,11 @@ function collectFeishuAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const channels = params.config.channels as Record<string, unknown> | undefined;
-  if (!isRecord(channels)) {
+  const resolved = getChannelSurface(params.config, "feishu");
+  if (!resolved) {
     return;
   }
-  const feishu = channels.feishu;
-  if (!isRecord(feishu)) {
-    return;
-  }
-  const surface = resolveChannelAccountSurface(feishu);
+  const { channel: feishu, surface } = resolved;
   collectSimpleChannelFieldAssignments({
     channelKey: "feishu",
     field: "appSecret",
@@ -788,97 +792,43 @@ function collectFeishuAssignments(params: {
   });
   const baseConnectionMode =
     normalizeSecretStringValue(feishu.connectionMode) === "webhook" ? "webhook" : "websocket";
-  const topLevelVerificationTokenActive = !surface.channelEnabled
-    ? false
-    : !surface.hasExplicitAccounts
-      ? baseConnectionMode === "webhook"
-      : surface.accounts.some(({ account, enabled }) => {
-          if (!enabled || hasOwnProperty(account, "verificationToken")) {
-            return false;
-          }
-          const accountMode = hasOwnProperty(account, "connectionMode")
-            ? normalizeSecretStringValue(account.connectionMode)
-            : baseConnectionMode;
-          return accountMode === "webhook";
-        });
-  const topLevelEncryptKeyActive = !surface.channelEnabled
-    ? false
-    : !surface.hasExplicitAccounts
-      ? baseConnectionMode === "webhook"
-      : surface.accounts.some(({ account, enabled }) => {
-          if (!enabled || hasOwnProperty(account, "encryptKey")) {
-            return false;
-          }
-          const accountMode = hasOwnProperty(account, "connectionMode")
-            ? normalizeSecretStringValue(account.connectionMode)
-            : baseConnectionMode;
-          return accountMode === "webhook";
-        });
-  collectSecretInputAssignment({
-    value: feishu.encryptKey,
-    path: "channels.feishu.encryptKey",
-    expected: "string",
-    defaults: params.defaults,
-    context: params.context,
-    active: topLevelEncryptKeyActive,
-    inactiveReason: "no enabled Feishu webhook-mode surface inherits this top-level encryptKey.",
-    apply: (value) => {
-      feishu.encryptKey = value;
-    },
-  });
-  collectSecretInputAssignment({
-    value: feishu.verificationToken,
-    path: "channels.feishu.verificationToken",
-    expected: "string",
-    defaults: params.defaults,
-    context: params.context,
-    active: topLevelVerificationTokenActive,
-    inactiveReason:
-      "no enabled Feishu webhook-mode surface inherits this top-level verificationToken.",
-    apply: (value) => {
-      feishu.verificationToken = value;
-    },
-  });
-  if (!surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const { accountId, account, enabled } of surface.accounts) {
-    if (hasOwnProperty(account, "encryptKey")) {
-      const accountMode = hasOwnProperty(account, "connectionMode")
-        ? normalizeSecretStringValue(account.connectionMode)
-        : baseConnectionMode;
-      collectSecretInputAssignment({
-        value: account.encryptKey,
-        path: `channels.feishu.accounts.${accountId}.encryptKey`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled && accountMode === "webhook",
-        inactiveReason: "Feishu account is disabled or not running in webhook mode.",
-        apply: (value) => {
-          account.encryptKey = value;
-        },
-      });
-    }
-    if (!hasOwnProperty(account, "verificationToken")) {
-      continue;
-    }
-    const accountMode = hasOwnProperty(account, "connectionMode")
+  const resolveAccountMode = (account: Record<string, unknown>) =>
+    hasOwnProperty(account, "connectionMode")
       ? normalizeSecretStringValue(account.connectionMode)
       : baseConnectionMode;
-    collectSecretInputAssignment({
-      value: account.verificationToken,
-      path: `channels.feishu.accounts.${accountId}.verificationToken`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: enabled && accountMode === "webhook",
-      inactiveReason: "Feishu account is disabled or not running in webhook mode.",
-      apply: (value) => {
-        account.verificationToken = value;
-      },
-    });
-  }
+  collectConditionalChannelFieldAssignments({
+    channelKey: "feishu",
+    field: "encryptKey",
+    channel: feishu,
+    surface,
+    defaults: params.defaults,
+    context: params.context,
+    topLevelActiveWithoutAccounts: baseConnectionMode === "webhook",
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled &&
+      !hasOwnProperty(account, "encryptKey") &&
+      resolveAccountMode(account) === "webhook",
+    accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "webhook",
+    topInactiveReason: "no enabled Feishu webhook-mode surface inherits this top-level encryptKey.",
+    accountInactiveReason: "Feishu account is disabled or not running in webhook mode.",
+  });
+  collectConditionalChannelFieldAssignments({
+    channelKey: "feishu",
+    field: "verificationToken",
+    channel: feishu,
+    surface,
+    defaults: params.defaults,
+    context: params.context,
+    topLevelActiveWithoutAccounts: baseConnectionMode === "webhook",
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled &&
+      !hasOwnProperty(account, "verificationToken") &&
+      resolveAccountMode(account) === "webhook",
+    accountActive: ({ account, enabled }) => enabled && resolveAccountMode(account) === "webhook",
+    topInactiveReason:
+      "no enabled Feishu webhook-mode surface inherits this top-level verificationToken.",
+    accountInactiveReason: "Feishu account is disabled or not running in webhook mode.",
+  });
 }
 
 function collectNextcloudTalkAssignments(params: {
@@ -886,86 +836,41 @@ function collectNextcloudTalkAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const channels = params.config.channels as Record<string, unknown> | undefined;
-  if (!isRecord(channels)) {
+  const resolved = getChannelSurface(params.config, "nextcloud-talk");
+  if (!resolved) {
     return;
   }
-  const nextcloudTalk = channels["nextcloud-talk"];
-  if (!isRecord(nextcloudTalk)) {
-    return;
-  }
-  const surface = resolveChannelAccountSurface(nextcloudTalk);
-  const topLevelBotSecretActive = !surface.channelEnabled
-    ? false
-    : !surface.hasExplicitAccounts
-      ? true
-      : surface.accounts.some(
-          ({ account, enabled }) => enabled && !hasOwnProperty(account, "botSecret"),
-        );
-  collectSecretInputAssignment({
-    value: nextcloudTalk.botSecret,
-    path: "channels.nextcloud-talk.botSecret",
-    expected: "string",
+  const { channel: nextcloudTalk, surface } = resolved;
+  const inheritsField =
+    (field: string) =>
+    ({ account, enabled }: ChannelAccountEntry) =>
+      enabled && !hasOwnProperty(account, field);
+  collectConditionalChannelFieldAssignments({
+    channelKey: "nextcloud-talk",
+    field: "botSecret",
+    channel: nextcloudTalk,
+    surface,
     defaults: params.defaults,
     context: params.context,
-    active: topLevelBotSecretActive,
-    inactiveReason: "no enabled Nextcloud Talk surface inherits this top-level botSecret.",
-    apply: (value) => {
-      nextcloudTalk.botSecret = value;
-    },
+    topLevelActiveWithoutAccounts: true,
+    topLevelInheritedAccountActive: inheritsField("botSecret"),
+    accountActive: ({ enabled }) => enabled,
+    topInactiveReason: "no enabled Nextcloud Talk surface inherits this top-level botSecret.",
+    accountInactiveReason: "Nextcloud Talk account is disabled.",
   });
-  const topLevelApiPasswordActive = !surface.channelEnabled
-    ? false
-    : !surface.hasExplicitAccounts
-      ? true
-      : surface.accounts.some(
-          ({ account, enabled }) => enabled && !hasOwnProperty(account, "apiPassword"),
-        );
-  collectSecretInputAssignment({
-    value: nextcloudTalk.apiPassword,
-    path: "channels.nextcloud-talk.apiPassword",
-    expected: "string",
+  collectConditionalChannelFieldAssignments({
+    channelKey: "nextcloud-talk",
+    field: "apiPassword",
+    channel: nextcloudTalk,
+    surface,
     defaults: params.defaults,
     context: params.context,
-    active: topLevelApiPasswordActive,
-    inactiveReason: "no enabled Nextcloud Talk surface inherits this top-level apiPassword.",
-    apply: (value) => {
-      nextcloudTalk.apiPassword = value;
-    },
+    topLevelActiveWithoutAccounts: true,
+    topLevelInheritedAccountActive: inheritsField("apiPassword"),
+    accountActive: ({ enabled }) => enabled,
+    topInactiveReason: "no enabled Nextcloud Talk surface inherits this top-level apiPassword.",
+    accountInactiveReason: "Nextcloud Talk account is disabled.",
   });
-  if (!surface.hasExplicitAccounts) {
-    return;
-  }
-  for (const { accountId, account, enabled } of surface.accounts) {
-    if (hasOwnProperty(account, "botSecret")) {
-      collectSecretInputAssignment({
-        value: account.botSecret,
-        path: `channels.nextcloud-talk.accounts.${accountId}.botSecret`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled,
-        inactiveReason: "Nextcloud Talk account is disabled.",
-        apply: (value) => {
-          account.botSecret = value;
-        },
-      });
-    }
-    if (hasOwnProperty(account, "apiPassword")) {
-      collectSecretInputAssignment({
-        value: account.apiPassword,
-        path: `channels.nextcloud-talk.accounts.${accountId}.apiPassword`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled,
-        inactiveReason: "Nextcloud Talk account is disabled.",
-        apply: (value) => {
-          account.apiPassword = value;
-        },
-      });
-    }
-  }
 }
 
 function collectGoogleChatAccountAssignment(params: {
@@ -1064,7 +969,9 @@ export function collectChannelConfigAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const googleChat = params.config.channels?.googlechat as GoogleChatAccountLike | undefined;
+  const googleChat = getChannelRecord(params.config, "googlechat") as
+    | GoogleChatAccountLike
+    | undefined;
   if (googleChat) {
     collectGoogleChatAssignments({
       googleChat,

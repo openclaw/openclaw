@@ -8,6 +8,7 @@
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import type { FeishuBlockTable, FeishuDocxBlock } from "./docx-types.js";
 
 // ============ Table Utilities ============
 
@@ -33,9 +34,35 @@ const DEFAULT_TABLE_WIDTH = 730; // Approximate Feishu page content width
  * @param tableBlockId - The block_id of the table block
  * @returns Array of column widths in pixels
  */
+function normalizeChildBlockIds(children: string[] | string | undefined): string[] {
+  if (Array.isArray(children)) {
+    return children;
+  }
+  return typeof children === "string" ? [children] : [];
+}
+
+function omitParentId(block: FeishuDocxBlock): FeishuDocxBlock {
+  const cleanBlock = { ...block };
+  delete cleanBlock.parent_id;
+  return cleanBlock;
+}
+
+function createDescendantTable(
+  table: FeishuBlockTable,
+  adaptiveWidths: number[] | undefined,
+): FeishuBlockTable {
+  const { row_size, column_size } = table.property || {};
+  return {
+    property: {
+      row_size,
+      column_size,
+      ...(adaptiveWidths?.length ? { column_width: adaptiveWidths } : {}),
+    },
+  };
+}
+
 export function calculateAdaptiveColumnWidths(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  blocks: any[],
+  blocks: FeishuDocxBlock[],
   tableBlockId: string,
 ): number[] {
   // Find the table block
@@ -46,28 +73,30 @@ export function calculateAdaptiveColumnWidths(
   }
 
   const { row_size, column_size, column_width: originalWidths } = tableBlock.table.property;
+  if (!row_size || !column_size) {
+    return [];
+  }
 
   // Use original total width from Convert API, or fall back to default
   const totalWidth =
     originalWidths && originalWidths.length > 0
       ? originalWidths.reduce((a: number, b: number) => a + b, 0)
       : DEFAULT_TABLE_WIDTH;
-  const cellIds: string[] = tableBlock.children || [];
+  const cellIds = normalizeChildBlockIds(tableBlock.children);
 
   // Build block lookup map
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const blockMap = new Map<string, any>();
+  const blockMap = new Map<string, FeishuDocxBlock>();
   for (const block of blocks) {
-    blockMap.set(block.block_id, block);
+    if (block.block_id) {
+      blockMap.set(block.block_id, block);
+    }
   }
 
   // Extract text content from a table cell
   function getCellText(cellId: string): string {
     const cell = blockMap.get(cellId);
-    if (!cell?.children) return "";
-
     let text = "";
-    const childIds = Array.isArray(cell.children) ? cell.children : [cell.children];
+    const childIds = normalizeChildBlockIds(cell?.children);
 
     for (const childId of childIds) {
       const child = blockMap.get(childId);
@@ -158,20 +187,18 @@ export function calculateAdaptiveColumnWidths(
  * @param blocks - Array of blocks from Convert API
  * @returns Cleaned blocks ready for Descendant API
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function cleanBlocksForDescendant(blocks: any[]): any[] {
+export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxBlock[] {
   // Pre-calculate adaptive widths for all tables
   const tableWidths = new Map<string, number[]>();
   for (const block of blocks) {
-    if (block.block_type === 31) {
+    if (block.block_type === 31 && block.block_id) {
       const widths = calculateAdaptiveColumnWidths(blocks, block.block_id);
       tableWidths.set(block.block_id, widths);
     }
   }
 
   return blocks.map((block) => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { parent_id: _parentId, ...cleanBlock } = block;
+    const cleanBlock = omitParentId(block);
 
     // Fix: Convert API sometimes returns children as string for TableCell
     if (cleanBlock.block_type === 32 && typeof cleanBlock.children === "string") {
@@ -180,18 +207,8 @@ export function cleanBlocksForDescendant(blocks: any[]): any[] {
 
     // Clean table blocks
     if (cleanBlock.block_type === 31 && cleanBlock.table) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { cells: _cells, ...tableWithoutCells } = cleanBlock.table;
-      const { row_size, column_size } = tableWithoutCells.property || {};
-      const adaptiveWidths = tableWidths.get(block.block_id);
-
-      cleanBlock.table = {
-        property: {
-          row_size,
-          column_size,
-          ...(adaptiveWidths?.length && { column_width: adaptiveWidths }),
-        },
-      };
+      const adaptiveWidths = block.block_id ? tableWidths.get(block.block_id) : undefined;
+      cleanBlock.table = createDescendantTable(cleanBlock.table, adaptiveWidths);
     }
 
     return cleanBlock;

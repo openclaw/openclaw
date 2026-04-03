@@ -6,6 +6,7 @@ import {
   InboxOnMessage,
   buildNotifyMessageUpsert,
   getAuthDir,
+  getSock,
   installWebMonitorInboxUnitTestHooks,
   startInboxMonitor,
   waitForMessageCalls,
@@ -60,6 +61,23 @@ describe("web monitor inbox", () => {
         replyToId: "q1",
         replyToBody: "original",
         replyToSender: "+111",
+        sender: expect.objectContaining({
+          e164: "+999",
+          name: "Tester",
+        }),
+        replyTo: expect.objectContaining({
+          id: "q1",
+          body: "original",
+          sender: expect.objectContaining({
+            jid: "111@s.whatsapp.net",
+            e164: "+111",
+            label: "+111",
+          }),
+        }),
+        self: expect.objectContaining({
+          jid: "123@s.whatsapp.net",
+          e164: "+123",
+        }),
       }),
     );
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
@@ -76,7 +94,7 @@ describe("web monitor inbox", () => {
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
     const messageId = nextMessageId("stream");
     const upsert = buildNotifyMessageUpsert({
       id: messageId,
@@ -106,6 +124,64 @@ describe("web monitor inbox", () => {
       text: "pong",
     });
 
+    await listener.close();
+  });
+
+  it("stays unavailable on connect in self-chat mode", async () => {
+    const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
+      selfChatMode: true,
+    });
+
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "unavailable");
+
+    await listener.close();
+  });
+
+  it("hydrates participating groups once after connect", async () => {
+    const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
+
+    expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
+  it("continues when group hydration fails on connect", async () => {
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockRejectedValueOnce(new Error("no groups"));
+
+    const { listener } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage);
+
+    expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
+
+    await listener.close();
+  });
+
+  it("does not block inbound listeners while group hydration is pending", async () => {
+    let resolveHydration!: () => void;
+    const sock = getSock();
+    const pendingHydration = new Promise<Record<string, never>>((resolve) => {
+      resolveHydration = () => resolve({});
+    });
+    sock.groupFetchAllParticipating.mockImplementationOnce(() => pendingHydration);
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const { listener } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("pending-hydration"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    resolveHydration();
     await listener.close();
   });
 
@@ -264,6 +340,22 @@ describe("web monitor inbox", () => {
   it("captures reply context from wrapped quoted messages", async () => {
     await expectQuotedReplyContext({
       viewOnceMessageV2Extension: {
+        message: { conversation: "original" },
+      },
+    });
+  });
+
+  it("captures reply context from botInvokeMessage wrapped quoted messages", async () => {
+    await expectQuotedReplyContext({
+      botInvokeMessage: {
+        message: { conversation: "original" },
+      },
+    });
+  });
+
+  it("captures reply context from groupMentionedMessage wrapped quoted messages", async () => {
+    await expectQuotedReplyContext({
+      groupMentionedMessage: {
         message: { conversation: "original" },
       },
     });

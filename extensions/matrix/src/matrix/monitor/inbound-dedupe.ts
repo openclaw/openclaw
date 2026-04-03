@@ -1,6 +1,6 @@
-import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "../../runtime-api.js";
-import { resolveMatrixStoragePaths } from "../client/storage.js";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { createAsyncLock } from "../async-lock.js";
+import { resolveMatrixStateFilePath } from "../client/storage.js";
 import type { MatrixAuth } from "../client/types.js";
 import { LogService } from "../sdk/logger.js";
 
@@ -28,23 +28,6 @@ export type MatrixInboundEventDeduper = {
   stop: () => Promise<void>;
 };
 
-function createAsyncLock() {
-  let lock: Promise<void> = Promise.resolve();
-  return async function withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const previous = lock;
-    let release: (() => void) | undefined;
-    lock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      return await fn();
-    } finally {
-      release?.();
-    }
-  };
-}
-
 function normalizeEventPart(value: string): string {
   return value.trim();
 }
@@ -60,16 +43,12 @@ function resolveInboundDedupeStatePath(params: {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
 }): string {
-  const storagePaths = resolveMatrixStoragePaths({
-    homeserver: params.auth.homeserver,
-    userId: params.auth.userId,
-    accessToken: params.auth.accessToken,
-    accountId: params.auth.accountId,
-    deviceId: params.auth.deviceId,
+  return resolveMatrixStateFilePath({
+    auth: params.auth,
     env: params.env,
     stateDir: params.stateDir,
+    filename: INBOUND_DEDUPE_FILENAME,
   });
-  return path.join(storagePaths.rootDir, INBOUND_DEDUPE_FILENAME);
 }
 
 function normalizeTimestamp(raw: unknown): number | null {

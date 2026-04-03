@@ -9,56 +9,85 @@ vi.mock("node:child_process", () => ({
 
 import { resolveOsSummary } from "./os-summary.js";
 
+type OsSummaryCase = {
+  name: string;
+  platform: ReturnType<typeof os.platform>;
+  release: string;
+  arch: ReturnType<typeof os.arch>;
+  swVersStdout?: string;
+  expected: ReturnType<typeof resolveOsSummary>;
+};
+
 describe("resolveOsSummary", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("formats darwin labels from sw_vers output", () => {
-    vi.spyOn(os, "platform").mockReturnValue("darwin");
-    vi.spyOn(os, "release").mockReturnValue("24.0.0");
-    vi.spyOn(os, "arch").mockReturnValue("arm64");
-    spawnSyncMock.mockReturnValue({
-      stdout: " 15.4 \n",
-      stderr: "",
-      pid: 1,
-      output: [],
-      status: 0,
-      signal: null,
-    });
-
-    expect(resolveOsSummary()).toEqual({
-      platform: "darwin",
-      arch: "arm64",
+  it.each<OsSummaryCase>([
+    {
+      name: "formats darwin labels from sw_vers output",
+      platform: "darwin" as const,
       release: "24.0.0",
-      label: "macos 15.4 (arm64)",
-    });
-  });
-
-  it("falls back to os.release when sw_vers output is blank", () => {
-    vi.spyOn(os, "platform").mockReturnValue("darwin");
-    vi.spyOn(os, "release").mockReturnValue("24.1.0");
-    vi.spyOn(os, "arch").mockReturnValue("x64");
-    spawnSyncMock.mockReturnValue({
-      stdout: "   ",
-      stderr: "",
-      pid: 1,
-      output: [],
-      status: 0,
-      signal: null,
-    });
-
-    expect(resolveOsSummary().label).toBe("macos 24.1.0 (x64)");
-  });
-
-  it("formats windows and non-darwin labels from os metadata", () => {
-    vi.spyOn(os, "release").mockReturnValue("10.0.26100");
-    vi.spyOn(os, "arch").mockReturnValue("x64");
-
-    vi.spyOn(os, "platform").mockReturnValue("win32");
-    expect(resolveOsSummary().label).toBe("windows 10.0.26100 (x64)");
-
-    vi.spyOn(os, "platform").mockReturnValue("linux");
-    expect(resolveOsSummary().label).toBe("linux 10.0.26100 (x64)");
+      arch: "arm64",
+      swVersStdout: " 15.4 \n",
+      expected: {
+        platform: "darwin",
+        arch: "arm64",
+        release: "24.0.0",
+        label: "macos 15.4 (arm64)",
+      },
+    },
+    {
+      name: "falls back to os.release when sw_vers output is blank",
+      platform: "darwin" as const,
+      release: "24.1.0",
+      arch: "x64",
+      swVersStdout: "   ",
+      expected: {
+        platform: "darwin",
+        arch: "x64",
+        release: "24.1.0",
+        label: "macos 24.1.0 (x64)",
+      },
+    },
+    {
+      name: "formats windows labels from os metadata",
+      platform: "win32" as const,
+      release: "10.0.26100",
+      arch: "x64",
+      expected: {
+        platform: "win32",
+        arch: "x64",
+        release: "10.0.26100",
+        label: "windows 10.0.26100 (x64)",
+      },
+    },
+    {
+      name: "formats non-darwin labels from os metadata",
+      platform: "linux" as const,
+      release: "10.0.26100",
+      arch: "x64",
+      expected: {
+        platform: "linux",
+        arch: "x64",
+        release: "10.0.26100",
+        label: "linux 10.0.26100 (x64)",
+      },
+    },
+  ])("$name", ({ platform, release, arch, swVersStdout, expected }) => {
+    vi.spyOn(os, "platform").mockReturnValue(platform);
+    vi.spyOn(os, "release").mockReturnValue(release);
+    vi.spyOn(os, "arch").mockReturnValue(arch);
+    if (platform === "darwin") {
+      spawnSyncMock.mockReturnValue({
+        stdout: swVersStdout ?? "",
+        stderr: "",
+        pid: 1,
+        output: [],
+        status: 0,
+        signal: null,
+      });
+    }
+    expect(resolveOsSummary()).toEqual(expected);
   });
 });

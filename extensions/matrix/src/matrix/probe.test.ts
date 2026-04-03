@@ -3,8 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const createMatrixClientMock = vi.fn();
 const isBunRuntimeMock = vi.fn(() => false);
 
-vi.mock("./client.js", () => ({
+vi.mock("./probe.runtime.js", () => ({
   createMatrixClient: (...args: unknown[]) => createMatrixClientMock(...args),
+}));
+
+vi.mock("./client/runtime.js", () => ({
   isBunRuntime: () => isBunRuntimeMock(),
 }));
 
@@ -66,6 +69,29 @@ describe("probeMatrix", () => {
       accessToken: "tok",
       localTimeoutMs: 500,
       accountId: "ops",
+    });
+  });
+
+  it("passes dispatcherPolicy through to client creation", async () => {
+    await probeMatrix({
+      homeserver: "https://matrix.example.org",
+      accessToken: "tok",
+      timeoutMs: 500,
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://127.0.0.1:7890",
+      },
+    });
+
+    expect(createMatrixClientMock).toHaveBeenCalledWith({
+      homeserver: "https://matrix.example.org",
+      userId: undefined,
+      accessToken: "tok",
+      localTimeoutMs: 500,
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://127.0.0.1:7890",
+      },
     });
   });
 

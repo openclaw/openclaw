@@ -1,19 +1,12 @@
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../../account-selection.js";
 import { resolveMatrixAccountStringValues } from "../../auth-precedence.js";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  assertHttpUrlTargetsPrivateNetwork,
-  isPrivateOrLoopbackHost,
-  type LookupFn,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-  normalizeResolvedSecretInputString,
-  ssrfPolicyFromAllowPrivateNetwork,
-} from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import {
@@ -21,14 +14,147 @@ import {
   resolveMatrixBaseConfig,
   listNormalizedMatrixAccountIds,
 } from "../account-config.js";
-import { resolveMatrixConfigFieldPath } from "../config-update.js";
-import { credentialsMatchConfig, loadMatrixCredentials } from "../credentials-read.js";
-import { MatrixClient } from "../sdk.js";
-import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
+import { resolveMatrixConfigFieldPath } from "../config-paths.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  assertHttpUrlTargetsPrivateNetwork,
+  isPrivateOrLoopbackHost,
+  type LookupFn,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+  ssrfPolicyFromAllowPrivateNetwork,
+} from "./config-runtime-api.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
-function clean(value: unknown, path: string): string {
-  return normalizeResolvedSecretInputString({ value, path }) ?? "";
+type MatrixAuthClientDeps = {
+  MatrixClient: typeof import("../sdk.js").MatrixClient;
+  ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+};
+
+type MatrixCredentialsReadDeps = {
+  loadMatrixCredentials: typeof import("../credentials-read.js").loadMatrixCredentials;
+  credentialsMatchConfig: typeof import("../credentials-read.js").credentialsMatchConfig;
+};
+
+type MatrixSecretInputDeps = {
+  resolveConfiguredSecretInputString: typeof import("./config-secret-input.runtime.js").resolveConfiguredSecretInputString;
+};
+
+let matrixAuthClientDepsPromise: Promise<MatrixAuthClientDeps> | undefined;
+let matrixCredentialsReadDepsPromise: Promise<MatrixCredentialsReadDeps> | undefined;
+let matrixSecretInputDepsPromise: Promise<MatrixSecretInputDeps> | undefined;
+let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
+
+export function setMatrixAuthClientDepsForTest(
+  deps?:
+    | {
+        MatrixClient: typeof import("../sdk.js").MatrixClient;
+        ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+      }
+    | undefined,
+): void {
+  matrixAuthClientDepsForTest = deps;
+}
+
+async function loadMatrixAuthClientDeps(): Promise<MatrixAuthClientDeps> {
+  if (matrixAuthClientDepsForTest) {
+    return matrixAuthClientDepsForTest;
+  }
+  matrixAuthClientDepsPromise ??= Promise.all([import("../sdk.js"), import("./logging.js")]).then(
+    ([sdkModule, loggingModule]) => ({
+      MatrixClient: sdkModule.MatrixClient,
+      ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
+    }),
+  );
+  return await matrixAuthClientDepsPromise;
+}
+
+async function loadMatrixCredentialsReadDeps(): Promise<MatrixCredentialsReadDeps> {
+  matrixCredentialsReadDepsPromise ??= import("../credentials-read.js").then(
+    (credentialsReadModule) => ({
+      loadMatrixCredentials: credentialsReadModule.loadMatrixCredentials,
+      credentialsMatchConfig: credentialsReadModule.credentialsMatchConfig,
+    }),
+  );
+  return await matrixCredentialsReadDepsPromise;
+}
+
+async function loadMatrixSecretInputDeps(): Promise<MatrixSecretInputDeps> {
+  matrixSecretInputDepsPromise ??= import("./config-secret-input.runtime.js").then((runtime) => ({
+    resolveConfiguredSecretInputString: runtime.resolveConfiguredSecretInputString,
+  }));
+  return await matrixSecretInputDepsPromise;
+}
+
+function readEnvSecretRefFallback(params: {
+  value: unknown;
+  env?: NodeJS.ProcessEnv;
+  config?: Pick<CoreConfig, "secrets">;
+}): string | undefined {
+  const ref = coerceSecretRef(params.value, params.config?.secrets?.defaults);
+  if (!ref || ref.source !== "env" || !params.env) {
+    return undefined;
+  }
+
+  const providerConfig = params.config?.secrets?.providers?.[ref.provider];
+  if (providerConfig) {
+    if (providerConfig.source !== "env") {
+      throw new Error(
+        `Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "env".`,
+      );
+    }
+    if (providerConfig.allowlist && !providerConfig.allowlist.includes(ref.id)) {
+      throw new Error(
+        `Environment variable "${ref.id}" is not allowlisted in secrets.providers.${ref.provider}.allowlist.`,
+      );
+    }
+  } else if (ref.provider !== (params.config?.secrets?.defaults?.env?.trim() || "default")) {
+    throw new Error(
+      `Secret provider "${ref.provider}" is not configured (ref: ${ref.source}:${ref.provider}:${ref.id}).`,
+    );
+  }
+
+  const resolved = params.env[ref.id];
+  if (typeof resolved !== "string") {
+    return undefined;
+  }
+
+  const trimmed = resolved.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function clean(
+  value: unknown,
+  path: string,
+  opts?: {
+    env?: NodeJS.ProcessEnv;
+    config?: Pick<CoreConfig, "secrets">;
+    allowEnvSecretRefFallback?: boolean;
+    suppressSecretRef?: boolean;
+  },
+): string {
+  const ref = coerceSecretRef(value, opts?.config?.secrets?.defaults);
+  if (opts?.suppressSecretRef && ref) {
+    return "";
+  }
+  const normalizedValue = opts?.allowEnvSecretRefFallback
+    ? ref?.source === "env"
+      ? (readEnvSecretRefFallback({
+          value,
+          env: opts.env,
+          config: opts.config,
+        }) ?? value)
+      : ref
+        ? ""
+        : value
+    : value;
+  return (
+    normalizeResolvedSecretInputString({
+      value: normalizedValue,
+      path,
+      defaults: opts?.config?.secrets?.defaults,
+    }) ?? ""
+  );
 }
 
 type MatrixEnvConfig = {
@@ -52,11 +178,146 @@ function resolveMatrixBaseConfigFieldPath(field: MatrixConfigStringField): strin
   return `channels.matrix.${field}`;
 }
 
+function shouldAllowEnvSecretRefFallback(field: MatrixConfigStringField): boolean {
+  return field === "accessToken" || field === "password";
+}
+
+type MatrixAuthSecretField = "accessToken" | "password";
+
+type MatrixConfiguredAuthInput = {
+  value: unknown;
+  path: string;
+};
+
+function hasConfiguredSecretInputValue(value: unknown, cfg: Pick<CoreConfig, "secrets">): boolean {
+  return (
+    (typeof value === "string" && value.trim().length > 0) ||
+    Boolean(coerceSecretRef(value, cfg.secrets?.defaults))
+  );
+}
+
+function hasConfiguredMatrixAccessTokenSource(params: {
+  cfg: CoreConfig;
+  env: NodeJS.ProcessEnv;
+  accountId: string;
+}): boolean {
+  const normalizedAccountId = normalizeAccountId(params.accountId);
+  const account = findMatrixAccountConfig(params.cfg, normalizedAccountId) ?? {};
+  const scopedAccessTokenVar = getMatrixScopedEnvVarNames(normalizedAccountId).accessToken;
+  if (
+    hasConfiguredSecretInputValue(account.accessToken, params.cfg) ||
+    clean(params.env[scopedAccessTokenVar], scopedAccessTokenVar).length > 0
+  ) {
+    return true;
+  }
+  if (normalizedAccountId !== DEFAULT_ACCOUNT_ID) {
+    return false;
+  }
+  const matrix = resolveMatrixBaseConfig(params.cfg);
+  return (
+    hasConfiguredSecretInputValue(matrix.accessToken, params.cfg) ||
+    clean(params.env.MATRIX_ACCESS_TOKEN, "MATRIX_ACCESS_TOKEN").length > 0
+  );
+}
+
+function resolveConfiguredMatrixAuthInput(params: {
+  cfg: CoreConfig;
+  env: NodeJS.ProcessEnv;
+  accountId: string;
+  field: MatrixAuthSecretField;
+}): MatrixConfiguredAuthInput | undefined {
+  const normalizedAccountId = normalizeAccountId(params.accountId);
+  const account = findMatrixAccountConfig(params.cfg, normalizedAccountId) ?? {};
+  const accountValue = account[params.field];
+  if (accountValue !== undefined) {
+    return {
+      value: accountValue,
+      path: resolveMatrixConfigFieldPath(params.cfg, normalizedAccountId, params.field),
+    };
+  }
+
+  const scopedKeys = getMatrixScopedEnvVarNames(normalizedAccountId);
+  const scopedEnv = resolveScopedMatrixEnvConfig(normalizedAccountId, params.env);
+  const scopedValue = scopedEnv[params.field];
+  if (scopedValue !== undefined) {
+    return {
+      value: scopedValue,
+      path: params.field === "accessToken" ? scopedKeys.accessToken : scopedKeys.password,
+    };
+  }
+
+  if (normalizedAccountId !== DEFAULT_ACCOUNT_ID) {
+    return undefined;
+  }
+
+  const matrix = resolveMatrixBaseConfig(params.cfg);
+  const baseValue = matrix[params.field];
+  if (baseValue !== undefined) {
+    return {
+      value: baseValue,
+      path: resolveMatrixBaseConfigFieldPath(params.field),
+    };
+  }
+
+  const globalValue =
+    params.field === "accessToken" ? params.env.MATRIX_ACCESS_TOKEN : params.env.MATRIX_PASSWORD;
+  if (globalValue !== undefined) {
+    return {
+      value: globalValue,
+      path: params.field === "accessToken" ? "MATRIX_ACCESS_TOKEN" : "MATRIX_PASSWORD",
+    };
+  }
+
+  return undefined;
+}
+
+async function resolveConfiguredMatrixAuthSecretInput(params: {
+  cfg: CoreConfig;
+  env: NodeJS.ProcessEnv;
+  accountId: string;
+  field: MatrixAuthSecretField;
+}): Promise<string | undefined> {
+  const configured = resolveConfiguredMatrixAuthInput(params);
+  if (!configured) {
+    return undefined;
+  }
+
+  const { resolveConfiguredSecretInputString } = await loadMatrixSecretInputDeps();
+  const resolved = await resolveConfiguredSecretInputString({
+    config: params.cfg,
+    env: params.env,
+    value: configured.value,
+    path: configured.path,
+    unresolvedReasonStyle: "detailed",
+  });
+  if (resolved.value !== undefined) {
+    return resolved.value;
+  }
+
+  if (coerceSecretRef(configured.value, params.cfg.secrets?.defaults)) {
+    throw new Error(
+      resolved.unresolvedRefReason ?? `${configured.path} SecretRef could not be resolved.`,
+    );
+  }
+
+  return undefined;
+}
+
 function readMatrixBaseConfigField(
   matrix: ReturnType<typeof resolveMatrixBaseConfig>,
   field: MatrixConfigStringField,
+  opts?: {
+    env?: NodeJS.ProcessEnv;
+    config?: Pick<CoreConfig, "secrets">;
+    suppressSecretRef?: boolean;
+  },
 ): string {
-  return clean(matrix[field], resolveMatrixBaseConfigFieldPath(field));
+  return clean(matrix[field], resolveMatrixBaseConfigFieldPath(field), {
+    env: opts?.env,
+    config: opts?.config,
+    allowEnvSecretRefFallback: shouldAllowEnvSecretRefFallback(field),
+    suppressSecretRef: opts?.suppressSecretRef,
+  });
 }
 
 function readMatrixAccountConfigField(
@@ -64,8 +325,18 @@ function readMatrixAccountConfigField(
   accountId: string,
   account: Partial<Record<MatrixConfigStringField, unknown>>,
   field: MatrixConfigStringField,
+  opts?: {
+    env?: NodeJS.ProcessEnv;
+    config?: Pick<CoreConfig, "secrets">;
+    suppressSecretRef?: boolean;
+  },
 ): string {
-  return clean(account[field], resolveMatrixConfigFieldPath(cfg, accountId, field));
+  return clean(account[field], resolveMatrixConfigFieldPath(cfg, accountId, field), {
+    env: opts?.env,
+    config: opts?.config,
+    allowEnvSecretRefFallback: shouldAllowEnvSecretRefFallback(field),
+    suppressSecretRef: opts?.suppressSecretRef,
+  });
 }
 
 function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
@@ -75,15 +346,22 @@ function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
 const MATRIX_HTTP_HOMESERVER_ERROR =
   "Matrix homeserver must use https:// unless it targets a private or loopback host";
 
-function buildMatrixNetworkFields(
-  allowPrivateNetwork: boolean | undefined,
-): Pick<MatrixResolvedConfig, "allowPrivateNetwork" | "ssrfPolicy"> {
-  if (!allowPrivateNetwork) {
+function buildMatrixNetworkFields(params: {
+  allowPrivateNetwork: boolean | undefined;
+  proxy?: string;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+}): Pick<MatrixResolvedConfig, "allowPrivateNetwork" | "ssrfPolicy" | "dispatcherPolicy"> {
+  const dispatcherPolicy: PinnedDispatcherPolicy | undefined =
+    params.dispatcherPolicy ??
+    (params.proxy ? { mode: "explicit-proxy", proxyUrl: params.proxy } : undefined);
+  if (!params.allowPrivateNetwork && !dispatcherPolicy) {
     return {};
   }
   return {
-    allowPrivateNetwork: true,
-    ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(true),
+    ...(params.allowPrivateNetwork
+      ? { allowPrivateNetwork: true, ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(true) }
+      : {}),
+    ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
   };
 }
 
@@ -238,18 +516,30 @@ export function resolveMatrixConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): MatrixResolvedConfig {
   const matrix = resolveMatrixBaseConfig(cfg);
+  const suppressInactivePasswordSecretRef = hasConfiguredMatrixAccessTokenSource({
+    cfg,
+    env,
+    accountId: DEFAULT_ACCOUNT_ID,
+  });
+  const fieldReadOptions = {
+    env,
+    config: cfg,
+  };
   const defaultScopedEnv = resolveScopedMatrixEnvConfig(DEFAULT_ACCOUNT_ID, env);
   const globalEnv = resolveGlobalMatrixEnvConfig(env);
   const resolvedStrings = resolveMatrixAccountStringValues({
     accountId: DEFAULT_ACCOUNT_ID,
     scopedEnv: defaultScopedEnv,
     channel: {
-      homeserver: readMatrixBaseConfigField(matrix, "homeserver"),
-      userId: readMatrixBaseConfigField(matrix, "userId"),
-      accessToken: readMatrixBaseConfigField(matrix, "accessToken"),
-      password: readMatrixBaseConfigField(matrix, "password"),
-      deviceId: readMatrixBaseConfigField(matrix, "deviceId"),
-      deviceName: readMatrixBaseConfigField(matrix, "deviceName"),
+      homeserver: readMatrixBaseConfigField(matrix, "homeserver", fieldReadOptions),
+      userId: readMatrixBaseConfigField(matrix, "userId", fieldReadOptions),
+      accessToken: readMatrixBaseConfigField(matrix, "accessToken", fieldReadOptions),
+      password: readMatrixBaseConfigField(matrix, "password", {
+        ...fieldReadOptions,
+        suppressSecretRef: suppressInactivePasswordSecretRef,
+      }),
+      deviceId: readMatrixBaseConfigField(matrix, "deviceId", fieldReadOptions),
+      deviceName: readMatrixBaseConfigField(matrix, "deviceName", fieldReadOptions),
     },
     globalEnv,
   });
@@ -265,7 +555,7 @@ export function resolveMatrixConfig(
     deviceName: resolvedStrings.deviceName || undefined,
     initialSyncLimit,
     encryption,
-    ...buildMatrixNetworkFields(allowPrivateNetwork),
+    ...buildMatrixNetworkFields({ allowPrivateNetwork, proxy: matrix.proxy }),
   };
 }
 
@@ -277,10 +567,22 @@ export function resolveMatrixConfigForAccount(
   const matrix = resolveMatrixBaseConfig(cfg);
   const account = findMatrixAccountConfig(cfg, accountId) ?? {};
   const normalizedAccountId = normalizeAccountId(accountId);
+  const suppressInactivePasswordSecretRef = hasConfiguredMatrixAccessTokenSource({
+    cfg,
+    env,
+    accountId: normalizedAccountId,
+  });
+  const fieldReadOptions = {
+    env,
+    config: cfg,
+  };
   const scopedEnv = resolveScopedMatrixEnvConfig(normalizedAccountId, env);
   const globalEnv = resolveGlobalMatrixEnvConfig(env);
   const accountField = (field: MatrixConfigStringField) =>
-    readMatrixAccountConfigField(cfg, normalizedAccountId, account, field);
+    readMatrixAccountConfigField(cfg, normalizedAccountId, account, field, {
+      ...fieldReadOptions,
+      suppressSecretRef: field === "password" ? suppressInactivePasswordSecretRef : undefined,
+    });
   const resolvedStrings = resolveMatrixAccountStringValues({
     accountId: normalizedAccountId,
     account: {
@@ -293,12 +595,15 @@ export function resolveMatrixConfigForAccount(
     },
     scopedEnv,
     channel: {
-      homeserver: readMatrixBaseConfigField(matrix, "homeserver"),
-      userId: readMatrixBaseConfigField(matrix, "userId"),
-      accessToken: readMatrixBaseConfigField(matrix, "accessToken"),
-      password: readMatrixBaseConfigField(matrix, "password"),
-      deviceId: readMatrixBaseConfigField(matrix, "deviceId"),
-      deviceName: readMatrixBaseConfigField(matrix, "deviceName"),
+      homeserver: readMatrixBaseConfigField(matrix, "homeserver", fieldReadOptions),
+      userId: readMatrixBaseConfigField(matrix, "userId", fieldReadOptions),
+      accessToken: readMatrixBaseConfigField(matrix, "accessToken", fieldReadOptions),
+      password: readMatrixBaseConfigField(matrix, "password", {
+        ...fieldReadOptions,
+        suppressSecretRef: suppressInactivePasswordSecretRef,
+      }),
+      deviceId: readMatrixBaseConfigField(matrix, "deviceId", fieldReadOptions),
+      deviceName: readMatrixBaseConfigField(matrix, "deviceName", fieldReadOptions),
     },
     globalEnv,
   });
@@ -320,18 +625,21 @@ export function resolveMatrixConfigForAccount(
     deviceName: resolvedStrings.deviceName || undefined,
     initialSyncLimit,
     encryption,
-    ...buildMatrixNetworkFields(allowPrivateNetwork),
+    ...buildMatrixNetworkFields({
+      allowPrivateNetwork,
+      proxy: account.proxy ?? matrix.proxy,
+    }),
   };
 }
 
 export function resolveImplicitMatrixAccountId(
   cfg: CoreConfig,
-  _env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  if (requiresExplicitMatrixDefaultAccount(cfg)) {
+  if (requiresExplicitMatrixDefaultAccount(cfg, env)) {
     return null;
   }
-  return normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(cfg));
+  return normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(cfg, env));
 }
 
 export function resolveMatrixAuthContext(params?: {
@@ -379,6 +687,14 @@ export async function resolveMatrixAuth(params?: {
   accountId?: string | null;
 }): Promise<MatrixAuth> {
   const { cfg, env, accountId, resolved } = resolveMatrixAuthContext(params);
+  const accessToken =
+    (await resolveConfiguredMatrixAuthSecretInput({
+      cfg,
+      env,
+      accountId,
+      field: "accessToken",
+    })) ?? resolved.accessToken;
+  const tokenAuthPassword = resolved.password;
   const homeserver = await resolveValidatedMatrixHomeserverUrl(resolved.homeserver, {
     allowPrivateNetwork: resolved.allowPrivateNetwork,
   });
@@ -388,30 +704,33 @@ export async function resolveMatrixAuth(params?: {
     return credentialsWriter;
   };
 
+  const { loadMatrixCredentials, credentialsMatchConfig } = await loadMatrixCredentialsReadDeps();
   const cached = loadMatrixCredentials(env, accountId);
   const cachedCredentials =
     cached &&
     credentialsMatchConfig(cached, {
       homeserver,
       userId: resolved.userId || "",
-      accessToken: resolved.accessToken,
+      accessToken,
     })
       ? cached
       : null;
 
   // If we have an access token, we can fetch userId via whoami if not provided
-  if (resolved.accessToken) {
+  if (accessToken) {
     let userId = resolved.userId;
-    const hasMatchingCachedToken = cachedCredentials?.accessToken === resolved.accessToken;
+    const hasMatchingCachedToken = cachedCredentials?.accessToken === accessToken;
     let knownDeviceId = hasMatchingCachedToken
       ? cachedCredentials?.deviceId || resolved.deviceId
       : resolved.deviceId;
 
     if (!userId || !knownDeviceId) {
       // Fetch whoami when we need to resolve userId and/or deviceId from token auth.
+      const { MatrixClient, ensureMatrixSdkLoggingConfigured } = await loadMatrixAuthClientDeps();
       ensureMatrixSdkLoggingConfigured();
-      const tempClient = new MatrixClient(homeserver, resolved.accessToken, undefined, undefined, {
+      const tempClient = new MatrixClient(homeserver, accessToken, {
         ssrfPolicy: resolved.ssrfPolicy,
+        dispatcherPolicy: resolved.dispatcherPolicy,
       });
       const whoami = (await tempClient.doRequest("GET", "/_matrix/client/v3/account/whoami")) as {
         user_id?: string;
@@ -440,7 +759,7 @@ export async function resolveMatrixAuth(params?: {
         {
           homeserver,
           userId,
-          accessToken: resolved.accessToken,
+          accessToken,
           deviceId: knownDeviceId,
         },
         env,
@@ -454,13 +773,16 @@ export async function resolveMatrixAuth(params?: {
       accountId,
       homeserver,
       userId,
-      accessToken: resolved.accessToken,
-      password: resolved.password,
+      accessToken,
+      password: tokenAuthPassword,
       deviceId: knownDeviceId,
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
       encryption: resolved.encryption,
-      ...buildMatrixNetworkFields(resolved.allowPrivateNetwork),
+      ...buildMatrixNetworkFields({
+        allowPrivateNetwork: resolved.allowPrivateNetwork,
+        dispatcherPolicy: resolved.dispatcherPolicy,
+      }),
     };
   }
 
@@ -472,12 +794,15 @@ export async function resolveMatrixAuth(params?: {
       homeserver: cachedCredentials.homeserver,
       userId: cachedCredentials.userId,
       accessToken: cachedCredentials.accessToken,
-      password: resolved.password,
+      password: tokenAuthPassword,
       deviceId: cachedCredentials.deviceId || resolved.deviceId,
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
       encryption: resolved.encryption,
-      ...buildMatrixNetworkFields(resolved.allowPrivateNetwork),
+      ...buildMatrixNetworkFields({
+        allowPrivateNetwork: resolved.allowPrivateNetwork,
+        dispatcherPolicy: resolved.dispatcherPolicy,
+      }),
     };
   }
 
@@ -485,21 +810,30 @@ export async function resolveMatrixAuth(params?: {
     throw new Error("Matrix userId is required when no access token is configured (matrix.userId)");
   }
 
-  if (!resolved.password) {
+  const password =
+    (await resolveConfiguredMatrixAuthSecretInput({
+      cfg,
+      env,
+      accountId,
+      field: "password",
+    })) ?? resolved.password;
+  if (!password) {
     throw new Error(
       "Matrix password is required when no access token is configured (matrix.password)",
     );
   }
 
   // Login with password using the same hardened request path as other Matrix HTTP calls.
+  const { MatrixClient, ensureMatrixSdkLoggingConfigured } = await loadMatrixAuthClientDeps();
   ensureMatrixSdkLoggingConfigured();
-  const loginClient = new MatrixClient(homeserver, "", undefined, undefined, {
+  const loginClient = new MatrixClient(homeserver, "", {
     ssrfPolicy: resolved.ssrfPolicy,
+    dispatcherPolicy: resolved.dispatcherPolicy,
   });
   const login = (await loginClient.doRequest("POST", "/_matrix/client/v3/login", undefined, {
     type: "m.login.password",
     identifier: { type: "m.id.user", user: resolved.userId },
-    password: resolved.password,
+    password,
     device_id: resolved.deviceId,
     initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
   })) as {
@@ -508,8 +842,8 @@ export async function resolveMatrixAuth(params?: {
     device_id?: string;
   };
 
-  const accessToken = login.access_token?.trim();
-  if (!accessToken) {
+  const loginAccessToken = login.access_token?.trim();
+  if (!loginAccessToken) {
     throw new Error("Matrix login did not return an access token");
   }
 
@@ -517,13 +851,16 @@ export async function resolveMatrixAuth(params?: {
     accountId,
     homeserver,
     userId: login.user_id ?? resolved.userId,
-    accessToken,
-    password: resolved.password,
+    accessToken: loginAccessToken,
+    password,
     deviceId: login.device_id ?? resolved.deviceId,
     deviceName: resolved.deviceName,
     initialSyncLimit: resolved.initialSyncLimit,
     encryption: resolved.encryption,
-    ...buildMatrixNetworkFields(resolved.allowPrivateNetwork),
+    ...buildMatrixNetworkFields({
+      allowPrivateNetwork: resolved.allowPrivateNetwork,
+      dispatcherPolicy: resolved.dispatcherPolicy,
+    }),
   };
 
   const { saveMatrixCredentials } = await loadCredentialsWriter();

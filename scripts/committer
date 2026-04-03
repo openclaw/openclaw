@@ -104,12 +104,18 @@ last_commit_error=''
 run_git_command() {
   local stderr_log
   stderr_log=$(mktemp)
-  if "$@" 2> >(tee "$stderr_log" >&2); then
+  if "$@" 2>"$stderr_log"; then
+    if [ -s "$stderr_log" ]; then
+      cat "$stderr_log" >&2
+    fi
     rm -f "$stderr_log"
     last_commit_error=''
     return 0
   fi
 
+  if [ -s "$stderr_log" ]; then
+    cat "$stderr_log" >&2
+  fi
   last_commit_error=$(cat "$stderr_log")
   rm -f "$stderr_log"
   return 1

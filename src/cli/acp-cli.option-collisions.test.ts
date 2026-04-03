@@ -1,36 +1,38 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { withTempSecretFiles } from "../test-utils/secret-file-fixture.js";
+import { registerAcpCli } from "./acp-cli.js";
 
-const runAcpClientInteractive = vi.fn(async (_opts: unknown) => {});
-const serveAcpGateway = vi.fn(async (_opts: unknown) => {});
+const mocks = vi.hoisted(() => ({
+  runAcpClientInteractive: vi.fn(async (_opts: unknown) => {}),
+  serveAcpGateway: vi.fn(async (_opts: unknown) => {}),
+  defaultRuntime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+    exit: vi.fn(),
+  },
+}));
 
-const defaultRuntime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  writeStdout: vi.fn(),
-  writeJson: vi.fn(),
-  exit: vi.fn(),
-};
+const { runAcpClientInteractive, serveAcpGateway, defaultRuntime } = mocks;
 
 const passwordKey = () => ["pass", "word"].join("");
 
 vi.mock("../acp/client.js", () => ({
-  runAcpClientInteractive: (opts: unknown) => runAcpClientInteractive(opts),
+  runAcpClientInteractive: (opts: unknown) => mocks.runAcpClientInteractive(opts),
 }));
 
 vi.mock("../acp/server.js", () => ({
-  serveAcpGateway: (opts: unknown) => serveAcpGateway(opts),
+  serveAcpGateway: (opts: unknown) => mocks.serveAcpGateway(opts),
 }));
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 describe("acp cli option collisions", () => {
-  let registerAcpCli: typeof import("./acp-cli.js").registerAcpCli;
-
   function createAcpProgram() {
     const program = new Command();
     registerAcpCli(program);
@@ -47,10 +49,6 @@ describe("acp cli option collisions", () => {
     expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringMatching(pattern));
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   }
-
-  beforeAll(async () => {
-    ({ registerAcpCli } = await import("./acp-cli.js"));
-  });
 
   beforeEach(() => {
     runAcpClientInteractive.mockClear();

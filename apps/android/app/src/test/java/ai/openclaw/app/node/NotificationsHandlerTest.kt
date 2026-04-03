@@ -141,6 +141,46 @@ class NotificationsHandlerTest {
     }
 
   @Test
+  fun notificationsActions_rejectsMissingKey() =
+    runTest {
+      val provider =
+        FakeNotificationsStateProvider(
+          DeviceNotificationSnapshot(
+            enabled = true,
+            connected = true,
+            notifications = listOf(sampleEntry("n3")),
+          ),
+        )
+      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+
+      val result = handler.handleNotificationsActions("""{"action":"open"}""")
+
+      assertFalse(result.ok)
+      assertEquals("INVALID_REQUEST", result.error?.code)
+      assertEquals(0, provider.actionRequests)
+    }
+
+  @Test
+  fun notificationsActions_rejectsInvalidAction() =
+    runTest {
+      val provider =
+        FakeNotificationsStateProvider(
+          DeviceNotificationSnapshot(
+            enabled = true,
+            connected = true,
+            notifications = listOf(sampleEntry("n3")),
+          ),
+        )
+      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+
+      val result = handler.handleNotificationsActions("""{"key":"n3","action":"archive"}""")
+
+      assertFalse(result.ok)
+      assertEquals("INVALID_REQUEST", result.error?.code)
+      assertEquals(0, provider.actionRequests)
+    }
+
+  @Test
   fun notificationsActions_propagatesProviderError() =
     runTest {
       val provider =
@@ -164,6 +204,29 @@ class NotificationsHandlerTest {
 
       assertFalse(result.ok)
       assertEquals("NOTIFICATION_NOT_FOUND", result.error?.code)
+      assertEquals(1, provider.actionRequests)
+    }
+
+  @Test
+  fun notificationsActions_fallsBackWhenProviderOmitsErrorDetails() =
+    runTest {
+      val provider =
+        FakeNotificationsStateProvider(
+          DeviceNotificationSnapshot(
+            enabled = true,
+            connected = true,
+            notifications = listOf(sampleEntry("n4")),
+          ),
+        ).also {
+          it.actionResult = NotificationActionResult(ok = false)
+        }
+      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+
+      val result = handler.handleNotificationsActions("""{"key":"n4","action":"open"}""")
+
+      assertFalse(result.ok)
+      assertEquals("UNAVAILABLE", result.error?.code)
+      assertEquals("notification action failed", result.error?.message)
       assertEquals(1, provider.actionRequests)
     }
 

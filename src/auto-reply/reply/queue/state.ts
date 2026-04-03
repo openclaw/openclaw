@@ -85,3 +85,66 @@ export function clearFollowupQueue(key: string): number {
   FOLLOWUP_QUEUES.delete(cleaned);
   return cleared;
 }
+
+export function refreshQueuedFollowupSession(params: {
+  key: string;
+  previousSessionId?: string;
+  nextSessionId?: string;
+  nextSessionFile?: string;
+  nextProvider?: string;
+  nextModel?: string;
+  nextAuthProfileId?: string;
+  nextAuthProfileIdSource?: "auto" | "user";
+}): void {
+  const cleaned = params.key.trim();
+  if (!cleaned) {
+    return;
+  }
+  const queue = getExistingFollowupQueue(cleaned);
+  if (!queue) {
+    return;
+  }
+  const shouldRewriteSession =
+    Boolean(params.previousSessionId) &&
+    Boolean(params.nextSessionId) &&
+    params.previousSessionId !== params.nextSessionId;
+  const shouldRewriteSelection =
+    typeof params.nextProvider === "string" ||
+    typeof params.nextModel === "string" ||
+    Object.hasOwn(params, "nextAuthProfileId") ||
+    Object.hasOwn(params, "nextAuthProfileIdSource");
+  if (!shouldRewriteSession && !shouldRewriteSelection) {
+    return;
+  }
+
+  const rewriteRun = (run?: FollowupRun["run"]) => {
+    if (!run) {
+      return;
+    }
+    if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
+      run.sessionId = params.nextSessionId!;
+      if (params.nextSessionFile?.trim()) {
+        run.sessionFile = params.nextSessionFile;
+      }
+    }
+    if (shouldRewriteSelection) {
+      if (typeof params.nextProvider === "string") {
+        run.provider = params.nextProvider;
+      }
+      if (typeof params.nextModel === "string") {
+        run.model = params.nextModel;
+      }
+      if (Object.hasOwn(params, "nextAuthProfileId")) {
+        run.authProfileId = params.nextAuthProfileId?.trim() || undefined;
+      }
+      if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
+        run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
+    }
+  };
+
+  rewriteRun(queue.lastRun);
+  for (const item of queue.items) {
+    rewriteRun(item.run);
+  }
+}

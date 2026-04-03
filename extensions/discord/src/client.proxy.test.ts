@@ -1,0 +1,77 @@
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { createDiscordRestClient } from "./client.js";
+
+const makeProxyFetchMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  makeProxyFetchMock.mockImplementation((proxyUrl: string) => {
+    if (proxyUrl === "bad-proxy") {
+      throw new Error("bad proxy");
+    }
+    return actual.makeProxyFetch(proxyUrl);
+  });
+  return {
+    ...actual,
+    makeProxyFetch: makeProxyFetchMock,
+  };
+});
+
+describe("createDiscordRestClient proxy support", () => {
+  it("injects a custom fetch into RequestClient when a Discord proxy is configured", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+          proxy: "http://proxy.test:8080",
+        },
+      },
+    } as OpenClawConfig;
+
+    const { rest } = createDiscordRestClient({}, cfg);
+    const requestClient = rest as unknown as {
+      customFetch?: typeof fetch;
+      options?: { fetch?: typeof fetch };
+    };
+
+    expect(requestClient.options?.fetch).toEqual(expect.any(Function));
+    expect(requestClient.customFetch).toBe(requestClient.options?.fetch);
+  });
+
+  it("does not inject fetch when no proxy is configured", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    const { rest } = createDiscordRestClient({}, cfg);
+    const requestClient = rest as unknown as {
+      options?: { fetch?: typeof fetch };
+    };
+
+    expect(requestClient.options?.fetch).toBeUndefined();
+  });
+
+  it("falls back to direct fetch when the Discord proxy URL is invalid", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+          proxy: "bad-proxy",
+        },
+      },
+    } as OpenClawConfig;
+
+    const { rest } = createDiscordRestClient({}, cfg);
+    const requestClient = rest as unknown as {
+      options?: { fetch?: typeof fetch };
+    };
+
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("bad-proxy");
+    expect(requestClient.options?.fetch).toBeUndefined();
+  });
+});

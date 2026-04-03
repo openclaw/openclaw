@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 /**
  * Inject `tool_stream=true` so tool-call deltas stream in real time.
@@ -15,15 +16,8 @@ export function createToolStreamWrapper(
       return underlying(model, context, options);
     }
 
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          (payload as Record<string, unknown>).tool_stream = true;
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      payloadObj.tool_stream = true;
     });
   };
 }

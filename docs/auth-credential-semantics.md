@@ -44,6 +44,13 @@ Token credentials (`type: "token"`) support inline `token` and/or `tokenRef`.
 2. For eligible profiles, token material may be resolved from inline value or `tokenRef`.
 3. Unresolvable refs produce `unresolved_ref` in `models status --probe` output.
 
+## OAuth SecretRef Policy Guard
+
+- SecretRef input is for static credentials only.
+- If a profile credential is `type: "oauth"`, SecretRef objects are not supported for that profile credential material.
+- If `auth.profiles.<id>.mode` is `"oauth"`, SecretRef-backed `keyRef`/`tokenRef` input for that profile is rejected.
+- Violations are hard failures in startup/reload auth resolution paths.
+
 ## Legacy-Compatible Messaging
 
 For script compatibility, probe errors keep this first line unchanged:

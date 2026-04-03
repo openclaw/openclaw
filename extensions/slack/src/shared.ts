@@ -17,14 +17,9 @@ import {
   resolveSlackAccount,
   type ResolvedSlackAccount,
 } from "./accounts.js";
+import { SlackChannelConfigSchema } from "./config-schema.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  SlackConfigSchema,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "./runtime-api.js";
+import { getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "./runtime-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
@@ -55,22 +50,28 @@ function buildSlackManifest(botName: string) {
     oauth_config: {
       scopes: {
         bot: [
-          "chat:write",
+          "app_mentions:read",
+          "assistant:write",
           "channels:history",
           "channels:read",
-          "groups:history",
-          "im:history",
-          "mpim:history",
-          "users:read",
-          "app_mentions:read",
-          "reactions:read",
-          "reactions:write",
-          "pins:read",
-          "pins:write",
-          "emoji:read",
+          "chat:write",
           "commands",
+          "emoji:read",
           "files:read",
           "files:write",
+          "groups:history",
+          "groups:read",
+          "im:history",
+          "im:read",
+          "im:write",
+          "mpim:history",
+          "mpim:read",
+          "mpim:write",
+          "pins:read",
+          "pins:write",
+          "reactions:read",
+          "reactions:write",
+          "users:read",
         ],
       },
     },
@@ -79,17 +80,17 @@ function buildSlackManifest(botName: string) {
       event_subscriptions: {
         bot_events: [
           "app_mention",
+          "channel_rename",
+          "member_joined_channel",
+          "member_left_channel",
           "message.channels",
           "message.groups",
           "message.im",
           "message.mpim",
-          "reaction_added",
-          "reaction_removed",
-          "member_joined_channel",
-          "member_left_channel",
-          "channel_rename",
           "pin_added",
           "pin_removed",
+          "reaction_added",
+          "reaction_removed",
         ],
       },
     },
@@ -192,6 +193,7 @@ export function createSlackPluginBase(params: {
       messageToolHints: ({ cfg, accountId }) =>
         isSlackInteractiveRepliesEnabled({ cfg, accountId })
           ? [
+              "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
               "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
               "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
             ]
@@ -203,7 +205,7 @@ export function createSlackPluginBase(params: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.slack"] },
-    configSchema: buildChannelConfigSchema(SlackConfigSchema),
+    configSchema: SlackChannelConfigSchema,
     config: {
       ...slackConfigAdapter,
       isConfigured: (account) => isSlackPluginAccountConfigured(account),

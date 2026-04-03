@@ -181,17 +181,10 @@ class GatewaySession(
 
   suspend fun sendNodeEvent(event: String, payloadJson: String?): Boolean {
     val conn = currentConnection ?: return false
-    val parsedPayload = payloadJson?.let { parseJsonOrNull(it) }
     val params =
       buildJsonObject {
         put("event", JsonPrimitive(event))
-        if (parsedPayload != null) {
-          put("payload", parsedPayload)
-        } else if (payloadJson != null) {
-          put("payloadJSON", JsonPrimitive(payloadJson))
-        } else {
-          put("payloadJSON", JsonNull)
-        }
+        put("payloadJSON", JsonPrimitive(payloadJson ?: "{}"))
       }
     try {
       conn.request("node.event", params, timeoutMs = 8_000)
@@ -275,16 +268,10 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
 
-    val remoteAddress: String =
-      if (endpoint.host.contains(":")) {
-        "[${endpoint.host}]:${endpoint.port}"
-      } else {
-        "${endpoint.host}:${endpoint.port}"
-      }
+    val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
     suspend fun connect() {
-      val scheme = if (tls != null) "wss" else "ws"
-      val url = "$scheme://${endpoint.host}:${endpoint.port}"
+      val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
       val request = Request.Builder().url(url).build()
       socket = client.newWebSocket(request, Listener())
       try {
@@ -759,7 +746,7 @@ class GatewaySession(
 
     // If raw URL is a non-loopback address and this connection uses TLS,
     // normalize scheme/port to the endpoint we actually connected to.
-    if (trimmed.isNotBlank() && host.isNotBlank() && !isLoopbackHost(host)) {
+    if (trimmed.isNotBlank() && host.isNotBlank() && !isLoopbackGatewayHost(host)) {
       val needsTlsRewrite =
         isTlsConnection &&
           (
@@ -788,7 +775,7 @@ class GatewaySession(
 
   private fun buildCanvasUrl(host: String, scheme: String, port: Int, suffix: String): String {
     val loweredScheme = scheme.lowercase()
-    val formattedHost = if (host.contains(":")) "[${host}]" else host
+    val formattedHost = formatGatewayAuthorityHost(host)
     val portSuffix = if ((loweredScheme == "https" && port == 443) || (loweredScheme == "http" && port == 80)) "" else ":$port"
     return "$loweredScheme://$formattedHost$portSuffix$suffix"
   }
@@ -799,15 +786,6 @@ class GatewaySession(
     val query = uri.rawQuery?.takeIf { it.isNotBlank() }?.let { "?$it" } ?: ""
     val fragment = uri.rawFragment?.takeIf { it.isNotBlank() }?.let { "#$it" } ?: ""
     return "$path$query$fragment"
-  }
-
-  private fun isLoopbackHost(raw: String?): Boolean {
-    val host = raw?.trim()?.lowercase().orEmpty()
-    if (host.isEmpty()) return false
-    if (host == "localhost") return true
-    if (host == "::1") return true
-    if (host == "0.0.0.0" || host == "::") return true
-    return host.startsWith("127.")
   }
 
   private fun selectConnectAuth(
@@ -898,11 +876,25 @@ class GatewaySession(
     endpoint: GatewayEndpoint,
     tls: GatewayTlsParams?,
   ): Boolean {
-    if (isLoopbackHost(endpoint.host)) {
+    if (isLoopbackGatewayHost(endpoint.host)) {
       return true
     }
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
+}
+
+internal fun buildGatewayWebSocketUrl(host: String, port: Int, useTls: Boolean): String {
+  val scheme = if (useTls) "wss" else "ws"
+  return "$scheme://${formatGatewayAuthority(host, port)}"
+}
+
+internal fun formatGatewayAuthority(host: String, port: Int): String {
+  return "${formatGatewayAuthorityHost(host)}:$port"
+}
+
+private fun formatGatewayAuthorityHost(host: String): String {
+  val normalizedHost = host.trim().trim('[', ']')
+  return if (normalizedHost.contains(":")) "[${normalizedHost}]" else normalizedHost
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject

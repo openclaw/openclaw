@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+import { statusJsonCommand } from "./status-json.js";
 
 const mocks = vi.hoisted(() => ({
   scanStatusJsonFast: vi.fn(),
@@ -40,8 +41,6 @@ vi.mock("../infra/update-channels.js", () => ({
   normalizeUpdateChannel: mocks.normalizeUpdateChannel,
   resolveUpdateChannelDisplay: mocks.resolveUpdateChannelDisplay,
 }));
-
-const { statusJsonCommand } = await import("./status-json.js");
 
 function createRuntimeCapture() {
   const logs: string[] = [];

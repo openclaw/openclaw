@@ -68,7 +68,7 @@ export function normalizeEnvVarKey(
   return key;
 }
 
-function normalizeHostOverrideEnvVarKey(rawKey: string): string | null {
+export function normalizeHostOverrideEnvVarKey(rawKey: string): string | null {
   const key = normalizeEnvVarKey(rawKey);
   if (!key) {
     return null;

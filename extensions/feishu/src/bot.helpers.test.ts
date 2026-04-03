@@ -49,7 +49,7 @@ describe("toMessageResourceType", () => {
 
 describe("resolveBroadcastAgents", () => {
   it("returns agent list when broadcast config has the peerId", () => {
-    const cfg = { broadcast: { oc_group123: ["susan", "main"] } } as unknown as ClawdbotConfig;
+    const cfg: ClawdbotConfig = { broadcast: { oc_group123: ["susan", "main"] } };
     expect(resolveBroadcastAgents(cfg, "oc_group123")).toEqual(["susan", "main"]);
   });
 
@@ -59,12 +59,12 @@ describe("resolveBroadcastAgents", () => {
   });
 
   it("returns null when peerId not in broadcast", () => {
-    const cfg = { broadcast: { oc_other: ["susan"] } } as unknown as ClawdbotConfig;
+    const cfg: ClawdbotConfig = { broadcast: { oc_other: ["susan"] } };
     expect(resolveBroadcastAgents(cfg, "oc_group123")).toBeNull();
   });
 
   it("returns null when agent list is empty", () => {
-    const cfg = { broadcast: { oc_group123: [] } } as unknown as ClawdbotConfig;
+    const cfg: ClawdbotConfig = { broadcast: { oc_group123: [] } };
     expect(resolveBroadcastAgents(cfg, "oc_group123")).toBeNull();
   });
 });

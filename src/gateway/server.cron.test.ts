@@ -397,31 +397,30 @@ describe("gateway server cron", () => {
       expect(modelOnlyPatched?.payload?.message).toBe("hello");
       expect(modelOnlyPatched?.payload?.model).toBe("anthropic/claude-sonnet-4-5");
 
-      const legacyDeliveryPatchRes = await rpcReq(ws, "cron.update", {
+      const deliveryPatchRes = await rpcReq(ws, "cron.update", {
         id: mergeJobId,
         patch: {
-          payload: {
-            kind: "agentTurn",
-            deliver: true,
+          delivery: {
+            mode: "announce",
             channel: "signal",
             to: "+15550001111",
-            bestEffortDeliver: true,
+            bestEffort: true,
           },
         },
       });
-      expect(legacyDeliveryPatchRes.ok).toBe(true);
-      const legacyDeliveryPatched = legacyDeliveryPatchRes.payload as
+      expect(deliveryPatchRes.ok).toBe(true);
+      const deliveryPatched = deliveryPatchRes.payload as
         | {
             payload?: { kind?: unknown; message?: unknown };
             delivery?: { mode?: unknown; channel?: unknown; to?: unknown; bestEffort?: unknown };
           }
         | undefined;
-      expect(legacyDeliveryPatched?.payload?.kind).toBe("agentTurn");
-      expect(legacyDeliveryPatched?.payload?.message).toBe("hello");
-      expect(legacyDeliveryPatched?.delivery?.mode).toBe("announce");
-      expect(legacyDeliveryPatched?.delivery?.channel).toBe("signal");
-      expect(legacyDeliveryPatched?.delivery?.to).toBe("+15550001111");
-      expect(legacyDeliveryPatched?.delivery?.bestEffort).toBe(true);
+      expect(deliveryPatched?.payload?.kind).toBe("agentTurn");
+      expect(deliveryPatched?.payload?.message).toBe("hello");
+      expect(deliveryPatched?.delivery?.mode).toBe("announce");
+      expect(deliveryPatched?.delivery?.channel).toBe("signal");
+      expect(deliveryPatched?.delivery?.to).toBe("+15550001111");
+      expect(deliveryPatched?.delivery?.bestEffort).toBe(true);
 
       const rejectJobId = await addMainSystemEventCronJob({ ws, name: "patch reject" });
 

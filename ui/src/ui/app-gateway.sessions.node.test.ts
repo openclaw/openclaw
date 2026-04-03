@@ -49,6 +49,9 @@ vi.mock("./gateway.ts", () => ({
 }));
 
 const { handleGatewayEvent } = await import("./app-gateway.ts");
+const { addExecApproval } = await vi.importActual<typeof import("./controllers/exec-approval.ts")>(
+  "./controllers/exec-approval.ts",
+);
 
 function createHost() {
   return {
@@ -118,5 +121,30 @@ describe("handleGatewayEvent sessions.changed", () => {
 
     expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(loadSessionsMock).toHaveBeenCalledWith(host);
+  });
+});
+
+describe("addExecApproval", () => {
+  it("keeps the newest approval at the front of the queue", () => {
+    const queue = addExecApproval(
+      [
+        {
+          id: "approval-old",
+          kind: "exec",
+          request: { command: "echo old" },
+          createdAtMs: 1,
+          expiresAtMs: Date.now() + 120_000,
+        },
+      ],
+      {
+        id: "approval-new",
+        kind: "exec",
+        request: { command: "echo new" },
+        createdAtMs: 2,
+        expiresAtMs: Date.now() + 120_000,
+      },
+    );
+
+    expect(queue.map((entry) => entry.id)).toEqual(["approval-new", "approval-old"]);
   });
 });

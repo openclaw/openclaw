@@ -1,5 +1,5 @@
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
-import type { ProviderConfig } from "./models-config.providers.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 export type ExistingProviderConfig = ProviderConfig & {
   apiKey?: string;

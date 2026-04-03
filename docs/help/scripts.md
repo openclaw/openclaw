@@ -19,8 +19,7 @@ Use these when a task is clearly tied to a script; otherwise prefer the CLI.
 
 ## Auth monitoring scripts
 
-Auth monitoring scripts are documented here:
-[/automation/auth-monitoring](/automation/auth-monitoring)
+Auth monitoring is covered in [Authentication](/gateway/authentication). The scripts under `scripts/` are optional extras for systemd/Termux phone workflows.
 
 ## When adding scripts
 

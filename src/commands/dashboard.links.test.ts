@@ -72,6 +72,7 @@ describe("dashboardCommand", () => {
     formatControlUiSshHintMock.mockClear();
     copyToClipboardMock.mockClear();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.CUSTOM_GATEWAY_TOKEN;
   });
 
   it("opens and copies the dashboard link by default", async () => {
@@ -172,20 +173,22 @@ describe("dashboardCommand", () => {
     );
   });
 
-  it("resolves env-template gateway.auth.token before building dashboard URL", async () => {
+  it("keeps URL non-tokenized when env-template gateway.auth.token is unresolved", async () => {
     mockSnapshot("${CUSTOM_GATEWAY_TOKEN}");
     copyToClipboardMock.mockResolvedValue(true);
     detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
     openUrlMock.mockResolvedValue(true);
-    resolveSecretRefValuesMock.mockResolvedValue(
-      new Map([["env:default:CUSTOM_GATEWAY_TOKEN", "resolved-secret-token"]]),
-    );
 
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Token auto-auth unavailable: gateway.auth.token SecretRef is unresolved (env:default:CUSTOM_GATEWAY_TOKEN).",
+      ),
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(
       expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
     );
   });

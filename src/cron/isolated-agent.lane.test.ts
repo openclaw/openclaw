@@ -33,7 +33,7 @@ async function runLaneCase(home: string, lane?: string) {
   await runCronIsolatedAgentTurn({
     cfg: makeCfg(home, storePath),
     deps: createCliDeps(),
-    job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+    job: { ...makeJob({ kind: "agentTurn", message: "do it" }), delivery: { mode: "none" } },
     message: "do it",
     sessionKey: "cron:job-1",
     ...(lane === undefined ? {} : { lane }),

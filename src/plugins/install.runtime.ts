@@ -20,9 +20,13 @@ import {
   installFromNpmSpecArchiveWithInstaller,
 } from "../infra/npm-pack-install.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveCompatibilityHostVersion, resolveRuntimeServiceVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
-import { scanBundleInstallSource, scanPackageInstallSource } from "./install-security-scan.js";
+import {
+  scanBundleInstallSource,
+  scanFileInstallSource,
+  scanPackageInstallSource,
+} from "./install-security-scan.js";
 import {
   getPackageManifestMetadata,
   loadPluginManifest,
@@ -52,9 +56,11 @@ export {
   resolveExistingInstallPath,
   resolveInstallModeOptions,
   resolvePackageExtensionEntries,
+  resolveCompatibilityHostVersion,
   resolveRuntimeServiceVersion,
   resolveTimedInstallModeOptions,
   scanBundleInstallSource,
+  scanFileInstallSource,
   scanPackageInstallSource,
   validateRegistryNpmSpec,
   withExtractedArchiveRoot,

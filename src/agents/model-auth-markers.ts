@@ -3,7 +3,6 @@ import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
 export const OAUTH_API_KEY_MARKER_PREFIX = "oauth:";
-export const QWEN_OAUTH_MARKER = "qwen-oauth";
 export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
 export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
 export const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
@@ -80,7 +79,6 @@ export function isNonSecretApiKeyMarker(
   }
   const isKnownMarker =
     trimmed === MINIMAX_OAUTH_MARKER ||
-    trimmed === QWEN_OAUTH_MARKER ||
     isOAuthApiKeyMarker(trimmed) ||
     trimmed === OLLAMA_LOCAL_AUTH_MARKER ||
     trimmed === CUSTOM_LOCAL_AUTH_MARKER ||

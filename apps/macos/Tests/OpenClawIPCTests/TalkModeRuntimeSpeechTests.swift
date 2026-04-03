@@ -11,4 +11,13 @@ struct TalkModeRuntimeSpeechTests {
         #expect(request.shouldReportPartialResults)
         #expect(request.taskHint == .dictation)
     }
+
+    @Test func `playback plan falls back only from elevenlabs`() {
+        #expect(
+            TalkModeRuntime.playbackPlan(apiKey: "key", voiceId: "voice")
+                == .elevenLabsThenSystemVoice(apiKey: "key", voiceId: "voice"))
+        #expect(TalkModeRuntime.playbackPlan(apiKey: nil, voiceId: "voice") == .systemVoiceOnly)
+        #expect(TalkModeRuntime.playbackPlan(apiKey: "key", voiceId: nil) == .systemVoiceOnly)
+        #expect(TalkModeRuntime.playbackPlan(apiKey: "", voiceId: "voice") == .systemVoiceOnly)
+    }
 }

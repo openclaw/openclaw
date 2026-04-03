@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
+import { resetCliCredentialCachesForTest } from "../agents/cli-credentials.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -107,6 +111,20 @@ const installModelCatalogMock = () =>
 
 installModelCatalogMock();
 
+vi.doMock("../agents/model-catalog.runtime.js", () => ({
+  loadModelCatalog: (...args: unknown[]) => modelCatalogMocks.loadModelCatalog(...args),
+}));
+
+vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
+  augmentModelCatalogWithProviderPlugins: async (params: { catalog?: unknown[] }) =>
+    params.catalog ?? [],
+  buildProviderAuthDoctorHintWithPlugin: () => undefined,
+  buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  formatProviderAuthProfileApiKeyWithPlugin: (params: { apiKey?: string }) => params.apiKey,
+  prepareProviderRuntimeAuth: async () => undefined,
+  refreshProviderOAuthCredentialWithPlugin: async () => undefined,
+}));
+
 const modelFallbackMocks = getSharedMocks("openclaw.trigger-handling.model-fallback-mocks", () => ({
   runWithModelFallback: vi.fn(
     async (params: {
@@ -131,18 +149,27 @@ const installModelFallbackMock = () =>
 
 installModelFallbackMock();
 
+vi.doMock("../infra/git-commit.js", () => ({
+  resolveCommitHash: vi.fn(() => "abcdef0"),
+}));
+
 const webSessionMocks = getSharedMocks("openclaw.trigger-handling.web-session-mocks", () => ({
   webAuthExists: vi.fn().mockResolvedValue(true),
   getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
 }));
 
+const whatsappRuntimeApiModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "whatsapp",
+  artifactBasename: "runtime-api.js",
+});
+
 export function getWebSessionMocks(): AnyMocks {
   return webSessionMocks;
 }
 
-const installWebSessionMock = () =>
-  vi.doMock("../../extensions/whatsapp/runtime-api.js", () => webSessionMocks);
+const installWebSessionMock = () => vi.doMock(whatsappRuntimeApiModuleId, () => webSessionMocks);
 
 installWebSessionMock();
 
@@ -419,6 +446,9 @@ export async function runGreetingPromptForBareNewOrReset(params: {
 
 export function installTriggerHandlingE2eTestHooks() {
   afterEach(() => {
+    clearRuntimeAuthProfileStoreSnapshots();
+    resetCliCredentialCachesForTest();
+    resetProviderRuntimeHookCacheForTest();
     vi.clearAllMocks();
   });
 }

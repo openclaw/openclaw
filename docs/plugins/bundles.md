@@ -72,13 +72,110 @@ is detected but not yet wired.
 
 ### Supported now
 
-| Feature       | How it maps                                                                                          | Applies to     |
-| ------------- | ---------------------------------------------------------------------------------------------------- | -------------- |
-| Skill content | Bundle skill roots load as normal OpenClaw skills                                                    | All formats    |
-| Commands      | `commands/` and `.cursor/commands/` treated as skill roots                                           | Claude, Cursor |
-| Hook packs    | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                                      | Codex          |
-| MCP tools     | Bundle MCP config merged into embedded Pi settings; supported stdio servers launched as subprocesses | All formats    |
-| Settings      | Claude `settings.json` imported as embedded Pi defaults                                              | Claude         |
+| Feature       | How it maps                                                                                 | Applies to     |
+| ------------- | ------------------------------------------------------------------------------------------- | -------------- |
+| Skill content | Bundle skill roots load as normal OpenClaw skills                                           | All formats    |
+| Commands      | `commands/` and `.cursor/commands/` treated as skill roots                                  | Claude, Cursor |
+| Hook packs    | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                             | Codex          |
+| MCP tools     | Bundle MCP config merged into embedded Pi settings; supported stdio and HTTP servers loaded | All formats    |
+| Settings      | Claude `settings.json` imported as embedded Pi defaults                                     | Claude         |
+
+#### Skill content
+
+- bundle skill roots load as normal OpenClaw skill roots
+- Claude `commands` roots are treated as additional skill roots
+- Cursor `.cursor/commands` roots are treated as additional skill roots
+
+This means Claude markdown command files work through the normal OpenClaw skill
+loader. Cursor command markdown works through the same path.
+
+#### Hook packs
+
+- bundle hook roots work **only** when they use the normal OpenClaw hook-pack
+  layout. Today this is primarily the Codex-compatible case:
+  - `HOOK.md`
+  - `handler.ts` or `handler.js`
+
+#### MCP for Pi
+
+- enabled bundles can contribute MCP server config
+- OpenClaw merges bundle MCP config into the effective embedded Pi settings as
+  `mcpServers`
+- OpenClaw exposes supported bundle MCP tools during embedded Pi agent turns by
+  launching stdio servers or connecting to HTTP servers
+- project-local Pi settings still apply after bundle defaults, so workspace
+  settings can override bundle MCP entries when needed
+
+##### Transports
+
+MCP servers can use stdio or HTTP transport:
+
+**Stdio** launches a child process:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "command": "node",
+        "args": ["server.js"],
+        "env": { "PORT": "3000" }
+      }
+    }
+  }
+}
+```
+
+**HTTP** connects to a running MCP server over `sse` by default, or `streamable-http` when requested:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "url": "http://localhost:3100/mcp",
+        "transport": "streamable-http",
+        "headers": {
+          "Authorization": "Bearer ${MY_SECRET_TOKEN}"
+        },
+        "connectionTimeoutMs": 30000
+      }
+    }
+  }
+}
+```
+
+- `transport` may be set to `"streamable-http"` or `"sse"`; when omitted, OpenClaw uses `sse`
+- only `http:` and `https:` URL schemes are allowed
+- `headers` values support `${ENV_VAR}` interpolation
+- a server entry with both `command` and `url` is rejected
+- URL credentials (userinfo and query params) are redacted from tool
+  descriptions and logs
+- `connectionTimeoutMs` overrides the default 30-second connection timeout for
+  both stdio and HTTP transports
+
+##### Tool naming
+
+OpenClaw registers bundle MCP tools with provider-safe names in the form
+`serverName__toolName`. For example, a server keyed `"vigil-harbor"` exposing a
+`memory_search` tool registers as `vigil-harbor__memory_search`.
+
+- characters outside `A-Za-z0-9_-` are replaced with `-`
+- server prefixes are capped at 30 characters
+- full tool names are capped at 64 characters
+- empty server names fall back to `mcp`
+- colliding sanitized names are disambiguated with numeric suffixes
+
+#### Embedded Pi settings
+
+- Claude `settings.json` is imported as default embedded Pi settings when the
+  bundle is enabled
+- OpenClaw sanitizes shell override keys before applying them
+
+Sanitized keys:
+
+- `shellPath`
+- `shellCommandPrefix`
 
 ### Detected but not executed
 

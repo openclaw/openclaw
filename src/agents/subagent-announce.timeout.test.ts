@@ -25,59 +25,114 @@ let requesterDepthResolver: (sessionKey?: string) => number = () => 0;
 let subagentSessionRunActive = true;
 let shouldIgnorePostCompletion = false;
 let pendingDescendantRuns = 0;
+const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
+const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
 let fallbackRequesterResolution: {
   requesterSessionKey: string;
   requesterOrigin?: { channel?: string; to?: string; accountId?: string };
 } | null = null;
 let chatHistoryMessages: Array<Record<string, unknown>> = [];
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(async (request: GatewayCall) => {
-    gatewayCalls.push(request);
-    if (request.method === "chat.history") {
-      return { messages: chatHistoryMessages };
-    }
-    return await callGatewayImpl(request);
+function createGatewayCallModuleMock() {
+  return {
+    callGateway: vi.fn(async (request: GatewayCall) => {
+      gatewayCalls.push(request);
+      if (request.method === "chat.history") {
+        return { messages: chatHistoryMessages };
+      }
+      return await callGatewayImpl(request);
+    }),
+  };
+}
+
+function createSessionsModuleMock() {
+  return {
+    loadSessionStore: vi.fn(() => sessionStore),
+    resolveAgentIdFromSessionKey: () => "main",
+    resolveStorePath: () => "/tmp/sessions-main.json",
+    resolveMainSessionKey: () => "agent:main:main",
+  };
+}
+
+function createSubagentDepthModuleMock() {
+  return {
+    getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
+  };
+}
+
+function createTimeoutHistoryWithNoReply() {
+  return [
+    { role: "user", content: "do something" },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Still working through the files." },
+        { type: "toolCall", id: "call1", name: "read", arguments: {} },
+      ],
+    },
+    { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    },
+  ];
+}
+
+vi.mock("../gateway/call.js", createGatewayCallModuleMock);
+vi.mock("./subagent-depth.js", createSubagentDepthModuleMock);
+vi.mock("./subagent-announce-delivery.runtime.js", () => ({
+  createBoundDeliveryRouter: () => ({
+    resolveDestination: () => ({ mode: "none" }),
+  }),
+  resolveConversationIdFromTargets: () => "",
+  resolveExternalBestEffortDeliveryTarget: (params: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string;
+  }) => ({
+    deliver: Boolean(params.channel && params.to),
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    threadId: params.threadId,
+  }),
+  resolveQueueSettings: (params: {
+    cfg?: {
+      messages?: {
+        queue?: {
+          byChannel?: Record<string, string>;
+        };
+      };
+    };
+    channel?: string;
+  }) => ({
+    mode: (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "none",
   }),
 }));
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => configOverride,
-  };
-});
-
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: vi.fn(() => sessionStore),
-  resolveAgentIdFromSessionKey: () => "main",
-  resolveStorePath: () => "/tmp/sessions-main.json",
-  resolveMainSessionKey: () => "agent:main:main",
+vi.mock("./subagent-announce.runtime.js", () => ({
+  callGateway: createGatewayCallModuleMock().callGateway,
+  loadConfig: () => configOverride,
+  ...createSessionsModuleMock(),
+  isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+  queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
+  waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
+    waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
 }));
-
-vi.mock("./subagent-depth.js", () => ({
-  getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
-}));
-
-vi.mock("./pi-embedded.js", () => ({
-  isEmbeddedPiRunActive: () => false,
-  queueEmbeddedPiMessage: () => false,
-  waitForEmbeddedPiRunEnd: async () => true,
-}));
-
-vi.mock("./subagent-registry.js", () => ({
+vi.mock("./subagent-announce.registry.runtime.js", () => ({
   countActiveDescendantRuns: () => 0,
   countPendingDescendantRuns: () => pendingDescendantRuns,
+  countPendingDescendantRunsExcludingRun: () => 0,
   listSubagentRunsForRequester: () => [],
   isSubagentSessionRunActive: () => subagentSessionRunActive,
   shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
+  replaceSubagentRunAfterSteer: () => true,
   resolveRequesterForChildSession: () => fallbackRequesterResolution,
 }));
-
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
-
-type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];
+type AnnounceFlowParams = Parameters<
+  typeof import("./subagent-announce.js").runSubagentAnnounceFlow
+>[0];
 
 const defaultSessionConfig = {
   mainKey: "main",
@@ -157,6 +212,8 @@ describe("subagent announce timeout config", () => {
     subagentSessionRunActive = true;
     shouldIgnorePostCompletion = false;
     pendingDescendantRuns = 0;
+    isEmbeddedPiRunActiveMock.mockReset().mockReturnValue(false);
+    waitForEmbeddedPiRunEndMock.mockReset().mockResolvedValue(true);
     fallbackRequesterResolution = null;
   });
 
@@ -195,9 +252,9 @@ describe("subagent announce timeout config", () => {
     expect(completionDirectAgentCall?.timeoutMs).toBe(90_000);
   });
 
-  it("does not retry gateway timeout for externally delivered completion announces", async () => {
-    vi.useFakeTimers();
+  it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
     try {
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
       callGatewayImpl = async (request) => {
         if (request.method === "chat.history") {
           return { messages: [] };
@@ -205,22 +262,21 @@ describe("subagent announce timeout config", () => {
         throw new Error("gateway timeout after 90000ms");
       };
 
-      await expect(
-        runAnnounceFlowForTest("run-completion-timeout-no-retry", {
-          requesterOrigin: {
-            channel: "telegram",
-            to: "12345",
-          },
-          expectsCompletionMessage: true,
-        }),
-      ).resolves.toBe(false);
+      const announcePromise = runAnnounceFlowForTest("run-completion-timeout-retry", {
+        requesterOrigin: {
+          channel: "telegram",
+          to: "12345",
+        },
+        expectsCompletionMessage: true,
+      });
+      await expect(announcePromise).resolves.toBe(false);
 
       const directAgentCalls = gatewayCalls.filter(
         (call) => call.method === "agent" && call.expectFinal === true,
       );
-      expect(directAgentCalls).toHaveLength(1);
+      expect(directAgentCalls).toHaveLength(4);
     } finally {
-      vi.useRealTimers();
+      vi.unstubAllEnvs();
     }
   });
 
@@ -389,19 +445,7 @@ describe("subagent announce timeout config", () => {
 
   it("preserves NO_REPLY when timeout partial-progress history mixes prior text and later silence", async () => {
     chatHistoryMessages = [
-      { role: "user", content: "do something" },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Still working through the files." },
-          { type: "toolCall", id: "call1", name: "read", arguments: {} },
-        ],
-      },
-      { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
+      ...createTimeoutHistoryWithNoReply(),
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call2", name: "exec", arguments: {} }],
@@ -418,21 +462,9 @@ describe("subagent announce timeout config", () => {
     ).toBeUndefined();
   });
 
-  it("prefers NO_REPLY partial progress over a longer latest assistant reply", async () => {
+  it("prefers later visible assistant progress over an earlier NO_REPLY marker", async () => {
     chatHistoryMessages = [
-      { role: "user", content: "do something" },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Still working through the files." },
-          { type: "toolCall", id: "call1", name: "read", arguments: {} },
-        ],
-      },
-      { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
+      ...createTimeoutHistoryWithNoReply(),
       {
         role: "assistant",
         content: [{ type: "text", text: "A longer partial summary that should stay silent." }],
@@ -444,8 +476,11 @@ describe("subagent announce timeout config", () => {
       roundOneReply: undefined,
     });
 
-    expect(
-      findGatewayCall((call) => call.method === "agent" && call.expectFinal === true),
-    ).toBeUndefined();
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toContain(
+      "A longer partial summary that should stay silent.",
+    );
   });
 });

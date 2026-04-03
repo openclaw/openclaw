@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runPreparedReply } from "./get-reply-run.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -21,9 +21,15 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
 }));
 
-vi.mock("../../config/sessions/store.js", () => ({
-  updateSessionStore: vi.fn(),
-}));
+const storeRuntimeLoads = vi.hoisted(() => vi.fn());
+const updateSessionStore = vi.hoisted(() => vi.fn());
+
+vi.mock("../../config/sessions/store.runtime.js", () => {
+  storeRuntimeLoads();
+  return {
+    updateSessionStore,
+  };
+});
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
@@ -89,10 +95,19 @@ vi.mock("./typing-mode.js", () => ({
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
 
-import { runReplyAgent } from "./agent-runner.runtime.js";
-import { routeReply } from "./route-reply.runtime.js";
-import { drainFormattedSystemEvents } from "./session-system-events.js";
-import { resolveTypingMode } from "./typing-mode.js";
+let runPreparedReply: typeof import("./get-reply-run.js").runPreparedReply;
+let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
+let routeReply: typeof import("./route-reply.runtime.js").routeReply;
+let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
+let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
+let loadScopeCounter = 0;
+
+async function loadFreshGetReplyRunModuleForTest() {
+  ({ runPreparedReply } = await importFreshModule<typeof import("./get-reply-run.js")>(
+    import.meta.url,
+    `./get-reply-run.js?scope=media-only-${loadScopeCounter++}`,
+  ));
+}
 
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
@@ -124,10 +139,14 @@ function baseParams(
     sessionCfg: {},
     commandAuthorized: true,
     command: {
+      surface: "slack",
+      channel: "slack",
       isAuthorizedSender: true,
       abortKey: "session-key",
       ownerList: [],
       senderIsOwner: false,
+      rawBodyNormalized: "",
+      commandBodyNormalized: "",
     } as never,
     commandSource: "",
     allowTextCommands: true,
@@ -167,8 +186,24 @@ function baseParams(
 }
 
 describe("runPreparedReply media-only handling", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
+    ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
+    ({ routeReply } = await import("./route-reply.runtime.js"));
+    ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
+    ({ resolveTypingMode } = await import("./typing-mode.js"));
+  });
+
+  beforeEach(async () => {
+    storeRuntimeLoads.mockClear();
+    updateSessionStore.mockReset();
     vi.clearAllMocks();
+    await loadFreshGetReplyRunModuleForTest();
+  });
+
+  it("does not load session store runtime on module import", async () => {
+    await loadFreshGetReplyRunModuleForTest();
+
+    expect(storeRuntimeLoads).not.toHaveBeenCalled();
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
@@ -248,10 +283,13 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "group",
         },
         command: {
+          surface: "webchat",
           isAuthorizedSender: true,
           abortKey: "session-key",
           ownerList: [],
           senderIsOwner: false,
+          rawBodyNormalized: "",
+          commandBodyNormalized: "",
           channel: "webchat",
           from: undefined,
           to: undefined,

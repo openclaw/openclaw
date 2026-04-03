@@ -1,6 +1,7 @@
 import type { Message } from "grammy/types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  buildTelegramRoutingTarget,
   buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
@@ -9,6 +10,7 @@ import {
   hasBotMention,
   normalizeForwardedContext,
   resolveTelegramDirectPeerId,
+  resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
 } from "./helpers.js";
 
@@ -31,6 +33,49 @@ describe("resolveTelegramForumThreadId", () => {
   });
 });
 
+describe("resolveTelegramForumFlag", () => {
+  it("keeps explicit forum metadata when Telegram already provides it", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: false }));
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: -100123,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: true,
+        getChat,
+      }),
+    ).resolves.toBe(true);
+    expect(getChat).not.toHaveBeenCalled();
+  });
+
+  it("falls back to getChat for supergroups when is_forum is omitted", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: -100123,
+        chatType: "supergroup",
+        isGroup: true,
+        getChat,
+      }),
+    ).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledWith(-100123);
+  });
+
+  it("returns false when forum lookup is unavailable", async () => {
+    const getChat = vi.fn(async () => {
+      throw new Error("lookup failed");
+    });
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: -100123,
+        chatType: "supergroup",
+        isGroup: true,
+        getChat,
+      }),
+    ).resolves.toBe(false);
+  });
+});
+
 describe("buildTelegramThreadParams", () => {
   it.each([
     { input: { id: 1, scope: "forum" as const }, expected: undefined },
@@ -45,6 +90,31 @@ describe("buildTelegramThreadParams", () => {
     { input: { id: 0, scope: "none" as const }, expected: { message_thread_id: 0 } },
   ])("builds thread params", ({ input, expected }) => {
     expect(buildTelegramThreadParams(input)).toEqual(expected);
+  });
+});
+
+describe("buildTelegramRoutingTarget", () => {
+  it.each([
+    {
+      name: "keeps General forum topic chat-scoped",
+      chatId: -100123,
+      thread: { id: 1, scope: "forum" as const },
+      expected: "telegram:-100123",
+    },
+    {
+      name: "includes real forum topic ids",
+      chatId: -100123,
+      thread: { id: 42, scope: "forum" as const },
+      expected: "telegram:-100123:topic:42",
+    },
+    {
+      name: "falls back to bare chat when thread is missing",
+      chatId: -100123,
+      thread: null,
+      expected: "telegram:-100123",
+    },
+  ])("$name", ({ chatId, thread, expected }) => {
+    expect(buildTelegramRoutingTarget(chatId, thread)).toBe(expected);
   });
 });
 
@@ -245,6 +315,44 @@ describe("describeReplyTarget", () => {
     expect(result?.body).toBe("Original message");
     expect(result?.sender).toBe("Alice");
     expect(result?.id).toBe("1");
+    expect(result?.kind).toBe("reply");
+  });
+
+  it("handles non-string reply text gracefully (issue #27201)", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        // Simulate edge case where text is an unexpected non-string value
+        text: { some: "object" },
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    // Should not throw when reply text is malformed; return null instead.
+    expect(result).toBeNull();
+  });
+
+  it("falls back to caption when reply text is malformed", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        text: { some: "object" },
+        caption: "Caption body",
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    expect(result?.body).toBe("Caption body");
     expect(result?.kind).toBe("reply");
   });
 

@@ -1,5 +1,5 @@
+import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../../../../src/agents/auth-profiles.js";
 import {
   createDiscordAutoPresenceController,
   resolveDiscordAutoPresenceDecision,

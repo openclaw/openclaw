@@ -13,6 +13,16 @@ const LIVE = isLiveTestEnabled(["MOONSHOT_LIVE_TEST"]);
 
 const describeLive = LIVE && MOONSHOT_KEY ? describe : describe.skip;
 
+function forceMoonshotInstantMode(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  // Moonshot's official API exposes instant mode via thinking.type=disabled.
+  // Without this, tiny smoke probes can spend the full token budget in hidden
+  // reasoning_content and never emit visible assistant text.
+  (payload as Record<string, unknown>).thinking = { type: "disabled" };
+}
+
 describeLive("moonshot live", () => {
   it("returns assistant text", async () => {
     const model: Model<"openai-completions"> = {
@@ -33,7 +43,13 @@ describeLive("moonshot live", () => {
       {
         messages: createSingleUserPromptMessage(),
       },
-      { apiKey: MOONSHOT_KEY, maxTokens: 64 },
+      {
+        apiKey: MOONSHOT_KEY,
+        maxTokens: 64,
+        onPayload: (payload) => {
+          forceMoonshotInstantMode(payload);
+        },
+      },
     );
 
     const text = extractNonEmptyAssistantText(res.content);

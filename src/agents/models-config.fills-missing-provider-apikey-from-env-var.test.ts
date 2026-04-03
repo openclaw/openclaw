@@ -329,8 +329,6 @@ describe("models-config", () => {
           providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
         }>();
         expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY"); // pragma: allowlist secret
-        const ids = parsed.providers.minimax?.models?.map((model) => model.id);
-        expect(ids).toContain("MiniMax-VL-01");
       });
     });
   });
@@ -599,8 +597,8 @@ describe("models-config", () => {
     await expectMoonshotTokenLimits({
       contextWindow: 0,
       maxTokens: -1,
-      expectedContextWindow: 256000,
-      expectedMaxTokens: 8192,
+      expectedContextWindow: 262144,
+      expectedMaxTokens: 262144,
     });
   });
 });

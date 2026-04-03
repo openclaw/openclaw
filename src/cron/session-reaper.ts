@@ -116,7 +116,7 @@ export async function sweepCronRunSessions(params: {
           .map((entry) => entry?.sessionId)
           .filter((id): id is string => Boolean(id)),
       );
-      const archivedDirs = archiveRemovedSessionTranscripts({
+      const archivedDirs = await archiveRemovedSessionTranscripts({
         removedSessionFiles: prunedSessions,
         referencedSessionIds,
         storePath,

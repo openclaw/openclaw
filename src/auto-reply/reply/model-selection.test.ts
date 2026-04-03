@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MODEL_CONTEXT_TOKEN_CACHE } from "../../agents/context-cache.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { createModelSelectionState } from "./model-selection.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
@@ -15,6 +18,14 @@ vi.mock("../../agents/model-catalog.js", () => ({
     { provider: "xai", id: "grok-4.20-reasoning", name: "Grok 4.20 (Reasoning)" },
   ]),
 }));
+
+afterEach(() => {
+  MODEL_CONTEXT_TOKEN_CACHE.clear();
+});
+
+beforeEach(() => {
+  setActivePluginRegistry(createSessionConversationTestRegistry());
+});
 
 const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
   id: "gpt-5.4",
@@ -123,6 +134,22 @@ describe("createModelSelectionState catalog loading", () => {
     });
 
     expect(loadModelCatalog).toHaveBeenCalledOnce();
+  });
+});
+
+describe("resolveContextTokens", () => {
+  it("prefers provider-qualified cache keys over bare model ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set("anthropic/claude-opus-4-6", 1_000_000);
+
+    const result = resolveContextTokens({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
+    expect(result).toBe(1_000_000);
   });
 });
 
@@ -378,6 +405,17 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.model).toBe("deepseek-v3-4bit-mlx");
   });
 
+  it("splits legacy combined modelOverride when providerOverride is missing", async () => {
+    const state = await resolveState(
+      makeEntry({
+        modelOverride: "ollama-beelink2/qwen2.5-coder:7b",
+      }),
+    );
+
+    expect(state.provider).toBe("ollama-beelink2");
+    expect(state.model).toBe("qwen2.5-coder:7b");
+  });
+
   it("normalizes deprecated xai beta session overrides before allowlist checks", async () => {
     const cfg = {
       agents: {
@@ -413,7 +451,7 @@ describe("createModelSelectionState respects session model override", () => {
     });
 
     expect(state.provider).toBe("xai");
-    expect(state.model).toBe("grok-4.20-reasoning");
+    expect(state.model).toBe("grok-4.20-beta-latest-reasoning");
     expect(state.resetModelOverride).toBe(false);
   });
 
@@ -450,6 +488,44 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.resetModelOverride).toBe(true);
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+  });
+
+  it("keeps allowed legacy combined session overrides after normalization", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "ollama-beelink2/qwen2.5-coder:7b": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:2";
+    const sessionEntry = makeEntry({
+      modelOverride: "ollama-beelink2/qwen2.5-coder:7b",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("ollama-beelink2");
+    expect(state.model).toBe("qwen2.5-coder:7b");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("ollama-beelink2/qwen2.5-coder:7b");
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });
 });

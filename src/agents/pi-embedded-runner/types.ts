@@ -1,10 +1,11 @@
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
   provider: string;
   model: string;
+  cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
   promptTokens?: number;
   usage?: {
@@ -61,6 +62,7 @@ export type EmbeddedPiRunResult = {
     mediaUrls?: string[];
     replyToId?: string;
     isError?: boolean;
+    isReasoning?: boolean;
   }>;
   meta: EmbeddedPiRunMeta;
   // True if a messaging tool (telegram, whatsapp, discord, slack, sessions_send)

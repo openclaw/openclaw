@@ -9,6 +9,7 @@ export type IMessageAttachment = {
 
 export type IMessagePayload = {
   id?: number | null;
+  guid?: string | null;
   chat_id?: number | null;
   sender?: string | null;
   is_from_me?: boolean | null;

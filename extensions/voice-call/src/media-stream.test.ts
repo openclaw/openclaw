@@ -344,4 +344,39 @@ describe("MediaStreamHandler security hardening", () => {
       await server.close();
     }
   });
+
+  it("rejects oversized pre-start frames at the websocket maxPayload guard before validation runs", async () => {
+    const shouldAcceptStreamCalls: Array<{ callId: string; streamSid: string; token?: string }> =
+      [];
+    const handler = new MediaStreamHandler({
+      sttProvider: createStubSttProvider(),
+      preStartTimeoutMs: 1_000,
+      shouldAcceptStream: (params) => {
+        shouldAcceptStreamCalls.push(params);
+        return true;
+      },
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-oversized",
+          start: {
+            callSid: "CA-oversized",
+            customParameters: { token: "token-oversized", padding: "A".repeat(256 * 1024) },
+          },
+        }),
+      );
+
+      const closed = await waitForClose(ws);
+
+      expect(closed.code).toBe(1009);
+      expect(shouldAcceptStreamCalls).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
 });

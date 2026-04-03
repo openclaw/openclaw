@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { isWSL2Sync } from "openclaw/plugin-sdk/infra-runtime";
+import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { AUTH_URL, REDIRECT_URI, SCOPES } from "./oauth.shared.js";
 
@@ -14,7 +14,11 @@ export function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-export function buildAuthUrl(challenge: string, verifier: string): string {
+export function generateOAuthState(): string {
+  return randomBytes(32).toString("hex");
+}
+
+export function buildAuthUrl(challenge: string, state: string): string {
   const { clientId } = resolveOAuthClientConfig();
   const params = new URLSearchParams({
     client_id: clientId,
@@ -23,7 +27,7 @@ export function buildAuthUrl(challenge: string, verifier: string): string {
     scope: SCOPES.join(" "),
     code_challenge: challenge,
     code_challenge_method: "S256",
-    state: verifier,
+    state,
     access_type: "offline",
     prompt: "consent",
   });
@@ -32,7 +36,6 @@ export function buildAuthUrl(challenge: string, verifier: string): string {
 
 export function parseCallbackInput(
   input: string,
-  expectedState: string,
 ): { code: string; state: string } | { error: string } {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -42,7 +45,7 @@ export function parseCallbackInput(
   try {
     const url = new URL(trimmed);
     const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state") ?? expectedState;
+    const state = url.searchParams.get("state");
     if (!code) {
       return { error: "Missing 'code' parameter in URL" };
     }
@@ -51,10 +54,7 @@ export function parseCallbackInput(
     }
     return { code, state };
   } catch {
-    if (!expectedState) {
-      return { error: "Paste the full redirect URL, not just the code." };
-    }
-    return { code: trimmed, state: expectedState };
+    return { error: "Paste the full redirect URL, not just the code." };
   }
 }
 

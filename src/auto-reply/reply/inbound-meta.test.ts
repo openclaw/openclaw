@@ -100,6 +100,41 @@ describe("buildInboundMetaSystemPrompt", () => {
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["sender_id"]).toBeUndefined();
   });
+
+  it("includes Slack mrkdwn response format hints for Slack chats", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "channel:C123",
+      OriginatingChannel: "slack",
+      Provider: "slack",
+      Surface: "slack",
+      ChatType: "channel",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["response_format"]).toEqual({
+      text_markup: "slack_mrkdwn",
+      rules: [
+        "Use Slack mrkdwn, not standard Markdown.",
+        "Bold uses *single asterisks*.",
+        "Links use <url|label>.",
+        "Code blocks use triple backticks without a language identifier.",
+        "Do not use markdown headings or pipe tables.",
+      ],
+    });
+  });
+
+  it("omits response format hints for non-Slack chats", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "telegram:123",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["response_format"]).toBeUndefined();
+  });
 });
 
 describe("buildInboundUserContextPrefix", () => {

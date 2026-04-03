@@ -115,6 +115,40 @@ await api.runtime.subagent.deleteSession({
   Untrusted plugins can still run subagents, but override requests are rejected.
 </Warning>
 
+### `api.runtime.taskFlow`
+
+Bind a Task Flow runtime to an existing OpenClaw session key or trusted tool
+context, then create and manage Task Flows without passing an owner on every call.
+
+```typescript
+const taskFlow = api.runtime.taskFlow.fromToolContext(ctx);
+
+const created = taskFlow.createManaged({
+  controllerId: "my-plugin/review-batch",
+  goal: "Review new pull requests",
+});
+
+const child = taskFlow.runTask({
+  flowId: created.flowId,
+  runtime: "acp",
+  childSessionKey: "agent:main:subagent:reviewer",
+  task: "Review PR #123",
+  status: "running",
+  startedAt: Date.now(),
+});
+
+const waiting = taskFlow.setWaiting({
+  flowId: created.flowId,
+  expectedRevision: created.revision,
+  currentStep: "await-human-reply",
+  waitJson: { kind: "reply", channel: "telegram" },
+});
+```
+
+Use `bindSession({ sessionKey, requesterOrigin })` when you already have a
+trusted OpenClaw session key from your own binding layer. Do not bind from raw
+user input.
+
 ### `api.runtime.tts`
 
 Text-to-speech synthesis.
@@ -330,15 +364,15 @@ export function tryGetRuntime() {
 
 Beyond `api.runtime`, the API object also provides:
 
-| Field                    | Type                      | Description                                               |
-| ------------------------ | ------------------------- | --------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                 |
-| `api.name`               | `string`                  | Plugin display name                                       |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot                                   |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config` |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)          |
-| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, or `"setup-runtime"`            |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve a path relative to the plugin root                |
+| Field                    | Type                      | Description                                                      |
+| ------------------------ | ------------------------- | ---------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                        |
+| `api.name`               | `string`                  | Plugin display name                                              |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot                                          |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`        |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                 |
+| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"` |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve a path relative to the plugin root                       |
 
 ## Related
 

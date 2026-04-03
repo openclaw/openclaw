@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 
 describe("normalizeCompatibilityConfigValues", () => {
@@ -122,6 +123,38 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved channels.slack.dm.policy → channels.slack.dmPolicy.",
       "Moved channels.slack.dm.allowFrom → channels.slack.allowFrom.",
     ]);
+  });
+
+  it("migrates legacy x_search auth into xai plugin-owned config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          x_search: {
+            apiKey: "xai-legacy-key",
+            enabled: true,
+            model: "grok-4-1-fast",
+          },
+        } as Record<string, unknown>,
+      },
+    });
+
+    expect((res.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(res.config.plugins?.entries?.xai).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "xai-legacy-key",
+        },
+      },
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
+      ]),
+    );
   });
 
   it("migrates Discord account dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
@@ -318,6 +351,10 @@ describe("normalizeCompatibilityConfigValues", () => {
       provider: "default",
       id: "GEMINI_API_KEY",
     });
+    expect(res.config.models?.providers?.google?.baseUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
+    expect(res.config.models?.providers?.google?.models).toEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
@@ -341,6 +378,10 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.models?.providers?.google?.apiKey).toBe("env-gemini-key");
+    expect(res.config.models?.providers?.google?.baseUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
+    expect(res.config.models?.providers?.google?.models).toEqual([]);
     expect(res.changes).toContain(
       "Moved skills.entries.nano-banana-pro.env.GEMINI_API_KEY → models.providers.google.apiKey.",
     );
@@ -499,6 +540,87 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
+  it("migrates legacy web fetch provider config to plugin-owned config paths", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          fetch: {
+            provider: "firecrawl",
+            timeoutSeconds: 15,
+            firecrawl: {
+              apiKey: "firecrawl-key",
+              baseUrl: "https://api.firecrawl.dev",
+              onlyMainContent: false,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(res.config.tools?.web?.fetch).toEqual({
+      provider: "firecrawl",
+      timeoutSeconds: 15,
+    });
+    expect(res.config.plugins?.entries?.firecrawl).toEqual({
+      enabled: true,
+      config: {
+        webFetch: {
+          apiKey: "firecrawl-key",
+          baseUrl: "https://api.firecrawl.dev",
+          onlyMainContent: false,
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Moved tools.web.fetch.firecrawl → plugins.entries.firecrawl.config.webFetch.",
+    ]);
+  });
+
+  it("keeps explicit plugin-owned web fetch config while filling missing legacy fields", () => {
+    const res = normalizeCompatibilityConfigValues({
+      tools: {
+        web: {
+          fetch: {
+            provider: "firecrawl",
+            firecrawl: {
+              apiKey: "legacy-firecrawl-key",
+              baseUrl: "https://api.firecrawl.dev",
+              onlyMainContent: false,
+            },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          firecrawl: {
+            enabled: true,
+            config: {
+              webFetch: {
+                apiKey: "explicit-firecrawl-key",
+                timeoutSeconds: 30,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(res.config.plugins?.entries?.firecrawl).toEqual({
+      enabled: true,
+      config: {
+        webFetch: {
+          apiKey: "explicit-firecrawl-key",
+          timeoutSeconds: 30,
+          baseUrl: "https://api.firecrawl.dev",
+          onlyMainContent: false,
+        },
+      },
+    });
+    expect(res.changes).toEqual([
+      "Merged tools.web.fetch.firecrawl → plugins.entries.firecrawl.config.webFetch (filled missing fields from legacy; kept explicit plugin config values).",
+    ]);
+  });
+
   it("migrates legacy talk flat fields to provider/providers", () => {
     const res = normalizeCompatibilityConfigValues({
       talk: {
@@ -515,7 +637,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.talk).toEqual({
-      provider: "elevenlabs",
       providers: {
         elevenlabs: {
           voiceId: "voice-123",
@@ -537,9 +658,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
-    expect(res.changes).toEqual([
-      "Moved legacy talk flat fields → talk.provider/talk.providers.elevenlabs.",
-    ]);
+    expect(res.changes).toEqual(["Moved legacy talk flat fields → talk.providers.elevenlabs."]);
   });
 
   it("normalizes talk provider ids without overriding explicit provider config", () => {
@@ -667,6 +786,54 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Merged tools.media.audio.deepgram → tools.media.audio.providerOptions.deepgram (filled missing canonical fields from legacy).",
       "Moved tools.media.audio.models[0].deepgram → tools.media.audio.models[0].providerOptions.deepgram.",
       "Merged tools.media.models[0].deepgram → tools.media.models[0].providerOptions.deepgram (filled missing canonical fields from legacy).",
+    ]);
+  });
+
+  it("normalizes persisted mistral model maxTokens that matched the old context-sized defaults", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "mistral-large-latest",
+                name: "Mistral Large",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 262144,
+              },
+              {
+                id: "magistral-small",
+                name: "Magistral Small",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 128000,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.mistral?.models).toEqual([
+      expect.objectContaining({
+        id: "mistral-large-latest",
+        maxTokens: 16384,
+      }),
+      expect.objectContaining({
+        id: "magistral-small",
+        maxTokens: 40000,
+      }),
+    ]);
+    expect(res.changes).toEqual([
+      "Normalized models.providers.mistral.models[0].maxTokens (262144 → 16384) to avoid Mistral context-window rejects.",
+      "Normalized models.providers.mistral.models[1].maxTokens (128000 → 40000) to avoid Mistral context-window rejects.",
     ]);
   });
 });

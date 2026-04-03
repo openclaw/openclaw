@@ -55,6 +55,10 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     - generate a gateway token and write it to `.env`
     - start the gateway via Docker Compose
 
+    During setup, pre-start onboarding and config writes run through
+    `openclaw-gateway` directly. `openclaw-cli` is for commands you run after
+    the gateway container already exists.
+
   </Step>
 
   <Step title="Open the Control UI">
@@ -94,7 +98,15 @@ If you prefer to run each step yourself instead of using the setup script:
 
 ```bash
 docker build -t openclaw:local -f Dockerfile .
-docker compose run --rm openclaw-cli onboard
+docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
+  dist/index.js onboard --mode local --no-install-daemon
+docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
+  dist/index.js config set gateway.mode local
+docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
+  dist/index.js config set gateway.bind lan
+docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
+  dist/index.js config set gateway.controlUi.allowedOrigins \
+  '["http://localhost:18789","http://127.0.0.1:18789"]' --strict-json
 docker compose up -d openclaw-gateway
 ```
 
@@ -102,6 +114,13 @@ docker compose up -d openclaw-gateway
 Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS`
 or `OPENCLAW_HOME_VOLUME`, the setup script writes `docker-compose.extra.yml`;
 include it with `-f docker-compose.yml -f docker-compose.extra.yml`.
+</Note>
+
+<Note>
+Because `openclaw-cli` shares `openclaw-gateway`'s network namespace, it is a
+post-start tool. Before `docker compose up -d openclaw-gateway`, run onboarding
+and setup-time config writes through `openclaw-gateway` with
+`--no-deps --entrypoint node`.
 </Note>
 
 ### Environment variables
@@ -168,13 +187,15 @@ and rolling file logs under `/tmp/openclaw/`.
 For easier day-to-day Docker management, install `ClawDock`:
 
 ```bash
-mkdir -p ~/.clawdock && curl -sL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/shell-helpers/clawdock-helpers.sh -o ~/.clawdock/clawdock-helpers.sh
+mkdir -p ~/.clawdock && curl -sL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/clawdock/clawdock-helpers.sh -o ~/.clawdock/clawdock-helpers.sh
 echo 'source ~/.clawdock/clawdock-helpers.sh' >> ~/.zshrc && source ~/.zshrc
 ```
 
+If you installed ClawDock from the older `scripts/shell-helpers/clawdock-helpers.sh` raw path, rerun the install command above so your local helper file tracks the new location.
+
 Then use `clawdock-start`, `clawdock-stop`, `clawdock-dashboard`, etc. Run
 `clawdock-help` for all commands.
-See the [`ClawDock` Helper README](https://github.com/openclaw/openclaw/blob/main/scripts/shell-helpers/README.md).
+See [ClawDock](/install/clawdock) for the full helper guide.
 
 <AccordionGroup>
   <Accordion title="Enable agent sandbox for Docker gateway">
@@ -373,3 +394,11 @@ scripts/sandbox-setup.sh
 
   </Accordion>
 </AccordionGroup>
+
+## Related
+
+- [Install Overview](/install) — all installation methods
+- [Podman](/install/podman) — Podman alternative to Docker
+- [ClawDock](/install/clawdock) — Docker Compose community setup
+- [Updating](/install/updating) — keeping OpenClaw up to date
+- [Configuration](/gateway/configuration) — gateway configuration after install

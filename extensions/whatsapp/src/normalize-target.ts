@@ -67,3 +67,32 @@ export function normalizeWhatsAppTarget(value: string): string | null {
   const normalized = normalizeE164(candidate);
   return normalized.length > 1 ? normalized : null;
 }
+
+export function normalizeWhatsAppMessagingTarget(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return normalizeWhatsAppTarget(trimmed) ?? undefined;
+}
+
+export function normalizeWhatsAppAllowFromEntries(allowFrom: Array<string | number>): string[] {
+  return allowFrom
+    .map((entry) => String(entry).trim())
+    .filter((entry): entry is string => Boolean(entry))
+    .map((entry) => (entry === "*" ? entry : normalizeWhatsAppTarget(entry)))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+export function looksLikeWhatsAppTargetId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    /^whatsapp:/i.test(trimmed) ||
+    isWhatsAppGroupJid(trimmed) ||
+    isWhatsAppUserTarget(trimmed) ||
+    normalizeWhatsAppTarget(trimmed) !== null
+  );
+}

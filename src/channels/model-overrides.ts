@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
   buildChannelKeyCandidates,
@@ -7,8 +7,11 @@ import {
   resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "./channel-config.js";
-
-const THREAD_SUFFIX_REGEX = /:(?:thread|topic):[^:]+$/i;
+import { normalizeChatType } from "./chat-type.js";
+import {
+  resolveSessionConversation,
+  resolveSessionConversationRef,
+} from "./plugins/session-conversation.js";
 
 export type ChannelModelOverride = {
   channel: string;
@@ -23,6 +26,7 @@ type ChannelModelOverrideParams = {
   cfg: OpenClawConfig;
   channel?: string | null;
   groupId?: string | null;
+  groupChatType?: string | null;
   groupChannel?: string | null;
   groupSubject?: string | null;
   parentSessionKey?: string | null;
@@ -44,38 +48,31 @@ function resolveProviderEntry(
   );
 }
 
-function resolveParentGroupId(groupId: string | undefined): string | undefined {
-  const raw = groupId?.trim();
-  if (!raw || !THREAD_SUFFIX_REGEX.test(raw)) {
-    return undefined;
-  }
-  const parent = raw.replace(THREAD_SUFFIX_REGEX, "").trim();
-  return parent && parent !== raw ? parent : undefined;
-}
-
-function resolveGroupIdFromSessionKey(sessionKey?: string | null): string | undefined {
-  const raw = sessionKey?.trim();
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = parseAgentSessionKey(raw);
-  const candidate = parsed?.rest ?? raw;
-  const match = candidate.match(/(?:^|:)(?:group|channel):([^:]+)(?::|$)/i);
-  const id = match?.[1]?.trim();
-  return id || undefined;
-}
-
 function buildChannelCandidates(
   params: Pick<
     ChannelModelOverrideParams,
-    "groupId" | "groupChannel" | "groupSubject" | "parentSessionKey"
+    "channel" | "groupId" | "groupChatType" | "groupChannel" | "groupSubject" | "parentSessionKey"
   >,
-) {
+): { keys: string[]; parentKeys: string[] } {
+  const normalizedChannel =
+    normalizeMessageChannel(params.channel ?? "") ?? params.channel?.trim().toLowerCase();
   const groupId = params.groupId?.trim();
-  const parentGroupId = resolveParentGroupId(groupId);
-  const parentGroupIdFromSession = resolveGroupIdFromSessionKey(params.parentSessionKey);
-  const parentGroupIdResolved =
-    resolveParentGroupId(parentGroupIdFromSession) ?? parentGroupIdFromSession;
+  const sessionConversation = resolveSessionConversationRef(params.parentSessionKey);
+  const feishuParentFallbacks = resolveFeishuParentSessionFallbackCandidates({
+    channel: normalizedChannel,
+    parentSessionKey: params.parentSessionKey,
+  });
+  const groupConversationKind =
+    normalizeChatType(params.groupChatType ?? undefined) === "channel"
+      ? "channel"
+      : sessionConversation?.kind === "channel"
+        ? "channel"
+        : "group";
+  const groupConversation = resolveSessionConversation({
+    channel: normalizedChannel ?? "",
+    kind: groupConversationKind,
+    rawId: groupId ?? "",
+  });
   const groupChannel = params.groupChannel?.trim();
   const groupSubject = params.groupSubject?.trim();
   const channelBare = groupChannel ? groupChannel.replace(/^#/, "") : undefined;
@@ -83,17 +80,60 @@ function buildChannelCandidates(
   const channelSlug = channelBare ? normalizeChannelSlug(channelBare) : undefined;
   const subjectSlug = subjectBare ? normalizeChannelSlug(subjectBare) : undefined;
 
-  return buildChannelKeyCandidates(
-    groupId,
-    parentGroupId,
-    parentGroupIdResolved,
-    groupChannel,
-    channelBare,
-    channelSlug,
-    groupSubject,
-    subjectBare,
-    subjectSlug,
-  );
+  return {
+    keys: buildChannelKeyCandidates(
+      groupId,
+      sessionConversation?.rawId,
+      ...(groupConversation?.parentConversationCandidates ?? []),
+      ...(sessionConversation?.parentConversationCandidates ?? []),
+      ...feishuParentFallbacks,
+    ),
+    parentKeys: buildChannelKeyCandidates(
+      groupChannel,
+      channelBare,
+      channelSlug,
+      groupSubject,
+      subjectBare,
+      subjectSlug,
+    ),
+  };
+}
+
+function resolveFeishuParentSessionFallbackCandidates(params: {
+  channel?: string;
+  parentSessionKey?: string | null;
+}): string[] {
+  if (params.channel !== "feishu") {
+    return [];
+  }
+  const rawId = parseRawSessionConversationRef(params.parentSessionKey)?.rawId?.trim();
+  if (!rawId) {
+    return [];
+  }
+  const topicSenderMatch = rawId.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
+  if (topicSenderMatch) {
+    const chatId = topicSenderMatch[1]?.trim().toLowerCase();
+    const topicId = topicSenderMatch[2]?.trim().toLowerCase();
+    if (chatId && topicId) {
+      return [`${chatId}:topic:${topicId}`, chatId];
+    }
+    return [];
+  }
+  const topicMatch = rawId.match(/^(.+):topic:([^:]+)$/i);
+  if (topicMatch) {
+    const chatId = topicMatch[1]?.trim().toLowerCase();
+    const topicId = topicMatch[2]?.trim().toLowerCase();
+    if (chatId && topicId) {
+      return [chatId];
+    }
+    return [];
+  }
+  const senderMatch = rawId.match(/^(.+):sender:([^:]+)$/i);
+  if (senderMatch) {
+    const chatId = senderMatch[1]?.trim().toLowerCase();
+    return chatId ? [chatId] : [];
+  }
+  return [];
 }
 
 export function resolveChannelModelOverride(
@@ -114,13 +154,14 @@ export function resolveChannelModelOverride(
     return null;
   }
 
-  const candidates = buildChannelCandidates(params);
-  if (candidates.length === 0) {
+  const { keys, parentKeys } = buildChannelCandidates(params);
+  if (keys.length === 0 && parentKeys.length === 0) {
     return null;
   }
   const match = resolveChannelEntryMatchWithFallback({
     entries: providerEntries,
-    keys: candidates,
+    keys,
+    parentKeys,
     wildcardKey: "*",
     normalizeKey: (value) => value.trim().toLowerCase(),
   });

@@ -87,7 +87,7 @@ function createLocalGatewayConfigWithAuth(auth: Record<string, unknown>) {
     secrets: createDefaultSecretProvider(),
     gateway: {
       bind: "custom",
-      customBindHost: "gateway.local",
+      customBindHost: "127.0.0.1",
       auth,
     },
   };
@@ -149,7 +149,7 @@ describe("registerQrCli", () => {
   }
 
   function expectLoggedLocalSetupCode() {
-    expectLoggedSetupCode("ws://gateway.local:18789");
+    expectLoggedSetupCode("ws://127.0.0.1:18789");
   }
 
   function mockTailscaleStatusLookup() {
@@ -178,7 +178,7 @@ describe("registerQrCli", () => {
     loadConfig.mockReturnValue({
       gateway: {
         bind: "custom",
-        customBindHost: "gateway.local",
+        customBindHost: "127.0.0.1",
         auth: { mode: "token", token: "tok" },
       },
     });
@@ -186,7 +186,7 @@ describe("registerQrCli", () => {
     await runQr(["--setup-code-only"]);
 
     const expected = encodePairingSetupCode({
-      url: "ws://gateway.local:18789",
+      url: "ws://127.0.0.1:18789",
       bootstrapToken: "bootstrap-123",
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
@@ -198,7 +198,7 @@ describe("registerQrCli", () => {
     loadConfig.mockReturnValue({
       gateway: {
         bind: "custom",
-        customBindHost: "gateway.local",
+        customBindHost: "127.0.0.1",
         auth: { mode: "token", token: "tok" },
       },
     });
@@ -213,11 +213,54 @@ describe("registerQrCli", () => {
     expect(output).toContain("openclaw devices approve <requestId>");
   });
 
-  it("accepts --token override when config has no auth", async () => {
+  it("fails fast for insecure remote mobile pairing setup urls", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "gateway.example",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await expectQrExit(["--setup-code-only"]);
+
+    const output = runtime.error.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    expect(output).toContain("Tailscale and public mobile pairing require a secure gateway URL");
+    expect(output).toContain("gateway.tailscale.mode=serve");
+  });
+
+  it("allows lan mdns cleartext setup urls", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         bind: "custom",
         customBindHost: "gateway.local",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await runQr(["--setup-code-only"]);
+
+    expectLoggedSetupCode("ws://gateway.local:18789");
+  });
+
+  it("allows android emulator cleartext override urls", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "loopback",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await runQr(["--setup-code-only", "--url", "ws://10.0.2.2:18789"]);
+
+    expectLoggedSetupCode("ws://10.0.2.2:18789");
+  });
+
+  it("accepts --token override when config has no auth", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
       },
     });
 

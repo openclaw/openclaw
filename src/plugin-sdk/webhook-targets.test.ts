@@ -24,6 +24,28 @@ function createRequest(method: string, url: string): IncomingMessage {
   return req;
 }
 
+function createResponse() {
+  const setHeader = vi.fn();
+  const end = vi.fn();
+  return {
+    res: {
+      statusCode: 200,
+      setHeader,
+      end,
+    } as unknown as ServerResponse,
+    setHeader,
+    end,
+  };
+}
+
+function createPipelineRequest(url: string): IncomingMessage {
+  const req = createRequest("POST", url);
+  (req as unknown as { socket: { remoteAddress: string } }).socket = {
+    remoteAddress: "127.0.0.1",
+  };
+  return req;
+}
+
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
@@ -141,31 +163,31 @@ describe("registerWebhookTargetWithPluginRoute", () => {
 });
 
 describe("resolveWebhookTargets", () => {
-  it("resolves normalized path targets", () => {
-    const targets = new Map<string, Array<{ id: string }>>();
-    targets.set("/hook", [{ id: "A" }]);
-
-    expect(resolveWebhookTargets(createRequest("POST", "/hook/"), targets)).toEqual({
-      path: "/hook",
-      targets: [{ id: "A" }],
-    });
-  });
-
-  it("returns null when path has no targets", () => {
-    const targets = new Map<string, Array<{ id: string }>>();
-    expect(resolveWebhookTargets(createRequest("POST", "/missing"), targets)).toBeNull();
+  it.each([
+    {
+      name: "resolves normalized path targets",
+      requestPath: "/hook/",
+      targets: new Map([["/hook", [{ id: "A" }]]]),
+      expected: {
+        path: "/hook",
+        targets: [{ id: "A" }],
+      },
+    },
+    {
+      name: "returns null when path has no targets",
+      requestPath: "/missing",
+      targets: new Map<string, Array<{ id: string }>>(),
+      expected: null,
+    },
+  ])("$name", ({ requestPath, targets, expected }) => {
+    expect(resolveWebhookTargets(createRequest("POST", requestPath), targets)).toEqual(expected);
   });
 });
 
 describe("withResolvedWebhookRequestPipeline", () => {
   it("returns false when request path has no registered targets", async () => {
     const req = createRequest("POST", "/missing");
-    req.headers = {};
-    const res = {
-      statusCode: 200,
-      setHeader: vi.fn(),
-      end: vi.fn(),
-    } as unknown as ServerResponse;
+    const { res } = createResponse();
     const handled = await withResolvedWebhookRequestPipeline({
       req,
       res,
@@ -177,16 +199,8 @@ describe("withResolvedWebhookRequestPipeline", () => {
   });
 
   it("runs handler when targets resolve and method passes", async () => {
-    const req = createRequest("POST", "/hook");
-    req.headers = {};
-    (req as unknown as { socket: { remoteAddress: string } }).socket = {
-      remoteAddress: "127.0.0.1",
-    };
-    const res = {
-      statusCode: 200,
-      setHeader: vi.fn(),
-      end: vi.fn(),
-    } as unknown as ServerResponse;
+    const req = createPipelineRequest("/hook");
+    const { res } = createResponse();
     const handle = vi.fn(async () => {});
     const handled = await withResolvedWebhookRequestPipeline({
       req,
@@ -200,16 +214,8 @@ describe("withResolvedWebhookRequestPipeline", () => {
   });
 
   it("releases in-flight slot when handler throws", async () => {
-    const req = createRequest("POST", "/hook");
-    req.headers = {};
-    (req as unknown as { socket: { remoteAddress: string } }).socket = {
-      remoteAddress: "127.0.0.1",
-    };
-    const res = {
-      statusCode: 200,
-      setHeader: vi.fn(),
-      end: vi.fn(),
-    } as unknown as ServerResponse;
+    const req = createPipelineRequest("/hook");
+    const { res } = createResponse();
     const limiter = createWebhookInFlightLimiter();
 
     await expect(
@@ -231,20 +237,14 @@ describe("withResolvedWebhookRequestPipeline", () => {
 
 describe("rejectNonPostWebhookRequest", () => {
   it("sets 405 for non-POST requests", () => {
-    const setHeaderMock = vi.fn();
-    const endMock = vi.fn();
-    const res = {
-      statusCode: 200,
-      setHeader: setHeaderMock,
-      end: endMock,
-    } as unknown as ServerResponse;
+    const { res, setHeader, end } = createResponse();
 
     const rejected = rejectNonPostWebhookRequest(createRequest("GET", "/hook"), res);
 
     expect(rejected).toBe(true);
     expect(res.statusCode).toBe(405);
-    expect(setHeaderMock).toHaveBeenCalledWith("Allow", "POST");
-    expect(endMock).toHaveBeenCalledWith("Method Not Allowed");
+    expect(setHeader).toHaveBeenCalledWith("Allow", "POST");
+    expect(end).toHaveBeenCalledWith("Method Not Allowed");
   });
 });
 
@@ -291,11 +291,7 @@ describe("resolveSingleWebhookTarget", () => {
 
 describe("resolveWebhookTargetWithAuthOrReject", () => {
   it("returns matched target", async () => {
-    const res = {
-      statusCode: 200,
-      setHeader: vi.fn(),
-      end: vi.fn(),
-    } as unknown as ServerResponse;
+    const { res } = createResponse();
     await expect(
       resolveWebhookTargetWithAuthOrReject({
         targets: [{ id: "a" }, { id: "b" }],
@@ -305,50 +301,36 @@ describe("resolveWebhookTargetWithAuthOrReject", () => {
     ).resolves.toEqual({ id: "b" });
   });
 
-  it("writes unauthorized response on no match", async () => {
-    const endMock = vi.fn();
-    const res = {
-      statusCode: 200,
-      setHeader: vi.fn(),
-      end: endMock,
-    } as unknown as ServerResponse;
+  it.each([
+    {
+      name: "writes unauthorized response on no match",
+      targets: [{ id: "a" }],
+      isMatch: () => false,
+      expectedEnd: "unauthorized",
+    },
+    {
+      name: "writes ambiguous response on multi-match",
+      targets: [{ id: "a" }, { id: "b" }],
+      isMatch: () => true,
+      expectedEnd: "ambiguous webhook target",
+    },
+  ])("$name", async ({ targets, isMatch, expectedEnd }) => {
+    const { res, end } = createResponse();
     await expect(
       resolveWebhookTargetWithAuthOrReject({
-        targets: [{ id: "a" }],
+        targets,
         res,
-        isMatch: () => false,
+        isMatch,
       }),
     ).resolves.toBeNull();
     expect(res.statusCode).toBe(401);
-    expect(endMock).toHaveBeenCalledWith("unauthorized");
-  });
-
-  it("writes ambiguous response on multi-match", async () => {
-    const endMock = vi.fn();
-    const res = {
-      statusCode: 200,
-      setHeader: vi.fn(),
-      end: endMock,
-    } as unknown as ServerResponse;
-    await expect(
-      resolveWebhookTargetWithAuthOrReject({
-        targets: [{ id: "a" }, { id: "b" }],
-        res,
-        isMatch: () => true,
-      }),
-    ).resolves.toBeNull();
-    expect(res.statusCode).toBe(401);
-    expect(endMock).toHaveBeenCalledWith("ambiguous webhook target");
+    expect(end).toHaveBeenCalledWith(expectedEnd);
   });
 });
 
 describe("resolveWebhookTargetWithAuthOrRejectSync", () => {
   it("returns matched target synchronously", () => {
-    const res = {
-      statusCode: 200,
-      setHeader: vi.fn(),
-      end: vi.fn(),
-    } as unknown as ServerResponse;
+    const { res } = createResponse();
     const target = resolveWebhookTargetWithAuthOrRejectSync({
       targets: [{ id: "a" }, { id: "b" }],
       res,

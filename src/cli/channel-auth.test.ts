@@ -5,12 +5,15 @@ const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   getChannelPluginCatalogEntry: vi.fn(),
+  listChannelPluginCatalogEntries: vi.fn(),
   resolveChannelDefaultAccountId: vi.fn(),
   getChannelPlugin: vi.fn(),
+  listChannelPlugins: vi.fn(),
   normalizeChannelId: vi.fn(),
   loadConfig: vi.fn(),
-  writeConfigFile: vi.fn(),
-  resolveMessageChannelSelection: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
+  applyPluginAutoEnable: vi.fn(),
+  replaceConfigFile: vi.fn(),
   setVerbose: vi.fn(),
   createClackPrompter: vi.fn(),
   ensureChannelSetupPluginInstalled: vi.fn(),
@@ -27,6 +30,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../channels/plugins/catalog.js", () => ({
   getChannelPluginCatalogEntry: mocks.getChannelPluginCatalogEntry,
+  listChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
 }));
 
 vi.mock("../channels/plugins/helpers.js", () => ({
@@ -35,16 +39,18 @@ vi.mock("../channels/plugins/helpers.js", () => ({
 
 vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: mocks.getChannelPlugin,
+  listChannelPlugins: mocks.listChannelPlugins,
   normalizeChannelId: mocks.normalizeChannelId,
 }));
 
 vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
-  writeConfigFile: mocks.writeConfigFile,
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  replaceConfigFile: mocks.replaceConfigFile,
 }));
 
-vi.mock("../infra/outbound/channel-selection.js", () => ({
-  resolveMessageChannelSelection: mocks.resolveMessageChannelSelection,
+vi.mock("../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: mocks.applyPluginAutoEnable,
 }));
 
 vi.mock("../globals.js", () => ({
@@ -67,7 +73,10 @@ describe("channel-auth", () => {
     id: "whatsapp",
     auth: { login: mocks.login },
     gateway: { logoutAccount: mocks.logoutAccount },
-    config: { resolveAccount: mocks.resolveAccount },
+    config: {
+      listAccountIds: vi.fn().mockReturnValue(["default"]),
+      resolveAccount: mocks.resolveAccount,
+    },
   };
 
   beforeEach(() => {
@@ -75,18 +84,18 @@ describe("channel-auth", () => {
     mocks.normalizeChannelId.mockReturnValue("whatsapp");
     mocks.getChannelPlugin.mockReturnValue(plugin);
     mocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
-    mocks.loadConfig.mockReturnValue({ channels: {} });
-    mocks.writeConfigFile.mockResolvedValue(undefined);
-    mocks.resolveMessageChannelSelection.mockResolvedValue({
-      channel: "whatsapp",
-      configured: ["whatsapp"],
-    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([]);
+    mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {} } });
+    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
+    mocks.listChannelPlugins.mockReturnValue([plugin]);
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace");
     mocks.resolveChannelDefaultAccountId.mockReturnValue("default-account");
     mocks.createClackPrompter.mockReturnValue({} as object);
     mocks.ensureChannelSetupPluginInstalled.mockResolvedValue({
-      cfg: { channels: {} },
+      cfg: { channels: { whatsapp: {} } },
       installed: true,
       pluginId: "whatsapp",
     });
@@ -106,7 +115,7 @@ describe("channel-auth", () => {
     expect(mocks.resolveChannelDefaultAccountId).not.toHaveBeenCalled();
     expect(mocks.login).toHaveBeenCalledWith(
       expect.objectContaining({
-        cfg: { channels: {} },
+        cfg: { channels: { whatsapp: {} } },
         accountId: "acct-1",
         runtime,
         verbose: true,
@@ -115,10 +124,9 @@ describe("channel-auth", () => {
     );
   });
 
-  it("auto-picks the single configured channel when opts are empty", async () => {
+  it("auto-picks the single configured channel that supports login when opts are empty", async () => {
     await runChannelLogin({}, runtime);
 
-    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({ cfg: { channels: {} } });
     expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
     expect(mocks.login).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -127,17 +135,122 @@ describe("channel-auth", () => {
     );
   });
 
-  it("propagates channel ambiguity when channel is omitted", async () => {
-    mocks.resolveMessageChannelSelection.mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: telegram, slack"),
-    );
+  it("does not auto-pick enabled-only channel stubs when channel is omitted", async () => {
+    mocks.loadConfig.mockReturnValue({ channels: { whatsapp: { enabled: false } } });
 
-    await expect(runChannelLogin({}, runtime)).rejects.toThrow("Channel is required");
+    await expect(runChannelLogin({}, runtime)).rejects.toThrow(
+      "Channel is required (no configured channels support login).",
+    );
     expect(mocks.login).not.toHaveBeenCalled();
   });
 
+  it("auto-picks the single auth-capable channel from the auto-enabled config snapshot", async () => {
+    const autoEnabledCfg = { channels: { whatsapp: {} }, plugins: { allow: ["whatsapp"] } };
+    mocks.loadConfig.mockReturnValue({});
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledCfg, changes: ["whatsapp"] });
+
+    await runChannelLogin({}, runtime);
+
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: {},
+      env: process.env,
+    });
+    expect(mocks.login).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: autoEnabledCfg,
+        channelInput: "whatsapp",
+      }),
+    );
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: autoEnabledCfg,
+      baseHash: "config-1",
+    });
+  });
+
+  it("persists auto-enabled config during logout auto-pick too", async () => {
+    const autoEnabledCfg = { channels: { whatsapp: {} }, plugins: { allow: ["whatsapp"] } };
+    mocks.loadConfig.mockReturnValue({});
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledCfg, changes: ["whatsapp"] });
+
+    await runChannelLogout({}, runtime);
+
+    expect(mocks.logoutAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: autoEnabledCfg,
+      }),
+    );
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: autoEnabledCfg,
+      baseHash: "config-1",
+    });
+  });
+
+  it("ignores configured channels that do not support login when channel is omitted", async () => {
+    const telegramPlugin = {
+      id: "telegram",
+      auth: {},
+      gateway: {},
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: vi.fn().mockReturnValue({ enabled: true }),
+      },
+    };
+    mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {}, telegram: {} } });
+    mocks.listChannelPlugins.mockReturnValue([telegramPlugin, plugin]);
+
+    await runChannelLogin({}, runtime);
+
+    expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
+    expect(mocks.login).toHaveBeenCalled();
+  });
+
+  it("propagates auth-channel ambiguity when multiple configured channels support login", async () => {
+    const zaloPlugin = {
+      id: "zalouser",
+      auth: { login: vi.fn() },
+      gateway: {},
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: vi.fn().mockReturnValue({ enabled: true }),
+      },
+    };
+    mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {}, zalouser: {} } });
+    mocks.listChannelPlugins.mockReturnValue([plugin, zaloPlugin]);
+    mocks.normalizeChannelId.mockImplementation((value) => value);
+    mocks.getChannelPlugin.mockImplementation((value) =>
+      value === "whatsapp"
+        ? plugin
+        : value === "zalouser"
+          ? (zaloPlugin as typeof plugin)
+          : undefined,
+    );
+
+    await expect(runChannelLogin({}, runtime)).rejects.toThrow(
+      "multiple configured channels support login: whatsapp, zalouser",
+    );
+    expect(mocks.login).not.toHaveBeenCalled();
+  });
+
+  it("ignores plugins with prototype-chain IDs like __proto__", async () => {
+    const protoPlugin = {
+      id: "__proto__",
+      auth: { login: vi.fn() },
+      gateway: {},
+      config: {
+        listAccountIds: vi.fn().mockReturnValue(["default"]),
+        resolveAccount: vi.fn().mockReturnValue({ enabled: true }),
+      },
+    };
+    mocks.listChannelPlugins.mockReturnValue([protoPlugin, plugin]);
+
+    await runChannelLogin({}, runtime);
+
+    expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
+    expect(mocks.login).toHaveBeenCalled();
+  });
+
   it("throws for unsupported channel aliases", async () => {
-    mocks.normalizeChannelId.mockReturnValueOnce(undefined);
+    mocks.normalizeChannelId.mockImplementation(() => undefined);
 
     await expect(runChannelLogin({ channel: "bad-channel" }, runtime)).rejects.toThrow(
       "Unsupported channel: bad-channel",
@@ -158,8 +271,7 @@ describe("channel-auth", () => {
   });
 
   it("installs a catalog-backed channel plugin on demand for login", async () => {
-    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
-    mocks.getChannelPluginCatalogEntry.mockReturnValueOnce({
+    const catalogEntry = {
       id: "whatsapp",
       pluginId: "@openclaw/whatsapp",
       meta: {
@@ -172,7 +284,61 @@ describe("channel-auth", () => {
       install: {
         npmSpec: "@openclaw/whatsapp",
       },
+    };
+    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
+    mocks.listChannelPluginCatalogEntries.mockReturnValueOnce([catalogEntry]);
+    mocks.loadChannelSetupPluginRegistrySnapshotForChannel
+      .mockReturnValueOnce({
+        channels: [],
+        channelSetups: [],
+      })
+      .mockReturnValueOnce({
+        channels: [{ plugin }],
+        channelSetups: [],
+      });
+
+    await runChannelLogin({ channel: "whatsapp" }, runtime);
+
+    expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: catalogEntry,
+        runtime,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        pluginId: "whatsapp",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: { channels: { whatsapp: {} } },
+      baseHash: "config-1",
     });
+    expect(mocks.login).toHaveBeenCalled();
+  });
+
+  it("resolves explicit channel login through the catalog when registry normalize misses", async () => {
+    mocks.normalizeChannelId.mockReturnValueOnce(undefined).mockReturnValue("whatsapp");
+    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
+    mocks.listChannelPluginCatalogEntries.mockReturnValueOnce([
+      {
+        id: "whatsapp",
+        pluginId: "@openclaw/whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/channels/whatsapp",
+          blurb: "wa",
+        },
+        install: {
+          npmSpec: "@openclaw/whatsapp",
+        },
+      },
+    ]);
     mocks.loadChannelSetupPluginRegistrySnapshotForChannel
       .mockReturnValueOnce({
         channels: [],
@@ -192,23 +358,19 @@ describe("channel-auth", () => {
         workspaceDir: "/tmp/workspace",
       }),
     );
-    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+    expect(mocks.login).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "whatsapp",
-        pluginId: "whatsapp",
-        workspaceDir: "/tmp/workspace",
+        channelInput: "whatsapp",
       }),
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith({ channels: {} });
-    expect(mocks.login).toHaveBeenCalled();
   });
 
   it("runs logout with resolved account and explicit account id", async () => {
     await runChannelLogout({ channel: "whatsapp", account: " acct-2 " }, runtime);
 
-    expect(mocks.resolveAccount).toHaveBeenCalledWith({ channels: {} }, "acct-2");
+    expect(mocks.resolveAccount).toHaveBeenCalledWith({ channels: { whatsapp: {} } }, "acct-2");
     expect(mocks.logoutAccount).toHaveBeenCalledWith({
-      cfg: { channels: {} },
+      cfg: { channels: { whatsapp: {} } },
       accountId: "acct-2",
       account: { id: "resolved-account" },
       runtime,

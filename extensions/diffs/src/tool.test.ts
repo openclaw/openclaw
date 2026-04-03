@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import type { DiffScreenshotter } from "./browser.js";
 import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
@@ -41,6 +41,57 @@ describe("diffs tool", () => {
     expect((result?.details as Record<string, unknown>).viewerUrl).toBeDefined();
   });
 
+  it("uses configured viewerBaseUrl when tool input omits baseUrl", async () => {
+    const tool = createDiffsTool({
+      api: createApi({
+        viewerBaseUrl: "https://example.com/openclaw/",
+      }),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+      viewerBaseUrl: "https://example.com/openclaw",
+    });
+
+    const result = await tool.execute?.("tool-viewer-config", {
+      before: "one\n",
+      after: "two\n",
+      path: "README.md",
+      mode: "view",
+    });
+
+    expect(readTextContent(result, 0)).toContain(
+      "https://example.com/openclaw/plugins/diffs/view/",
+    );
+    expect((result?.details as Record<string, unknown>).viewerUrl).toEqual(
+      expect.stringContaining("https://example.com/openclaw/plugins/diffs/view/"),
+    );
+  });
+
+  it("prefers per-call baseUrl over configured viewerBaseUrl", async () => {
+    const tool = createDiffsTool({
+      api: createApi({
+        viewerBaseUrl: "https://example.com/openclaw",
+      }),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+      viewerBaseUrl: "https://example.com/openclaw",
+    });
+
+    const result = await tool.execute?.("tool-viewer-override", {
+      before: "one\n",
+      after: "two\n",
+      path: "README.md",
+      mode: "view",
+      baseUrl: "https://preview.example.com/review",
+    });
+
+    expect(readTextContent(result, 0)).toContain(
+      "https://preview.example.com/review/plugins/diffs/view/",
+    );
+    expect((result?.details as Record<string, unknown>).viewerUrl).toEqual(
+      expect.stringContaining("https://preview.example.com/review/plugins/diffs/view/"),
+    );
+  });
+
   it("does not expose reserved format in the tool schema", async () => {
     const tool = createDiffsTool({
       api: createApi(),
@@ -57,7 +108,7 @@ describe("diffs tool", () => {
     const cleanupSpy = vi.spyOn(store, "scheduleCleanup");
     const screenshotter = createPngScreenshotter({
       assertHtml: (html) => {
-        expect(html).toContain("/plugins/diffs/assets/viewer.js");
+        expect(html).toContain("../../assets/viewer.js");
       },
       assertImage: (image) => {
         expect(image).toMatchObject({
@@ -352,7 +403,7 @@ describe("diffs tool", () => {
   it("prefers explicit tool params over configured defaults", async () => {
     const screenshotter = createPngScreenshotter({
       assertHtml: (html) => {
-        expect(html).toContain("/plugins/diffs/assets/viewer.js");
+        expect(html).toContain("../../assets/viewer.js");
       },
       assertImage: (image) => {
         expect(image).toMatchObject({
@@ -420,7 +471,7 @@ describe("diffs tool", () => {
   });
 });
 
-function createApi(): OpenClawPluginApi {
+function createApi(pluginConfig?: Record<string, unknown>): OpenClawPluginApi {
   return createTestPluginApi({
     id: "diffs",
     name: "Diffs",
@@ -432,6 +483,7 @@ function createApi(): OpenClawPluginApi {
         bind: "loopback",
       },
     },
+    pluginConfig,
     runtime: {} as OpenClawPluginApi["runtime"],
   }) as OpenClawPluginApi;
 }

@@ -7,16 +7,6 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
-import {
-  buildModelsProviderData,
-  createChannelReplyPipeline,
-  isRequestBodyLimitError,
-  logTypingFailure,
-  readRequestBodyWithLimit,
-  type OpenClawConfig,
-  type ReplyPayload,
-  type RuntimeEnv,
-} from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
@@ -37,6 +27,16 @@ import {
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import {
+  buildModelsProviderData,
+  createChannelReplyPipeline,
+  isRequestBodyLimitError,
+  logTypingFailure,
+  readRequestBodyWithLimit,
+  type OpenClawConfig,
+  type ReplyPayload,
+  type RuntimeEnv,
+} from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 import {
   parseSlashCommandPayload,
@@ -260,6 +260,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     const client = createMattermostClient({
       baseUrl: account.baseUrl ?? "",
       botToken: account.botToken ?? "",
+      allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
     });
 
     const auth = await authorizeSlashInvocation({
@@ -316,6 +317,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       try {
         const to = `channel:${channelId}`;
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
+          cfg,
           accountId: account.accountId,
         });
       } catch {
@@ -387,6 +389,7 @@ async function handleSlashCommandAsync(params: {
     const data = await buildModelsProviderData(cfg, route.agentId);
     if (data.providers.length === 0) {
       await sendMessageMattermost(to, "No models available.", {
+        cfg,
         accountId: account.accountId,
       });
       return;
@@ -418,6 +421,7 @@ async function handleSlashCommandAsync(params: {
             });
 
     await sendMessageMattermost(to, view.text, {
+      cfg,
       accountId: account.accountId,
       buttons: view.buttons,
     });

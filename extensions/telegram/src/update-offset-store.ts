@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { writeJsonAtomic } from "openclaw/plugin-sdk/infra-runtime";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 const STORE_VERSION = 2;
@@ -116,11 +116,7 @@ export async function writeTelegramUpdateOffset(params: {
     lastUpdateId: params.updateId,
     botId: extractBotIdFromToken(params.botToken),
   };
-  await writeJsonAtomic(filePath, payload, {
-    mode: 0o600,
-    trailingNewline: true,
-    ensureDirMode: 0o700,
-  });
+  await writeJsonFileAtomically(filePath, payload);
 }
 
 export async function deleteTelegramUpdateOffset(params: {

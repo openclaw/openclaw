@@ -1,16 +1,114 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  patchChannelOnboardingAdapter,
-  setDefaultChannelPluginRegistryForTests,
-} from "./channel-test-helpers.js";
+import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
+import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
 import {
   createChannelOnboardingPostWriteHookCollector,
   runCollectedChannelOnboardingPostWriteHooks,
   setupChannels,
 } from "./onboard-channels.js";
 import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
+
+function setMinimalTelegramOnboardingRegistryForTests(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "telegram",
+            label: "Telegram",
+            capabilities: { chatTypes: ["direct", "group"] },
+          }),
+          setup: {
+            applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+          },
+          setupWizard: {
+            channel: "telegram",
+            status: {
+              configuredLabel: "Configured",
+              unconfiguredLabel: "Not configured",
+              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
+                Boolean(cfg.channels?.telegram?.botToken),
+            },
+            credentials: [],
+          },
+        },
+      },
+    ]),
+  );
+}
+
+type ChannelSetupWizardAdapterPatch = Partial<
+  Pick<
+    ChannelSetupWizardAdapter,
+    | "afterConfigWritten"
+    | "configure"
+    | "configureInteractive"
+    | "configureWhenConfigured"
+    | "getStatus"
+  >
+>;
+
+type PatchedSetupAdapterFields = {
+  afterConfigWritten?: ChannelSetupWizardAdapter["afterConfigWritten"];
+  configure?: ChannelSetupWizardAdapter["configure"];
+  configureInteractive?: ChannelSetupWizardAdapter["configureInteractive"];
+  configureWhenConfigured?: ChannelSetupWizardAdapter["configureWhenConfigured"];
+  getStatus?: ChannelSetupWizardAdapter["getStatus"];
+};
+
+function patchChannelOnboardingAdapterForTest(patch: ChannelSetupWizardAdapterPatch): () => void {
+  const adapter = getChannelSetupWizardAdapter("telegram");
+  if (!adapter) {
+    throw new Error("missing setup adapter for telegram");
+  }
+
+  const previous: PatchedSetupAdapterFields = {};
+
+  if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
+    previous.getStatus = adapter.getStatus;
+    adapter.getStatus = patch.getStatus ?? adapter.getStatus;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "afterConfigWritten")) {
+    previous.afterConfigWritten = adapter.afterConfigWritten;
+    adapter.afterConfigWritten = patch.afterConfigWritten;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
+    previous.configure = adapter.configure;
+    adapter.configure = patch.configure ?? adapter.configure;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "configureInteractive")) {
+    previous.configureInteractive = adapter.configureInteractive;
+    adapter.configureInteractive = patch.configureInteractive;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")) {
+    previous.configureWhenConfigured = adapter.configureWhenConfigured;
+    adapter.configureWhenConfigured = patch.configureWhenConfigured;
+  }
+
+  return () => {
+    if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
+      adapter.getStatus = previous.getStatus!;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "afterConfigWritten")) {
+      adapter.afterConfigWritten = previous.afterConfigWritten;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
+      adapter.configure = previous.configure!;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "configureInteractive")) {
+      adapter.configureInteractive = previous.configureInteractive;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")) {
+      adapter.configureWhenConfigured = previous.configureWhenConfigured;
+    }
+  };
+}
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   return createWizardPrompter(
@@ -45,7 +143,7 @@ function createUnexpectedQuickstartPrompter(select: WizardPrompter["select"]) {
 
 describe("setupChannels post-write hooks", () => {
   beforeEach(() => {
-    setDefaultChannelPluginRegistryForTests();
+    setMinimalTelegramOnboardingRegistryForTests();
   });
 
   it("collects onboarding post-write hooks and runs them against the final config", async () => {
@@ -61,7 +159,7 @@ describe("setupChannels post-write hooks", () => {
       } as OpenClawConfig,
       accountId: "acct-1",
     }));
-    const restore = patchChannelOnboardingAdapter("telegram", {
+    const restore = patchChannelOnboardingAdapterForTest({
       configureInteractive,
       afterConfigWritten,
       getStatus: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({

@@ -11,10 +11,13 @@ import {
 describe("model auth markers", () => {
   it("recognizes explicit non-secret markers", () => {
     expect(isNonSecretApiKeyMarker(NON_ENV_SECRETREF_MARKER)).toBe(true);
-    expect(isNonSecretApiKeyMarker("qwen-oauth")).toBe(true);
     expect(isNonSecretApiKeyMarker(resolveOAuthApiKeyMarker("chutes"))).toBe(true);
     expect(isNonSecretApiKeyMarker("ollama-local")).toBe(true);
     expect(isNonSecretApiKeyMarker(GCP_VERTEX_CREDENTIALS_MARKER)).toBe(true);
+  });
+
+  it("does not treat removed provider markers as active auth markers", () => {
+    expect(isNonSecretApiKeyMarker("qwen-oauth")).toBe(false);
   });
 
   it("recognizes known env marker names but not arbitrary all-caps keys", () => {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const withStartedActionClientMock = vi.fn();
 const loadConfigMock = vi.fn(() => ({
@@ -19,9 +19,13 @@ vi.mock("./client.js", () => ({
   withStartedActionClient: (...args: unknown[]) => withStartedActionClientMock(...args),
 }));
 
-const { listMatrixVerifications } = await import("./verification.js");
+let listMatrixVerifications: typeof import("./verification.js").listMatrixVerifications;
 
 describe("matrix verification actions", () => {
+  beforeAll(async () => {
+    ({ listMatrixVerifications } = await import("./verification.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     loadConfigMock.mockReturnValue({

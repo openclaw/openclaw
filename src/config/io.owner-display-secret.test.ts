@@ -9,9 +9,17 @@ async function waitForPersistedSecret(configPath: string, expectedSecret: string
   const deadline = Date.now() + 3_000;
   while (Date.now() < deadline) {
     const raw = await fs.readFile(configPath, "utf-8");
-    const parsed = JSON.parse(raw) as {
+    let parsed: {
       commands?: { ownerDisplaySecret?: string };
     };
+    try {
+      parsed = JSON.parse(raw) as {
+        commands?: { ownerDisplaySecret?: string };
+      };
+    } catch {
+      await sleep(5);
+      continue;
+    }
     if (parsed.commands?.ownerDisplaySecret === expectedSecret) {
       return;
     }

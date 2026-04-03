@@ -63,7 +63,7 @@ export async function loadSanitizeSessionHistoryWithCleanMocks(): Promise<Saniti
   vi.resetAllMocks();
   const mockedHelpers = await import("./pi-embedded-helpers.js");
   vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
-  const mod = await import("./pi-embedded-runner/google.js");
+  const mod = await import("./pi-embedded-runner/replay-history.js");
   return {
     sanitizeSessionHistory: mod.sanitizeSessionHistory,
     mockedHelpers,

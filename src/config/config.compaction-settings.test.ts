@@ -1,8 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { loadConfig } from "./config.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadConfig, resetConfigRuntimeState } from "./config.js";
 import { withTempHomeConfig } from "./test-helpers.js";
 
 describe("config compaction settings", () => {
+  beforeEach(() => {
+    resetConfigRuntimeState();
+  });
+
+  afterEach(() => {
+    resetConfigRuntimeState();
+  });
+
   it("preserves memory flush config values", async () => {
     await withTempHomeConfig(
       {

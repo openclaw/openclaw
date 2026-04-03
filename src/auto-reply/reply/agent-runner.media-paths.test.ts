@@ -1,11 +1,21 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
+const abortEmbeddedPiRunMock = vi.fn();
+const compactEmbeddedPiSessionMock = vi.fn();
+const isEmbeddedPiRunActiveMock = vi.fn(() => false);
+const isEmbeddedPiRunStreamingMock = vi.fn(() => false);
+const queueEmbeddedPiMessageMock = vi.fn(() => false);
+const resolveEmbeddedSessionLaneMock = vi.fn();
+const waitForEmbeddedPiRunEndMock = vi.fn();
+const enqueueFollowupRunMock = vi.fn();
+const scheduleFollowupDrainMock = vi.fn();
+const refreshQueuedFollowupSessionMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -13,34 +23,50 @@ vi.mock("../../agents/model-fallback.js", () => ({
     model: string;
     run: (provider: string, model: string) => Promise<unknown>;
   }) => runWithModelFallbackMock(params),
+  isFallbackSummaryError: (err: unknown) =>
+    err instanceof Error &&
+    err.name === "FallbackSummaryError" &&
+    Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/pi-embedded.js")>(
-    "../../agents/pi-embedded.js",
-  );
-  return {
-    ...actual,
-    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-    runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
-  };
-});
+vi.mock("../../agents/pi-embedded.js", () => ({
+  abortEmbeddedPiRun: abortEmbeddedPiRunMock,
+  compactEmbeddedPiSession: compactEmbeddedPiSessionMock,
+  isEmbeddedPiRunActive: isEmbeddedPiRunActiveMock,
+  isEmbeddedPiRunStreaming: isEmbeddedPiRunStreamingMock,
+  queueEmbeddedPiMessage: queueEmbeddedPiMessageMock,
+  resolveEmbeddedSessionLane: resolveEmbeddedSessionLaneMock,
+  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+  waitForEmbeddedPiRunEnd: waitForEmbeddedPiRunEndMock,
+}));
 
-vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-  return {
-    ...actual,
-    enqueueFollowupRun: vi.fn(),
-    scheduleFollowupDrain: vi.fn(),
-  };
-});
+vi.mock("./queue.js", () => ({
+  enqueueFollowupRun: enqueueFollowupRunMock,
+  refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
+  scheduleFollowupDrain: scheduleFollowupDrainMock,
+}));
 
-import { runReplyAgent } from "./agent-runner.js";
+let runReplyAgent: typeof import("./agent-runner.js").runReplyAgent;
 
 describe("runReplyAgent media path normalization", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     runEmbeddedPiAgentMock.mockReset();
     runWithModelFallbackMock.mockReset();
+    abortEmbeddedPiRunMock.mockReset();
+    compactEmbeddedPiSessionMock.mockReset();
+    isEmbeddedPiRunActiveMock.mockReset();
+    isEmbeddedPiRunActiveMock.mockReturnValue(false);
+    isEmbeddedPiRunStreamingMock.mockReset();
+    isEmbeddedPiRunStreamingMock.mockReturnValue(false);
+    queueEmbeddedPiMessageMock.mockReset();
+    queueEmbeddedPiMessageMock.mockReturnValue(false);
+    resolveEmbeddedSessionLaneMock.mockReset();
+    waitForEmbeddedPiRunEndMock.mockReset();
+    enqueueFollowupRunMock.mockReset();
+    scheduleFollowupDrainMock.mockReset();
+    refreshQueuedFollowupSessionMock.mockReset();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     runWithModelFallbackMock.mockImplementation(
       async ({
         provider,
@@ -56,6 +82,11 @@ describe("runReplyAgent media path normalization", () => {
         model,
       }),
     );
+    ({ runReplyAgent } = await import("./agent-runner.js"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("normalizes final MEDIA replies against the run workspace", async () => {

@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 
 type ReactionResolution = ReturnType<typeof resolveTelegramReactionLevel>;

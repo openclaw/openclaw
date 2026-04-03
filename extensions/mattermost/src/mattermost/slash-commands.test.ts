@@ -11,9 +11,15 @@ import {
 
 describe("slash-commands", () => {
   async function registerSingleStatusCommand(
-    request: (path: string, init?: { method?: string }) => Promise<unknown>,
+    requestImpl: (path: string, init?: { method?: string }) => Promise<unknown>,
   ) {
-    const client = { request } as unknown as MattermostClient;
+    const client: MattermostClient = {
+      baseUrl: "https://chat.example.com",
+      apiBaseUrl: "https://chat.example.com/api/v4",
+      token: "bot-token",
+      request: async <T>(path: string, init?: RequestInit) => (await requestImpl(path, init)) as T,
+      fetchImpl: vi.fn<typeof fetch>(),
+    };
     return registerSlashCommands({
       client,
       teamId: "team-1",

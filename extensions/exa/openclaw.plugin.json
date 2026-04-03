@@ -11,6 +11,9 @@
       "placeholder": "exa-..."
     }
   },
+  "contracts": {
+    "webSearchProviders": ["exa"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

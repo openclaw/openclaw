@@ -19,7 +19,11 @@ export type {
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
 } from "../channels/plugins/types.adapters.js";
-export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type {
+  ChannelConfigSchema,
+  ChannelConfigUiHint,
+  ChannelPlugin,
+} from "../channels/plugins/types.plugin.js";
 export type { ChannelSetupAdapter, ChannelSetupInput } from "../channels/plugins/types.js";
 export type {
   ConfiguredBindingConversation,
@@ -39,6 +43,7 @@ export type {
 } from "../channels/plugins/setup-wizard.js";
 export type {
   AnyAgentTool,
+  CliBackendPlugin,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,
@@ -54,9 +59,25 @@ export type {
   SubagentRunParams,
   SubagentRunResult,
 } from "../plugins/runtime/types.js";
+export type {
+  BoundTaskFlowsRuntime,
+  BoundTaskRunsRuntime,
+  PluginRuntimeTaskFlows,
+  PluginRuntimeTaskRuns,
+  PluginRuntimeTasks,
+} from "../plugins/runtime/runtime-tasks.js";
+export type {
+  TaskFlowDetail,
+  TaskFlowView,
+  TaskRunAggregateSummary,
+  TaskRunCancelResult,
+  TaskRunDetail,
+  TaskRunView,
+} from "../plugins/runtime/task-domain-types.js";
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
+export type { CliBackendConfig } from "../config/types.js";
 export * from "./image-generation.js";
 export type { SecretInput, SecretRef } from "../config/types.secrets.js";
 export type { RuntimeEnv } from "../runtime.js";

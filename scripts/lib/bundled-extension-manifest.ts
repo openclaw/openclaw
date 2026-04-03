@@ -11,6 +11,7 @@ export type ExtensionPackageJson = {
   optionalDependencies?: Record<string, string>;
   openclaw?: {
     install?: unknown;
+    releaseChecks?: unknown;
   };
 };
 

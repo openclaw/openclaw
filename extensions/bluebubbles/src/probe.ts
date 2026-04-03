@@ -35,6 +35,7 @@ export async function fetchBlueBubblesServerInfo(params: {
   password?: string | null;
   accountId?: string;
   timeoutMs?: number;
+  allowPrivateNetwork?: boolean;
 }): Promise<BlueBubblesServerInfo | null> {
   const baseUrl = normalizeSecretInputString(params.baseUrl);
   const password = normalizeSecretInputString(params.password);
@@ -48,9 +49,15 @@ export async function fetchBlueBubblesServerInfo(params: {
     return cached.info;
   }
 
+  const ssrfPolicy = params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
   const url = buildBlueBubblesApiUrl({ baseUrl, path: "/api/v1/server/info", password });
   try {
-    const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, params.timeoutMs ?? 5000);
+    const res = await blueBubblesFetchWithTimeout(
+      url,
+      { method: "GET" },
+      params.timeoutMs ?? 5000,
+      ssrfPolicy,
+    );
     if (!res.ok) {
       return null;
     }
@@ -138,6 +145,7 @@ export async function probeBlueBubbles(params: {
   baseUrl?: string | null;
   password?: string | null;
   timeoutMs?: number;
+  allowPrivateNetwork?: boolean;
 }): Promise<BlueBubblesProbe> {
   const baseUrl = normalizeSecretInputString(params.baseUrl);
   const password = normalizeSecretInputString(params.password);
@@ -147,9 +155,15 @@ export async function probeBlueBubbles(params: {
   if (!password) {
     return { ok: false, error: "password not configured" };
   }
+  const probeSsrfPolicy = params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
   const url = buildBlueBubblesApiUrl({ baseUrl, path: "/api/v1/ping", password });
   try {
-    const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, params.timeoutMs);
+    const res = await blueBubblesFetchWithTimeout(
+      url,
+      { method: "GET" },
+      params.timeoutMs,
+      probeSsrfPolicy,
+    );
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }

@@ -35,7 +35,6 @@ describe("createGatewayCloseHandler", () => {
       chatRunState: { clear: vi.fn() },
       clients: new Set(),
       configReloader: { stop: vi.fn(async () => undefined) },
-      browserControl: null,
       wss: { close: (cb: () => void) => cb() } as never,
       httpServer: {
         close: (cb: (err?: Error | null) => void) => cb(null),

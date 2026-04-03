@@ -1,7 +1,13 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { type ExecHost } from "../infra/exec-approvals.js";
+import {
+  DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  resolveExecApprovalAllowedDecisions,
+  type ExecHost,
+  type ExecApprovalDecision,
+  type ExecTarget,
+} from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
@@ -15,6 +21,7 @@ export {
   normalizeExecAsk,
   normalizeExecHost,
   normalizeExecSecurity,
+  normalizeExecTarget,
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
@@ -35,6 +42,25 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+
+const SMKX = "\x1b[?1h";
+const RMKX = "\x1b[?1l";
+
+/**
+ * Detect cursor key mode from PTY output chunk.
+ * Uses lastIndexOf to find the *last* toggle in the chunk.
+ * Returns "application" if smkx is the last toggle, "normal" if rmkx is last,
+ * or null if no toggle is found.
+ */
+export function detectCursorKeyMode(raw: string): "application" | "normal" | null {
+  const lastSmkx = raw.lastIndexOf(SMKX);
+  const lastRmkx = raw.lastIndexOf(RMKX);
+  if (lastSmkx === -1 && lastRmkx === -1) {
+    return null;
+  }
+  // Whichever appears later in the chunk wins.
+  return lastSmkx > lastRmkx ? "application" : "normal";
+}
 
 // Sanitize inherited host env before merge so dangerous variables from process.env
 // are not propagated into non-sandboxed executions.
@@ -91,8 +117,8 @@ export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
-export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
-export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
+export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
@@ -124,7 +150,7 @@ export const execSchema = Type.Object({
   ),
   host: Type.Optional(
     Type.String({
-      description: "Exec host (sandbox|gateway|node).",
+      description: "Exec host/target (auto|sandbox|gateway|node).",
     }),
   ),
   security: Type.Optional(
@@ -185,6 +211,62 @@ export type ExecProcessHandle = {
 
 export function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
+}
+
+export function renderExecTargetLabel(target: ExecTarget) {
+  return target === "auto" ? "auto" : renderExecHostLabel(target);
+}
+
+export function isRequestedExecTargetAllowed(params: {
+  configuredTarget: ExecTarget;
+  requestedTarget: ExecTarget;
+}) {
+  // `auto` is a routing strategy, not a wildcard allowlist. Keep per-call host
+  // selection pinned to the configured/session-selected target so a sandboxed
+  // session cannot silently hop to gateway or node.
+  return params.requestedTarget === params.configuredTarget;
+}
+
+export function resolveExecTarget(params: {
+  configuredTarget?: ExecTarget;
+  requestedTarget?: ExecTarget | null;
+  elevatedRequested: boolean;
+  sandboxAvailable: boolean;
+}) {
+  const configuredTarget = params.configuredTarget ?? "auto";
+  const requestedTarget = params.requestedTarget ?? null;
+  if (params.elevatedRequested) {
+    return {
+      configuredTarget,
+      requestedTarget,
+      selectedTarget: "gateway" as const,
+      effectiveHost: "gateway" as const,
+    };
+  }
+  if (
+    requestedTarget &&
+    !isRequestedExecTargetAllowed({
+      configuredTarget,
+      requestedTarget,
+    })
+  ) {
+    throw new Error(
+      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
+        `configure tools.exec.host=${renderExecTargetLabel(requestedTarget)} to allow).`,
+    );
+  }
+  const selectedTarget = requestedTarget ?? configuredTarget;
+  // `auto` preserves the no-config "just work" default: sandbox when available,
+  // otherwise gateway. The YOLO part comes from security/ask defaults, not from
+  // `auto` itself.
+  const effectiveHost =
+    selectedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : selectedTarget;
+  return {
+    configuredTarget,
+    requestedTarget,
+    selectedTarget,
+    effectiveHost,
+  };
 }
 
 export function normalizeNotifyOutput(value: string) {
@@ -256,8 +338,9 @@ export function buildApprovalPendingMessage(params: {
   warningText?: string;
   approvalSlug: string;
   approvalId: string;
+  allowedDecisions?: readonly ExecApprovalDecision[];
   command: string;
-  cwd: string;
+  cwd: string | undefined;
   host: "gateway" | "node";
   nodeId?: string;
 }) {
@@ -267,6 +350,8 @@ export function buildApprovalPendingMessage(params: {
   }
   const commandBlock = `${fence}sh\n${params.command}\n${fence}`;
   const lines: string[] = [];
+  const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
+  const decisionText = allowedDecisions.join("|");
   const warningText = params.warningText?.trim();
   if (warningText) {
     lines.push(warningText, "");
@@ -276,12 +361,21 @@ export function buildApprovalPendingMessage(params: {
   if (params.nodeId) {
     lines.push(`Node: ${params.nodeId}`);
   }
-  lines.push(`CWD: ${params.cwd}`);
+  lines.push(`CWD: ${params.cwd ?? "(node default)"}`);
   lines.push("Command:");
   lines.push(commandBlock);
   lines.push("Mode: foreground (interactive approvals available).");
-  lines.push("Background mode requires pre-approved policy (allow-always or ask=off).");
-  lines.push(`Reply with: /approve ${params.approvalSlug} allow-once|allow-always|deny`);
+  lines.push(
+    allowedDecisions.includes("allow-always")
+      ? "Background mode requires pre-approved policy (allow-always or ask=off)."
+      : "Background mode requires an effective policy that allows pre-approval (for example ask=off).",
+  );
+  lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
+  if (!allowedDecisions.includes("allow-always")) {
+    lines.push(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+  }
   lines.push("If the short code is ambiguous, use the full id in /approve.");
   return lines.join("\n");
 }
@@ -474,6 +568,7 @@ export async function runExecProcess(opts: {
     exitSignal: undefined as NodeJS.Signals | number | null | undefined,
     truncated: false,
     backgrounded: false,
+    cursorKeyMode: opts.usePty ? "unknown" : "normal",
   };
   addSession(session);
 
@@ -497,7 +592,15 @@ export async function runExecProcess(opts: {
   };
 
   const handleStdout = (data: string) => {
-    const str = sanitizeBinaryOutput(data.toString());
+    const raw = data.toString();
+    // Detect smkx/rmkx BEFORE sanitizeBinaryOutput strips ESC sequences.
+    // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
+    // and sent atomically by terminals. Split across chunks is rare in practice.
+    const mode = detectCursorKeyMode(raw);
+    if (mode) {
+      session.cursorKeyMode = mode;
+    }
+    const str = sanitizeBinaryOutput(raw);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stdout", chunk);
       emitUpdate();

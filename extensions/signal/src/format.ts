@@ -1,9 +1,9 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
-  chunkMarkdownIR,
   markdownToIR,
   type MarkdownIR,
   type MarkdownStyle,
+  renderMarkdownIRChunksWithinLimit,
 } from "openclaw/plugin-sdk/text-runtime";
 
 type SignalTextStyle = "BOLD" | "ITALIC" | "STRIKETHROUGH" | "MONOSPACE" | "SPOILER";
@@ -245,129 +245,6 @@ export function markdownToSignalText(
   return renderSignalText(ir);
 }
 
-function sliceSignalStyles(
-  styles: SignalTextStyleRange[],
-  start: number,
-  end: number,
-): SignalTextStyleRange[] {
-  const sliced: SignalTextStyleRange[] = [];
-  for (const style of styles) {
-    const styleEnd = style.start + style.length;
-    const sliceStart = Math.max(style.start, start);
-    const sliceEnd = Math.min(styleEnd, end);
-    if (sliceEnd > sliceStart) {
-      sliced.push({
-        start: sliceStart - start,
-        length: sliceEnd - sliceStart,
-        style: style.style,
-      });
-    }
-  }
-  return sliced;
-}
-
-/**
- * Split Signal formatted text into chunks under the limit while preserving styles.
- *
- * This implementation deterministically tracks cursor position without using indexOf,
- * which is fragile when chunks are trimmed or when duplicate substrings exist.
- * Styles spanning chunk boundaries are split into separate ranges for each chunk.
- */
-function splitSignalFormattedText(
-  formatted: SignalFormattedText,
-  limit: number,
-): SignalFormattedText[] {
-  const { text, styles } = formatted;
-
-  if (text.length <= limit) {
-    return [formatted];
-  }
-
-  const results: SignalFormattedText[] = [];
-  let remaining = text;
-  let offset = 0; // Track position in original text for style slicing
-
-  while (remaining.length > 0) {
-    if (remaining.length <= limit) {
-      // Last chunk - take everything remaining
-      const trimmed = remaining.trimEnd();
-      if (trimmed.length > 0) {
-        results.push({
-          text: trimmed,
-          styles: mergeStyles(sliceSignalStyles(styles, offset, offset + trimmed.length)),
-        });
-      }
-      break;
-    }
-
-    // Find a good break point within the limit
-    const window = remaining.slice(0, limit);
-    let breakIdx = findBreakIndex(window);
-
-    // If no good break point found, hard break at limit
-    if (breakIdx <= 0) {
-      breakIdx = limit;
-    }
-
-    // Extract chunk and trim trailing whitespace
-    const rawChunk = remaining.slice(0, breakIdx);
-    const chunk = rawChunk.trimEnd();
-
-    if (chunk.length > 0) {
-      results.push({
-        text: chunk,
-        styles: mergeStyles(sliceSignalStyles(styles, offset, offset + chunk.length)),
-      });
-    }
-
-    // Advance past the chunk and any whitespace separator
-    const brokeOnWhitespace = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
-    const nextStart = Math.min(remaining.length, breakIdx + (brokeOnWhitespace ? 1 : 0));
-
-    // Chunks are sent as separate messages, so we intentionally drop boundary whitespace.
-    // Keep `offset` in sync with the dropped characters so style slicing stays correct.
-    remaining = remaining.slice(nextStart).trimStart();
-    offset = text.length - remaining.length;
-  }
-
-  return results;
-}
-
-/**
- * Find the best break index within a text window.
- * Prefers newlines over whitespace, avoids breaking inside parentheses.
- */
-function findBreakIndex(window: string): number {
-  let lastNewline = -1;
-  let lastWhitespace = -1;
-  let parenDepth = 0;
-
-  for (let i = 0; i < window.length; i++) {
-    const char = window[i];
-
-    if (char === "(") {
-      parenDepth++;
-      continue;
-    }
-    if (char === ")" && parenDepth > 0) {
-      parenDepth--;
-      continue;
-    }
-
-    // Only consider break points outside parentheses
-    if (parenDepth === 0) {
-      if (char === "\n") {
-        lastNewline = i;
-      } else if (/\s/.test(char)) {
-        lastWhitespace = i;
-      }
-    }
-  }
-
-  // Prefer newline break, fall back to whitespace
-  return lastNewline > 0 ? lastNewline : lastWhitespace;
-}
-
 export function markdownToSignalTextChunks(
   markdown: string,
   limit: number,
@@ -380,18 +257,10 @@ export function markdownToSignalTextChunks(
     blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
-  const chunks = chunkMarkdownIR(ir, limit);
-  const results: SignalFormattedText[] = [];
-
-  for (const chunk of chunks) {
-    const rendered = renderSignalText(chunk);
-    // If link expansion caused the chunk to exceed the limit, re-chunk it
-    if (rendered.text.length > limit) {
-      results.push(...splitSignalFormattedText(rendered, limit));
-    } else {
-      results.push(rendered);
-    }
-  }
-
-  return results;
+  return renderMarkdownIRChunksWithinLimit({
+    ir,
+    limit,
+    renderChunk: renderSignalText,
+    measureRendered: (rendered) => rendered.text.length,
+  }).map(({ rendered }) => rendered);
 }

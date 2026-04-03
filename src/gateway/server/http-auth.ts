@@ -4,13 +4,12 @@ import { safeEqualSecret } from "../../security/secret-equal.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
-  isLocalDirectRequest,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../auth.js";
 import { CANVAS_CAPABILITY_TTL_MS } from "../canvas-capability.js";
 import { authorizeGatewayBearerRequestOrReply } from "../http-auth-helpers.js";
-import { getBearerToken } from "../http-utils.js";
+import { getBearerToken, resolveHttpBrowserOriginPolicy } from "../http-utils.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "../protocol/client-info.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
@@ -78,9 +77,6 @@ export async function authorizeCanvasRequest(params: {
   if (malformedScopedPath) {
     return { ok: false, reason: "unauthorized" };
   }
-  if (isLocalDirectRequest(req, trustedProxies, allowRealIpFallback)) {
-    return { ok: true };
-  }
 
   let lastAuthFailure: GatewayAuthResult | null = null;
   const token = getBearerToken(req);
@@ -92,6 +88,7 @@ export async function authorizeCanvasRequest(params: {
       trustedProxies,
       allowRealIpFallback,
       rateLimiter,
+      browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
     });
     if (authResult.ok) {
       return authResult;

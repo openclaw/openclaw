@@ -1,5 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging.js";
 import {
   resolveChannelPluginIds,
@@ -27,24 +28,63 @@ function scopeRank(scope: typeof pluginRegistryLoaded): number {
   }
 }
 
+function activeRegistrySatisfiesScope(
+  scope: PluginRegistryScope,
+  active: ReturnType<typeof getActivePluginRegistry>,
+  expectedChannelPluginIds: readonly string[],
+): boolean {
+  if (!active) {
+    return false;
+  }
+  const activeChannelPluginIds = new Set(active.channels.map((entry) => entry.plugin.id));
+  switch (scope) {
+    case "configured-channels":
+    case "channels":
+      return (
+        active.channels.length > 0 &&
+        expectedChannelPluginIds.every((pluginId) => activeChannelPluginIds.has(pluginId))
+      );
+    case "all":
+      return false;
+  }
+}
+
 export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistryScope }): void {
   const scope = options?.scope ?? "all";
   if (scopeRank(pluginRegistryLoaded) >= scopeRank(scope)) {
     return;
   }
+  const config = loadConfig();
+  const autoEnabled = applyPluginAutoEnable({ config, env: process.env });
+  const resolvedConfig = autoEnabled.config;
+  const workspaceDir = resolveAgentWorkspaceDir(
+    resolvedConfig,
+    resolveDefaultAgentId(resolvedConfig),
+  );
+  const expectedChannelPluginIds =
+    scope === "configured-channels"
+      ? resolveConfiguredChannelPluginIds({
+          config: resolvedConfig,
+          workspaceDir,
+          env: process.env,
+        })
+      : scope === "channels"
+        ? resolveChannelPluginIds({
+            config: resolvedConfig,
+            workspaceDir,
+            env: process.env,
+          })
+        : [];
   const active = getActivePluginRegistry();
   // Tests (and callers) can pre-seed a registry (e.g. `test/setup.ts`); avoid
   // doing an expensive load when we already have plugins/channels/tools.
   if (
     pluginRegistryLoaded === "none" &&
-    active &&
-    (active.plugins.length > 0 || active.channels.length > 0 || active.tools.length > 0)
+    activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds)
   ) {
-    pluginRegistryLoaded = "all";
+    pluginRegistryLoaded = scope;
     return;
   }
-  const config = loadConfig();
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const logger: PluginLogger = {
     info: (msg) => log.info(msg),
     warn: (msg) => log.warn(msg),
@@ -52,27 +92,27 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
     debug: (msg) => log.debug(msg),
   };
   loadOpenClawPlugins({
-    config,
+    config: resolvedConfig,
+    activationSourceConfig: config,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     logger,
     throwOnLoadError: true,
     ...(scope === "configured-channels"
       ? {
-          onlyPluginIds: resolveConfiguredChannelPluginIds({
-            config,
-            workspaceDir,
-            env: process.env,
-          }),
+          onlyPluginIds: expectedChannelPluginIds,
         }
       : scope === "channels"
         ? {
-            onlyPluginIds: resolveChannelPluginIds({
-              config,
-              workspaceDir,
-              env: process.env,
-            }),
+            onlyPluginIds: expectedChannelPluginIds,
           }
         : {}),
   });
   pluginRegistryLoaded = scope;
 }
+
+export const __testing = {
+  resetPluginRegistryLoadedForTests(): void {
+    pluginRegistryLoaded = "none";
+  },
+};

@@ -44,6 +44,11 @@ interface Segment {
   bold?: boolean;
 }
 
+type DocxPatchPayload = NonNullable<Parameters<Lark.Client["docx"]["documentBlock"]["patch"]>[0]>;
+type DocxTextElement = NonNullable<
+  NonNullable<NonNullable<DocxPatchPayload["data"]>["update_text_elements"]>["elements"]
+>[number];
+
 /**
  * Parse color markup into segments.
  *
@@ -120,8 +125,7 @@ export async function updateColorText(
 ) {
   const segments = parseColorMarkup(content);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK type
-  const elements: any[] = segments.map((seg) => ({
+  const elements: DocxTextElement[] = segments.map((seg) => ({
     text_run: {
       content: seg.text,
       text_element_style: {

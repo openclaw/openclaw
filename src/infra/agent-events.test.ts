@@ -1,10 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import {
   clearAgentRunContext,
   emitAgentEvent,
   getAgentRunContext,
   onAgentEvent,
   registerAgentRunContext,
+  resetAgentEventsForTest,
   resetAgentRunContextForTest,
 } from "./agent-events.js";
 
@@ -17,8 +18,11 @@ async function importAgentEventsModule(cacheBust: string): Promise<AgentEventsMo
 }
 
 describe("agent-events sequencing", () => {
+  beforeEach(() => {
+    resetAgentEventsForTest();
+  });
+
   test("stores and clears run context", async () => {
-    resetAgentRunContextForTest();
     registerAgentRunContext("run-1", { sessionKey: "main" });
     expect(getAgentRunContext("run-1")?.sessionKey).toBe("main");
     clearAgentRunContext("run-1");

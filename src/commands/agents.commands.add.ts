@@ -7,7 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import { writeConfigFile } from "../config/config.js";
+import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -21,7 +21,7 @@ import {
   describeBinding,
   parseBindingSpecs,
 } from "./agents.bindings.js";
-import { createQuietRuntime, requireValidConfig } from "./agents.command-shared.js";
+import { createQuietRuntime, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import { applyAgentConfig, findAgentEntryIndex, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
@@ -53,10 +53,12 @@ export async function agentsAddCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) {
+  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
+  if (!configSnapshot) {
     return;
   }
+  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
+  const baseHash = configSnapshot.hash;
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
@@ -127,7 +129,10 @@ export async function agentsAddCommand(
         ? applyAgentBindings(nextConfig, bindingParse.bindings)
         : { config: nextConfig, added: [], updated: [], skipped: [], conflicts: [] };
 
-    await writeConfigFile(bindingResult.config);
+    await replaceConfigFile({
+      nextConfig: bindingResult.config,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
     if (!opts.json) {
       logConfigUpdated(runtime);
     }
@@ -342,7 +347,10 @@ export async function agentsAddCommand(
       }
     }
 
-    await writeConfigFile(nextConfig);
+    await replaceConfigFile({
+      nextConfig,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
     logConfigUpdated(runtime);
     await ensureWorkspaceAndSessions(workspaceDir, runtime, {
       skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),

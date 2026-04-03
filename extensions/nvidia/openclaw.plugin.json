@@ -1,5 +1,6 @@
 {
   "id": "nvidia",
+  "enabledByDefault": true,
   "providers": ["nvidia"],
   "providerAuthEnvVars": {
     "nvidia": ["NVIDIA_API_KEY"]

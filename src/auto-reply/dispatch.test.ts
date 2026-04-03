@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { dispatchInboundMessage, withReplyDispatcher } from "./dispatch.js";
+import {
+  dispatchInboundMessage,
+  dispatchInboundMessageWithBufferedDispatcher,
+  withReplyDispatcher,
+} from "./dispatch.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
@@ -10,6 +14,7 @@ function createDispatcher(record: string[]): ReplyDispatcher {
     sendBlockReply: () => true,
     sendFinalReply: () => true,
     getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+    getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
     markComplete: () => {
       record.push("markComplete");
     },
@@ -71,6 +76,7 @@ describe("withReplyDispatcher", () => {
         return true;
       },
       getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
       markComplete: () => {
         order.push("markComplete");
       },
@@ -87,5 +93,33 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+  });
+
+  it("dispatchInboundMessageWithBufferedDispatcher cleans up typing after a resolver starts it", async () => {
+    const typing = {
+      onReplyStart: vi.fn(async () => {}),
+      startTypingLoop: vi.fn(async () => {}),
+      startTypingOnText: vi.fn(async () => {}),
+      refreshTypingTtl: vi.fn(),
+      isActive: vi.fn(() => true),
+      markRunComplete: vi.fn(),
+      markDispatchIdle: vi.fn(),
+      cleanup: vi.fn(),
+    };
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyResolver: async (_ctx, opts) => {
+        opts?.onTypingController?.(typing);
+        return { text: "ok" };
+      },
+    });
+
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalled();
   });
 });

@@ -1,7 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveApiKeyForProfile } from "./oauth.js";
 import type { AuthProfileStore } from "./types.js";
+
+vi.mock("../cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: () => null,
+  readMiniMaxCliCredentialsCached: () => null,
+  resetCliCredentialCachesForTest: () => undefined,
+}));
+
+vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
+  formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
+    params.context?.access,
+  refreshProviderOAuthCredentialWithPlugin: async () => null,
+}));
+
+let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
+
+async function loadFreshOAuthModuleForTest() {
+  vi.resetModules();
+  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+}
 
 function cfgFor(profileId: string, provider: string, mode: "api_key" | "token" | "oauth") {
   return {
@@ -93,6 +111,10 @@ async function expectResolvedApiKey(params: {
 }
 
 describe("resolveApiKeyForProfile config compatibility", () => {
+  beforeEach(async () => {
+    await loadFreshOAuthModuleForTest();
+  });
+
   it("accepts token credentials when config mode is oauth", async () => {
     const profileId = "anthropic:token";
     const store: AuthProfileStore = {
@@ -179,6 +201,10 @@ describe("resolveApiKeyForProfile config compatibility", () => {
 });
 
 describe("resolveApiKeyForProfile token expiry handling", () => {
+  beforeEach(async () => {
+    await loadFreshOAuthModuleForTest();
+  });
+
   it("accepts token credentials when expires is undefined", async () => {
     const profileId = "anthropic:token-no-expiry";
     const result = await resolveWithConfig({
@@ -275,6 +301,10 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
 });
 
 describe("resolveApiKeyForProfile secret refs", () => {
+  beforeEach(async () => {
+    await loadFreshOAuthModuleForTest();
+  });
+
   it("resolves api_key keyRef from env", async () => {
     const profileId = "openai:default";
     const previous = process.env.OPENAI_API_KEY;
@@ -332,6 +362,26 @@ describe("resolveApiKeyForProfile secret refs", () => {
         expectedApiKey: "gh-ref-token", // pragma: allowlist secret
       });
     });
+  });
+
+  it("hard-fails when oauth mode is combined with token SecretRef input", async () => {
+    const profileId = "anthropic:oauth-secretref-token";
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "anthropic", "oauth"),
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "token",
+              provider: "anthropic",
+              tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
+            },
+          },
+        },
+        profileId,
+      }),
+    ).rejects.toThrow(/mode is "oauth"/i);
   });
 
   it("resolves inline ${ENV} api_key values", async () => {

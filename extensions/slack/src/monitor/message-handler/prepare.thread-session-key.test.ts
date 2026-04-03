@@ -1,9 +1,26 @@
 import type { App } from "@slack/bolt";
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../../../src/config/config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
-import { prepareSlackMessage } from "./prepare.js";
-import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
+
+type PrepareSlackMessage = typeof import("./prepare.js").prepareSlackMessage;
+type CreateInboundSlackTestContext =
+  typeof import("./prepare.test-helpers.js").createInboundSlackTestContext;
+type CreateSlackTestAccount = typeof import("./prepare.test-helpers.js").createSlackTestAccount;
+
+let prepareSlackMessage: PrepareSlackMessage;
+let createInboundSlackTestContext: CreateInboundSlackTestContext;
+let createSlackTestAccount: CreateSlackTestAccount;
+
+async function loadSlackPrepareModules() {
+  const [{ prepareSlackMessage: loadedPrepareSlackMessage }, helpers] = await Promise.all([
+    import("./prepare.js"),
+    import("./prepare.test-helpers.js"),
+  ]);
+  prepareSlackMessage = loadedPrepareSlackMessage;
+  createInboundSlackTestContext = helpers.createInboundSlackTestContext;
+  createSlackTestAccount = helpers.createSlackTestAccount;
+}
 
 function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" }) {
   const replyToMode = overrides?.replyToMode ?? "all";
@@ -31,6 +48,10 @@ function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessa
 }
 
 describe("thread-level session keys", () => {
+  beforeAll(async () => {
+    await loadSlackPrepareModules();
+  });
+
   it("keeps top-level channel turns in one session when replyToMode=off", async () => {
     const ctx = buildCtx({ replyToMode: "off" });
     ctx.resolveUserName = async () => ({ name: "Alice" });

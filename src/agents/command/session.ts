@@ -20,6 +20,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 
@@ -39,6 +40,56 @@ type SessionKeyResolution = {
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
 };
+
+type SessionIdMatchSet = {
+  matches: Array<[string, SessionEntry]>;
+  primaryStoreMatches: Array<[string, SessionEntry]>;
+  storeByKey: Map<string, SessionKeyResolution>;
+};
+
+function collectSessionIdMatchesForRequest(opts: {
+  cfg: OpenClawConfig;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  storeAgentId?: string;
+  sessionId: string;
+}): SessionIdMatchSet {
+  const matches: Array<[string, SessionEntry]> = [];
+  const primaryStoreMatches: Array<[string, SessionEntry]> = [];
+  const storeByKey = new Map<string, SessionKeyResolution>();
+
+  const addMatches = (
+    candidateStore: Record<string, SessionEntry>,
+    candidateStorePath: string,
+    options?: { primary?: boolean },
+  ): void => {
+    for (const [candidateKey, candidateEntry] of Object.entries(candidateStore)) {
+      if (candidateEntry?.sessionId !== opts.sessionId) {
+        continue;
+      }
+      matches.push([candidateKey, candidateEntry]);
+      if (options?.primary) {
+        primaryStoreMatches.push([candidateKey, candidateEntry]);
+      }
+      storeByKey.set(candidateKey, {
+        sessionKey: candidateKey,
+        sessionStore: candidateStore,
+        storePath: candidateStorePath,
+      });
+    }
+  };
+
+  addMatches(opts.sessionStore, opts.storePath, { primary: true });
+  for (const agentId of listAgentIds(opts.cfg)) {
+    if (agentId === opts.storeAgentId) {
+      continue;
+    }
+    const candidateStorePath = resolveStorePath(opts.cfg.session?.store, { agentId });
+    addMatches(loadSessionStore(candidateStorePath), candidateStorePath);
+  }
+
+  return { matches, primaryStoreMatches, storeByKey };
+}
 
 export function resolveSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;
@@ -67,41 +118,31 @@ export function resolveSessionKeyForRequest(opts: {
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
 
   // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
-  if (
-    !explicitSessionKey &&
-    opts.sessionId &&
-    (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
-  ) {
-    const foundKey = Object.keys(sessionStore).find(
-      (key) => sessionStore[key]?.sessionId === opts.sessionId,
-    );
-    if (foundKey) {
-      sessionKey = foundKey;
-    }
-  }
-
-  // When sessionId was provided but not found in the primary store, search all agent stores.
-  // Sessions created under a specific agent live in that agent's store file; the primary
-  // store (derived from the default agent) won't contain them.
-  // Also covers the case where --to derived a sessionKey that doesn't match the requested sessionId.
+  // When duplicates exist across agent stores, pick the same deterministic best match used by the
+  // shared gateway/session resolver helpers instead of whichever store happens to be scanned first.
   if (
     opts.sessionId &&
     !explicitSessionKey &&
     (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
   ) {
-    const allAgentIds = listAgentIds(opts.cfg);
-    for (const agentId of allAgentIds) {
-      if (agentId === storeAgentId) {
-        continue;
+    const { matches, primaryStoreMatches, storeByKey } = collectSessionIdMatchesForRequest({
+      cfg: opts.cfg,
+      sessionStore,
+      storePath,
+      storeAgentId,
+      sessionId: opts.sessionId,
+    });
+    const preferredSelection = resolveSessionIdMatchSelection(matches, opts.sessionId);
+    const currentStoreSelection =
+      preferredSelection.kind === "selected"
+        ? preferredSelection
+        : resolveSessionIdMatchSelection(primaryStoreMatches, opts.sessionId);
+    if (currentStoreSelection.kind === "selected") {
+      const preferred = storeByKey.get(currentStoreSelection.sessionKey);
+      if (preferred) {
+        return preferred;
       }
-      const altStorePath = resolveStorePath(sessionCfg?.store, { agentId });
-      const altStore = loadSessionStore(altStorePath);
-      const foundKey = Object.keys(altStore).find(
-        (key) => altStore[key]?.sessionId === opts.sessionId,
-      );
-      if (foundKey) {
-        return { sessionKey: foundKey, sessionStore: altStore, storePath: altStorePath };
-      }
+      sessionKey = currentStoreSelection.sessionKey;
     }
   }
 
@@ -130,7 +171,7 @@ export function resolveSession(opts: {
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
-    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel,
+    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel ?? sessionEntry?.origin?.provider,
   });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,

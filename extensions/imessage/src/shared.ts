@@ -6,18 +6,14 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  IMessageConfigSchema,
-  type ChannelPlugin,
-} from "../runtime-api.js";
+import { getChatChannelMeta, type ChannelPlugin } from "../runtime-api.js";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
+import { IMessageChannelConfigSchema } from "./config-schema.js";
 import { createIMessageSetupWizardProxy } from "./setup-core.js";
 
 export const IMESSAGE_CHANNEL = "imessage" as const;
@@ -83,7 +79,7 @@ export function createIMessagePluginBase(params: {
       media: true,
     },
     reload: { configPrefixes: ["channels.imessage"] },
-    configSchema: buildChannelConfigSchema(IMessageConfigSchema),
+    configSchema: IMessageChannelConfigSchema,
     config: {
       ...imessageConfigAdapter,
       isConfigured: (account) => account.configured,

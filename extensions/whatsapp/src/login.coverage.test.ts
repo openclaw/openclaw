@@ -1,8 +1,6 @@
+import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { DisconnectReason } from "@whiskeysockets/baileys";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loginWeb } from "./login.js";
 import {
   createWaSocket,
@@ -12,12 +10,13 @@ import {
 } from "./session.js";
 
 const rmMock = vi.spyOn(fs, "rm");
+const testState = vi.hoisted(() => ({
+  authDir: `${(process.env.TMPDIR ?? "/tmp").replace(/\/+$/, "")}/openclaw-wa-creds-${process.pid}-${Math.random().toString(16).slice(2)}`,
+}));
 
 function resolveTestAuthDir() {
-  return path.join(os.tmpdir(), "wa-creds");
+  return testState.authDir;
 }
-
-const authDir = resolveTestAuthDir();
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
@@ -38,7 +37,8 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   };
 });
 
-vi.mock("./session.js", () => {
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   const authDir = resolveTestAuthDir();
   const sockA = { ws: { close: vi.fn() } };
   const sockB = { ws: { close: vi.fn() } };
@@ -53,6 +53,7 @@ vi.mock("./session.js", () => {
   );
   const waitForCredsSaveQueueWithTimeout = vi.fn(async () => {});
   return {
+    ...actual,
     createWaSocket,
     waitForWaConnection,
     formatError,
@@ -90,7 +91,11 @@ describe("loginWeb coverage", () => {
     rmMock.mockClear();
   });
   afterEach(() => {
+    vi.runOnlyPendingTimers();
     vi.useRealTimers();
+  });
+  afterAll(() => {
+    rmSync(testState.authDir, { recursive: true, force: true });
   });
 
   it("restarts once when WhatsApp requests code 515", async () => {
@@ -109,7 +114,7 @@ describe("loginWeb coverage", () => {
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(1);
     expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledOnce();
-    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledWith(authDir);
+    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledWith(testState.authDir);
 
     releaseCredsFlush?.();
     await pendingLogin;
@@ -124,13 +129,13 @@ describe("loginWeb coverage", () => {
 
   it("clears creds and throws when logged out", async () => {
     waitForWaConnectionMock.mockRejectedValueOnce({
-      output: { statusCode: DisconnectReason.loggedOut },
+      output: { statusCode: 401 },
     });
 
     await expect(loginWeb(false, waitForWaConnectionMock as never)).rejects.toThrow(
       /cache cleared/i,
     );
-    expect(rmMock).toHaveBeenCalledWith(authDir, {
+    expect(rmMock).toHaveBeenCalledWith(testState.authDir, {
       recursive: true,
       force: true,
     });

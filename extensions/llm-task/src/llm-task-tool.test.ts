@@ -36,45 +36,14 @@ vi.mock("ajv", () => ({
   },
 }));
 
-vi.mock("../api.js", () => ({
-  formatXHighModelHint: () => "provider models that advertise xhigh reasoning",
-  normalizeThinkLevel: (raw?: string | null) => {
-    if (!raw) {
-      return undefined;
-    }
-    const key = raw.trim().toLowerCase();
-    const collapsed = key.replace(/[\s_-]+/g, "");
-    if (collapsed === "adaptive" || collapsed === "auto") {
-      return "adaptive";
-    }
-    if (collapsed === "xhigh" || collapsed === "extrahigh") {
-      return "xhigh";
-    }
-    if (["off"].includes(key)) {
-      return "off";
-    }
-    if (["on", "enable", "enabled"].includes(key)) {
-      return "low";
-    }
-    if (["min", "minimal", "think"].includes(key)) {
-      return "minimal";
-    }
-    if (["low", "thinkhard", "think-hard", "think_hard"].includes(key)) {
-      return "low";
-    }
-    if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
-      return "medium";
-    }
-    if (
-      ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
-    ) {
-      return "high";
-    }
-    return undefined;
-  },
-  resolvePreferredOpenClawTmpDir: () => "/tmp",
-  supportsXHighThinking: () => false,
-}));
+vi.mock("../api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api.js")>();
+  return {
+    ...actual,
+    resolvePreferredOpenClawTmpDir: () => "/tmp",
+    supportsXHighThinking: () => false,
+  };
+});
 
 import { createLlmTaskTool } from "./llm-task-tool.js";
 

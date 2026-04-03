@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeProviderId } from "../provider-id.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
 
@@ -51,7 +52,7 @@ export function getHistoryLimitFromSessionKey(
   const parts = sessionKey.split(":").filter(Boolean);
   const providerParts = parts.length >= 3 && parts[0] === "agent" ? parts.slice(2) : parts;
 
-  const provider = providerParts[0]?.toLowerCase();
+  const provider = normalizeProviderId(providerParts[0] ?? "");
   if (!provider) {
     return undefined;
   }
@@ -74,15 +75,22 @@ export function getHistoryLimitFromSessionKey(
     if (!channels || typeof channels !== "object") {
       return undefined;
     }
-    const entry = (channels as Record<string, unknown>)[providerId];
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return undefined;
+    for (const [configuredProviderId, value] of Object.entries(
+      channels as Record<string, unknown>,
+    )) {
+      if (normalizeProviderId(configuredProviderId) !== providerId) {
+        continue;
+      }
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return undefined;
+      }
+      return value as {
+        historyLimit?: number;
+        dmHistoryLimit?: number;
+        dms?: Record<string, { historyLimit?: number }>;
+      };
     }
-    return entry as {
-      historyLimit?: number;
-      dmHistoryLimit?: number;
-      dms?: Record<string, { historyLimit?: number }>;
-    };
+    return undefined;
   };
 
   const providerConfig = resolveProviderConfig(config, provider);

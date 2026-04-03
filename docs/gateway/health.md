@@ -1,7 +1,8 @@
 ---
-summary: "Health check steps for channel connectivity"
+summary: "Health check commands and gateway health monitoring"
 read_when:
-  - Diagnosing WhatsApp channel health
+  - Diagnosing channel connectivity or gateway health
+  - Understanding health check CLI commands and options
 title: "Health Checks"
 ---
 
@@ -41,4 +42,12 @@ Short guide to verify channel connectivity without guessing.
 
 ## Dedicated "health" command
 
-`openclaw health --json` asks the running Gateway for its health snapshot (no direct channel sockets from the CLI). It reports linked creds/auth age when available, per-channel probe summaries, session-store summary, and a probe duration. It exits non-zero if the Gateway is unreachable or the probe fails/timeouts. Use `--timeout <ms>` to override the 10s default.
+`openclaw health --json` asks the running Gateway for its health snapshot (no direct channel sockets from the CLI). It reports linked creds/auth age when available, per-channel probe summaries, session-store summary, and a probe duration. It exits non-zero if the Gateway is unreachable or the probe fails/timeouts.
+
+Options:
+
+- `--json`: machine-readable JSON output
+- `--timeout <ms>`: override the default 10s probe timeout
+- `--probe`: force a live probe of all channels instead of returning the cached health snapshot
+
+The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, and session-store summary.

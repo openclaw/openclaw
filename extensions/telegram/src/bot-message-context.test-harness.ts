@@ -1,9 +1,4 @@
-import { vi } from "vitest";
-import {
-  buildTelegramMessageContext,
-  type BuildTelegramMessageContextParams,
-  type TelegramMediaRef,
-} from "./bot-message-context.js";
+import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
 
 export const baseTelegramMessageContextConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
@@ -24,7 +19,11 @@ type BuildTelegramMessageContextForTestParams = {
 
 export async function buildTelegramMessageContextForTest(
   params: BuildTelegramMessageContextForTestParams,
-): Promise<Awaited<ReturnType<typeof buildTelegramMessageContext>>> {
+): Promise<
+  Awaited<ReturnType<typeof import("./bot-message-context.js").buildTelegramMessageContext>>
+> {
+  const { vi } = await loadVitestModule();
+  const buildTelegramMessageContext = await loadBuildTelegramMessageContext();
   return await buildTelegramMessageContext({
     primaryCtx: {
       message: {
@@ -46,6 +45,7 @@ export async function buildTelegramMessageContextForTest(
       },
     } as never,
     cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,
+    loadFreshConfig: () => (params.cfg ?? baseTelegramMessageContextConfig) as never,
     account: { accountId: params.accountId ?? "default" } as never,
     historyLimit: 0,
     groupHistories: new Map(),
@@ -64,4 +64,31 @@ export async function buildTelegramMessageContextForTest(
       })),
     sendChatActionHandler: { sendChatAction: vi.fn() } as never,
   });
+}
+
+let buildTelegramMessageContextLoader:
+  | typeof import("./bot-message-context.js").buildTelegramMessageContext
+  | undefined;
+let vitestModuleLoader: Promise<typeof import("vitest")> | undefined;
+let messageContextMocksInstalled = false;
+
+async function loadBuildTelegramMessageContext() {
+  await installMessageContextTestMocks();
+  if (!buildTelegramMessageContextLoader) {
+    ({ buildTelegramMessageContext: buildTelegramMessageContextLoader } =
+      await import("./bot-message-context.js"));
+  }
+  return buildTelegramMessageContextLoader;
+}
+
+async function loadVitestModule() {
+  vitestModuleLoader ??= import("vitest");
+  return await vitestModuleLoader;
+}
+
+async function installMessageContextTestMocks() {
+  if (messageContextMocksInstalled) {
+    return;
+  }
+  messageContextMocksInstalled = true;
 }

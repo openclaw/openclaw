@@ -1,4 +1,4 @@
-import type { ChatType, OpenClawConfig } from "../runtime-api.js";
+import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 
 export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
   if (!channelType) {

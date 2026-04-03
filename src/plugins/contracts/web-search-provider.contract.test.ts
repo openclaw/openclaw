@@ -1,18 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { webSearchProviderContractRegistry } from "./registry.js";
-import { installWebSearchProviderContractSuite } from "./suites.js";
+import { describeWebSearchProviderContracts } from "../../../test/helpers/plugins/web-search-provider-contract.js";
+import { pluginRegistrationContractRegistry } from "./registry.js";
 
-describe("web search provider contract registry load", () => {
-  it("loads bundled web search providers", () => {
-    expect(webSearchProviderContractRegistry.length).toBeGreaterThan(0);
-  });
-});
+const webSearchProviderContractTests = pluginRegistrationContractRegistry.filter(
+  (entry) => entry.webSearchProviderIds.length > 0,
+);
 
-for (const entry of webSearchProviderContractRegistry) {
-  describe(`${entry.pluginId}:${entry.provider.id} web search contract`, () => {
-    installWebSearchProviderContractSuite({
-      provider: entry.provider,
-      credentialValue: entry.credentialValue,
-    });
-  });
+for (const entry of webSearchProviderContractTests) {
+  describeWebSearchProviderContracts(entry.pluginId);
 }

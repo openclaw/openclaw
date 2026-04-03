@@ -8,8 +8,11 @@ import {
   buildWorkspaceSkillSnapshotMock,
   getCliSessionIdMock,
   isCliProviderMock,
+  lookupContextTokensMock,
   loadRunCronIsolatedAgentTurn,
   logWarnMock,
+  makeCronSession,
+  makeCronSessionEntry,
   resolveAgentConfigMock,
   resolveAgentSkillsFilterMock,
   resolveAllowedModelRefMock,
@@ -165,7 +168,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         cfg: {
           agents: {
             defaults: {
-              model: { primary: "openai-codex/gpt-5.3-codex", fallbacks: defaultFallbacks },
+              model: { primary: "openai-codex/gpt-5.4", fallbacks: defaultFallbacks },
             },
           },
         },
@@ -216,7 +219,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         cfg: {
           agents: {
             defaults: {
-              model: { primary: "openai-codex/gpt-5.3-codex", fallbacks: defaultFallbacks },
+              model: { primary: "openai-codex/gpt-5.4", fallbacks: defaultFallbacks },
             },
           },
         },
@@ -228,7 +231,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         "cron: payload.model 'anthropic/claude-sonnet-4-6' not allowed, falling back to agent defaults",
       );
       expectDefaultModelCall({
-        primary: "openai-codex/gpt-5.3-codex",
+        primary: "openai-codex/gpt-5.4",
         fallbacks: defaultFallbacks,
       });
     });
@@ -318,6 +321,41 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         "cliSessionId",
         "existing-cli-session-def",
       );
+    });
+  });
+
+  describe("context token fallback", () => {
+    it("preserves existing session contextTokens when no configured or cached model window is loaded", async () => {
+      const session = makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          contextTokens: 222_000,
+        }),
+      });
+      resolveCronSessionMock.mockReturnValue(session);
+      lookupContextTokensMock.mockReturnValue(undefined);
+
+      const result = await runSkillFilterCase();
+
+      expect(result.status).toBe("ok");
+      expect(session.sessionEntry.contextTokens).toBe(222_000);
+    });
+
+    it("prefers sync-configured model contextTokens over the previous session value", async () => {
+      const session = makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          contextTokens: 222_000,
+        }),
+      });
+      resolveCronSessionMock.mockReturnValue(session);
+      lookupContextTokensMock.mockReturnValue(512_000);
+
+      const result = await runSkillFilterCase();
+
+      expect(result.status).toBe("ok");
+      expect(session.sessionEntry.contextTokens).toBe(512_000);
+      expect(lookupContextTokensMock).toHaveBeenCalledWith("gpt-4", {
+        allowAsyncLoad: false,
+      });
     });
   });
 });

@@ -29,14 +29,27 @@ vi.mock("@anthropic-ai/vertex-sdk", () => ({
   }),
 }));
 
-import {
-  resolveAnthropicVertexRegion,
-  resolveAnthropicVertexRegionFromBaseUrl,
-} from "./anthropic-vertex-provider.js";
-import {
-  createAnthropicVertexStreamFn,
-  createAnthropicVertexStreamFnForModel,
-} from "./anthropic-vertex-stream.js";
+let createAnthropicVertexStreamFn: typeof import("./anthropic-vertex-stream.js").createAnthropicVertexStreamFn;
+let createAnthropicVertexStreamFnForModel: typeof import("./anthropic-vertex-stream.js").createAnthropicVertexStreamFnForModel;
+
+async function loadFreshAnthropicVertexStreamModuleForTest() {
+  vi.resetModules();
+  vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
+    const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+    return {
+      ...original,
+      streamAnthropic: (model: unknown, context: unknown, options: unknown) =>
+        hoisted.streamAnthropicMock(model, context, options),
+    };
+  });
+  vi.doMock("@anthropic-ai/vertex-sdk", () => ({
+    AnthropicVertex: vi.fn(function MockAnthropicVertex(options: unknown) {
+      hoisted.anthropicVertexCtorMock(options);
+      return { options };
+    }),
+  }));
+  return await import("./anthropic-vertex-stream.js");
+}
 
 function makeModel(params: { id: string; maxTokens?: number }): Model<"anthropic-messages"> {
   return {
@@ -51,6 +64,11 @@ describe("createAnthropicVertexStreamFn", () => {
   beforeEach(() => {
     hoisted.streamAnthropicMock.mockClear();
     hoisted.anthropicVertexCtorMock.mockClear();
+  });
+
+  beforeEach(async () => {
+    ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
+      await loadFreshAnthropicVertexStreamModuleForTest());
   });
 
   it("omits projectId when ADC credentials are used without an explicit project", () => {
@@ -141,39 +159,14 @@ describe("createAnthropicVertexStreamFn", () => {
   });
 });
 
-describe("resolveAnthropicVertexRegionFromBaseUrl", () => {
-  it("accepts well-formed regional env values", () => {
-    expect(
-      resolveAnthropicVertexRegion({
-        GOOGLE_CLOUD_LOCATION: "us-east1",
-      } as NodeJS.ProcessEnv),
-    ).toBe("us-east1");
-  });
-
-  it("falls back to the default region for malformed env values", () => {
-    expect(
-      resolveAnthropicVertexRegion({
-        GOOGLE_CLOUD_LOCATION: "us-central1.attacker.example",
-      } as NodeJS.ProcessEnv),
-    ).toBe("global");
-  });
-
-  it("parses regional Vertex endpoints", () => {
-    expect(
-      resolveAnthropicVertexRegionFromBaseUrl("https://europe-west4-aiplatform.googleapis.com"),
-    ).toBe("europe-west4");
-  });
-
-  it("treats the global Vertex endpoint as global", () => {
-    expect(resolveAnthropicVertexRegionFromBaseUrl("https://aiplatform.googleapis.com")).toBe(
-      "global",
-    );
-  });
-});
-
 describe("createAnthropicVertexStreamFnForModel", () => {
   beforeEach(() => {
     hoisted.anthropicVertexCtorMock.mockClear();
+  });
+
+  beforeEach(async () => {
+    ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
+      await loadFreshAnthropicVertexStreamModuleForTest());
   });
 
   it("derives project and region from the model and env", () => {

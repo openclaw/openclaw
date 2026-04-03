@@ -416,9 +416,7 @@ export function buildGatewayCronService(params: {
         if (evt.status === "error" && job) {
           const failureDest = resolveFailureDestination(job, params.cfg.cron?.failureDestination);
           if (failureDest) {
-            const isBestEffort =
-              job.delivery?.bestEffort === true ||
-              (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+            const isBestEffort = job.delivery?.bestEffort === true;
 
             if (!isBestEffort) {
               const failureMessage = `Cron job "${job.name}" failed: ${evt.error ?? "unknown error"}`;

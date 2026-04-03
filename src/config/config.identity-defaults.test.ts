@@ -1,11 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, resetConfigRuntimeState } from "./config.js";
 import { withTempHome } from "./home-env.test-harness.js";
 
 describe("config identity defaults", () => {
+  beforeEach(() => {
+    resetConfigRuntimeState();
+  });
+
+  afterEach(() => {
+    resetConfigRuntimeState();
+  });
+
   const defaultIdentity = {
     name: "Samantha",
     theme: "helpful sloth",

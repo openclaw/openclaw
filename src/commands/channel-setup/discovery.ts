@@ -6,6 +6,7 @@ import {
 import type { ChannelMeta, ChannelPlugin } from "../../channels/plugins/types.js";
 import { listChatChannels } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { ChannelChoice } from "../onboard-types.js";
 
@@ -31,10 +32,14 @@ export function listManifestInstalledChannelIds(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Set<ChannelChoice> {
-  const workspaceDir = resolveWorkspaceDir(params.cfg, params.workspaceDir);
+  const resolvedConfig = applyPluginAutoEnable({
+    config: params.cfg,
+    env: params.env ?? process.env,
+  }).config;
+  const workspaceDir = resolveWorkspaceDir(resolvedConfig, params.workspaceDir);
   return new Set(
     loadPluginManifestRegistry({
-      config: params.cfg,
+      config: resolvedConfig,
       workspaceDir,
       env: params.env ?? process.env,
     }).plugins.flatMap((plugin) => plugin.channels as ChannelChoice[]),

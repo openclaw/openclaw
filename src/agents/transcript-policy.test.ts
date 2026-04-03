@@ -1,7 +1,122 @@
-import { describe, expect, it } from "vitest";
-import { resolveTranscriptPolicy } from "./transcript-policy.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) => {
+    if (
+      !provider ||
+      ![
+        "amazon-bedrock",
+        "anthropic",
+        "google",
+        "kilocode",
+        "kimi",
+        "kimi-code",
+        "mistral",
+        "openai",
+        "openai-codex",
+        "opencode",
+        "opencode-go",
+        "openrouter",
+      ].includes(provider)
+    ) {
+      return undefined;
+    }
+    return {
+      buildReplayPolicy: (context?: { modelId?: string; modelApi?: string }) => {
+        const modelId = context?.modelId?.toLowerCase() ?? "";
+        switch (provider) {
+          case "amazon-bedrock":
+          case "anthropic":
+            return {
+              sanitizeMode: "full",
+              sanitizeToolCallIds: true,
+              toolCallIdMode: "strict",
+              preserveSignatures: true,
+              repairToolUseResultPairing: true,
+              validateAnthropicTurns: true,
+              allowSyntheticToolResults: true,
+              ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+            };
+          case "google":
+            return {
+              sanitizeMode: "full",
+              sanitizeToolCallIds: true,
+              toolCallIdMode: "strict",
+              sanitizeThoughtSignatures: {
+                allowBase64Only: true,
+                includeCamelCase: true,
+              },
+              repairToolUseResultPairing: true,
+              applyAssistantFirstOrderingFix: true,
+              validateGeminiTurns: true,
+              validateAnthropicTurns: false,
+              allowSyntheticToolResults: true,
+            };
+          case "mistral":
+            return {
+              sanitizeToolCallIds: true,
+              toolCallIdMode: "strict9",
+            };
+          case "openai":
+          case "openai-codex":
+            return {
+              sanitizeMode: "images-only",
+              sanitizeToolCallIds: context?.modelApi === "openai-completions",
+              ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
+              applyAssistantFirstOrderingFix: false,
+              validateGeminiTurns: false,
+              validateAnthropicTurns: false,
+            };
+          case "kimi":
+          case "kimi-code":
+            return {
+              preserveSignatures: false,
+            };
+          case "openrouter":
+          case "opencode":
+          case "opencode-go":
+            return {
+              applyAssistantFirstOrderingFix: false,
+              validateGeminiTurns: false,
+              validateAnthropicTurns: false,
+              ...(modelId.includes("gemini")
+                ? {
+                    sanitizeThoughtSignatures: {
+                      allowBase64Only: true,
+                      includeCamelCase: true,
+                    },
+                  }
+                : {}),
+            };
+          case "kilocode":
+            return modelId.includes("gemini")
+              ? {
+                  sanitizeThoughtSignatures: {
+                    allowBase64Only: true,
+                    includeCamelCase: true,
+                  },
+                }
+              : undefined;
+          default:
+            return undefined;
+        }
+      },
+    };
+  }),
+  resetProviderRuntimeHookCacheForTest: vi.fn(),
+}));
+
+let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 
 describe("resolveTranscriptPolicy", () => {
+  beforeAll(async () => {
+    ({ resolveTranscriptPolicy } = await import("./transcript-policy.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("enables sanitizeToolCallIds for Anthropic provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",
@@ -42,6 +157,9 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(false);
     expect(policy.toolCallIdMode).toBeUndefined();
+    expect(policy.applyGoogleTurnOrdering).toBe(false);
+    expect(policy.validateGeminiTurns).toBe(false);
+    expect(policy.validateAnthropicTurns).toBe(false);
   });
 
   it("enables strict tool call id sanitization for openai-completions APIs", () => {
@@ -60,6 +178,20 @@ describe("resolveTranscriptPolicy", () => {
       modelId: "kimi-k2.5",
       modelApi: "openai-completions",
     });
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("falls back to transport defaults when a plugin replay hook returns undefined", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "kilocode",
+      modelId: "kilocode-default",
+      modelApi: "openai-completions",
+    });
+
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
     expect(policy.applyGoogleTurnOrdering).toBe(true);
     expect(policy.validateGeminiTurns).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);

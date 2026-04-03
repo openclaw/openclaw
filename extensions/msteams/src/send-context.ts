@@ -9,10 +9,11 @@ import type {
   MSTeamsConversationStore,
   StoredConversationReference,
 } from "./conversation-store.js";
+import { formatUnknownError } from "./errors.js";
 import { resolveGraphChatId } from "./graph-upload.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { createMSTeamsAdapter, createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 export type MSTeamsConversationType = "personal" | "groupChat" | "channel";
@@ -92,7 +93,7 @@ async function findConversationReference(recipient: {
     return null;
   }
 
-  const found = await recipient.store.findByUserId(recipient.id);
+  const found = await recipient.store.findPreferredDmByUserId(recipient.id);
   if (!found) {
     return null;
   }
@@ -131,11 +132,11 @@ export async function resolveMSTeamsSendContext(params: {
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams:send" });
 
-  const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-  const adapter = createMSTeamsAdapter(authConfig, sdk);
+  const { sdk, app } = await loadMSTeamsSdkWithAuth(creds);
+  const adapter = createMSTeamsAdapter(app, sdk);
 
-  // Create token provider for Graph API / OneDrive operations
-  const tokenProvider = new sdk.MsalTokenProvider(authConfig) as MSTeamsAccessTokenProvider;
+  // Create token provider adapter for Graph API / OneDrive operations
+  const tokenProvider: MSTeamsAccessTokenProvider = createMSTeamsTokenProvider(app);
 
   // Determine conversation type from stored reference
   const storedConversationType = ref.conversation?.conversationType?.toLowerCase() ?? "";
@@ -190,7 +191,7 @@ export async function resolveMSTeamsSendContext(params: {
         "failed to resolve Graph chat ID; file uploads may fall back to Bot Framework ID",
         {
           conversationId,
-          error: String(err),
+          error: formatUnknownError(err),
         },
       );
       graphChatId = null;

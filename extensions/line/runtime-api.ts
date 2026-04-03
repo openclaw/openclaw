@@ -9,8 +9,8 @@ export type {
 } from "openclaw/plugin-sdk/core";
 export { clearAccountEntryFields } from "openclaw/plugin-sdk/core";
 export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+export type { ChannelAccountSnapshot, ChannelGatewayContext } from "openclaw/plugin-sdk/line";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { ChannelAccountSnapshot, ChannelGatewayContext } from "openclaw/plugin-sdk/testing";
 export type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
 export type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 export {
@@ -23,7 +23,29 @@ export {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-export * from "openclaw/plugin-sdk/line-runtime";
+// Keep named exports explicit here so the runtime barrel stays self-contained
+// and plugin-sdk can re-export this file directly without reaching into
+// extension internals.
+export {
+  firstDefined,
+  isSenderAllowed,
+  normalizeAllowFrom,
+  normalizeDmAllowFromWithStore,
+} from "./src/bot-access.js";
+export { downloadLineMedia } from "./src/download.js";
+export { probeLineBot } from "./src/probe.js";
+export { buildTemplateMessageFromPayload } from "./src/template-messages.js";
+export {
+  createQuickReplyItems,
+  pushFlexMessage,
+  pushLocationMessage,
+  pushMessageLine,
+  pushMessagesLine,
+  pushTemplateMessage,
+  pushTextMessageWithQuickReplies,
+  sendMessageLine,
+} from "./src/send.js";
+export { monitorLineProvider } from "./src/monitor.js";
 
 export * from "./src/accounts.js";
 export * from "./src/bot-access.js";

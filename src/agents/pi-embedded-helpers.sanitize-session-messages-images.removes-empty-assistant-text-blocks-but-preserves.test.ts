@@ -118,7 +118,6 @@ describe("sanitizeSessionMessagesImages", () => {
     const toolCall = assistant.content?.find((b) => b.type === "toolCall");
     expect(toolCall).toBeTruthy();
     expect("input" in (toolCall ?? {})).toBe(false);
-    expect("arguments" in (toolCall ?? {})).toBe(false);
   });
 
   it("removes empty assistant text blocks but preserves tool calls", async () => {
@@ -311,6 +310,77 @@ describe("sanitizeSessionMessagesImages", () => {
       expect(content).toHaveLength(2);
       expect("thought_signature" in ((content?.[0] ?? {}) as object)).toBe(false);
       expect((content?.[1] as { thought_signature?: unknown })?.thought_signature).toBe("AQID");
+    });
+
+    it("still strips signatures in images-only mode when replay policy requests it", async () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thought_signature: "msg_abc123" },
+            { type: "text", text: "visible" },
+          ],
+        },
+      ]);
+
+      const out = await sanitizeSessionMessagesImages(input, "test", {
+        sanitizeMode: "images-only",
+        sanitizeThoughtSignatures: {
+          allowBase64Only: true,
+          includeCamelCase: true,
+        },
+      });
+
+      const content = (out[0] as { content?: Array<{ thought_signature?: unknown }> }).content;
+      expect(content).toHaveLength(2);
+      expect(content?.[0]?.thought_signature).toBeUndefined();
+    });
+
+    it("preserves interleaved thinking block order when signatures are preserved", async () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "first",
+              thought_signature: "sig-1",
+            },
+            { type: "text", text: "" },
+            { type: "text", text: "visible" },
+            {
+              type: "redacted_thinking",
+              data: "opaque",
+              thought_signature: "sig-2",
+            },
+            { type: "text", text: "tail" },
+          ],
+        },
+      ]);
+
+      const out = await sanitizeSessionMessagesImages(input, "test", {
+        preserveSignatures: true,
+      });
+
+      expect(out).toHaveLength(1);
+      const content = (out[0] as { content?: Array<{ type?: string; text?: string }> }).content;
+      expect(content?.map((block) => block.type)).toEqual([
+        "thinking",
+        "text",
+        "text",
+        "redacted_thinking",
+        "text",
+      ]);
+      expect(content?.[0]).toMatchObject({
+        type: "thinking",
+        thinking: "first",
+        thought_signature: "sig-1",
+      });
+      expect(content?.[1]).toMatchObject({ type: "text", text: "" });
+      expect(content?.[3]).toMatchObject({
+        type: "redacted_thinking",
+        thought_signature: "sig-2",
+      });
     });
   });
 });

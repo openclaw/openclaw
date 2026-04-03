@@ -38,15 +38,21 @@ export async function resolveAnnounceTarget(params: {
       match?.deliveryContext && typeof match.deliveryContext === "object"
         ? (match.deliveryContext as Record<string, unknown>)
         : undefined;
+    const origin =
+      match?.origin && typeof match.origin === "object"
+        ? (match.origin as Record<string, unknown>)
+        : undefined;
     const channel =
       (typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined) ??
-      (typeof match?.lastChannel === "string" ? match.lastChannel : undefined);
+      (typeof match?.lastChannel === "string" ? match.lastChannel : undefined) ??
+      (typeof origin?.provider === "string" ? origin.provider : undefined);
     const to =
       (typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined) ??
       (typeof match?.lastTo === "string" ? match.lastTo : undefined);
     const accountId =
       (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
-      (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined);
+      (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined) ??
+      (typeof origin?.accountId === "string" ? origin.accountId : undefined);
     if (channel && to) {
       return { channel, to, accountId };
     }

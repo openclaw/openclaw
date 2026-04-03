@@ -21,18 +21,10 @@ export function renderGatewayUrlConfirmation(state: AppViewState) {
           Only confirm if you trust this URL. Malicious URLs can compromise your system.
         </div>
         <div class="exec-approval-actions">
-          <button
-            class="btn primary"
-            @click=${() => state.handleGatewayUrlConfirm()}
-          >
+          <button class="btn primary" @click=${() => state.handleGatewayUrlConfirm()}>
             Confirm
           </button>
-          <button
-            class="btn"
-            @click=${() => state.handleGatewayUrlCancel()}
-          >
-            Cancel
-          </button>
+          <button class="btn" @click=${() => state.handleGatewayUrlCancel()}>Cancel</button>
         </div>
       </div>
     </div>

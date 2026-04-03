@@ -1,1 +1,1 @@
-export { resolveRequestUrl } from "./runtime-api.js";
+export { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";

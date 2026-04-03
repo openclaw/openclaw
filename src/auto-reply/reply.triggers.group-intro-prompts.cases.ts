@@ -44,8 +44,8 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "whatsapp",
         },
         expected: [
-          `You are in the WhatsApp group chat "Ops".`,
-          `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
+          `You are in the WhatsApp group chat "Ops". Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group — just reply normally.`,
+          `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). WhatsApp IDs: SenderId is the participant JID (group participant id). ${groupParticipationNote} Address the specific sender noted in the message context.`,
         ],
       },
       {

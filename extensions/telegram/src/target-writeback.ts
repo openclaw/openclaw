@@ -16,6 +16,7 @@ import {
 } from "./targets.js";
 
 const writebackLogger = createSubsystemLogger("telegram/target-writeback");
+const TELEGRAM_ADMIN_SCOPE = "operator.admin";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -141,6 +142,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
   rawTarget: string;
   resolvedChatId: string;
   verbose?: boolean;
+  gatewayClientScopes?: readonly string[];
 }): Promise<void> {
   const raw = params.rawTarget.trim();
   if (!raw) {
@@ -154,6 +156,15 @@ export async function maybePersistResolvedTelegramTarget(params: {
     return;
   }
   const { matchKey, resolvedTarget } = rewrite;
+  if (
+    Array.isArray(params.gatewayClientScopes) &&
+    !params.gatewayClientScopes.includes(TELEGRAM_ADMIN_SCOPE)
+  ) {
+    writebackLogger.warn(
+      `skipping Telegram target writeback for ${raw} because gateway caller is missing ${TELEGRAM_ADMIN_SCOPE}`,
+    );
+    return;
+  }
 
   try {
     const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();

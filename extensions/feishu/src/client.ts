@@ -31,6 +31,11 @@ export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
 export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
+type FeishuHttpInstanceLike = Pick<
+  typeof feishuClientSdk.defaultHttpInstance,
+  "request" | "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
+>;
+
 function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
   const proxyUrl =
     process.env.https_proxy ||
@@ -66,8 +71,7 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
  * (e.g. when the Feishu API is slow, causing per-chat queue deadlocks).
  */
 function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
-  const base: Lark.HttpInstance =
-    feishuClientSdk.defaultHttpInstance as unknown as Lark.HttpInstance;
+  const base: FeishuHttpInstanceLike = feishuClientSdk.defaultHttpInstance;
 
   function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
     return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;

@@ -768,10 +768,8 @@ struct DebugSettings: View {
     }
 
     private func loadSessionStorePath() {
-        let url = self.configURL()
+        let parsed = OpenClawConfigFile.loadDict()
         guard
-            let data = try? Data(contentsOf: url),
-            let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let session = parsed["session"] as? [String: Any],
             let path = session["store"] as? String
         else {
@@ -783,28 +781,14 @@ struct DebugSettings: View {
 
     private func saveSessionStorePath() {
         let trimmed = self.sessionStorePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        var root: [String: Any] = [:]
-        let url = self.configURL()
-        if let data = try? Data(contentsOf: url),
-           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        {
-            root = parsed
-        }
+        var root = OpenClawConfigFile.loadDict()
 
         var session = root["session"] as? [String: Any] ?? [:]
         session["store"] = trimmed.isEmpty ? SessionLoader.defaultStorePath : trimmed
         root["session"] = session
 
-        do {
-            let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-            try FileManager().createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try data.write(to: url, options: [.atomic])
-            self.sessionStoreSaveError = nil
-        } catch {
-            self.sessionStoreSaveError = error.localizedDescription
-        }
+        OpenClawConfigFile.saveDict(root)
+        self.sessionStoreSaveError = nil
     }
 
     private var bindingOverride: Binding<String> {
@@ -827,10 +811,6 @@ struct DebugSettings: View {
 
     private var canRestartGateway: Bool {
         self.state.connectionMode == .local
-    }
-
-    private func configURL() -> URL {
-        OpenClawPaths.configURL
     }
 }
 

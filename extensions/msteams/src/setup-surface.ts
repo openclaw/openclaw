@@ -13,6 +13,7 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import type { MSTeamsTeamConfig } from "../runtime-api.js";
+import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
   resolveMSTeamsChannelAllowlist,
@@ -240,7 +241,7 @@ async function resolveMSTeamsGroupAllowlist(params: {
     return resolvedEntries;
   } catch (err) {
     await params.prompter.note(
-      `Channel lookup failed; keeping entries as typed. ${String(err)}`,
+      `Channel lookup failed; keeping entries as typed. ${formatUnknownError(err)}`,
       "MS Teams channels",
     );
     return resolvedEntries;

@@ -1,4 +1,4 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 const XIAOMI_BASE_URL = "https://api.xiaomimimo.com/v1";
 export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";

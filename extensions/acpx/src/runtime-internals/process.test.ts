@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createWindowsCmdShimFixture } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createWindowsCmdShimFixture } from "../../../../src/test-helpers/windows-cmd-shim.js";
 import {
   resolveSpawnCommand,
   spawnAndCollect,
@@ -112,6 +112,36 @@ describe("resolveSpawnCommand", () => {
 
     expect(resolved).toEqual({
       command: "/custom/node",
+      args: [scriptPath, "--help"],
+    });
+  });
+
+  it("falls back to node on PATH when execPath is unavailable for a node shebang wrapper", async () => {
+    const dir = await createTempDir();
+    const binDir = path.join(dir, "bin");
+    const scriptPath = path.join(binDir, "acpx");
+    const nodePath = path.join(binDir, "node");
+    await mkdir(binDir, { recursive: true });
+    await writeFile(scriptPath, "#!/usr/bin/env node\nconsole.log('ok')\n", "utf8");
+    await writeFile(nodePath, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(scriptPath, 0o755);
+    await chmod(nodePath, 0o755);
+
+    const resolved = resolveSpawnCommand(
+      {
+        command: scriptPath,
+        args: ["--help"],
+      },
+      undefined,
+      {
+        platform: "darwin",
+        env: { PATH: binDir },
+        execPath: "/missing/node",
+      },
+    );
+
+    expect(resolved).toEqual({
+      command: nodePath,
       args: [scriptPath, "--help"],
     });
   });
@@ -333,7 +363,7 @@ describe("spawnAndCollect", () => {
       command: process.execPath,
       args: [
         "-e",
-        `process.stdout.write(JSON.stringify({openai:process.env.${openAiEnvKey},github:process.env.${githubEnvKey},hf:process.env.${hfEnvKey},openclaw:process.env.OPENCLAW_API_KEY,shell:process.env.OPENCLAW_SHELL}))`,
+        `process.stdout.write(JSON.stringify({openai:process.env.${openAiEnvKey},github:process.env.${githubEnvKey},hf:process.env.${hfEnvKey},openclaw:process.env.OPENCLAW_API_KEY,shell:process.env.OPENCLAW_SHELL}), () => process.exit(0))`,
       ],
       cwd: process.cwd(),
       stripProviderAuthEnvVars: options?.stripProviderAuthEnvVars,
@@ -341,7 +371,7 @@ describe("spawnAndCollect", () => {
 
     expect(result.code).toBe(0);
     expect(result.error).toBeNull();
-    return JSON.parse(result.stdout) as SpawnedEnvSnapshot;
+    return JSON.parse(result.stdout.trim()) as SpawnedEnvSnapshot;
   }
 
   it("returns abort error immediately when signal is already aborted", async () => {

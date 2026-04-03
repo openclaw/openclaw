@@ -1,4 +1,7 @@
+import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
+
+export type { HeartbeatRunResult };
 
 /** Structured logger surface injected into runtime-backed plugin helpers. */
 export type RuntimeLogger = {
@@ -6,6 +9,14 @@ export type RuntimeLogger = {
   info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
   error: (message: string, meta?: Record<string, unknown>) => void;
+};
+
+export type RunHeartbeatOnceOptions = {
+  reason?: string;
+  agentId?: string;
+  sessionKey?: string;
+  /** Override heartbeat config (e.g. `{ target: "last" }` to deliver to the last active channel). */
+  heartbeat?: { target?: string };
 };
 
 /** Core runtime helpers exposed to trusted native plugins. */
@@ -37,6 +48,13 @@ export type PluginRuntimeCore = {
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
     requestHeartbeatNow: typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;
+    /**
+     * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
+     * Accepts an optional `heartbeat` config override so callers can force
+     * delivery to the last active channel — the same pattern the cron service
+     * uses to avoid the default `target: "none"` suppression.
+     */
+    runHeartbeatOnce: (opts?: RunHeartbeatOnceOptions) => Promise<HeartbeatRunResult>;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
@@ -49,20 +67,20 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
-    textToSpeech: typeof import("../../tts/runtime.js").textToSpeech;
-    textToSpeechTelephony: typeof import("../../tts/runtime.js").textToSpeechTelephony;
-    listVoices: typeof import("../../tts/runtime.js").listSpeechVoices;
+    textToSpeech: typeof import("../../plugin-sdk/speech-runtime.js").textToSpeech;
+    textToSpeechTelephony: typeof import("../../plugin-sdk/speech-runtime.js").textToSpeechTelephony;
+    listVoices: typeof import("../../plugin-sdk/speech-runtime.js").listSpeechVoices;
   };
   mediaUnderstanding: {
-    runFile: typeof import("../../media-understanding/runtime.js").runMediaUnderstandingFile;
-    describeImageFile: typeof import("../../media-understanding/runtime.js").describeImageFile;
-    describeImageFileWithModel: typeof import("../../media-understanding/runtime.js").describeImageFileWithModel;
-    describeVideoFile: typeof import("../../media-understanding/runtime.js").describeVideoFile;
-    transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
+    runFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").runMediaUnderstandingFile;
+    describeImageFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").describeImageFile;
+    describeImageFileWithModel: typeof import("../../plugin-sdk/media-understanding-runtime.js").describeImageFileWithModel;
+    describeVideoFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").describeVideoFile;
+    transcribeAudioFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").transcribeAudioFile;
   };
   imageGeneration: {
-    generate: typeof import("../../image-generation/runtime.js").generateImage;
-    listProviders: typeof import("../../image-generation/runtime.js").listRuntimeImageGenerationProviders;
+    generate: typeof import("../../plugin-sdk/image-generation-runtime.js").generateImage;
+    listProviders: typeof import("../../plugin-sdk/image-generation-runtime.js").listRuntimeImageGenerationProviders;
   };
   webSearch: {
     listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
@@ -70,11 +88,6 @@ export type PluginRuntimeCore = {
   };
   stt: {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
-  };
-  tools: {
-    createMemoryGetTool: typeof import("../../agents/tools/memory-tool.js").createMemoryGetTool;
-    createMemorySearchTool: typeof import("../../agents/tools/memory-tool.js").createMemorySearchTool;
-    registerMemoryCli: typeof import("../../cli/memory-cli.js").registerMemoryCli;
   };
   events: {
     onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
@@ -90,6 +103,14 @@ export type PluginRuntimeCore = {
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };
+  tasks: {
+    runs: import("./runtime-tasks.js").PluginRuntimeTaskRuns;
+    flows: import("./runtime-tasks.js").PluginRuntimeTaskFlows;
+    /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
+    flow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
+  };
+  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
+  taskFlow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
   modelAuth: {
     /** Resolve auth for a model. Only provider/model and optional cfg are used. */
     getApiKeyForModel: (params: {

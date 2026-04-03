@@ -1,5 +1,6 @@
 {
   "id": "huggingface",
+  "enabledByDefault": true,
   "providers": ["huggingface"],
   "providerAuthEnvVars": {
     "huggingface": ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"]

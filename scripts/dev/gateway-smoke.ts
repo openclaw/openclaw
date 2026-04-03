@@ -1,12 +1,19 @@
 import { createArgReader, createGatewayWsClient, resolveGatewayUrl } from "./gateway-ws-client.ts";
 
+function writeStdoutLine(message: string): void {
+  process.stdout.write(`${message}\n`);
+}
+
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
 const { get: getArg } = createArgReader();
 const urlRaw = getArg("--url") ?? process.env.OPENCLAW_GATEWAY_URL;
 const token = getArg("--token") ?? process.env.OPENCLAW_GATEWAY_TOKEN;
 
 if (!urlRaw || !token) {
-  // eslint-disable-next-line no-console
-  console.error(
+  writeStderrLine(
     "Usage: bun scripts/dev/gateway-smoke.ts --url <wss://host[:port]> --token <gateway.auth.token>\n" +
       "Or set env: OPENCLAW_GATEWAY_URL / OPENCLAW_GATEWAY_TOKEN",
   );
@@ -48,27 +55,23 @@ async function main() {
   });
 
   if (!connectRes.ok) {
-    // eslint-disable-next-line no-console
-    console.error("connect failed:", connectRes.error);
+    writeStderrLine(`connect failed: ${String(connectRes.error)}`);
     process.exit(2);
   }
 
   const healthRes = await request("health");
   if (!healthRes.ok) {
-    // eslint-disable-next-line no-console
-    console.error("health failed:", healthRes.error);
+    writeStderrLine(`health failed: ${String(healthRes.error)}`);
     process.exit(3);
   }
 
   const historyRes = await request("chat.history", { sessionKey: "main" }, 15000);
   if (!historyRes.ok) {
-    // eslint-disable-next-line no-console
-    console.error("chat.history failed:", historyRes.error);
+    writeStderrLine(`chat.history failed: ${String(historyRes.error)}`);
     process.exit(4);
   }
 
-  // eslint-disable-next-line no-console
-  console.log("ok: connected + health + chat.history");
+  writeStdoutLine("ok: connected + health + chat.history");
   close();
 }
 

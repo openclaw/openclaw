@@ -68,11 +68,8 @@ export class FakeProvider implements VoiceCallProvider {
   }
 }
 
-let storeSeq = 0;
-
 export function createTestStorePath(): string {
-  storeSeq += 1;
-  return path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}-${storeSeq}`);
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-test-"));
 }
 
 export async function createManagerHarness(

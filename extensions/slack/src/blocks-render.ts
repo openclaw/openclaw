@@ -10,6 +10,26 @@ const SLACK_PLAIN_TEXT_MAX = 75;
 
 export type SlackBlock = Block | KnownBlock;
 
+function buildSlackReplyButtonActionId(buttonIndex: number, choiceIndex: number): string {
+  return `${SLACK_REPLY_BUTTON_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
+}
+
+function buildSlackReplySelectActionId(selectIndex: number): string {
+  return `${SLACK_REPLY_SELECT_ACTION_ID}:${String(selectIndex)}`;
+}
+
+function resolveSlackButtonStyle(
+  style: "primary" | "secondary" | "success" | "danger" | undefined,
+) {
+  if (style === "primary" || style === "danger") {
+    return style;
+  }
+  if (style === "success") {
+    return "primary";
+  }
+  return undefined;
+}
+
 export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): SlackBlock[] {
   const initialState = {
     blocks: [] as SlackBlock[],
@@ -38,16 +58,20 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
       state.blocks.push({
         type: "actions",
         block_id: `openclaw_reply_buttons_${++state.buttonIndex}`,
-        elements: block.buttons.map((button, choiceIndex) => ({
-          type: "button",
-          action_id: SLACK_REPLY_BUTTON_ACTION_ID,
-          text: {
-            type: "plain_text",
-            text: truncateSlackText(button.label, SLACK_PLAIN_TEXT_MAX),
-            emoji: true,
-          },
-          value: button.value,
-        })),
+        elements: block.buttons.map((button, choiceIndex) => {
+          const style = resolveSlackButtonStyle(button.style);
+          return {
+            type: "button",
+            action_id: buildSlackReplyButtonActionId(state.buttonIndex, choiceIndex),
+            text: {
+              type: "plain_text",
+              text: truncateSlackText(button.label, SLACK_PLAIN_TEXT_MAX),
+              emoji: true,
+            },
+            value: button.value,
+            ...(style ? { style } : {}),
+          };
+        }),
       });
       return state;
     }
@@ -60,7 +84,7 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
       elements: [
         {
           type: "static_select",
-          action_id: SLACK_REPLY_SELECT_ACTION_ID,
+          action_id: buildSlackReplySelectActionId(state.selectIndex),
           placeholder: {
             type: "plain_text",
             text: truncateSlackText(

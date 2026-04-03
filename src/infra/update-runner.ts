@@ -21,11 +21,14 @@ import {
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import {
+  collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
   globalInstallFallbackArgs,
+  resolveExpectedInstalledVersionFromSpec,
+  resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
 } from "./update-global.js";
 
@@ -410,12 +413,32 @@ function normalizeTag(tag?: string) {
   return normalizePackageTagInput(tag, ["openclaw", DEFAULT_PACKAGE_NAME]) ?? "latest";
 }
 
+function mergeCommandEnvironments(
+  baseEnv: NodeJS.ProcessEnv | undefined,
+  overrideEnv: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv | undefined {
+  if (!baseEnv) {
+    return overrideEnv;
+  }
+  if (!overrideEnv) {
+    return baseEnv;
+  }
+  return {
+    ...baseEnv,
+    ...overrideEnv,
+  };
+}
+
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
   const startedAt = Date.now();
+  const defaultCommandEnv = await createGlobalInstallEnv();
   const runCommand =
     opts.runCommand ??
     (async (argv, options) => {
-      const res = await runCommandWithTimeout(argv, options);
+      const res = await runCommandWithTimeout(argv, {
+        ...options,
+        env: mergeCommandEnvironments(defaultCommandEnv, options.env),
+      });
       return { stdout: res.stdout, stderr: res.stderr, code: res.code };
     });
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -978,6 +1001,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const beforeVersion = await readPackageVersion(pkgRoot);
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
+    const installTarget = await resolveGlobalInstallTarget({
+      manager: globalManager,
+      runCommand,
+      timeoutMs,
+      pkgRoot,
+    });
     const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
@@ -995,7 +1024,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const updateStep = await runStep({
       runCommand,
       name: "global update",
-      argv: globalInstallArgs(globalManager, spec),
+      argv: globalInstallArgs(installTarget, spec),
       cwd: pkgRoot,
       timeoutMs,
       env: globalInstallEnv,
@@ -1007,7 +1036,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     let finalStep = updateStep;
     if (updateStep.exitCode !== 0) {
-      const fallbackArgv = globalInstallFallbackArgs(globalManager, spec);
+      const fallbackArgv = globalInstallFallbackArgs(installTarget, spec);
       if (fallbackArgv) {
         const fallbackStep = await runStep({
           runCommand,
@@ -1025,12 +1054,40 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
     }
 
-    const afterVersion = await readPackageVersion(pkgRoot);
+    const verifiedPackageRoot =
+      (
+        await resolveGlobalInstallTarget({
+          manager: installTarget,
+          runCommand,
+          timeoutMs,
+        })
+      ).packageRoot ?? pkgRoot;
+    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
+    const verificationErrors = await collectInstalledGlobalPackageErrors({
+      packageRoot: verifiedPackageRoot,
+      expectedVersion,
+    });
+    if (verificationErrors.length > 0) {
+      steps.push({
+        name: "global install verify",
+        command: `verify ${verifiedPackageRoot}`,
+        cwd: verifiedPackageRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: verificationErrors.join("\n"),
+      });
+    }
+    const afterVersion = await readPackageVersion(verifiedPackageRoot);
+    const failedStep =
+      finalStep.exitCode !== 0
+        ? finalStep
+        : (steps.find((step) => step.name === "global install verify" && step.exitCode !== 0) ??
+          null);
     return {
-      status: finalStep.exitCode === 0 ? "ok" : "error",
+      status: failedStep ? "error" : "ok",
       mode: globalManager,
-      root: pkgRoot,
-      reason: finalStep.exitCode === 0 ? undefined : finalStep.name,
+      root: verifiedPackageRoot,
+      reason: failedStep ? failedStep.name : undefined,
       before: { version: beforeVersion },
       after: { version: afterVersion },
       steps,

@@ -1,18 +1,9 @@
-import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
+import { collectBundledPluginSources } from "./lib/bundled-plugin-source-utils.mjs";
+import { reportGeneratedOutputCli, writeGeneratedOutput } from "./lib/generated-output-utils.mjs";
 
 const GENERATED_BY = "scripts/generate-bundled-provider-auth-env-vars.mjs";
 const DEFAULT_OUTPUT_PATH = "src/plugins/bundled-provider-auth-env-vars.generated.ts";
-
-function readIfExists(filePath) {
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch {
-    return null;
-  }
-}
 
 function normalizeProviderAuthEnvVars(providerAuthEnvVars) {
   if (
@@ -40,25 +31,10 @@ function normalizeProviderAuthEnvVars(providerAuthEnvVars) {
 
 export function collectBundledProviderAuthEnvVars(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const extensionsRoot = path.join(repoRoot, "extensions");
-  if (!fs.existsSync(extensionsRoot)) {
-    return {};
-  }
-
   const entries = new Map();
-  for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
-    if (!dirent.isDirectory()) {
-      continue;
-    }
-
-    const manifestPath = path.join(extensionsRoot, dirent.name, "openclaw.plugin.json");
-    if (!fs.existsSync(manifestPath)) {
-      continue;
-    }
-
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  for (const source of collectBundledPluginSources({ repoRoot })) {
     for (const [providerId, envVars] of normalizeProviderAuthEnvVars(
-      manifest.providerAuthEnvVars,
+      source.manifest.providerAuthEnvVars,
     )) {
       entries.set(providerId, envVars);
     }
@@ -89,43 +65,19 @@ ${renderedEntries}
 
 export function writeBundledProviderAuthEnvVarModule(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const outputPath = path.resolve(repoRoot, params.outputPath ?? DEFAULT_OUTPUT_PATH);
   const next = renderBundledProviderAuthEnvVarModule(
     collectBundledProviderAuthEnvVars({ repoRoot }),
   );
-  const current = readIfExists(outputPath);
-  const changed = current !== next;
-
-  if (params.check) {
-    return {
-      changed,
-      wrote: false,
-      outputPath,
-    };
-  }
-
-  return {
-    changed,
-    wrote: writeTextFileIfChanged(outputPath, next),
-    outputPath,
-  };
-}
-
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const result = writeBundledProviderAuthEnvVarModule({
-    check: process.argv.includes("--check"),
+  return writeGeneratedOutput({
+    repoRoot,
+    outputPath: params.outputPath ?? DEFAULT_OUTPUT_PATH,
+    next,
+    check: params.check,
   });
-
-  if (result.changed) {
-    if (process.argv.includes("--check")) {
-      console.error(
-        `[bundled-provider-auth-env-vars] stale generated output at ${path.relative(process.cwd(), result.outputPath)}`,
-      );
-      process.exitCode = 1;
-    } else {
-      console.log(
-        `[bundled-provider-auth-env-vars] wrote ${path.relative(process.cwd(), result.outputPath)}`,
-      );
-    }
-  }
 }
+
+reportGeneratedOutputCli({
+  importMetaUrl: import.meta.url,
+  label: "bundled-provider-auth-env-vars",
+  run: ({ check }) => writeBundledProviderAuthEnvVarModule({ check }),
+});

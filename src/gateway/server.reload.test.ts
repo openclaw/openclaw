@@ -26,11 +26,6 @@ const hoisted = vi.hoisted(() => {
     }
   }
 
-  const browserStop = vi.fn(async () => {});
-  const startBrowserControlServerIfEnabled = vi.fn(async () => ({
-    stop: browserStop,
-  }));
-
   const heartbeatStop = vi.fn();
   const heartbeatUpdateConfig = vi.fn();
   const startHeartbeatRunner = vi.fn(() => ({
@@ -131,8 +126,6 @@ const hoisted = vi.hoisted(() => {
   return {
     CronService: CronServiceMock,
     cronInstances,
-    browserStop,
-    startBrowserControlServerIfEnabled,
     heartbeatStop,
     heartbeatUpdateConfig,
     startHeartbeatRunner,
@@ -149,10 +142,6 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../cron/service.js", () => ({
   CronService: hoisted.CronService,
-}));
-
-vi.mock("./server-browser.js", () => ({
-  startBrowserControlServerIfEnabled: hoisted.startBrowserControlServerIfEnabled,
 }));
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
@@ -396,14 +385,23 @@ describe("gateway hot reload", () => {
       configPath,
       `${JSON.stringify(
         {
+          plugins: {
+            entries: {
+              google: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: "gemini-startup-key",
+                  },
+                },
+              },
+            },
+          },
           tools: {
             web: {
               search: {
                 enabled: true,
                 provider: "gemini",
-                gemini: {
-                  apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
-                },
               },
             },
           },
@@ -463,7 +461,6 @@ describe("gateway hot reload", () => {
         },
         cron: { enabled: true, store: "/tmp/cron.json" },
         agents: { defaults: { heartbeat: { every: "1m" }, maxConcurrent: 2 } },
-        browser: { enabled: true },
         web: { enabled: true },
         channels: {
           telegram: { botToken: "token" },
@@ -479,7 +476,6 @@ describe("gateway hot reload", () => {
             "hooks.gmail.account",
             "cron.enabled",
             "agents.defaults.heartbeat.every",
-            "browser.enabled",
             "web.enabled",
             "channels.telegram.botToken",
             "channels.discord.token",
@@ -491,7 +487,6 @@ describe("gateway hot reload", () => {
           hotReasons: ["web.enabled"],
           reloadHooks: true,
           restartGmailWatcher: true,
-          restartBrowserControl: true,
           restartCron: true,
           restartHeartbeat: true,
           restartChannels: new Set(["whatsapp", "telegram", "discord", "signal", "imessage"]),
@@ -502,9 +497,6 @@ describe("gateway hot reload", () => {
 
       expect(hoisted.stopGmailWatcher).toHaveBeenCalled();
       expect(hoisted.startGmailWatcher).toHaveBeenCalledWith(expect.objectContaining(nextConfig));
-
-      expect(hoisted.browserStop).toHaveBeenCalledTimes(1);
-      expect(hoisted.startBrowserControlServerIfEnabled).toHaveBeenCalledTimes(2);
 
       expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
       expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledTimes(1);
@@ -543,7 +535,6 @@ describe("gateway hot reload", () => {
           hotReasons: [],
           reloadHooks: false,
           restartGmailWatcher: false,
-          restartBrowserControl: false,
           restartCron: false,
           restartHeartbeat: false,
           restartChannels: new Set(),
@@ -634,7 +625,6 @@ describe("gateway hot reload", () => {
         hotReasons: ["models.providers.openai.apiKey"],
         reloadHooks: false,
         restartGmailWatcher: false,
-        restartBrowserControl: false,
         restartCron: false,
         restartHeartbeat: false,
         restartChannels: new Set(),
@@ -667,35 +657,61 @@ describe("gateway hot reload", () => {
     });
   });
 
-  it("emits one-shot degraded and recovered system events for web search secret reload transitions", async () => {
+  it("does not emit secrets reloader events for web search secret reload transitions", async () => {
     await writeWebSearchGeminiRefConfig();
-    process.env.GEMINI_API_KEY = "gemini-startup-key"; // pragma: allowlist secret
 
     await withGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
       const sessionKey = resolveMainSessionKeyFromConfig();
       const plan = {
-        changedPaths: ["tools.web.search.gemini.apiKey"],
+        changedPaths: ["plugins.entries.google.config.webSearch.apiKey"],
         restartGateway: false,
         restartReasons: [],
-        hotReasons: ["tools.web.search.gemini.apiKey"],
+        hotReasons: ["plugins.entries.google.config.webSearch.apiKey"],
         reloadHooks: false,
         restartGmailWatcher: false,
-        restartBrowserControl: false,
         restartCron: false,
         restartHeartbeat: false,
         restartChannels: new Set(),
         noopPaths: [],
       };
-      const nextConfig = {
+      const degradedConfig = {
         tools: {
           web: {
             search: {
               enabled: true,
               provider: "gemini",
-              gemini: {
-                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "OPENCLAW_TEST_MISSING_GEMINI_API_KEY",
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+      const recoveredConfig = {
+        tools: degradedConfig.tools,
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: "gemini-recovered-key",
+                },
               },
             },
           },
@@ -703,17 +719,13 @@ describe("gateway hot reload", () => {
       };
 
       delete process.env.GEMINI_API_KEY;
-      await expectOneShotSecretReloadEvents({
-        applyReload: () => onHotReload?.(plan, nextConfig),
-        sessionKey,
-        expectedError: "[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]",
-      });
+      delete process.env.OPENCLAW_TEST_MISSING_GEMINI_API_KEY;
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
+      await expect(onHotReload?.(plan, degradedConfig)).resolves.toBeUndefined();
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
 
-      process.env.GEMINI_API_KEY = "gemini-recovered-key"; // pragma: allowlist secret
-      await expectSecretReloadRecovered({
-        applyReload: () => onHotReload?.(plan, nextConfig),
-        sessionKey,
-      });
+      await expect(onHotReload?.(plan, recoveredConfig)).resolves.toBeUndefined();
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
     });
   });
 

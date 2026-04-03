@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./agents.ts";
+import { loadAgents, loadToolsCatalog, loadToolsEffective, saveAgentsConfig } from "./agents.ts";
 import type { AgentsConfigSaveState, AgentsState } from "./agents.ts";
 
 function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> } {
@@ -16,6 +16,30 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> 
     toolsCatalogLoading: false,
     toolsCatalogError: null,
     toolsCatalogResult: null,
+    toolsEffectiveLoading: false,
+    toolsEffectiveLoadingKey: null,
+    toolsEffectiveResultKey: null,
+    toolsEffectiveError: null,
+    toolsEffectiveResult: null,
+    sessionKey: "main",
+    sessionsResult: {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 0,
+          model: "gpt-5-mini",
+          modelProvider: "openai",
+        },
+      ],
+    },
+    chatModelOverrides: {},
+    chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
+    agentsPanel: "overview",
   };
   return { state, request };
 }
@@ -148,6 +172,56 @@ describe("loadToolsCatalog", () => {
     expect(state.toolsCatalogResult).toBeNull();
     expect(state.toolsCatalogError).toContain("gateway unavailable");
     expect(state.toolsCatalogLoading).toBe(false);
+  });
+});
+
+describe("loadToolsEffective", () => {
+  it("loads effective tools for the active session", async () => {
+    const { state, request } = createState();
+    const payload = {
+      agentId: "main",
+      profile: "coding",
+      groups: [
+        {
+          id: "core",
+          label: "Built-in tools",
+          source: "core",
+          tools: [
+            {
+              id: "read",
+              label: "Read",
+              description: "Read files",
+              rawDescription: "Read files",
+              source: "core",
+            },
+          ],
+        },
+      ],
+    };
+    request.mockResolvedValue(payload);
+
+    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+
+    expect(request).toHaveBeenCalledWith("tools.effective", {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    expect(state.toolsEffectiveResult).toEqual(payload);
+    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
+    expect(state.toolsEffectiveError).toBeNull();
+    expect(state.toolsEffectiveLoading).toBe(false);
+  });
+
+  it("captures effective-tool request errors", async () => {
+    const { state, request } = createState();
+    request.mockRejectedValue(new Error("gateway unavailable"));
+
+    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+
+    expect(state.toolsEffectiveResult).toBeNull();
+    expect(state.toolsEffectiveResultKey).toBeNull();
+    expect(state.toolsEffectiveError).toContain("gateway unavailable");
+    expect(state.toolsEffectiveLoading).toBe(false);
   });
 });
 

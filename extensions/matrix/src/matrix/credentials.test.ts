@@ -148,6 +148,40 @@ describe("matrix credentials storage", () => {
     expect(fs.existsSync(currentPath)).toBe(false);
   });
 
+  it("migrates legacy credentials to the named account when top-level auth is only a shared default", () => {
+    const stateDir = setupStateDir({
+      channels: {
+        matrix: {
+          accessToken: "shared-token",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    });
+    const legacyPath = path.join(stateDir, "credentials", "matrix", "credentials.json");
+    const currentPath = resolveMatrixCredentialsPath({}, "ops");
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        homeserver: "https://matrix.example.org",
+        userId: "@ops:example.org",
+        accessToken: "legacy-token",
+        createdAt: "2026-03-01T10:00:00.000Z",
+      }),
+    );
+
+    const loaded = loadMatrixCredentials({}, "ops");
+
+    expect(loaded?.accessToken).toBe("legacy-token");
+    expect(fs.existsSync(legacyPath)).toBe(false);
+    expect(fs.existsSync(currentPath)).toBe(true);
+  });
+
   it("clears both current and legacy credential paths", () => {
     const stateDir = setupStateDir({
       channels: {

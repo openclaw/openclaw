@@ -270,6 +270,28 @@ describe("live tool probe utils", () => {
         expected: true,
       },
       {
+        name: "retries eventual-consistency exec readback output",
+        params: {
+          text: "The file creation command succeeded, but the file wasn't found immediately after. Let me verify the file exists and read it again.",
+          nonce: "nonce-c",
+          provider: "mistral",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
+        name: "retries file-not-found exec readback wording",
+        params: {
+          text: "The `exec` command ran successfully, but the file read failed because the file was not found. Let me verify the file creation and read it again.",
+          nonce: "nonce-c",
+          provider: "mistral",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
         name: "does not retry generic exec conversational text without tool-retry context",
         params: {
           text: "Let me try a different approach.",

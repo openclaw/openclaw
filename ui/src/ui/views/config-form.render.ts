@@ -8,6 +8,7 @@ export type ConfigFormProps = {
   schema: JsonSchema | null;
   uiHints: ConfigUiHints;
   value: Record<string, unknown> | null;
+  rawAvailable?: boolean;
   disabled?: boolean;
   unsupportedPaths?: string[];
   searchQuery?: string;
@@ -231,6 +232,40 @@ const sectionIcons = {
       <path d="m19.07 10.93-4.24 4.24"></path>
     </svg>
   `,
+  diagnostics: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+    </svg>
+  `,
+  cli: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <polyline points="4 17 10 11 4 5"></polyline>
+      <line x1="12" y1="19" x2="20" y2="19"></line>
+    </svg>
+  `,
+  secrets: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path
+        d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"
+      ></path>
+    </svg>
+  `,
+  acp: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+      <circle cx="9" cy="7" r="4"></circle>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+    </svg>
+  `,
+  mcp: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+      <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+      <line x1="6" y1="6" x2="6.01" y2="6"></line>
+      <line x1="6" y1="18" x2="6.01" y2="18"></line>
+    </svg>
+  `,
   default: html`
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
@@ -275,6 +310,17 @@ export const SECTION_META: Record<string, { label: string; description: string }
   canvasHost: { label: "Canvas Host", description: "Canvas rendering and display" },
   talk: { label: "Talk", description: "Voice and speech settings" },
   plugins: { label: "Plugins", description: "Plugin management and extensions" },
+  diagnostics: {
+    label: "Diagnostics",
+    description: "Instrumentation, OpenTelemetry, and cache-trace settings",
+  },
+  cli: { label: "CLI", description: "CLI banner and startup behavior" },
+  secrets: { label: "Secrets", description: "Secret provider configuration" },
+  acp: {
+    label: "ACP",
+    description: "Agent Communication Protocol runtime and streaming settings",
+  },
+  mcp: { label: "MCP", description: "Model Context Protocol server definitions" },
 };
 
 function getSectionIcon(key: string) {
@@ -315,16 +361,12 @@ function matchesSearch(params: {
 
 export function renderConfigForm(props: ConfigFormProps) {
   if (!props.schema) {
-    return html`
-      <div class="muted">Schema unavailable.</div>
-    `;
+    return html` <div class="muted">Schema unavailable.</div> `;
   }
   const schema = props.schema;
   const value = props.value ?? {};
   if (schemaType(schema) !== "object" || !schema.properties) {
-    return html`
-      <div class="callout danger">Unsupported schema. Use Raw.</div>
-    `;
+    return html` <div class="callout danger">Unsupported schema. Use Raw.</div> `;
   }
   const unsupported = new Set(props.unsupportedPaths ?? []);
   const properties = schema.properties;
@@ -390,92 +432,84 @@ export function renderConfigForm(props: ConfigFormProps) {
     `;
   }
 
+  const renderSectionCard = (params: {
+    id: string;
+    sectionKey: string;
+    label: string;
+    description: string;
+    node: JsonSchema;
+    nodeValue: unknown;
+    path: Array<string | number>;
+  }) => html`
+    <section class="config-section-card" id=${params.id}>
+      <div class="config-section-card__header">
+        <span class="config-section-card__icon">${getSectionIcon(params.sectionKey)}</span>
+        <div class="config-section-card__titles">
+          <h3 class="config-section-card__title">${params.label}</h3>
+          ${params.description
+            ? html`<p class="config-section-card__desc">${params.description}</p>`
+            : nothing}
+        </div>
+      </div>
+      <div class="config-section-card__content">
+        ${renderNode({
+          schema: params.node,
+          value: params.nodeValue,
+          path: params.path,
+          hints: props.uiHints,
+          rawAvailable: props.rawAvailable ?? true,
+          unsupported,
+          disabled: props.disabled ?? false,
+          showLabel: false,
+          searchCriteria,
+          revealSensitive: props.revealSensitive ?? false,
+          isSensitivePathRevealed: props.isSensitivePathRevealed,
+          onToggleSensitivePath: props.onToggleSensitivePath,
+          onPatch: props.onPatch,
+        })}
+      </div>
+    </section>
+  `;
+
   return html`
     <div class="config-form config-form--modern">
-      ${
-        subsectionContext
-          ? (() => {
-              const { sectionKey, subsectionKey, schema: node } = subsectionContext;
-              const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
-              const label = hint?.label ?? node.title ?? humanize(subsectionKey);
-              const description = hint?.help ?? node.description ?? "";
-              const sectionValue = value[sectionKey];
-              const scopedValue =
-                sectionValue && typeof sectionValue === "object"
-                  ? (sectionValue as Record<string, unknown>)[subsectionKey]
-                  : undefined;
-              const id = `config-section-${sectionKey}-${subsectionKey}`;
-              return html`
-              <section class="config-section-card" id=${id}>
-                <div class="config-section-card__header">
-                  <span class="config-section-card__icon">${getSectionIcon(sectionKey)}</span>
-                  <div class="config-section-card__titles">
-                    <h3 class="config-section-card__title">${label}</h3>
-                    ${
-                      description
-                        ? html`<p class="config-section-card__desc">${description}</p>`
-                        : nothing
-                    }
-                  </div>
-                </div>
-                <div class="config-section-card__content">
-                  ${renderNode({
-                    schema: node,
-                    value: scopedValue,
-                    path: [sectionKey, subsectionKey],
-                    hints: props.uiHints,
-                    unsupported,
-                    disabled: props.disabled ?? false,
-                    showLabel: false,
-                    searchCriteria,
-                    revealSensitive: props.revealSensitive ?? false,
-                    isSensitivePathRevealed: props.isSensitivePathRevealed,
-                    onToggleSensitivePath: props.onToggleSensitivePath,
-                    onPatch: props.onPatch,
-                  })}
-                </div>
-              </section>
-            `;
-            })()
-          : filteredEntries.map(([key, node]) => {
-              const meta = SECTION_META[key] ?? {
-                label: key.charAt(0).toUpperCase() + key.slice(1),
-                description: node.description ?? "",
-              };
+      ${subsectionContext
+        ? (() => {
+            const { sectionKey, subsectionKey, schema: node } = subsectionContext;
+            const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
+            const label = hint?.label ?? node.title ?? humanize(subsectionKey);
+            const description = hint?.help ?? node.description ?? "";
+            const sectionValue = value[sectionKey];
+            const scopedValue =
+              sectionValue && typeof sectionValue === "object"
+                ? (sectionValue as Record<string, unknown>)[subsectionKey]
+                : undefined;
+            return renderSectionCard({
+              id: `config-section-${sectionKey}-${subsectionKey}`,
+              sectionKey,
+              label,
+              description,
+              node,
+              nodeValue: scopedValue,
+              path: [sectionKey, subsectionKey],
+            });
+          })()
+        : filteredEntries.map(([key, node]) => {
+            const meta = SECTION_META[key] ?? {
+              label: key.charAt(0).toUpperCase() + key.slice(1),
+              description: node.description ?? "",
+            };
 
-              return html`
-              <section class="config-section-card" id="config-section-${key}">
-                <div class="config-section-card__header">
-                  <span class="config-section-card__icon">${getSectionIcon(key)}</span>
-                  <div class="config-section-card__titles">
-                    <h3 class="config-section-card__title">${meta.label}</h3>
-                    ${
-                      meta.description
-                        ? html`<p class="config-section-card__desc">${meta.description}</p>`
-                        : nothing
-                    }
-                  </div>
-                </div>
-                <div class="config-section-card__content">
-                  ${renderNode({
-                    schema: node,
-                    value: value[key],
-                    path: [key],
-                    hints: props.uiHints,
-                    unsupported,
-                    disabled: props.disabled ?? false,
-                    showLabel: false,
-                    searchCriteria,
-                    revealSensitive: props.revealSensitive ?? false,
-                    isSensitivePathRevealed: props.isSensitivePathRevealed,
-                    onToggleSensitivePath: props.onToggleSensitivePath,
-                    onPatch: props.onPatch,
-                  })}
-                </div>
-              </section>
-            `;
-            })
-      }
+            return renderSectionCard({
+              id: `config-section-${key}`,
+              sectionKey: key,
+              label: meta.label,
+              description: meta.description,
+              node,
+              nodeValue: value[key],
+              path: [key],
+            });
+          })}
     </div>
   `;
 }

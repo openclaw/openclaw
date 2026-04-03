@@ -23,6 +23,7 @@ import type {
 } from "../runtime-api.js";
 import {
   DEFAULT_ACCOUNT_ID,
+  chunkTextForOutbound,
   isDangerousNameMatchingEnabled,
   isNumericTargetId,
   normalizeAccountId,
@@ -76,7 +77,7 @@ const zalouserRawSendResultAdapter = createRawChannelSendResultAdapter({
       textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
     });
   },
-  sendMedia: async ({ to, text, mediaUrl, accountId, cfg, mediaLocalRoots }) => {
+  sendMedia: async ({ to, text, mediaUrl, accountId, cfg, mediaLocalRoots, mediaReadFile }) => {
     const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
     const target = parseZalouserOutboundTarget(to);
     return await sendMessageZalouser(target.threadId, text, {
@@ -84,6 +85,7 @@ const zalouserRawSendResultAdapter = createRawChannelSendResultAdapter({
       isGroup: target.isGroup,
       mediaUrl,
       mediaLocalRoots,
+      mediaReadFile,
       textMode: "markdown",
       textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
       textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
@@ -509,7 +511,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getZalouserRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       sendPayload: async (ctx) =>
         await sendPayloadWithChunkedTextAndMedia({

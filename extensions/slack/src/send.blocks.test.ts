@@ -50,6 +50,26 @@ describe("sendMessageSlack NO_REPLY guard", () => {
   });
 });
 
+describe("sendMessageSlack chunking", () => {
+  it("keeps 4205-character text in a single Slack post by default", async () => {
+    const client = createSlackSendTestClient();
+    const message = "a".repeat(4205);
+
+    await sendMessageSlack("channel:C123", message, {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C123",
+        text: message,
+      }),
+    );
+  });
+});
+
 describe("sendMessageSlack blocks", () => {
   it("posts blocks with fallback text when message is empty", async () => {
     const client = createSlackSendTestClient();

@@ -4,6 +4,20 @@ import { defaultRuntime } from "../../runtime.js";
 
 export type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
 
+export type DaemonHintKind =
+  | "install"
+  | "container-restart"
+  | "container-foreground"
+  | "systemd-unavailable"
+  | "systemd-headless"
+  | "wsl-systemd"
+  | "generic";
+
+export type DaemonHintItem = {
+  kind: DaemonHintKind;
+  text: string;
+};
+
 export type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
@@ -11,6 +25,7 @@ export type DaemonActionResponse = {
   message?: string;
   error?: string;
   hints?: string[];
+  hintItems?: DaemonHintItem[];
   warnings?: string[];
   service?: {
     label: string;
@@ -22,6 +37,42 @@ export type DaemonActionResponse = {
 
 export function emitDaemonActionJson(payload: DaemonActionResponse) {
   defaultRuntime.writeJson(payload);
+}
+
+function classifyDaemonHintText(text: string): DaemonHintKind {
+  if (text.includes("openclaw gateway install") || text.startsWith("Service not installed. Run:")) {
+    return "install";
+  }
+  if (text.startsWith("Restart the container or the service that manages it for ")) {
+    return "container-restart";
+  }
+  if (text.startsWith("systemd user services are unavailable;")) {
+    return "systemd-unavailable";
+  }
+  if (
+    text.startsWith("On a headless server (SSH/no desktop session):") ||
+    text.startsWith("Also ensure XDG_RUNTIME_DIR is set:")
+  ) {
+    return "systemd-headless";
+  }
+  if (text.startsWith("If you're in a container, run the gateway in the foreground instead of")) {
+    return "container-foreground";
+  }
+  if (
+    text.startsWith("WSL2 needs systemd enabled:") ||
+    text.startsWith("Then run: wsl --shutdown") ||
+    text.startsWith("Verify: systemctl --user status")
+  ) {
+    return "wsl-systemd";
+  }
+  return "generic";
+}
+
+export function buildDaemonHintItems(hints: string[] | undefined): DaemonHintItem[] | undefined {
+  if (!hints?.length) {
+    return undefined;
+  }
+  return hints.map((text) => ({ kind: classifyDaemonHintText(text), text }));
 }
 
 export function buildDaemonServiceSnapshot(service: GatewayService, loaded: boolean) {
@@ -56,6 +107,7 @@ export function createDaemonActionContext(params: { action: DaemonAction; json: 
     emitDaemonActionJson({
       action: params.action,
       ...payload,
+      hintItems: payload.hintItems ?? buildDaemonHintItems(payload.hints),
       warnings: payload.warnings ?? (warnings.length ? warnings : undefined),
     });
   };
