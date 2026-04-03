@@ -1004,8 +1004,10 @@ authoring plugins:
   contract on the plugin. Core then reads approval auth, delivery, render, and
   native-routing behavior through that one capability instead of mixing
   approval behavior into unrelated plugin fields.
-- `openclaw/plugin-sdk/channel-runtime` remains only as a compatibility shim.
-  New code should import the narrower primitives instead.
+- `openclaw/plugin-sdk/channel-runtime` is deprecated and remains only as a
+  compatibility shim for older plugins. New code should import the narrower
+  generic primitives instead, and repo code should not add new imports of the
+  shim.
 - Bundled extension internals remain private. External plugins should use only
   `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
   public entry points under a plugin package root such as `index.js`, `api.js`,
