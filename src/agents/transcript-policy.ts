@@ -169,10 +169,11 @@ export function resolveTranscriptPolicy(params: {
     model: params.model,
   };
 
-  // Once a provider has an owning runtime plugin, replay policy should come
+  // Once a provider adopts the replay-policy hook, replay policy should come
   // from the plugin, not from transport-family defaults in core.
-  const pluginPolicy = runtimePlugin?.buildReplayPolicy?.(context);
-  if (runtimePlugin) {
+  const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
+  if (buildReplayPolicy) {
+    const pluginPolicy = buildReplayPolicy(context);
     return mergeTranscriptPolicy(pluginPolicy ?? undefined);
   }
 

@@ -21,11 +21,16 @@ vi.mock("../plugins/provider-runtime.js", () => ({
         "opencode-go",
         "ollama",
         "openrouter",
+        "sglang",
+        "vllm",
         "xai",
         "zai",
       ].includes(provider)
     ) {
       return undefined;
+    }
+    if (provider === "sglang" || provider === "vllm") {
+      return {};
     }
     return {
       buildReplayPolicy: (context?: { modelId?: string; modelApi?: string }) => {
@@ -33,8 +38,6 @@ vi.mock("../plugins/provider-runtime.js", () => ({
         switch (provider) {
           case "amazon-bedrock":
           case "anthropic":
-          case "minimax":
-          case "minimax-portal":
             return {
               sanitizeMode: "full",
               sanitizeToolCallIds: true,
@@ -45,6 +48,26 @@ vi.mock("../plugins/provider-runtime.js", () => ({
               allowSyntheticToolResults: true,
               ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
             };
+          case "minimax":
+          case "minimax-portal":
+            return context?.modelApi === "openai-completions"
+              ? {
+                  sanitizeToolCallIds: true,
+                  toolCallIdMode: "strict",
+                  applyAssistantFirstOrderingFix: true,
+                  validateGeminiTurns: true,
+                  validateAnthropicTurns: true,
+                }
+              : {
+                  sanitizeMode: "full",
+                  sanitizeToolCallIds: true,
+                  toolCallIdMode: "strict",
+                  preserveSignatures: true,
+                  repairToolUseResultPairing: true,
+                  validateAnthropicTurns: true,
+                  allowSyntheticToolResults: true,
+                  ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+                };
           case "moonshot":
           case "ollama":
           case "zai":
@@ -239,6 +262,20 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
+  it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "vllm",
+      modelId: "demo-model",
+      modelApi: "openai-completions",
+    });
+
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
   it("uses provider-owned Anthropic replay policy for MiniMax transports", () => {
     const policy = resolveTranscriptPolicy({
       provider: "minimax",
@@ -249,6 +286,22 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.sanitizeMode).toBe("full");
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.preserveSignatures).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("uses provider-owned OpenAI-compatible replay policy for MiniMax portal completions", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "minimax-portal",
+      modelId: "MiniMax-M2.7",
+      modelApi: "openai-completions",
+    });
+
+    expect(policy.sanitizeMode).toBe("images-only");
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.preserveSignatures).toBe(false);
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
