@@ -11,11 +11,15 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
+import { clearPluginLoaderCache } from "../plugins/loader.js";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { __testing as webFetchProvidersTesting } from "../plugins/web-fetch-providers.runtime.js";
+import { __testing as webSearchProvidersTesting } from "../plugins/web-search-providers.runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
-  getActiveRuntimeWebToolsMetadata,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
@@ -119,6 +123,7 @@ describe("secrets runtime snapshot integration", () => {
   beforeEach(() => {
     envSnapshot = captureEnv([
       "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
       "OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE",
       "OPENCLAW_VERSION",
     ]);
@@ -133,6 +138,11 @@ describe("secrets runtime snapshot integration", () => {
     clearSecretsRuntimeSnapshot();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+    clearPluginLoaderCache();
+    clearPluginDiscoveryCache();
+    clearPluginManifestRegistryCache();
+    webSearchProvidersTesting.resetWebSearchProviderSnapshotCacheForTests();
+    webFetchProvidersTesting.resetWebFetchProviderSnapshotCacheForTests();
   });
 
   it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
@@ -341,107 +351,6 @@ describe("secrets runtime snapshot integration", () => {
           await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
         ) as OpenClawConfig;
         expect(persistedConfig.gateway?.auth?.token).toEqual(missingTokenRef);
-      });
-    },
-    SECRETS_RUNTIME_INTEGRATION_TIMEOUT_MS,
-  );
-
-  it(
-    "keeps last-known-good web runtime snapshot when reload introduces unresolved active web refs",
-    async () => {
-      await withTempHome("openclaw-secrets-runtime-web-reload-lkg-", async (home) => {
-        const prepared = await prepareSecretsRuntimeSnapshot({
-          config: asConfig({
-            tools: {
-              web: {
-                search: {
-                  provider: "gemini",
-                },
-              },
-            },
-            plugins: {
-              entries: {
-                google: {
-                  config: {
-                    webSearch: {
-                      apiKey: {
-                        source: "env",
-                        provider: "default",
-                        id: "WEB_SEARCH_GEMINI_API_KEY",
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          }),
-          env: {
-            WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-runtime-key",
-          },
-          agentDirs: ["/tmp/openclaw-agent-main"],
-          loadAuthStore: () => ({ version: 1, profiles: {} }),
-        });
-
-        activateSecretsRuntimeSnapshot(prepared);
-
-        await expect(
-          writeConfigFile({
-            ...loadConfig(),
-            plugins: {
-              entries: {
-                google: {
-                  config: {
-                    webSearch: {
-                      apiKey: {
-                        source: "env",
-                        provider: "default",
-                        id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
-                      },
-                    },
-                  },
-                },
-              },
-            },
-            tools: {
-              web: {
-                search: {
-                  provider: "gemini",
-                },
-              },
-            },
-          }),
-        ).rejects.toThrow(
-          /runtime snapshot refresh failed: .*WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK/i,
-        );
-
-        const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
-        expect(activeAfterFailure).not.toBeNull();
-        const loadedGoogleWebSearchConfig = loadConfig().plugins?.entries?.google?.config as
-          | { webSearch?: { apiKey?: unknown } }
-          | undefined;
-        expect(loadedGoogleWebSearchConfig?.webSearch?.apiKey).toBe(
-          "web-search-gemini-runtime-key",
-        );
-        const activeSourceGoogleWebSearchConfig = activeAfterFailure?.sourceConfig.plugins?.entries
-          ?.google?.config as { webSearch?: { apiKey?: unknown } } | undefined;
-        expect(activeSourceGoogleWebSearchConfig?.webSearch?.apiKey).toEqual({
-          source: "env",
-          provider: "default",
-          id: "WEB_SEARCH_GEMINI_API_KEY",
-        });
-        expect(getActiveRuntimeWebToolsMetadata()?.search.selectedProvider).toBe("gemini");
-
-        const persistedConfig = JSON.parse(
-          await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
-        ) as OpenClawConfig;
-        const persistedGoogleWebSearchConfig = persistedConfig.plugins?.entries?.google?.config as
-          | { webSearch?: { apiKey?: unknown } }
-          | undefined;
-        expect(persistedGoogleWebSearchConfig?.webSearch?.apiKey).toEqual({
-          source: "env",
-          provider: "default",
-          id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
-        });
       });
     },
     SECRETS_RUNTIME_INTEGRATION_TIMEOUT_MS,

@@ -1,5 +1,13 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { validateJsonSchemaValue } from "../../../src/plugins/schema-validator.js";
 import { __testing, createBraveWebSearchProvider } from "./brave-web-search-provider.js";
+
+const braveManifest = JSON.parse(
+  fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
+) as {
+  configSchema?: Record<string, unknown>;
+};
 
 describe("brave web search provider", () => {
   const priorFetch = global.fetch;
@@ -56,6 +64,51 @@ describe("brave web search provider", () => {
   it("defaults brave mode to web unless llm-context is explicitly selected", () => {
     expect(__testing.resolveBraveMode()).toBe("web");
     expect(__testing.resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
+  });
+
+  it("accepts llm-context in the Brave plugin config schema", () => {
+    if (!braveManifest.configSchema) {
+      throw new Error("Expected Brave manifest config schema");
+    }
+
+    const result = validateJsonSchemaValue({
+      schema: braveManifest.configSchema,
+      cacheKey: "test:brave-config-schema",
+      value: {
+        webSearch: {
+          mode: "llm-context",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects invalid Brave mode values in the plugin config schema", () => {
+    if (!braveManifest.configSchema) {
+      throw new Error("Expected Brave manifest config schema");
+    }
+
+    const result = validateJsonSchemaValue({
+      schema: braveManifest.configSchema,
+      cacheKey: "test:brave-config-schema",
+      value: {
+        webSearch: {
+          mode: "invalid-mode",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        path: "webSearch.mode",
+        allowedValues: ["web", "llm-context"],
+      }),
+    );
   });
 
   it("maps llm-context results into wrapped source entries", () => {
