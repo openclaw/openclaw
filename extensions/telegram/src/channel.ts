@@ -871,7 +871,11 @@ export const telegramPlugin = createChatChannelPlugin({
     collectWarnings: collectTelegramSecurityWarnings,
   },
   threading: {
-    topLevelReplyToMode: "telegram",
+    scopedAccountReplyToMode: {
+      resolveAccount: (cfg, accountId) => resolveTelegramAccount({ cfg, accountId }),
+      resolveReplyToMode: (account) => account.config.replyToMode,
+      fallback: "off",
+    },
     buildToolContext: (params) => buildTelegramThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext }) => resolveTelegramAutoThreadId({ to, toolContext }),
   },
