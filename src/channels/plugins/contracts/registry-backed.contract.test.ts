@@ -1,12 +1,8 @@
-import {
-  describeChannelRegistryBackedContracts,
-  describeSessionBindingRegistryBackedContract,
-} from "../../../../test/helpers/channels/registry-backed-contract.js";
+import { describeChannelRegistryBackedContracts } from "../../../../test/helpers/channels/registry-backed-contract.js";
 import {
   actionContractRegistry,
   directoryContractRegistry,
   pluginContractRegistry,
-  sessionBindingContractRegistry,
   setupContractRegistry,
   statusContractRegistry,
   surfaceContractRegistry,
@@ -25,8 +21,4 @@ const registryIds = new Set<string>([
 
 for (const id of [...registryIds].toSorted()) {
   describeChannelRegistryBackedContracts(id);
-}
-
-for (const entry of sessionBindingContractRegistry) {
-  describeSessionBindingRegistryBackedContract(entry.id);
 }
