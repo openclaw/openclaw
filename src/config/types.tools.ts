@@ -542,6 +542,8 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** Allow RFC2544 benchmark range (198.18.0.0/15) for TUN proxy Fake-IP support (default: false). */
+      allowRfc2544BenchmarkRange?: boolean;
     };
   };
   media?: MediaToolsConfig;
