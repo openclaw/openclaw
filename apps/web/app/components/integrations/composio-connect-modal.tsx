@@ -74,12 +74,14 @@ export function ComposioConnectModal({
   toolkit,
   connections,
   open,
+  preferredAction,
   onOpenChange,
   onConnectionChange,
 }: {
   toolkit: ComposioToolkit | null;
   connections: ComposioConnection[];
   open: boolean;
+  preferredAction?: "connect" | "reconnect";
   onOpenChange: (open: boolean) => void;
   onConnectionChange: (payload?: {
     toolkit?: ComposioToolkit | null;
@@ -105,6 +107,8 @@ export function ComposioConnectModal({
     [normalizedConnections],
   );
   const connected = activeConnections.length > 0;
+  const primaryAction = preferredAction
+    ?? (connected ? "connect" : normalizedConnections.length > 0 ? "reconnect" : "connect");
 
   const stopPopupPolling = useCallback(() => {
     if (popupPollRef.current !== null) {
@@ -438,7 +442,9 @@ export function ComposioConnectModal({
           >
             {connecting
               ? "Waiting for authorization..."
-              : connected
+              : primaryAction === "reconnect"
+                ? `Reconnect ${toolkit.name}`
+                : connected
                 ? "Connect another account"
                 : `Connect ${toolkit.name}`}
           </Button>

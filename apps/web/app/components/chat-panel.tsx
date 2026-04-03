@@ -38,6 +38,7 @@ import {
 	type ChatModelOption,
 	resolveActiveChatModelId,
 } from "@/lib/chat-models";
+import type { ComposioChatAction } from "@/lib/composio-chat-actions";
 
 
 // ── Attachment types & helpers ──
@@ -795,6 +796,8 @@ type ChatPanelProps = {
 	onSubagentClick?: (task: string) => void;
 	/** Called when user clicks an inline file path in chat output. */
 	onFilePathClick?: (path: string) => Promise<boolean | void> | boolean | void;
+	/** Called when the assistant emits a Composio connect/reconnect action link. */
+	onComposioAction?: (action: ComposioChatAction) => void;
 	/** Called when user deletes the current session (e.g. from header menu). */
 	onDeleteSession?: (sessionId: string) => void;
 	/** Called when user renames the current session. */
@@ -836,6 +839,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			onSubagentSpawned,
 			onSubagentClick,
 			onFilePathClick,
+			onComposioAction,
 			onDeleteSession,
 			onRenameSession: _onRenameSession,
 			sessionKey: subagentSessionKey,
@@ -2647,6 +2651,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								isStreaming={isStreaming && i === messages.length - 1}
 								onSubagentClick={onSubagentClick}
 								onFilePathClick={onFilePathClick}
+								onComposioAction={onComposioAction}
 								sessionId={currentSessionId}
 								voicePlaybackEnabled={voicePlaybackEnabled}
 								userHtmlMap={userHtmlMapRef.current}

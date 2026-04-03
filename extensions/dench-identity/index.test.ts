@@ -41,6 +41,17 @@ describe("buildIdentityPrompt", () => {
     expect(prompt).toContain("composio_resolve_tool");
   });
 
+  it("teaches the agent to emit direct composio connect links for any app", () => {
+    const prompt = buildIdentityPrompt(workspaceDir);
+    expect(prompt).toContain("ANY third-party app or service");
+    expect(prompt).toContain("always call `composio_resolve_tool`");
+    expect(prompt).toContain("action_link_markdown");
+    expect(prompt).toContain("MUST end the assistant reply with that exact markdown link");
+    expect(prompt).toContain("dench://composio/connect");
+    expect(prompt).toContain("dench://composio/reconnect");
+    expect(prompt).toContain("connect_required");
+  });
+
   it("includes enrichment guidance for Apollo and Exa", () => {
     const prompt = buildIdentityPrompt(workspaceDir);
     expect(prompt).toContain("default tool for enrichment requests");
@@ -290,6 +301,52 @@ describe("register", () => {
 
     expect(payload.tool).toBe("GITHUB_FIND_PULL_REQUESTS");
     expect(payload.directly_callable).toBe(true);
+
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("returns a direct connect link when the requested app is not connected", async () => {
+    const tmp = path.join(
+      os.tmpdir(),
+      `dench-identity-resolver-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tmp, { recursive: true });
+    writeFileSync(
+      path.join(tmp, "composio-tool-index.json"),
+      JSON.stringify({
+        generated_at: "2026-04-03T00:00:00.000Z",
+        connected_apps: [
+          {
+            toolkit_slug: "github",
+            toolkit_name: "GitHub",
+            account_count: 1,
+            tools: [],
+            recipes: {},
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const api = {
+      config: { plugins: { entries: {} }, agents: { defaults: { workspace: tmp } } },
+      on: vi.fn(),
+      registerTool: vi.fn(),
+    };
+
+    register(api as any);
+
+    const resolver = api.registerTool.mock.calls[0][0];
+    const result = await resolver.execute({
+      app: "slack",
+      intent: "check my slack",
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.availability).toBe("connect_required");
+    expect(payload.action_required).toBe("connect");
+    expect(payload.toolkit_slug).toBe("slack");
+    expect(payload.action_link_markdown).toBe("[Connect Slack](dench://composio/connect?toolkit=slack&name=Slack)");
 
     rmSync(tmp, { recursive: true, force: true });
   });

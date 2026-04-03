@@ -7,7 +7,7 @@ import { useThumbSurvey } from "posthog-js/react/surveys";
 import { memo, useCallback, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { Components } from "react-markdown";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChainOfThought, type ChainPart } from "./chain-of-thought";
 import { isStatusReasoningText } from "./chat-stream-status";
@@ -17,6 +17,10 @@ import type { ReportConfig } from "./charts/types";
 import { DiffCard } from "./diff-viewer";
 import { MessageVoiceButton } from "./message-voice-button";
 import { SyntaxBlock } from "./syntax-block";
+import {
+	type ComposioChatAction,
+	parseComposioChatAction,
+} from "@/lib/composio-chat-actions";
 
 // Lazy-load ReportCard (uses Recharts which is heavy)
 const ReportCard = dynamic(
@@ -593,11 +597,13 @@ function FilePathCode({
 
 function createMarkdownComponents(
 	onFilePathClick?: FilePathClickHandler,
+	onComposioAction?: (action: ComposioChatAction) => void,
 ): Components {
 	return {
 		// Open external links in new tab; intercept local file-path links
 		a: ({ href, children, ...props }) => {
 			const rawHref = typeof href === "string" ? href : "";
+			const composioAction = parseComposioChatAction(rawHref);
 			const normalizedHref = normalizePathReference(rawHref);
 			const isExternal =
 				rawHref && (rawHref.startsWith("http://") || rawHref.startsWith("https://") || rawHref.startsWith("//"));
@@ -606,6 +612,22 @@ function createMarkdownComponents(
 				!isWorkspaceAppLink &&
 				(Boolean(rawHref.startsWith("file://")) ||
 					looksLikeFilePath(normalizedHref));
+			if (composioAction) {
+				return (
+					<button
+						type="button"
+						className="inline-flex items-center rounded-md px-2 py-0.5 text-sm font-medium no-underline transition-colors hover:opacity-90"
+						style={{
+							color: "rgb(147 197 253)",
+							background: "rgba(59, 130, 246, 0.12)",
+							border: "1px solid rgba(59, 130, 246, 0.2)",
+						}}
+						onClick={() => onComposioAction?.(composioAction)}
+					>
+						{children}
+					</button>
+				);
+			}
 			return (
 				<a
 					href={href}
@@ -789,13 +811,13 @@ function FeedbackButtons({ messageId, sessionId }: { messageId: string; sessionI
 
 /* ─── Chat message ─── */
 
-export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onSubagentClick, onFilePathClick, sessionId, voicePlaybackEnabled = false, userHtmlMap }: { message: UIMessage; isStreaming?: boolean; onSubagentClick?: (task: string) => void; onFilePathClick?: FilePathClickHandler; sessionId?: string | null; voicePlaybackEnabled?: boolean; userHtmlMap?: Map<string, string> }) {
+export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onSubagentClick, onFilePathClick, onComposioAction, sessionId, voicePlaybackEnabled = false, userHtmlMap }: { message: UIMessage; isStreaming?: boolean; onSubagentClick?: (task: string) => void; onFilePathClick?: FilePathClickHandler; onComposioAction?: (action: ComposioChatAction) => void; sessionId?: string | null; voicePlaybackEnabled?: boolean; userHtmlMap?: Map<string, string> }) {
 	const isUser = message.role === "user";
 	const segments = groupParts(message.parts);
 	const speechText = useMemo(() => extractSpeechText(segments), [segments]);
 	const markdownComponents = useMemo(
-		() => createMarkdownComponents(onFilePathClick),
-		[onFilePathClick],
+		() => createMarkdownComponents(onFilePathClick, onComposioAction),
+		[onComposioAction, onFilePathClick],
 	);
 
 	if (isUser) {
@@ -921,6 +943,11 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onS
 				<ReactMarkdown
 					remarkPlugins={[remarkGfm]}
 					components={markdownComponents}
+					urlTransform={(url) =>
+						parseComposioChatAction(url)
+							? url
+							: defaultUrlTransform(url)
+					}
 				>
 					{segment.text}
 				</ReactMarkdown>

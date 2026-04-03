@@ -33,6 +33,7 @@ import { isCodeFile } from "@/lib/report-utils";
 import { CronDashboard } from "../components/cron/cron-dashboard";
 import { SkillStorePanel } from "../components/skill-store/skill-store-panel";
 import { IntegrationsPanel } from "../components/integrations/integrations-panel";
+import { ChatComposioModalHost } from "../components/integrations/chat-composio-modal-host";
 import { CloudSettingsPanel } from "../components/settings/cloud-settings-panel";
 import { CronJobDetail } from "../components/cron/cron-job-detail";
 import { CronSessionView } from "../components/cron/cron-session-view";
@@ -94,6 +95,7 @@ import {
   isVirtualPath,
 } from "@/lib/workspace-paths";
 import dynamic from "next/dynamic";
+import type { ComposioChatAction } from "@/lib/composio-chat-actions";
 
 const TerminalDrawer = dynamic(
   () => import("../components/terminal/terminal-drawer"),
@@ -501,6 +503,7 @@ function WorkspacePageInner() {
 
   // Terminal drawer state
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [pendingComposioAction, setPendingComposioAction] = useState<ComposioChatAction | null>(null);
 
   // Tab state -- always starts with the home tab
   const [tabState, setTabState] = useState<TabState>({ tabs: [HOME_TAB], activeTabId: HOME_TAB_ID });
@@ -1232,6 +1235,18 @@ function WorkspacePageInner() {
     setActivePath(config.path);
     setContent({ kind: config.kind });
   }, [openTabForNode]);
+
+  const handleComposioActionFromChat = useCallback((action: ComposioChatAction) => {
+    setPendingComposioAction({
+      action: action.action,
+      toolkitSlug: action.toolkitSlug ?? null,
+      toolkitName: action.toolkitName ?? null,
+    });
+  }, []);
+
+  const handleComposioFallbackToIntegrations = useCallback(() => {
+    handleNavigate("integrations");
+  }, [handleNavigate]);
 
   const handleNodeSelect = useCallback(
     (node: TreeNode) => {
@@ -2727,6 +2742,7 @@ function WorkspacePageInner() {
                         onConversationActivity={() => promoteTabById(tab.id)}
                         onSubagentClick={handleSubagentClickFromChat}
                         onFilePathClick={handleFilePathClickFromChat}
+                        onComposioAction={handleComposioActionFromChat}
                         onDeleteSession={isGateway || tab.sessionKey ? undefined : handleDeleteSession}
                         onRenameSession={isGateway || tab.sessionKey ? undefined : handleRenameSession}
                         compact={isMobile}
@@ -2936,6 +2952,7 @@ function WorkspacePageInner() {
                   initialSessionId={fileChatSessionId ?? undefined}
                   onFileChanged={handleFileChanged}
                   onFilePathClick={handleFilePathClickFromChat}
+                  onComposioAction={handleComposioActionFromChat}
                   onActiveSessionChange={setFileChatSessionId}
                 />
               </div>
@@ -2999,12 +3016,18 @@ function WorkspacePageInner() {
                   initialSessionId={fileChatSessionId ?? undefined}
                   onFileChanged={handleFileChanged}
                   onFilePathClick={(path) => { handleFilePathClickFromChat(path); setMobileFileChatOpen(false); }}
+                  onComposioAction={(action) => { handleComposioActionFromChat(action); setMobileFileChatOpen(false); }}
                   onActiveSessionChange={setFileChatSessionId}
                 />
               </div>
             </div>
           </div>
         )}
+
+        <ChatComposioModalHost
+          request={pendingComposioAction}
+          onFallbackToIntegrations={handleComposioFallbackToIntegrations}
+        />
 
         {/* Terminal drawer (Cmd+J) */}
         {terminalOpen && (

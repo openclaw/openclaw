@@ -213,6 +213,49 @@ function normalizeResolverApp(value: string | undefined): string | undefined {
   return APP_ALIASES[normalized] ?? normalized.replace(/\s+/g, "-");
 }
 
+function humanizeResolverApp(value: string | undefined): string {
+  const normalized = normalizeResolverApp(value);
+  if (!normalized) {
+    return "App";
+  }
+  const labels: Record<string, string> = {
+    gmail: "Gmail",
+    slack: "Slack",
+    github: "GitHub",
+    notion: "Notion",
+    "google-calendar": "Google Calendar",
+    linear: "Linear",
+  };
+  return labels[normalized]
+    ?? normalized.split("-").map((token) => token.charAt(0).toUpperCase() + token.slice(1)).join(" ");
+}
+
+function buildComposioActionLink(action: "connect" | "reconnect", app: string | undefined): string | null {
+  const normalizedApp = normalizeResolverApp(app);
+  if (!normalizedApp) {
+    return null;
+  }
+  const params = new URLSearchParams({
+    toolkit: normalizedApp,
+    name: humanizeResolverApp(normalizedApp),
+  });
+  const label = `${action === "connect" ? "Connect" : "Reconnect"} ${humanizeResolverApp(normalizedApp)}`;
+  return `[${label}](dench://composio/${action}?${params.toString()})`;
+}
+
+function buildResolverActionDetails(action: "connect" | "reconnect", app: string | undefined) {
+  const normalizedApp = normalizeResolverApp(app);
+  if (!normalizedApp) {
+    return {};
+  }
+  return {
+    action_required: action,
+    toolkit_slug: normalizedApp,
+    toolkit_name: humanizeResolverApp(normalizedApp),
+    action_link_markdown: buildComposioActionLink(action, normalizedApp),
+  };
+}
+
 function tokenize(value: string): string[] {
   return value
     .toLowerCase()
@@ -600,10 +643,12 @@ function createComposioResolveTool(api: OpenClawPluginApi): AnyAgentTool {
           });
         }
         const status = describeStatusForResolver(workspaceDir);
+        const actionLink = buildComposioActionLink("connect", normalizedRequestedApp);
         return jsonResult({
           app: normalizedRequestedApp,
-          app_name: normalizedRequestedApp,
-          connected_accounts: null,
+          app_name: humanizeResolverApp(normalizedRequestedApp),
+          connected_accounts: 0,
+          availability: "connect_required",
           server: "composio",
           tool: fallback.tool,
           recommended_intent: fallback.intent,
@@ -614,15 +659,24 @@ function createComposioResolveTool(api: OpenClawPluginApi): AnyAgentTool {
           example_prompts: fallback.example_prompts ?? [],
           mcp_verified: status.verified,
           status_message: status.message,
-          instruction: `Call the Composio tool \`${fallback.tool}\` directly if it is available in this session. This answer came from the bundled fallback recipe because the workspace index is missing.`,
+          instruction: actionLink
+            ? `Treat ${humanizeResolverApp(normalizedRequestedApp)} as unavailable until proven otherwise. Only call \`${fallback.tool}\` if it is already available in this session; otherwise explain the limitation briefly and end the assistant reply with this exact markdown link: ${actionLink}`
+            : `Treat ${humanizeResolverApp(normalizedRequestedApp)} as unavailable until proven otherwise. Only call \`${fallback.tool}\` if it is already available in this session.`,
+          ...buildResolverActionDetails("connect", normalizedRequestedApp),
         });
       }
 
       const app = chooseApp(index, requestedApp, queryText);
       if (!app) {
+        const actionLink = buildComposioActionLink("connect", normalizedRequestedApp);
         return jsonResult({
           error: "Could not match the request to a connected Composio app.",
           available_apps: index.connected_apps.map((entry) => entry.toolkit_slug),
+          availability: "connect_required",
+          instruction: actionLink
+            ? `Explain briefly that the requested app is not currently connected, then end the assistant reply with this exact markdown link: ${actionLink}`
+            : "Explain briefly that the requested app is not currently connected.",
+          ...buildResolverActionDetails("connect", normalizedRequestedApp),
         });
       }
 
@@ -639,9 +693,15 @@ function createComposioResolveTool(api: OpenClawPluginApi): AnyAgentTool {
 
       const { tool, recipe } = chosen;
       if (!tool) {
+        const reconnectLink = buildComposioActionLink("reconnect", app.toolkit_slug);
         return jsonResult({
           error: `No indexed Composio tools are available for ${app.toolkit_name}.`,
           app: app.toolkit_slug,
+          availability: "reconnect_recommended",
+          instruction: reconnectLink
+            ? `The connected ${app.toolkit_name} app looks unavailable or stale. Explain that briefly and end the assistant reply with this exact markdown link: ${reconnectLink}`
+            : `The connected ${app.toolkit_name} app looks unavailable or stale.`,
+          ...buildResolverActionDetails("reconnect", app.toolkit_slug),
         });
       }
 
@@ -680,9 +740,14 @@ function buildComposioDefaultGuidance(composioAppsSkillPath: string): string {
     "Composio is the default integration layer for connected apps in this workspace.",
     "",
     "- If the user mentions Composio, rube, map, MCP, or says an app is already connected, use the Composio tools first.",
+    `- **When the user asks about ANY third-party app or service** (e.g. Slack, HubSpot, Salesforce, Jira, Asana, Discord, Airtable, Notion, Linear, Gmail, GitHub, Google Calendar, Stripe, Zendesk, Trello, etc.), always call \`${COMPOSIO_RESOLVE_TOOL_NAME}\` first to verify whether it is connected before answering. This applies to ALL apps, not just the ones listed here.`,
     `- If the exact Composio tool is not obvious, call \`${COMPOSIO_RESOLVE_TOOL_NAME}\` before guessing or scanning the full Composio catalog.`,
     `- Load and follow \`${composioAppsSkillPath}\` for Gmail, Slack, GitHub, Notion, Google Calendar, and Linear recipes when the generated tool index is missing.`,
     "- Never use `gog`, shell CLIs, curl, or raw `/v1/composio/*` HTTP for Gmail/Calendar/Drive/Slack/GitHub/Notion/Linear when Composio is connected or the user mentions Composio/rube/map/MCP.",
+    "- **When the resolver returns `action_link_markdown`, you MUST end the assistant reply with that exact markdown link.** Do not omit it. Do not rephrase it as plain text. The link renders as a clickable button in chat.",
+    "- Missing first-time connection example: `[Connect Slack](dench://composio/connect?toolkit=slack&name=Slack)`.",
+    "- Stale or unusable connection example: `[Reconnect Slack](dench://composio/reconnect?toolkit=slack&name=Slack)`.",
+    "- If the resolver returns an error with `availability: \"connect_required\"`, briefly explain the app is not connected and end with the connect link. Do NOT suggest navigating to Integrations manually.",
     "- Gmail fast path: `GMAIL_FETCH_EMAILS` with `label_ids: [\"INBOX\"]` and `max_results: 10`; for one message use `GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID`.",
     "- GitHub fast path: for 'recent PRs' or general PR discovery, prefer `GITHUB_FIND_PULL_REQUESTS` when available.",
     "- Google Calendar fast path: for 'what's upcoming' or 'find an event', prefer `GOOGLE_CALENDAR_EVENTS_LIST` with an explicit time window when the schema supports it.",
@@ -804,6 +869,7 @@ For multi-session projects, write a session handoff summary to \`${workspaceDir}
 - Use \`exa_search\` and \`exa_get_contents\` to gather open-web context around a person or company when Apollo lacks enough input or when the user wants broader research, news, or website evidence.
 - Use Apollo for structured CRM enrichment and Exa for broader web research; combine them when helpful, but do not substitute Exa for Apollo on explicit enrichment requests unless Apollo is unavailable or insufficient.
 - For connected apps (Gmail, Slack, GitHub, etc.), use the **Composio** tools directly. Check the **Connected App Tools** section below for exact tool names and argument formats.
+- **When the user mentions ANY third-party app or service**, always call \`${COMPOSIO_RESOLVE_TOOL_NAME}\` before answering to verify availability — this applies to all apps (HubSpot, Salesforce, Slack, Gmail, etc.), not just a fixed list. If the resolver says the app is not connected, emit the connect link it provides.
 - If the exact Composio tool name is unclear, call \`${COMPOSIO_RESOLVE_TOOL_NAME}\` before exploring the curated Composio tools for this workspace.
 - **Never** use curl or raw HTTP to call Composio or gateway integration endpoints — always use the Composio tools.
 - **Never** use \`gog\` for Gmail/Calendar/Drive when Composio is connected or the user mentions Composio/rube/map/MCP. \`gog\` is a fallback only when the user explicitly asks for it or Composio is unavailable.

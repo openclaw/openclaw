@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatMessage } from "./chat-message";
+import { buildComposioChatActionHref } from "@/lib/composio-chat-actions";
 
 vi.mock("next/dynamic", () => ({
   default: () => () => null,
@@ -52,5 +54,32 @@ describe("ChatMessage", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Play voice" })).not.toBeInTheDocument();
+  });
+
+  it("intercepts assistant composio action links inline", async () => {
+    const user = userEvent.setup();
+    const onComposioAction = vi.fn();
+
+    render(
+      <ChatMessage
+        message={{
+          id: "assistant-3",
+          role: "assistant",
+          parts: [{
+            type: "text",
+            text: `Slack is not connected yet. [Connect Slack](${buildComposioChatActionHref("connect", { toolkitSlug: "slack", toolkitName: "Slack" })})`,
+          }],
+        }}
+        onComposioAction={onComposioAction}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Connect Slack" }));
+
+    expect(onComposioAction).toHaveBeenCalledWith({
+      action: "connect",
+      toolkitSlug: "slack",
+      toolkitName: "Slack",
+    });
   });
 });
