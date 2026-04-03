@@ -458,6 +458,8 @@ export async function executePlan(plan, options = {}) {
       );
       const heapSnapshotDir =
         heapSnapshotBaseDir === null ? null : path.join(heapSnapshotBaseDir, unit.id);
+      const reportOnSignalEnabled =
+        (env.OPENCLAW_TEST_REPORT_ON_SIGNAL ?? "").trim().toLowerCase() === "1";
       let resolvedNodeOptions =
         maxOldSpaceSizeMb && !nextNodeOptions.includes("--max-old-space-size=")
           ? `${nextNodeOptions} --max-old-space-size=${maxOldSpaceSizeMb}`.trim()
@@ -503,6 +505,23 @@ export async function executePlan(plan, options = {}) {
           "--heapsnapshot-signal=",
           `--heapsnapshot-signal=${heapSnapshotSignal}`,
         );
+        if (reportOnSignalEnabled) {
+          resolvedNodeOptions = ensureNodeOptionFlag(
+            resolvedNodeOptions,
+            "--report-on-signal",
+            "--report-on-signal",
+          );
+          resolvedNodeOptions = ensureNodeOptionFlag(
+            resolvedNodeOptions,
+            "--report-signal=",
+            `--report-signal=${heapSnapshotSignal}`,
+          );
+          resolvedNodeOptions = ensureNodeOptionFlag(
+            resolvedNodeOptions,
+            "--report-directory=",
+            `--report-directory=${heapSnapshotDir}`,
+          );
+        }
       }
       let output = "";
       let fatalSeen = false;
