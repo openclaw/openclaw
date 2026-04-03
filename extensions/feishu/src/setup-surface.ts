@@ -16,7 +16,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
-import { inspectFeishuCredentials, listFeishuAccountIds } from "./accounts.js";
+import { inspectFeishuCredentials, listFeishuAccountIds, resolveFeishuAccount } from "./accounts.js";
 import { probeFeishu } from "./probe.js";
 import { feishuSetupAdapter } from "./setup-core.js";
 import type { FeishuConfig } from "./types.js";
@@ -162,10 +162,23 @@ export const feishuSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "needs app creds",
     configuredScore: 2,
     unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) => isFeishuConfigured(cfg),
-    resolveStatusLines: async ({ cfg, configured }) => {
-      const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-      const resolvedCredentials = inspectFeishuCredentials(feishuCfg);
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId ? resolveFeishuAccount({ cfg, accountId }).configured : isFeishuConfigured(cfg),
+    resolveStatusLines: async ({ cfg, accountId, configured }) => {
+      const resolvedCredentials = accountId
+        ? (() => {
+            const account = resolveFeishuAccount({ cfg, accountId });
+            return account.configured && account.appId && account.appSecret
+              ? {
+                  appId: account.appId,
+                  appSecret: account.appSecret,
+                  encryptKey: account.encryptKey,
+                  verificationToken: account.verificationToken,
+                  domain: account.domain,
+                }
+              : null;
+          })()
+        : inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined);
       let probeResult = null;
       if (configured && resolvedCredentials) {
         try {

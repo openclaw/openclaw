@@ -134,6 +134,31 @@ describe("feishu setup wizard status", () => {
     expect(status.configured).toBe(false);
   });
 
+  it("setup status honors the selected named account", async () => {
+    const status = await feishuGetStatus({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "top_level_app",
+            appSecret: "top-level-secret", // pragma: allowlist secret
+            accounts: {
+              work: {
+                appId: "",
+                appSecret: "work-secret", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {
+        feishu: "work",
+      },
+    });
+
+    expect(status.configured).toBe(false);
+    expect(status.statusLines).toEqual(["Feishu: needs app credentials"]);
+  });
+
   it("treats env SecretRef appId as not configured when env var is missing", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_MISSING_TEST";
     const appSecretKey = "FEISHU_APP_CREDENTIAL_STATUS_MISSING_TEST"; // pragma: allowlist secret
