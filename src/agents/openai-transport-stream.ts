@@ -1384,7 +1384,8 @@ function getCompat(model: OpenAIModeModel) {
   const compat = model.compat ?? {};
   return {
     supportsStore: compat.supportsStore ?? detected.supportsStore,
-    supportsDeveloperRole: compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
+    supportsDeveloperRole:
+      (compat.supportsDeveloperRole as boolean | undefined) ?? detected.supportsDeveloperRole,
     supportsReasoningEffort: compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
     reasoningEffortMap:
       (compat.reasoningEffortMap as Record<string, string> | undefined) ??
