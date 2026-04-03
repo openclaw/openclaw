@@ -13,6 +13,15 @@ The Model Studio provider gives access to Alibaba Cloud models including Qwen
 and third-party models hosted on the platform. Two billing plans are supported:
 **Standard** (pay-as-you-go) and **Coding Plan** (subscription).
 
+<Info>
+
+If you need **`qwen3.6-plus`**, prefer **Standard (pay-as-you-go)**. Coding
+Plan availability can lag behind the public Model Studio catalog, and the
+Coding Plan API can reject a model until it appears in your plan's supported
+model list.
+
+</Info>
+
 - Provider: `modelstudio`
 - Auth: `MODELSTUDIO_API_KEY`
 - API: OpenAI-compatible
@@ -71,12 +80,25 @@ override with a custom `baseUrl` in config.
 ## Available models
 
 - **qwen3.5-plus** (default) — Qwen 3.5 Plus
+- **qwen3.6-plus** — Qwen 3.6 Plus
 - **qwen3-coder-plus**, **qwen3-coder-next** — Qwen coding models
 - **GLM-5** — GLM models via Alibaba
 - **Kimi K2.5** — Moonshot AI via Alibaba
-- **MiniMax-M2.7** — MiniMax via Alibaba
+- **MiniMax-M2.5** — MiniMax via Alibaba
 
-Some models (qwen3.5-plus, kimi-k2.5) support image input. Context windows range from 200K to 1M tokens.
+Some models (qwen3.5-plus, qwen3.6-plus, kimi-k2.5) support image input. Context windows range from 200K to 1M tokens. Availability can vary by endpoint and billing plan.
+
+## Qwen 3.6 Plus availability
+
+`qwen3.6-plus` is available on the Standard (pay-as-you-go) Model Studio
+endpoints:
+
+- China: `dashscope.aliyuncs.com/compatible-mode/v1`
+- Global: `dashscope-intl.aliyuncs.com/compatible-mode/v1`
+
+If the Coding Plan endpoints return an "unsupported model" error for
+`qwen3.6-plus`, switch to Standard (pay-as-you-go) instead of the Coding Plan
+endpoint/key pair.
 
 ## Environment note
 

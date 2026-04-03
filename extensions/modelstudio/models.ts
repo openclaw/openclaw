@@ -31,6 +31,15 @@ export const MODELSTUDIO_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
     maxTokens: 65_536,
   },
   {
+    id: "qwen3.6-plus",
+    name: "qwen3.6-plus",
+    reasoning: false,
+    input: ["text", "image"],
+    cost: MODELSTUDIO_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
     id: "qwen3-max-2026-01-23",
     name: "qwen3-max-2026-01-23",
     reasoning: false,

@@ -17,17 +17,27 @@ background.
 
 </Warning>
 
-## Recommended: Model Studio (Alibaba Cloud Coding Plan)
+## Recommended: Model Studio (Alibaba Cloud)
 
 Use [Model Studio](/providers/qwen_modelstudio) for officially supported access to
-Qwen models (Qwen 3.5 Plus, GLM-4.7, Kimi K2.5, and more).
+Qwen models (Qwen 3.6 Plus, Qwen 3.5 Plus, GLM-5, Kimi K2.5, and more).
+
+If you want `qwen3.6-plus` directly from Alibaba Cloud, prefer the **Standard
+(pay-as-you-go)** Model Studio endpoint. Coding Plan support can lag behind the
+public Model Studio catalog.
 
 ```bash
-# Global endpoint
+# Global Coding Plan endpoint
 openclaw onboard --auth-choice modelstudio-api-key
 
-# China endpoint
+# China Coding Plan endpoint
 openclaw onboard --auth-choice modelstudio-api-key-cn
+
+# Global Standard (pay-as-you-go) endpoint
+openclaw onboard --auth-choice modelstudio-standard-api-key
+
+# China Standard (pay-as-you-go) endpoint
+openclaw onboard --auth-choice modelstudio-standard-api-key-cn
 ```
 
 See [Model Studio](/providers/qwen_modelstudio) for full setup details.
