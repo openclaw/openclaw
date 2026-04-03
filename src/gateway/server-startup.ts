@@ -38,6 +38,9 @@ async function prewarmConfiguredPrimaryModel(params: {
   cfg: ReturnType<typeof loadConfig>;
   log: { warn: (msg: string) => void };
 }): Promise<void> {
+  if (isTruthyEnvValue(process.env.OPENCLAW_SKIP_MODEL_WARMUP)) {
+    return;
+  }
   const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
   if (!explicitPrimary) {
     return;
