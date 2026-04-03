@@ -247,4 +247,13 @@ describe("fetchClaudeUsage", () => {
       expectMissingScopeError(result);
     },
   );
+
+  it("returns error snapshot for malformed JSON body on oauth usage", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "<html>Bad Gateway</html>"));
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.error).toBe("Invalid JSON");
+    expect(result.windows).toHaveLength(0);
+    expect(result.provider).toBe("anthropic");
+  });
 });
