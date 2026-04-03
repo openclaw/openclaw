@@ -32,6 +32,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import {
   listEnabledSlackAccounts,
+  resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackReplyToMode,
   type ResolvedSlackAccount,
@@ -489,7 +490,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const cfg = getSlackRuntime().config.loadConfig();
         const account = resolveSlackAccount({
           cfg,
-          accountId: DEFAULT_ACCOUNT_ID,
+          accountId: resolveDefaultSlackAccountId(cfg),
         });
         const { sendMessageSlack } = await loadSlackSendRuntime();
         const token = getTokenForOperation(account, "write");
