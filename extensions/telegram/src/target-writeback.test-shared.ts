@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../src/config/config.js";
 
 export const readConfigFileSnapshotForWrite = vi.fn();
 export const writeConfigFile = vi.fn();

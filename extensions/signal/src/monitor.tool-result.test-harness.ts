@@ -1,5 +1,5 @@
-import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
+import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 import type { SignalDaemonExitEvent, SignalDaemonHandle } from "./daemon.js";
 
 type SignalToolResultTestMocks = {
