@@ -543,7 +543,22 @@ describe("processDiscordMessage ack reactions", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getReactionEmojis()).toEqual(["👀"]);
-    expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith("c1", "m1", "👀", { rest: {} });
+    expect(sendMocks.removeReactionDiscord).toHaveBeenNthCalledWith(
+      2,
+      "c1",
+      "m1",
+      "👀",
+      expect.objectContaining({
+        rest: {},
+        cfg: expect.objectContaining({
+          messages: expect.objectContaining({
+            ackReaction: "👀",
+            removeAckAfterReply: true,
+          }),
+        }),
+        accountId: "default",
+      }),
+    );
   });
 });
 
