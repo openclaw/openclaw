@@ -14884,6 +14884,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: 'Default group policy across channels: "open", "disabled", or "allowlist". Keep "allowlist" for safer production setups unless broad group participation is intentional.',
       tags: ["access", "network", "channels"],
     },
+    "channels.defaults.contextVisibility": {
+      label: "Default Context Visibility",
+      help: 'Default supplemental context visibility for fetched quote/thread/history content: "all" (keep all context), "allowlist" (only allowlisted senders), or "allowlist_quote" (allowlist + keep explicit quotes).',
+      tags: ["network", "channels"],
+    },
     "channels.defaults.heartbeat": {
       label: "Default Heartbeat Visibility",
       help: "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
@@ -15194,6 +15199,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.2-beta.1",
+  version: "2026.4.3",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

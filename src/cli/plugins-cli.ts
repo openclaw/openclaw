@@ -156,6 +156,13 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   if (plugin.providerIds.length > 0) {
     parts.push(`  providers: ${plugin.providerIds.join(", ")}`);
   }
+  if (plugin.activated !== undefined || plugin.activationSource || plugin.activationReason) {
+    const activationSummary =
+      plugin.activated === false
+        ? "inactive"
+        : (plugin.activationSource ?? (plugin.activated ? "active" : "inactive"));
+    parts.push(`  activation: ${activationSummary}`);
+  }
   if (plugin.error) {
     parts.push(theme.error(`  error: ${plugin.error}`));
   }

@@ -1605,6 +1605,13 @@ export type OpenClawPluginCommandDefinition = {
    * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
    */
   nativeNames?: Partial<Record<string, string>> & { default?: string };
+  /**
+   * Optional Telegram-native progress placeholder text.
+   * When set, Telegram native/plugin command delivery sends this text
+   * immediately, then edits that same message in place if the final reply
+   * is a simple text-only payload.
+   */
+  telegramNativeProgressMessage?: string;
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */

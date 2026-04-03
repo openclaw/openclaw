@@ -129,7 +129,14 @@ describe("plugin activation boundary", () => {
     const { isChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
 
     expect(isChannelConfigured({}, "whatsapp", {})).toBe(false);
-    expect(resolveEnvApiKey("anthropic-vertex", {})).toBeNull();
+    expect(
+      resolveEnvApiKey("anthropic-vertex", {
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+      }),
+    ).toEqual({
+      apiKey: "gcp-vertex-credentials",
+      source: "gcloud adc",
+    });
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 

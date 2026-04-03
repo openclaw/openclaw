@@ -279,6 +279,13 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
           }),
       },
       isDirectMessage: false,
+      cfg: {
+        channels: {
+          matrix: {
+            contextVisibility: "allowlist",
+          },
+        },
+      },
       groupPolicy: "allowlist",
       groupAllowFrom: ["@alice:example.org"],
       roomsConfig: { "*": {} },
@@ -322,6 +329,13 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
           }),
       },
       isDirectMessage: false,
+      cfg: {
+        channels: {
+          matrix: {
+            contextVisibility: "allowlist",
+          },
+        },
+      },
       groupPolicy: "allowlist",
       groupAllowFrom: ["@alice:example.org"],
       roomsConfig: { "*": {} },
@@ -349,5 +363,52 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
     };
     expect(finalized.ReplyToBody).toBeUndefined();
     expect(finalized.ReplyToSender).toBeUndefined();
+  });
+
+  it("keeps quoted reply context in allowlist_quote mode", async () => {
+    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$quoted",
+            sender: "@mallory:example.org",
+            body: "Quoted payload",
+          }),
+      },
+      isDirectMessage: false,
+      cfg: {
+        channels: {
+          matrix: {
+            contextVisibility: "allowlist_quote",
+          },
+        },
+      },
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["@alice:example.org"],
+      roomsConfig: { "*": {} },
+      replyToMode: "all",
+      getMemberDisplayName: async (_roomId, userId) =>
+        userId === "@alice:example.org" ? "Alice" : "Mallory",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$reply1",
+        sender: "@alice:example.org",
+        body: "@room follow up",
+        relatesTo: {
+          "m.in_reply_to": { event_id: "$quoted" },
+        },
+        mentions: { room: true },
+      }),
+    );
+
+    const finalized = vi.mocked(finalizeInboundContext).mock.calls.at(-1)?.[0] as {
+      ReplyToBody?: string;
+      ReplyToSender?: string;
+    };
+    expect(finalized.ReplyToBody).toBe("Quoted payload");
+    expect(finalized.ReplyToSender).toBe("Mallory");
   });
 });

@@ -209,7 +209,6 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 
 describe("deliverOutboundPayloads", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
   });
 
