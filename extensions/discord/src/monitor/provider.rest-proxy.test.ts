@@ -42,15 +42,15 @@ describe("resolveDiscordRestFetch", () => {
     } as const;
     undiciFetchMock.mockClear().mockResolvedValue(new Response("ok", { status: 200 }));
     proxyAgentSpy.mockClear();
-    const fetcher = resolveDiscordRestFetch("http://proxy.test:8080", runtime);
+    const fetcher = resolveDiscordRestFetch("http://127.0.0.1:8080", runtime);
 
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(proxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:8080");
     expect(undiciFetchMock).toHaveBeenCalledWith(
       "https://discord.com/api/v10/oauth2/applications/@me",
       expect.objectContaining({
-        dispatcher: expect.objectContaining({ proxyUrl: "http://proxy.test:8080" }),
+        dispatcher: expect.objectContaining({ proxyUrl: "http://127.0.0.1:8080" }),
       }),
     );
     expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");
@@ -67,6 +67,21 @@ describe("resolveDiscordRestFetch", () => {
 
     expect(fetcher).toBe(fetch);
     expect(runtime.error).toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("falls back to global fetch when proxy URL is remote", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as const;
+
+    const fetcher = resolveDiscordRestFetch("http://proxy.test:8080", runtime);
+
+    expect(fetcher).toBe(fetch);
+    expect(proxyAgentSpy).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("loopback host"));
     expect(runtime.log).not.toHaveBeenCalled();
   });
 });

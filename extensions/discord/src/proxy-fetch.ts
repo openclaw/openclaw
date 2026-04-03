@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { makeProxyFetch } from "openclaw/plugin-sdk/infra-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
@@ -45,9 +46,44 @@ export function withValidatedDiscordProxy<T>(
     return undefined;
   }
   try {
+    validateDiscordProxyUrl(proxy);
     return createValue(proxy);
   } catch (err) {
     runtime?.error?.(danger(`discord: invalid rest proxy: ${String(err)}`));
     return undefined;
   }
+}
+
+export function validateDiscordProxyUrl(proxyUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(proxyUrl);
+  } catch {
+    throw new Error("Proxy URL must be a valid http or https URL");
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("Proxy URL must use http or https");
+  }
+  if (!isLoopbackProxyHostname(parsed.hostname)) {
+    throw new Error("Proxy URL must target a loopback host");
+  }
+  return proxyUrl;
+}
+
+function isLoopbackProxyHostname(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === "localhost") {
+    return true;
+  }
+  const ipFamily = isIP(normalized);
+  if (ipFamily === 4) {
+    return normalized.startsWith("127.");
+  }
+  if (ipFamily === 6) {
+    return normalized === "::1" || normalized === "0:0:0:0:0:0:0:1";
+  }
+  return false;
 }
