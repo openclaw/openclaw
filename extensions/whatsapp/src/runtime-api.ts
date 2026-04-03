@@ -14,6 +14,7 @@ export {
   jsonResult,
   readReactionParams,
   readStringParam,
+  ToolAuthorizationError,
 } from "openclaw/plugin-sdk/channel-actions";
 export { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
@@ -46,13 +47,6 @@ export type OpenClawConfig = RuntimeOpenClawConfig;
 export type WhatsAppAccountConfig = NonNullable<
   NonNullable<NonNullable<RuntimeOpenClawConfig["channels"]>["whatsapp"]>["accounts"]
 >[string];
-
-export class ToolAuthorizationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolAuthorizationError";
-  }
-}
 
 type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;
 
