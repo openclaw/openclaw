@@ -368,10 +368,6 @@ export function resolvePluginActivationState(params: {
     config: activationSource.plugins,
     rootConfig: activationSource.rootConfig,
   });
-  const explicitlyConfiguredBundledChannel =
-    params.origin === "bundled" &&
-    explicitSelection.explicitlyEnabled &&
-    explicitSelection.cause === "bundled-channel-enabled-in-config";
 
   if (!params.config.enabled) {
     return toPluginActivationState({
@@ -420,7 +416,7 @@ export function resolvePluginActivationState(params: {
       cause: "selected-memory-slot",
     });
   }
-  if (params.config.allow.length > 0 && !explicitlyAllowed && !explicitlyConfiguredBundledChannel) {
+  if (params.config.allow.length > 0 && !explicitlyAllowed) {
     return toPluginActivationState({
       enabled: false,
       activated: false,
