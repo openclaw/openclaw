@@ -165,7 +165,7 @@ const record = registry.plugins.find((entry) => entry.id === pluginId);
 assert.ok(record, "smoke plugin missing from registry");
 assert.equal(record.status, "loaded", record.error ?? "smoke plugin failed to load");
 
-assert.deepEqual(getPluginCommandSpecs("telegram"), [
+assert.deepEqual(getPluginCommandSpecs(), [
   { name: "pair", description: "Pair a device", acceptsArgs: true },
 ]);
 

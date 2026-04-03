@@ -354,12 +354,42 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
+    const dispatchCall = dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0] as
+      | {
+          channel?: string;
+          data?: string;
+          dedupeId?: string;
+          invoke?: (params: {
+            registration: { handler: (ctx: unknown) => unknown };
+            namespace: string;
+            payload: string;
+          }) => Promise<unknown>;
+        }
+      | undefined;
+    expect(dispatchCall).toMatchObject({
+      channel: "slack",
+      data: "codex:approve:thread-1",
+      dedupeId: "U123:C1:100.200:123.trigger:codex:approve:thread-1",
+    });
+    const registrationHandler = vi.fn();
+    await dispatchCall?.invoke?.({
+      registration: { handler: registrationHandler },
+      namespace: "codex",
+      payload: "approve:thread-1",
+    });
+    expect(registrationHandler).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "slack",
-        data: "codex:approve:thread-1",
-        dedupeId: "U123:C1:100.200:123.trigger:codex:approve:thread-1",
-        invoke: expect.any(Function),
+        accountId: ctx.accountId,
+        conversationId: "C1",
+        interactionId: "U123:C1:100.200:123.trigger:codex:approve:thread-1",
+        threadId: "100.100",
+        interaction: expect.objectContaining({
+          actionId: "codex",
+          value: "approve:thread-1",
+          data: "codex:approve:thread-1",
+          namespace: "codex",
+          payload: "approve:thread-1",
+        }),
       }),
     );
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
