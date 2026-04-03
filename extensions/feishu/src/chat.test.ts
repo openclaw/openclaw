@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../runtime-api.js";
@@ -30,8 +30,11 @@ describe("registerFeishuChatTools", () => {
     });
   }
 
+  beforeAll(async () => {
+    ({ registerFeishuChatTools } = await import("./chat.js"));
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
     createFeishuClientMock.mockReturnValue({
       im: {
@@ -42,10 +45,6 @@ describe("registerFeishuChatTools", () => {
         user: { get: contactUserGetMock },
       },
     });
-  });
-
-  beforeEach(async () => {
-    ({ registerFeishuChatTools } = await import("./chat.js"));
   });
 
   it("registers feishu_chat and handles info/members actions", async () => {

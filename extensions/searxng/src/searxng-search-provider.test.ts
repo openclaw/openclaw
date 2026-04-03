@@ -18,7 +18,6 @@ describe("searxng web search provider", () => {
   let plugin: typeof import("../index.js").default;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ createSearxngWebSearchProvider } = await import("./searxng-search-provider.js"));
     ({ default: plugin } = await import("../index.js"));
   });

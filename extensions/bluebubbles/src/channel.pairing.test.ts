@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 const sendMessageBlueBubblesMock = vi.hoisted(() => vi.fn());
@@ -17,11 +17,13 @@ vi.mock("../../../src/channels/plugins/bundled.js", () => ({
 let bluebubblesPlugin: typeof import("./channel.js").bluebubblesPlugin;
 
 describe("bluebubblesPlugin.pairing.notifyApproval", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ bluebubblesPlugin } = await import("./channel.js"));
+  });
+
+  beforeEach(() => {
     sendMessageBlueBubblesMock.mockReset();
     sendMessageBlueBubblesMock.mockResolvedValue({ messageId: "bb-pairing" });
-    ({ bluebubblesPlugin } = await import("./channel.js"));
   });
 
   it("preserves accountId when sending pairing approvals", async () => {

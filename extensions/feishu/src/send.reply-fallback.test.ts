@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuSendTargetMock = vi.hoisted(() => vi.fn());
 const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "preserve"));
@@ -42,9 +42,11 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(result.messageId).toBe(expectedMessageId);
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ sendCardFeishu, sendMessageFeishu } = await import("./send.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     resolveFeishuSendTargetMock.mockReturnValue({
       client: {

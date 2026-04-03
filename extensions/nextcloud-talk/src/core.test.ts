@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   escapeNextcloudTalkMarkdown,
   formatNextcloudTalkCodeBlock,
@@ -67,8 +67,7 @@ const tempDirs: string[] = [];
 let nextcloudTalkPlugin: typeof import("./channel.js").nextcloudTalkPlugin;
 let NextcloudTalkConfigSchema: typeof import("./config-schema.js").NextcloudTalkConfigSchema;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ nextcloudTalkPlugin } = await import("./channel.js"));
   ({ NextcloudTalkConfigSchema } = await import("./config-schema.js"));
 });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../runtime-api.js";
@@ -31,10 +31,12 @@ function createDriveToolApi(params: {
 describe("registerFeishuDriveTools", () => {
   const requestMock = vi.fn();
 
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({ registerFeishuDriveTools } = await import("./drive.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
     resolveAnyEnabledFeishuToolsConfigMock.mockReturnValue({
       doc: false,
       chat: false,

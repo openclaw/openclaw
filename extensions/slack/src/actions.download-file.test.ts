@@ -69,7 +69,6 @@ function mockSuccessfulMediaDownload(client: ReturnType<typeof createClient>) {
 
 describe("downloadSlackFile", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ downloadSlackFile } = await import("./actions.js"));
   });
 

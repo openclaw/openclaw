@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   listMattermostAccountIdsMock,
@@ -32,11 +32,13 @@ let listMattermostDirectoryGroups: typeof import("./directory.js").listMattermos
 let listMattermostDirectoryPeers: typeof import("./directory.js").listMattermostDirectoryPeers;
 
 describe("mattermost directory", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({ listMattermostDirectoryGroups, listMattermostDirectoryPeers } =
       await import("./directory.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("deduplicates channels across enabled accounts and skips failing accounts", async () => {

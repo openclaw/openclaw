@@ -46,7 +46,6 @@ function createMockClient() {
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   const runtimeModule = await import("../runtime.js");
   runtimeModule.setMatrixRuntime(runtimeStub);
   ({ createMatrixDraftStream } = await import("./draft-stream.js"));

@@ -133,7 +133,6 @@ function firstWsClientOptions(): { agent?: unknown } {
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   vi.doMock("@larksuiteoapi/node-sdk", () => ({
     AppType: { SelfBuild: "self" },
     Domain: { Feishu: "https://open.feishu.cn", Lark: "https://open.larksuite.com" },

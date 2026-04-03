@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 
 vi.mock("./remote-http.js", () => ({
@@ -14,12 +14,14 @@ describe("runGeminiEmbeddingBatches", () => {
   let withRemoteHttpResponse: typeof import("./remote-http.js").withRemoteHttpResponse;
   let remoteHttpMock: ReturnType<typeof vi.mocked<typeof withRemoteHttpResponse>>;
 
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({ runGeminiEmbeddingBatches } = await import("./batch-gemini.js"));
     ({ withRemoteHttpResponse } = await import("./remote-http.js"));
     remoteHttpMock = vi.mocked(withRemoteHttpResponse);
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   afterEach(() => {

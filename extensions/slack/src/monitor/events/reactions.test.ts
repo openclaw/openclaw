@@ -77,7 +77,6 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
 
 describe("registerSlackReactionEvents", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ registerSlackReactionEvents } = await import("./reactions.js"));
     ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
   });

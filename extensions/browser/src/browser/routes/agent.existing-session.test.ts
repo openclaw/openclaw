@@ -98,7 +98,6 @@ let registerBrowserAgentActRoutes: typeof import("./agent.act.js").registerBrows
 let registerBrowserAgentSnapshotRoutes: typeof import("./agent.snapshot.js").registerBrowserAgentSnapshotRoutes;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ registerBrowserAgentActRoutes } = await import("./agent.act.js"));
   ({ registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js"));
 });

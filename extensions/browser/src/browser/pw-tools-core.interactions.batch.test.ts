@@ -35,7 +35,6 @@ let batchViaPlaywright: typeof import("./pw-tools-core.interactions.js").batchVi
 
 describe("batchViaPlaywright", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ batchViaPlaywright } = await import("./pw-tools-core.interactions.js"));
   });
 

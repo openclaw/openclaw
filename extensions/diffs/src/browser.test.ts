@@ -28,7 +28,6 @@ describe("PlaywrightDiffScreenshotter", () => {
   let cleanupRootDir: () => Promise<void>;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ PlaywrightDiffScreenshotter, resetSharedBrowserStateForTests } =
       await import("./browser.js"));
   });

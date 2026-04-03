@@ -31,7 +31,6 @@ describe("fetchRemoteMedia telegram network policy", () => {
   type LookupFn = NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ TEST_UNDICI_RUNTIME_DEPS_KEY } = await import("../../../src/infra/net/undici-runtime.js"));
     ({ fetchRemoteMedia } = await import("../../../src/media/fetch.js"));
     ({ resolveTelegramTransport, shouldRetryTelegramTransportFallback } =

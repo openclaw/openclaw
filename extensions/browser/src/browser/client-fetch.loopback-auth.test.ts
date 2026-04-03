@@ -86,7 +86,6 @@ async function expectThrownBrowserFetchError(
 
 describe("fetchBrowserJson loopback auth", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ fetchBrowserJson } = await import("./client-fetch.js"));
   });
 

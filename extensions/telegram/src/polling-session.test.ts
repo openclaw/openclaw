@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runMock = vi.hoisted(() => vi.fn());
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
@@ -135,14 +135,16 @@ function createPollingSessionWithTransportRestart(params: {
 }
 
 describe("TelegramPollingSession", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ TelegramPollingSession } = await import("./polling-session.js"));
+  });
+
+  beforeEach(() => {
     runMock.mockReset();
     createTelegramBotMock.mockReset();
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
-    ({ TelegramPollingSession } = await import("./polling-session.js"));
   });
 
   it("uses backoff helpers for recoverable polling retries", async () => {

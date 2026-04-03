@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchTelegramChatId } from "./api-fetch.js";
 
 const require = createRequire(import.meta.url);
@@ -50,6 +50,12 @@ function getOwnSymbolValue(
 afterEach(() => {
   vi.unstubAllEnvs();
 });
+
+vi.mock("undici", () => ({
+  ProxyAgent: proxyMocks.ProxyAgent,
+  fetch: proxyMocks.undiciFetch,
+  setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
+}));
 
 describe("fetchTelegramChatId", () => {
   const cases = [
@@ -163,17 +169,14 @@ describe("undici env proxy semantics", () => {
 });
 
 describe("makeProxyFetch", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ getProxyUrlFromFetch, makeProxyFetch } = await import("./proxy.js"));
+  });
+
+  beforeEach(() => {
     proxyMocks.undiciFetch.mockReset();
     proxyMocks.proxyAgentSpy.mockClear();
     proxyMocks.setGlobalDispatcher.mockClear();
-    vi.doMock("undici", () => ({
-      ProxyAgent: proxyMocks.ProxyAgent,
-      fetch: proxyMocks.undiciFetch,
-      setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
-    }));
-    ({ getProxyUrlFromFetch, makeProxyFetch } = await import("./proxy.js"));
   });
 
   it("attaches proxy metadata for resolver transport handling", () => {

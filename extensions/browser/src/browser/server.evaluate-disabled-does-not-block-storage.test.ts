@@ -70,7 +70,6 @@ let stopBrowserControlServer: typeof import("./server.js").stopBrowserControlSer
 
 describe("browser control evaluate gating", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ startBrowserControlServerFromConfig, stopBrowserControlServer } =
       await import("./server.js"));
   });

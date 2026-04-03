@@ -121,7 +121,6 @@ function resetTelegramWebhookMocks(): void {
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ startTelegramWebhook } = await import("./webhook.js"));
 });
 
