@@ -237,13 +237,8 @@ export default definePluginEntry({
         }
         await ensureOllamaModelPulled({ config, model, prompter });
       },
-<<<<<<< HEAD
       createStreamFn: ({ config, model, provider }) => {
-        return createConfiguredOllamaStreamFn({
-=======
-      createStreamFn: ({ config, model }) => {
         const innerStreamFn = createConfiguredOllamaStreamFn({
->>>>>>> 87e6554f5 (Ollama: fix Cloud auth by distinguishing remote from local providers)
           model,
           providerBaseUrl: resolveConfiguredOllamaProviderConfig({ config, providerId: provider })
             ?.baseUrl,
