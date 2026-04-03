@@ -7,7 +7,6 @@ description: >-
   Trigger terms: OCR, 文字识别, 图片转文字, 截图识字, 提取图中文字, 扫描识字, 识字, 纯文字,
   plain text extraction, 坐标, 检测框, bbox, bounding box, image to text, screenshot, photo scan,
   recognize text.
-license: Apache-2.0
 compatibility: Requires Python 3.9+, uv, and internet access.
 metadata:
   openclaw:

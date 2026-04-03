@@ -7,7 +7,6 @@ description: >-
   Trigger terms: 文档解析, 版面分析, 版面还原, 表格提取, 公式识别, 多栏排版, 扫描件结构化,
   发票, 财报, 复杂 PDF, PDF转Markdown, 图表, 阅读顺序; reading order, formula, LaTeX,
   layout parsing, structure extraction, PP-StructureV3, PaddleOCR-VL.
-license: Apache-2.0
 compatibility: Requires Python 3.9+, uv, and internet access.
 metadata:
   openclaw:
