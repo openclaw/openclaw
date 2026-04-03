@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, expect, vi, type Mock } from "vitest";
 
 type ExecDockerRawFn = typeof import("./docker.js").execDockerRaw;
-type OpenBoundaryFileFn = typeof import("../../infra/boundary-file-read.js").openBoundaryFile;
+type OpenBoundaryFileFn = typeof import("./fs-bridge-path-safety.runtime.js").openBoundaryFile;
 type ExecDockerArgs = Parameters<ExecDockerRawFn>[0];
 type ExecDockerRawMock = Mock<ExecDockerRawFn>;
 type OpenBoundaryFileMock = Mock<OpenBoundaryFileFn>;
@@ -27,8 +27,10 @@ vi.mock("./docker.js", () => ({
     hoisted.execDockerRaw(args, opts),
 }));
 
-vi.mock("../../infra/boundary-file-read.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/boundary-file-read.js")>();
+vi.mock("./fs-bridge-path-safety.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./fs-bridge-path-safety.runtime.js")>(
+    "./fs-bridge-path-safety.runtime.js",
+  );
   actualOpenBoundaryFile = actual.openBoundaryFile;
   return {
     ...actual,
@@ -48,8 +50,10 @@ async function loadFreshFsBridgeModuleForTest() {
     execDockerRaw: (args: ExecDockerArgs, opts?: Parameters<ExecDockerRawFn>[1]) =>
       hoisted.execDockerRaw(args, opts),
   }));
-  vi.doMock("../../infra/boundary-file-read.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../infra/boundary-file-read.js")>();
+  vi.doMock("./fs-bridge-path-safety.runtime.js", async () => {
+    const actual = await vi.importActual<typeof import("./fs-bridge-path-safety.runtime.js")>(
+      "./fs-bridge-path-safety.runtime.js",
+    );
     actualOpenBoundaryFile = actual.openBoundaryFile;
     return {
       ...actual,

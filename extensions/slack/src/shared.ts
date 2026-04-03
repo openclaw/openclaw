@@ -34,7 +34,7 @@ function buildSlackManifest(botName: string) {
     features: {
       bot_user: {
         display_name: safeName,
-        always_online: false,
+        always_online: true,
       },
       app_home: {
         messages_tab_enabled: true,

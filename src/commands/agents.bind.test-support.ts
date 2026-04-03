@@ -24,8 +24,8 @@ export const replaceConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown
   },
 ) as Mock<(...args: unknown[]) => Promise<unknown>>;
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return await mergeMockedModule(actual, () => ({
     readConfigFileSnapshot: (...args: Parameters<typeof actual.readConfigFileSnapshot>) =>
       readConfigFileSnapshotMock(...args) as ReturnType<typeof actual.readConfigFileSnapshot>,

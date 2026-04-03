@@ -34,17 +34,8 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 5,
     resolveConfigured: ({ cfg, accountId }) => {
-      if (accountId) {
-        const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
-        return Boolean(account.secret && account.baseUrl);
-      }
-      return listNextcloudTalkAccountIds(cfg as CoreConfig).some((resolvedAccountId) => {
-            const account = resolveNextcloudTalkAccount({
-              cfg: cfg as CoreConfig,
-              accountId: resolvedAccountId,
-            });
-            return Boolean(account.secret && account.baseUrl);
-          });
+      const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
+      return Boolean(account.secret && account.baseUrl);
     },
   }),
   introNote: {

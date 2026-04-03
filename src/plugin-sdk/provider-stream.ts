@@ -1,6 +1,10 @@
 // Public stream-wrapper helpers for provider plugins.
 
 export {
+  applyAnthropicPayloadPolicyToParams,
+  resolveAnthropicPayloadPolicy,
+} from "../agents/anthropic-payload-policy.js";
+export {
   buildCopilotDynamicHeaders,
   hasCopilotVisionInput,
 } from "../agents/copilot-dynamic-headers.js";

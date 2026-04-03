@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
+export { buildCommandsPaginationKeyboard } from "../../extensions/telegram/api.js";
 export {
   createPreCryptoDirectDmAuthorizer,
   resolveInboundDirectDmAccessWithRuntime,

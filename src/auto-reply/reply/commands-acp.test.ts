@@ -100,9 +100,10 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
-vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
+vi.mock("../../infra/outbound/session-binding-service.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../infra/outbound/session-binding-service.js")
+  >("../../infra/outbound/session-binding-service.js");
   const patched = { ...actual } as typeof actual & {
     getSessionBindingService: () => ReturnType<typeof createAcpCommandSessionBindingService>;
   };

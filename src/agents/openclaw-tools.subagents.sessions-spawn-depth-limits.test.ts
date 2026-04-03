@@ -18,8 +18,8 @@ let addSubagentRunForTests: typeof import("./subagent-registry.js").addSubagentR
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
 let createSessionsSpawnTool: typeof import("./tools/sessions-spawn-tool.js").createSessionsSpawnTool;
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => configOverride,
@@ -66,8 +66,9 @@ async function loadFreshSessionsSpawnModulesForTest() {
   vi.doMock("../gateway/call.js", () => ({
     callGateway: (opts: unknown) => callGatewayMock(opts),
   }));
-  vi.doMock("../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/config.js")>();
+  vi.doMock("../config/config.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
     return {
       ...actual,
       loadConfig: () => configOverride,

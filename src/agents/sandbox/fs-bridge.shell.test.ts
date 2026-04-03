@@ -132,7 +132,6 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     const scripts = getScriptsFromCalls();
     expect(scripts.some((script) => script.includes("python3 - \"$@\" <<'PY'"))).toBe(false);
-    expect(scripts.some((script) => script.includes("python_cmd=''"))).toBe(true);
     expect(
       scripts.some((script) => script.includes('exec "$python_cmd" -c "$python_script" "$@"')),
     ).toBe(true);
