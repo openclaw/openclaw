@@ -1,3 +1,4 @@
+import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
@@ -449,7 +450,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         }
       } catch (err) {
         if (!isInvoke) {
-          response.status(500).send({ error: String(err) });
+          response.status(500).send({ error: formatUnknownError(err) });
         }
       }
     },
