@@ -85,4 +85,58 @@ describe("nostr outbound cfg threading", () => {
 
     cleanup.stop();
   });
+
+  it("uses the configured defaultAccount when accountId is omitted", async () => {
+    const resolveMarkdownTableMode = vi.fn(() => "off");
+    const convertMarkdownTables = vi.fn((text: string) => text);
+    setNostrRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode,
+          convertMarkdownTables,
+        },
+      },
+      reply: {},
+    } as unknown as PluginRuntime);
+
+    const sendDm = vi.fn(async () => {});
+    const bus = {
+      sendDm,
+      close: vi.fn(),
+      getMetrics: vi.fn(() => ({ counters: {} })),
+      publishProfile: vi.fn(),
+      getProfileState: vi.fn(async () => null),
+    };
+    mocks.startNostrBus.mockResolvedValueOnce(bus as any);
+
+    const cleanup = (await nostrPlugin.gateway!.startAccount!(
+      createStartAccountContext({
+        account: buildResolvedNostrAccount({ accountId: "work" }),
+      }),
+    )) as { stop: () => void };
+
+    const cfg = {
+      channels: {
+        nostr: {
+          privateKey: TEST_RESOLVED_PRIVATE_KEY, // pragma: allowlist secret
+          defaultAccount: "work",
+        },
+      },
+    };
+
+    await nostrPlugin.outbound!.sendText!({
+      cfg: cfg as any,
+      to: "NPUB123",
+      text: "hello",
+    });
+
+    expect(resolveMarkdownTableMode).toHaveBeenCalledWith({
+      cfg,
+      channel: "nostr",
+      accountId: "work",
+    });
+    expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello");
+
+    cleanup.stop();
+  });
 });
