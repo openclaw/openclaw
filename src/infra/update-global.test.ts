@@ -147,6 +147,12 @@ describe("update global helpers", () => {
         ? path.join("C:\\Users\\me\\AppData\\Roaming\\npm", "node_modules")
         : "/opt/homebrew/lib/node_modules";
     expect(resolveGlobalManagerCommand("npm", npmRoot)).toBe(npmCommand);
+    const pnpmRoot = process.platform === "win32"
+      ? path.join("C:\\Users\\me\\AppData\\Local\\pnpm", "global", "5", "node_modules")
+      : "/home/me/.local/share/pnpm/global/5/node_modules";
+    expect(resolveGlobalManagerCommand("pnpm", pnpmRoot)).toBe(
+      process.platform === "win32" ? "pnpm.cmd" : "pnpm",
+    );
     expect(globalInstallArgs("npm", "openclaw@latest", npmCommand)).toEqual([
       npmCommand,
       "i",
