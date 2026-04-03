@@ -87,6 +87,14 @@ function getErrorMessage(err: unknown) {
   return String(err);
 }
 
+export function setClawHubSearchQuery(state: SkillsState, query: string) {
+  state.clawhubSearchQuery = query;
+  state.clawhubInstallMessage = null;
+  state.clawhubSearchResults = null;
+  state.clawhubSearchError = null;
+  state.clawhubSearchLoading = false;
+}
+
 export async function loadSkills(state: SkillsState, options?: LoadSkillsOptions) {
   if (options?.clearMessages && Object.keys(state.skillMessages).length > 0) {
     state.skillMessages = {};
