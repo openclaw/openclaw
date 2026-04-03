@@ -15,6 +15,7 @@ import { splitReportBlocks, hasReportBlocks } from "@/lib/report-blocks";
 import { splitDiffBlocks, hasDiffBlocks } from "@/lib/diff-blocks";
 import type { ReportConfig } from "./charts/types";
 import { DiffCard } from "./diff-viewer";
+import { MessageVoiceButton } from "./message-voice-button";
 import { SyntaxBlock } from "./syntax-block";
 
 // Lazy-load ReportCard (uses Recharts which is heavy)
@@ -244,6 +245,27 @@ function parseAttachments(
 		.map((p) => p.trim())
 		.filter(Boolean);
 	return { paths, message };
+}
+
+function normalizeSpeechText(text: string): string {
+	return text
+		.replace(/```[\s\S]*?```/g, " Code block omitted. ")
+		.replace(/`([^`]+)`/g, "$1")
+		.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+		.replace(/^#{1,6}\s+/gm, "")
+		.replace(/[*_~]/g, "")
+		.replace(/\n{3,}/g, "\n\n")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+function extractSpeechText(segments: MessageSegment[]): string {
+	return normalizeSpeechText(
+		segments
+			.filter((segment): segment is { type: "text"; text: string } => segment.type === "text")
+			.map((segment) => segment.text)
+			.join("\n\n"),
+	);
 }
 
 function getCategoryFromPath(
@@ -732,7 +754,7 @@ function FeedbackButtons({ messageId, sessionId }: { messageId: string; sessionI
 	const btnBase = "p-1 rounded-md transition-colors";
 
 	return (
-		<div ref={triggerRef} className="flex items-center gap-0.5 mt-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+		<div ref={triggerRef} className="flex items-center gap-0.5">
 			<button
 				type="button"
 				onClick={() => respond("up")}
@@ -767,9 +789,10 @@ function FeedbackButtons({ messageId, sessionId }: { messageId: string; sessionI
 
 /* ─── Chat message ─── */
 
-export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onSubagentClick, onFilePathClick, sessionId, userHtmlMap }: { message: UIMessage; isStreaming?: boolean; onSubagentClick?: (task: string) => void; onFilePathClick?: FilePathClickHandler; sessionId?: string | null; userHtmlMap?: Map<string, string> }) {
+export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onSubagentClick, onFilePathClick, sessionId, voicePlaybackEnabled = false, userHtmlMap }: { message: UIMessage; isStreaming?: boolean; onSubagentClick?: (task: string) => void; onFilePathClick?: FilePathClickHandler; sessionId?: string | null; voicePlaybackEnabled?: boolean; userHtmlMap?: Map<string, string> }) {
 	const isUser = message.role === "user";
 	const segments = groupParts(message.parts);
+	const speechText = useMemo(() => extractSpeechText(segments), [segments]);
 	const markdownComponents = useMemo(
 		() => createMarkdownComponents(onFilePathClick),
 		[onFilePathClick],
@@ -991,7 +1014,12 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming, onS
 			);
 			})}
 			</AnimatePresence>
-			{!isStreaming && POSTHOG_KEY && <FeedbackButtons messageId={message.id} sessionId={sessionId} />}
+			{!isStreaming && (POSTHOG_KEY || (voicePlaybackEnabled && speechText)) && (
+				<div className="flex items-center gap-1 mt-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+					{voicePlaybackEnabled && speechText && <MessageVoiceButton text={speechText} />}
+					{POSTHOG_KEY && <FeedbackButtons messageId={message.id} sessionId={sessionId} />}
+				</div>
+			)}
 		</div>
 	);
 });

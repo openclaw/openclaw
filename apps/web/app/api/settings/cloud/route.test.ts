@@ -4,17 +4,20 @@ import { GET, POST } from "./route";
 vi.mock("@/lib/dench-cloud-settings", () => ({
   getCloudSettingsState: vi.fn(),
   saveApiKey: vi.fn(),
+  saveVoiceId: vi.fn(),
   selectModel: vi.fn(),
 }));
 
 const {
   getCloudSettingsState,
   saveApiKey,
+  saveVoiceId,
   selectModel,
 } = await import("@/lib/dench-cloud-settings");
 
 const mockedGet = vi.mocked(getCloudSettingsState);
 const mockedSaveKey = vi.mocked(saveApiKey);
+const mockedSaveVoice = vi.mocked(saveVoiceId);
 const mockedSelectModel = vi.mocked(selectModel);
 
 const validState = {
@@ -24,6 +27,8 @@ const validState = {
   primaryModel: "dench-cloud/anthropic.claude-opus-4-6-v1",
   isDenchPrimary: true,
   selectedDenchModel: "anthropic.claude-opus-4-6-v1",
+  selectedVoiceId: "voice_123",
+  elevenLabsEnabled: true,
   models: [
     {
       id: "claude-opus-4.6",
@@ -138,6 +143,28 @@ describe("cloud settings API", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "select_model", stableId: "" }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+  });
+
+  it("POST save_voice persists the selected voice", async () => {
+    mockedSaveVoice.mockResolvedValue({ state: validState, changed: true, refresh: refreshOk });
+    const req = new Request("http://localhost/api/settings/cloud", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save_voice", voiceId: "voice_123" }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(mockedSaveVoice).toHaveBeenCalledWith("voice_123");
+  });
+
+  it("POST save_voice rejects invalid voice payloads", async () => {
+    const req = new Request("http://localhost/api/settings/cloud", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save_voice", voiceId: 123 }),
     });
     const res = await POST(req);
     expect(res.status).toBe(400);

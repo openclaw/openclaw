@@ -1,6 +1,7 @@
 import {
   getCloudSettingsState,
   saveApiKey,
+  saveVoiceId,
   selectModel,
 } from "@/lib/dench-cloud-settings";
 
@@ -20,9 +21,10 @@ export async function GET() {
 }
 
 type PostBody = {
-  action: "save_key" | "select_model";
+  action: "save_key" | "select_model" | "save_voice";
   apiKey?: string;
   stableId?: string;
+  voiceId?: string | null;
 };
 
 export async function POST(request: Request) {
@@ -69,8 +71,31 @@ export async function POST(request: Request) {
     }
   }
 
+  if (body.action === "save_voice") {
+    try {
+      const voiceId = typeof body.voiceId === "string"
+        ? body.voiceId.trim() || null
+        : body.voiceId === null || body.voiceId === undefined
+          ? null
+          : undefined;
+      if (voiceId === undefined) {
+        return Response.json({ error: "Field 'voiceId' must be a string or null." }, { status: 400 });
+      }
+      const result = await saveVoiceId(voiceId);
+      if (result.error) {
+        return Response.json({ error: result.error, ...result }, { status: 409 });
+      }
+      return Response.json(result);
+    } catch (err) {
+      return Response.json(
+        { error: err instanceof Error ? err.message : "Failed to save voice." },
+        { status: 500 },
+      );
+    }
+  }
+
   return Response.json(
-    { error: "Unknown action. Use 'save_key' or 'select_model'." },
+    { error: "Unknown action. Use 'save_key', 'select_model', or 'save_voice'." },
     { status: 400 },
   );
 }

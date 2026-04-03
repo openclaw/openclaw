@@ -133,7 +133,7 @@ vi.mock("./composio-tool-index", () => ({
   rebuildComposioToolIndexIfReady: mocks.rebuildComposioToolIndexIfReady,
 }));
 
-import { saveApiKey, selectModel } from "./dench-cloud-settings";
+import { saveApiKey, saveVoiceId, selectModel } from "./dench-cloud-settings";
 
 describe("dench cloud settings", () => {
   beforeEach(() => {
@@ -225,5 +225,49 @@ describe("dench cloud settings", () => {
     const written = JSON.parse(mocks.state.configText);
     expect(written.agents.defaults.model.primary).toBe("dench-cloud/claude-sonnet-4.6");
     expect(written.mcp.servers.composio.headers.Authorization).toBe("Bearer dc-key");
+  });
+
+  it("preserves a stored voiceId without re-enabling ElevenLabs during model changes", async () => {
+    mocks.state.configText = JSON.stringify({
+      models: {
+        providers: {
+          "dench-cloud": {
+            apiKey: "dc-key",
+          },
+        },
+      },
+      messages: {
+        tts: {
+          providers: {
+            elevenlabs: {
+              voiceId: "voice_123",
+            },
+          },
+        },
+      },
+    });
+
+    await selectModel("claude-sonnet-4.6");
+
+    const written = JSON.parse(mocks.state.configText);
+    expect(written.messages.tts.provider).toBeUndefined();
+    expect(written.messages.tts.providers.elevenlabs).toEqual({
+      voiceId: "voice_123",
+    });
+  });
+
+  it("stores the selected ElevenLabs voice without restarting the gateway", async () => {
+    const result = await saveVoiceId("voice_456");
+
+    expect(result.changed).toBe(true);
+    expect(result.refresh).toEqual({
+      attempted: false,
+      restarted: false,
+      error: null,
+      profile: "default",
+    });
+
+    const written = JSON.parse(mocks.state.configText);
+    expect(written.messages.tts.providers.elevenlabs.voiceId).toBe("voice_456");
   });
 });

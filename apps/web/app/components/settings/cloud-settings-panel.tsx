@@ -15,6 +15,15 @@ type CatalogModel = {
   reasoning: boolean;
 };
 
+type VoiceOption = {
+  voiceId: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  previewUrl: string | null;
+  labels: string[];
+};
+
 type CloudState = {
   status: CloudStatus;
   apiKeySource: "config" | "env" | "missing";
@@ -22,6 +31,8 @@ type CloudState = {
   primaryModel: string | null;
   isDenchPrimary: boolean;
   selectedDenchModel: string | null;
+  selectedVoiceId: string | null;
+  elevenLabsEnabled: boolean;
   models: CatalogModel[];
   recommendedModelId: string;
   validationError?: string;
@@ -180,18 +191,30 @@ function ApiKeyEntry({
 function ModelSelector({
   models,
   selectedModel,
+  selectedVoiceId,
+  elevenLabsEnabled,
   isDenchPrimary,
   recommendedModelId,
   onSelect,
+  onSelectVoice,
   selecting,
+  savingVoice,
+  voiceLoading,
+  voices,
   notice,
 }: {
   models: CatalogModel[];
   selectedModel: string | null;
+  selectedVoiceId: string | null;
+  elevenLabsEnabled: boolean;
   isDenchPrimary: boolean;
   recommendedModelId: string;
   onSelect: (stableId: string) => void;
+  onSelectVoice: (voiceId: string | null) => void;
   selecting: boolean;
+  savingVoice: boolean;
+  voiceLoading: boolean;
+  voices: VoiceOption[];
   notice: ActionNotice | null;
 }) {
   const pickerModels: ChatModelSelectorOption[] = models.map((model) => ({
@@ -201,6 +224,7 @@ function ModelSelector({
     reasoning: model.reasoning,
     isRecommended: model.id === recommendedModelId,
   }));
+  const selectedVoice = voices.find((voice) => voice.voiceId === selectedVoiceId) ?? null;
 
   return (
     <div className="space-y-4">
@@ -262,6 +286,57 @@ function ModelSelector({
         </div>
       </div>
 
+      <div>
+        <label
+          className="block text-xs font-medium mb-2"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          ElevenLabs Voice
+        </label>
+        <div
+          className="rounded-xl border px-3 py-2.5"
+          style={{
+            background: "var(--color-surface)",
+            borderColor: "var(--color-border)",
+          }}
+        >
+          <select
+            value={selectedVoiceId ?? ""}
+            onChange={(event) => onSelectVoice(event.target.value || null)}
+            disabled={voiceLoading || savingVoice || voices.length === 0}
+            className="w-full bg-transparent text-sm outline-none"
+            style={{ color: "var(--color-text)" }}
+            aria-label="Select ElevenLabs voice"
+          >
+            <option value="">
+              {voiceLoading
+                ? "Loading voices..."
+                : voices.length > 0
+                  ? "Default voice (first available)"
+                  : "No voices available"}
+            </option>
+            {voices.map((voice) => (
+              <option key={voice.voiceId} value={voice.voiceId}>
+                {voice.name}
+                {voice.category ? ` · ${voice.category}` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="mt-2 space-y-1">
+          <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+            {elevenLabsEnabled
+              ? "Used for message playback and server-side voice input."
+              : "Choose a voice now. Playback and server-side voice input stay off until ElevenLabs is enabled in Integrations."}
+          </p>
+          {selectedVoice?.description && (
+            <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+              {selectedVoice.description}
+            </p>
+          )}
+        </div>
+      </div>
+
       {notice && <NoticeBanner notice={notice} />}
     </div>
   );
@@ -269,10 +344,13 @@ function ModelSelector({
 
 export function CloudSettingsPanel() {
   const [data, setData] = useState<CloudState | null>(null);
+  const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [loading, setLoading] = useState(true);
+  const [voiceLoading, setVoiceLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [selecting, setSelecting] = useState(false);
+  const [savingVoice, setSavingVoice] = useState(false);
   const [notice, setNotice] = useState<ActionNotice | null>(null);
 
   const fetchState = useCallback(async () => {
@@ -293,6 +371,44 @@ export function CloudSettingsPanel() {
   useEffect(() => {
     void fetchState();
   }, [fetchState]);
+
+  useEffect(() => {
+    if (data?.status !== "valid") {
+      setVoices([]);
+      return;
+    }
+
+    let cancelled = false;
+    setVoiceLoading(true);
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/voice/voices");
+        if (!response.ok) {
+          if (!cancelled) {
+            setVoices([]);
+          }
+          return;
+        }
+        const payload = await response.json() as { voices?: VoiceOption[] };
+        if (!cancelled) {
+          setVoices(Array.isArray(payload.voices) ? payload.voices : []);
+        }
+      } catch {
+        if (!cancelled) {
+          setVoices([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setVoiceLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.status, data?.gatewayUrl]);
 
   const handleSaveKey = useCallback(async (apiKey: string) => {
     setSaving(true);
@@ -381,6 +497,41 @@ export function CloudSettingsPanel() {
     }
   }, []);
 
+  const handleSelectVoice = useCallback(async (voiceId: string | null) => {
+    setSavingVoice(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/settings/cloud", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save_voice", voiceId }),
+      });
+      const payload = await res.json();
+      if (!res.ok) {
+        setNotice({
+          tone: "error",
+          message: payload.error ?? "Failed to save voice.",
+        });
+        return;
+      }
+      setData(payload.state);
+      const selectedName = voices.find((voice) => voice.voiceId === voiceId)?.name;
+      setNotice({
+        tone: "success",
+        message: voiceId
+          ? `Saved ${selectedName ?? "your selected voice"} for ElevenLabs playback.`
+          : "Cleared the custom ElevenLabs voice selection.",
+      });
+    } catch (err) {
+      setNotice({
+        tone: "error",
+        message: err instanceof Error ? err.message : "Failed to save voice.",
+      });
+    } finally {
+      setSavingVoice(false);
+    }
+  }, [voices]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -432,10 +583,16 @@ export function CloudSettingsPanel() {
       <ModelSelector
         models={data.models}
         selectedModel={data.selectedDenchModel}
+        selectedVoiceId={data.selectedVoiceId}
+        elevenLabsEnabled={data.elevenLabsEnabled}
         isDenchPrimary={data.isDenchPrimary}
         recommendedModelId={data.recommendedModelId}
         onSelect={handleSelectModel}
+        onSelectVoice={handleSelectVoice}
         selecting={selecting}
+        savingVoice={savingVoice}
+        voiceLoading={voiceLoading}
+        voices={voices}
         notice={notice}
       />
       <div>

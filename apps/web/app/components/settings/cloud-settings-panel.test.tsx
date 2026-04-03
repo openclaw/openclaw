@@ -16,6 +16,8 @@ const baseState = {
   primaryModel: null,
   isDenchPrimary: false,
   selectedDenchModel: null,
+  selectedVoiceId: null,
+  elevenLabsEnabled: true,
   models: [
     {
       id: "claude-opus-4.6",
@@ -35,6 +37,19 @@ const baseState = {
   recommendedModelId: "claude-opus-4.6",
 };
 
+const voicesPayload = {
+  voices: [
+    {
+      voiceId: "voice_123",
+      name: "Rachel",
+      description: "Warm narration voice",
+      category: "premade",
+      previewUrl: null,
+      labels: [],
+    },
+  ],
+};
+
 describe("CloudSettingsPanel", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -45,6 +60,9 @@ describe("CloudSettingsPanel", () => {
       const url = typeof input === "string" ? input : input.toString();
       if (url === "/api/settings/cloud") {
         return new Response(JSON.stringify(baseState));
+      }
+      if (url === "/api/voice/voices") {
+        return new Response(JSON.stringify(voicesPayload));
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }) as typeof fetch;
@@ -66,6 +84,9 @@ describe("CloudSettingsPanel", () => {
       const url = typeof input === "string" ? input : input.toString();
       if (url === "/api/settings/cloud" && (!init || init.method === undefined)) {
         return new Response(JSON.stringify(baseState));
+      }
+      if (url === "/api/voice/voices") {
+        return new Response(JSON.stringify(voicesPayload));
       }
 
       if (url === "/api/settings/cloud" && init?.method === "POST") {
@@ -96,6 +117,51 @@ describe("CloudSettingsPanel", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Switched to GPT-5.4 and the dench gateway restarted successfully.")).toBeInTheDocument();
+    });
+  });
+
+  it("saves the selected ElevenLabs voice", async () => {
+    const user = userEvent.setup();
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/settings/cloud" && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify(baseState));
+      }
+      if (url === "/api/voice/voices") {
+        return new Response(JSON.stringify(voicesPayload));
+      }
+      if (url === "/api/settings/cloud" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { action: string; voiceId: string };
+        expect(body).toEqual({ action: "save_voice", voiceId: "voice_123" });
+        return new Response(JSON.stringify({
+          state: {
+            ...baseState,
+            selectedVoiceId: "voice_123",
+          },
+          refresh: {
+            attempted: false,
+            restarted: false,
+            error: null,
+            profile: "default",
+          },
+        }));
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    render(<CloudSettingsPanel />);
+
+    const voiceSelect = await screen.findByRole("combobox", { name: "Select ElevenLabs voice" });
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Rachel/ })).toBeInTheDocument();
+      expect(voiceSelect).not.toBeDisabled();
+    });
+    await user.selectOptions(voiceSelect, "voice_123");
+
+    await waitFor(() => {
+      expect(screen.getByText("Saved Rachel for ElevenLabs playback.")).toBeInTheDocument();
     });
   });
 });

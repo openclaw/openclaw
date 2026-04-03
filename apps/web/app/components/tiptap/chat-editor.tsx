@@ -33,6 +33,8 @@ export type ChatEditorHandle = {
 	submit: () => void;
 	/** Replace the editor content with the given text and focus at end. */
 	setText: (text: string) => void;
+	/** Append text to the current editor content and focus at end. */
+	appendText: (text: string) => void;
 };
 
 type ChatEditorProps = {
@@ -422,6 +424,18 @@ export const ChatEditor = forwardRef<ChatEditorHandle, ChatEditorProps>(
 			setText: (text: string) => {
 				editor?.commands.setContent(text);
 				editor?.commands.focus("end");
+			},
+			appendText: (text: string) => {
+				if (!editor) {return;}
+				const nextText = text.trim();
+				if (!nextText) {return;}
+				const { text: currentText } = serializeContent(editor);
+				const separator = currentText.trim().length > 0 ? " " : "";
+				editor
+					.chain()
+					.focus("end")
+					.insertContent(`${separator}${nextText}`)
+					.run();
 			},
 		}));
 

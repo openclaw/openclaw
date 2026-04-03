@@ -18,6 +18,7 @@ import {
 	type SelectedFile,
 } from "./file-picker-modal";
 import { ChatEditor, type ChatEditorHandle } from "./tiptap/chat-editor";
+import { ChatVoiceInputButton } from "./chat-voice-input-button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -52,7 +53,9 @@ type AttachedFile = {
 };
 
 type ChatCloudState = {
+	status: "no_key" | "invalid_key" | "valid";
 	isDenchPrimary: boolean;
+	elevenLabsEnabled: boolean;
 	selectedDenchModel: string | null;
 	models: ChatModelOption[];
 };
@@ -108,7 +111,12 @@ function normalizeChatCloudState(value: unknown): ChatCloudState | null {
 				.filter((model): model is ChatModelOption => model !== null)
 		: [];
 	return {
+		status:
+			record.status === "no_key" || record.status === "invalid_key" || record.status === "valid"
+				? record.status
+				: "no_key",
 		isDenchPrimary: Boolean(record.isDenchPrimary),
+		elevenLabsEnabled: Boolean(record.elevenLabsEnabled),
 		selectedDenchModel:
 			typeof record.selectedDenchModel === "string" &&
 			record.selectedDenchModel.trim()
@@ -910,6 +918,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			setEditorEmpty(false);
 		}, []);
 
+		const handleVoiceTranscript = useCallback((text: string) => {
+			editorRef.current?.appendText(text);
+			setEditorEmpty(false);
+		}, []);
+
 		const filePath = fileContext?.path ?? null;
 
 		useEffect(() => {
@@ -1033,6 +1046,12 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			Boolean(currentSessionId) &&
 			Boolean(cloudState?.isDenchPrimary) &&
 			(cloudState?.models.length ?? 0) > 0;
+		const preferServerVoiceInput = Boolean(
+			cloudState?.status === "valid" && cloudState.elevenLabsEnabled,
+		);
+		const voicePlaybackEnabled = Boolean(
+			cloudState?.status === "valid" && cloudState.elevenLabsEnabled,
+		);
 
 		const onRuntimeStateChangeRef = useRef(onRuntimeStateChange);
 		onRuntimeStateChangeRef.current = onRuntimeStateChange;
@@ -2242,6 +2261,12 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 						)}
 					</div>
 					<div className="flex items-center gap-1.5">
+						<ChatVoiceInputButton
+							compact={compact}
+							disabled={loadingSession}
+							preferServerTranscription={preferServerVoiceInput}
+							onTranscript={handleVoiceTranscript}
+						/>
 						{isStreaming ? (
 							<button
 								type="button"
@@ -2584,6 +2609,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 								onSubagentClick={onSubagentClick}
 								onFilePathClick={onFilePathClick}
 								sessionId={currentSessionId}
+								voicePlaybackEnabled={voicePlaybackEnabled}
 								userHtmlMap={userHtmlMapRef.current}
 							/>
 						))}

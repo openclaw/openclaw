@@ -5,7 +5,6 @@ import {
   type DenchCloudCatalogModel,
   DEFAULT_DENCH_CLOUD_GATEWAY_URL,
   normalizeDenchGatewayUrl,
-  buildDenchGatewayApiBaseUrl,
   fetchDenchCloudCatalog,
   validateDenchCloudApiKey,
   buildDenchCloudConfigPatch,
@@ -24,6 +23,10 @@ function asRecord(value: unknown): UnknownRecord | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as UnknownRecord)
     : undefined;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function openClawConfigPath(): string {
@@ -86,7 +89,63 @@ function ensureRecord(parent: UnknownRecord, key: string): UnknownRecord {
   return fresh;
 }
 
+function readElevenLabsProvider(config: UnknownRecord): UnknownRecord | undefined {
+  return asRecord(asRecord(asRecord(config.messages)?.tts)?.providers)?.elevenlabs as UnknownRecord | undefined;
+}
+
+function readSelectedVoiceId(config: UnknownRecord): string | null {
+  return readString(readElevenLabsProvider(config)?.voiceId);
+}
+
+function isElevenLabsEnabled(config: UnknownRecord): boolean {
+  const tts = asRecord(asRecord(config.messages)?.tts);
+  const elevenlabs = readElevenLabsProvider(config);
+  return readString(tts?.provider) === "elevenlabs"
+    && Boolean(readString(elevenlabs?.baseUrl))
+    && Boolean(readString(elevenlabs?.apiKey));
+}
+
+function syncEnabledElevenLabsCredentials(
+  config: UnknownRecord,
+  params: { gatewayUrl: string; apiKey: string },
+): void {
+  const messages = ensureRecord(config, "messages");
+  const tts = ensureRecord(messages, "tts");
+  if (tts.provider !== "elevenlabs") {
+    return;
+  }
+  const providers = ensureRecord(tts, "providers");
+  const elevenlabs = ensureRecord(providers, "elevenlabs");
+  elevenlabs.baseUrl = params.gatewayUrl;
+  elevenlabs.apiKey = params.apiKey;
+}
+
+function setSelectedVoiceId(config: UnknownRecord, voiceId: string | null): void {
+  const messages = ensureRecord(config, "messages");
+  const tts = ensureRecord(messages, "tts");
+  const providers = ensureRecord(tts, "providers");
+  const elevenlabs = ensureRecord(providers, "elevenlabs");
+  if (voiceId) {
+    elevenlabs.voiceId = voiceId;
+  } else {
+    delete elevenlabs.voiceId;
+    if (Object.keys(elevenlabs).length === 0) {
+      delete providers.elevenlabs;
+    }
+  }
+}
+
 export type CloudSettingsStatus = "no_key" | "invalid_key" | "valid";
+
+export type CloudVoiceState = {
+  status: CloudSettingsStatus;
+  apiKeySource: "config" | "env" | "missing";
+  gatewayUrl: string;
+  apiKey: string | null;
+  selectedVoiceId: string | null;
+  elevenLabsEnabled: boolean;
+  validationError?: string;
+};
 
 export type CloudSettingsState = {
   status: CloudSettingsStatus;
@@ -95,6 +154,8 @@ export type CloudSettingsState = {
   primaryModel: string | null;
   isDenchPrimary: boolean;
   selectedDenchModel: string | null;
+  selectedVoiceId: string | null;
+  elevenLabsEnabled: boolean;
   models: DenchCloudCatalogModel[];
   recommendedModelId: string;
   validationError?: string;
@@ -119,13 +180,12 @@ async function rebuildComposioToolIndexBestEffort(): Promise<RebuildComposioTool
   }
 }
 
-export async function getCloudSettingsState(): Promise<CloudSettingsState> {
+export async function getCloudVoiceState(): Promise<CloudVoiceState> {
   const config = readConfig();
   const apiKey = resolveDenchApiKey(config);
   const gatewayUrl = resolveGatewayUrl(config);
-  const primaryModel = resolvePrimaryModel(config);
-  const isDenchPrimary = Boolean(primaryModel?.startsWith("dench-cloud/"));
-  const settings = readConfiguredDenchCloudSettings(config);
+  const selectedVoiceId = readSelectedVoiceId(config);
+  const elevenLabsEnabled = isElevenLabsEnabled(config);
 
   const apiKeySource: "config" | "env" | "missing" = (() => {
     const models = asRecord(config.models);
@@ -140,11 +200,9 @@ export async function getCloudSettingsState(): Promise<CloudSettingsState> {
       status: "no_key",
       apiKeySource: "missing",
       gatewayUrl,
-      primaryModel,
-      isDenchPrimary,
-      selectedDenchModel: null,
-      models: [],
-      recommendedModelId: RECOMMENDED_DENCH_CLOUD_MODEL_ID,
+      apiKey: null,
+      selectedVoiceId,
+      elevenLabsEnabled,
     };
   }
 
@@ -155,24 +213,72 @@ export async function getCloudSettingsState(): Promise<CloudSettingsState> {
       status: "invalid_key",
       apiKeySource,
       gatewayUrl,
-      primaryModel,
-      isDenchPrimary,
-      selectedDenchModel: null,
-      models: [],
-      recommendedModelId: RECOMMENDED_DENCH_CLOUD_MODEL_ID,
+      apiKey,
+      selectedVoiceId,
+      elevenLabsEnabled,
       validationError: err instanceof Error ? err.message : "API key validation failed.",
     };
   }
-
-  const catalog = await fetchDenchCloudCatalog(gatewayUrl);
 
   return {
     status: "valid",
     apiKeySource,
     gatewayUrl,
+    apiKey,
+    selectedVoiceId,
+    elevenLabsEnabled,
+  };
+}
+
+export async function getCloudSettingsState(): Promise<CloudSettingsState> {
+  const config = readConfig();
+  const primaryModel = resolvePrimaryModel(config);
+  const isDenchPrimary = Boolean(primaryModel?.startsWith("dench-cloud/"));
+  const settings = readConfiguredDenchCloudSettings(config);
+  const voiceState = await getCloudVoiceState();
+
+  if (voiceState.status === "no_key") {
+    return {
+      status: "no_key",
+      apiKeySource: "missing",
+      gatewayUrl: voiceState.gatewayUrl,
+      primaryModel,
+      isDenchPrimary,
+      selectedDenchModel: null,
+      selectedVoiceId: voiceState.selectedVoiceId,
+      elevenLabsEnabled: voiceState.elevenLabsEnabled,
+      models: [],
+      recommendedModelId: RECOMMENDED_DENCH_CLOUD_MODEL_ID,
+    };
+  }
+
+  if (voiceState.status === "invalid_key") {
+    return {
+      status: "invalid_key",
+      apiKeySource: voiceState.apiKeySource,
+      gatewayUrl: voiceState.gatewayUrl,
+      primaryModel,
+      isDenchPrimary,
+      selectedDenchModel: null,
+      selectedVoiceId: voiceState.selectedVoiceId,
+      elevenLabsEnabled: voiceState.elevenLabsEnabled,
+      models: [],
+      recommendedModelId: RECOMMENDED_DENCH_CLOUD_MODEL_ID,
+      validationError: voiceState.validationError,
+    };
+  }
+
+  const catalog = await fetchDenchCloudCatalog(voiceState.gatewayUrl);
+
+  return {
+    status: "valid",
+    apiKeySource: voiceState.apiKeySource,
+    gatewayUrl: voiceState.gatewayUrl,
     primaryModel,
     isDenchPrimary,
     selectedDenchModel: settings.selectedModel ?? null,
+    selectedVoiceId: voiceState.selectedVoiceId,
+    elevenLabsEnabled: voiceState.elevenLabsEnabled,
     models: catalog.models,
     recommendedModelId: RECOMMENDED_DENCH_CLOUD_MODEL_ID,
   };
@@ -218,6 +324,8 @@ export async function saveApiKey(apiKey: string): Promise<CloudSettingsUpdateRes
     const existingModels = asRecord(defaults.models) ?? {};
     defaults.models = { ...existingModels, ...(asRecord(patchAgentModels.models) ?? {}) };
   }
+
+  syncEnabledElevenLabsCredentials(config, { gatewayUrl, apiKey });
 
   const patchMcp = asRecord((patch as UnknownRecord).mcp);
   if (patchMcp) {
@@ -278,15 +386,7 @@ export async function selectModel(stableId: string): Promise<CloudSettingsUpdate
     const existingModels = asRecord(defaults.models) ?? {};
     defaults.models = { ...existingModels, ...(asRecord(patchAgentModels.models) ?? {}) };
   }
-
-  const messages = ensureRecord(config, "messages");
-  const tts = ensureRecord(messages, "tts");
-  tts.provider = "elevenlabs";
-  const ttsProviders = ensureRecord(tts, "providers");
-  ttsProviders.elevenlabs = {
-    baseUrl: gatewayUrl,
-    apiKey,
-  };
+  syncEnabledElevenLabsCredentials(config, { gatewayUrl, apiKey });
 
   const patchMcp = asRecord((patch as UnknownRecord).mcp);
   if (patchMcp) {
@@ -305,4 +405,28 @@ export async function selectModel(stableId: string): Promise<CloudSettingsUpdate
   const state = await getCloudSettingsState();
 
   return { state, changed: true, refresh, toolIndexRebuild };
+}
+
+export async function saveVoiceId(voiceId: string | null): Promise<CloudSettingsUpdateResult> {
+  const config = readConfig();
+  const nextVoiceId = voiceId?.trim() || null;
+  const currentVoiceId = readSelectedVoiceId(config);
+  const refresh = { attempted: false, restarted: false, error: null, profile: "default" } as const;
+
+  if (currentVoiceId === nextVoiceId) {
+    return {
+      state: await getCloudSettingsState(),
+      changed: false,
+      refresh,
+    };
+  }
+
+  setSelectedVoiceId(config, nextVoiceId);
+  writeConfig(config);
+
+  return {
+    state: await getCloudSettingsState(),
+    changed: true,
+    refresh,
+  };
 }
