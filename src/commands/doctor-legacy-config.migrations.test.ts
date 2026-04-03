@@ -232,15 +232,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
 
     expect(res.config.channels?.discord?.streaming).toBe("block");
-<<<<<<< HEAD
-    expect(
-      (res.config.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
-||||||| parent of 82b78a0a86 (fix: align config and plugin test types)
-    expect(res.config.channels?.discord?.streamMode).toBeUndefined();
-=======
     expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
->>>>>>> 82b78a0a86 (fix: align config and plugin test types)
     expect(res.changes).toEqual([
       "Moved channels.discord.streamMode → channels.discord.streaming (block).",
       "Normalized channels.discord.streaming boolean → enum (block).",
@@ -259,15 +251,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
 
     expect(res.config.channels?.telegram?.streaming).toBe("block");
-<<<<<<< HEAD
-    expect(
-      (res.config.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
-||||||| parent of 82b78a0a86 (fix: align config and plugin test types)
-    expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
-=======
     expect(getLegacyProperty(res.config.channels?.telegram, "streamMode")).toBeUndefined();
->>>>>>> 82b78a0a86 (fix: align config and plugin test types)
     expect(res.changes).toEqual([
       "Moved channels.telegram.streamMode → channels.telegram.streaming (block).",
     ]);
@@ -287,15 +271,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     expect(res.config.channels?.slack?.streaming).toBe("progress");
     expect(res.config.channels?.slack?.nativeStreaming).toBe(false);
-<<<<<<< HEAD
-    expect(
-      (res.config.channels?.slack as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
-||||||| parent of 82b78a0a86 (fix: align config and plugin test types)
-    expect(res.config.channels?.slack?.streamMode).toBeUndefined();
-=======
     expect(getLegacyProperty(res.config.channels?.slack, "streamMode")).toBeUndefined();
->>>>>>> 82b78a0a86 (fix: align config and plugin test types)
     expect(res.changes).toEqual([
       "Moved channels.slack.streamMode → channels.slack.streaming (progress).",
       "Moved channels.slack.streaming (boolean) → channels.slack.nativeStreaming (false).",

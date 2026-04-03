@@ -650,25 +650,6 @@ describe("tts", () => {
 
   describe("resolveTtsConfig provider normalization", () => {
     it("normalizes legacy edge provider ids to microsoft", () => {
-<<<<<<< HEAD
-      const config = resolveTtsConfig(
-        asLegacyOpenClawConfig({
-          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-          messages: {
-            tts: {
-              provider: "edge",
-              edge: {
-                enabled: true,
-              },
-||||||| parent of 82b78a0a86 (fix: align config and plugin test types)
-      const config = resolveTtsConfig({
-        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-        messages: {
-          tts: {
-            provider: "edge",
-            edge: {
-              enabled: true,
-=======
       const config = resolveTtsConfig(
         asLegacyTtsConfig({
           agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
@@ -678,7 +659,6 @@ describe("tts", () => {
               edge: {
                 enabled: true,
               },
->>>>>>> 82b78a0a86 (fix: align config and plugin test types)
             },
           },
         }),
@@ -1008,13 +988,7 @@ describe("tts", () => {
           },
         },
       },
-<<<<<<< HEAD
     });
-||||||| parent of 82b78a0a86 (fix: align config and plugin test types)
-    };
-=======
-    } as unknown as OpenClawConfig;
->>>>>>> 82b78a0a86 (fix: align config and plugin test types)
 
     const withMockedAutoTtsFetch = async (
       run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
