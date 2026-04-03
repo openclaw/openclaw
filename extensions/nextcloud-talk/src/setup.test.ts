@@ -363,4 +363,28 @@ describe("resolveNextcloudTalkAccount", () => {
     expect(account.secretSource).toBe("none");
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const account = resolveNextcloudTalkAccount({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            defaultAccount: "work",
+            botSecret: "top-secret",
+            accounts: {
+              work: {
+                baseUrl: "https://cloud.example.com",
+                botSecret: "work-secret",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+    });
+
+    expect(account.accountId).toBe("work");
+    expect(account.baseUrl).toBe("https://cloud.example.com");
+    expect(account.secret).toBe("work-secret");
+    expect(account.secretSource).toBe("config");
+  });
 });
