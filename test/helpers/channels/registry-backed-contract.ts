@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe } from "vitest";
-import { feishuThreadBindingTesting } from "../../../extensions/feishu/api.js";
-import { resetMatrixThreadBindingsForTests } from "../../../extensions/matrix/api.js";
 import {
   actionContractRegistry,
   directoryContractRegistry,
@@ -35,6 +33,8 @@ type DiscordThreadBindingTesting = {
 };
 
 let discordThreadBindingTestingCache: DiscordThreadBindingTesting | undefined;
+let feishuApiPromise: Promise<typeof import("../../../extensions/feishu/api.js")> | undefined;
+let matrixApiPromise: Promise<typeof import("../../../extensions/matrix/api.js")> | undefined;
 
 function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
   if (!discordThreadBindingTestingCache) {
@@ -45,9 +45,29 @@ function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
   }
   return discordThreadBindingTestingCache;
 }
-const { resetTelegramThreadBindingsForTests } = loadBundledPluginTestApiSync<{
-  resetTelegramThreadBindingsForTests: () => Promise<void>;
-}>("telegram");
+type ResetTelegramThreadBindingsForTests = () => Promise<void>;
+
+let resetTelegramThreadBindingsForTestsCache: ResetTelegramThreadBindingsForTests | undefined;
+
+function getResetTelegramThreadBindingsForTests(): ResetTelegramThreadBindingsForTests {
+  if (!resetTelegramThreadBindingsForTestsCache) {
+    ({ resetTelegramThreadBindingsForTests: resetTelegramThreadBindingsForTestsCache } =
+      loadBundledPluginTestApiSync<{
+        resetTelegramThreadBindingsForTests: ResetTelegramThreadBindingsForTests;
+      }>("telegram"));
+  }
+  return resetTelegramThreadBindingsForTestsCache;
+}
+
+async function getFeishuThreadBindingTesting() {
+  feishuApiPromise ??= import("../../../extensions/feishu/api.js");
+  return (await feishuApiPromise).feishuThreadBindingTesting;
+}
+
+async function getResetMatrixThreadBindingsForTests() {
+  matrixApiPromise ??= import("../../../extensions/matrix/api.js");
+  return (await matrixApiPromise).resetMatrixThreadBindingsForTests;
+}
 
 function hasEntries<T extends { id: string }>(
   entries: readonly T[],
@@ -164,9 +184,9 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
       setDefaultChannelPluginRegistryForTests();
       sessionBindingTesting.resetSessionBindingAdaptersForTests();
       getDiscordThreadBindingTesting().resetThreadBindingsForTests();
-      feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
-      resetMatrixThreadBindingsForTests();
-      await resetTelegramThreadBindingsForTests();
+      (await getFeishuThreadBindingTesting()).resetFeishuThreadBindingsForTests();
+      (await getResetMatrixThreadBindingsForTests())();
+      await getResetTelegramThreadBindingsForTests()();
     });
     afterEach(() => {
       clearRuntimeConfigSnapshot();

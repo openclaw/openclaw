@@ -2,13 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
-import { createThreadBindingManager as createDiscordThreadBindingManager } from "../../../../extensions/discord/runtime-api.js";
-import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
-import {
-  createMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
-} from "../../../../extensions/matrix/api.js";
-import { setMatrixRuntime } from "../../../../extensions/matrix/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getSessionBindingService,
@@ -40,6 +33,14 @@ type DiscordThreadBindingTesting = {
 };
 
 let discordThreadBindingTestingCache: DiscordThreadBindingTesting | undefined;
+let discordRuntimeApiPromise:
+  | Promise<typeof import("../../../../extensions/discord/runtime-api.js")>
+  | undefined;
+let feishuApiPromise: Promise<typeof import("../../../../extensions/feishu/api.js")> | undefined;
+let matrixApiPromise: Promise<typeof import("../../../../extensions/matrix/api.js")> | undefined;
+let matrixRuntimeApiPromise:
+  | Promise<typeof import("../../../../extensions/matrix/runtime-api.js")>
+  | undefined;
 
 function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
   if (!discordThreadBindingTestingCache) {
@@ -49,6 +50,26 @@ function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
       }>("discord"));
   }
   return discordThreadBindingTestingCache;
+}
+
+async function getDiscordRuntimeApi() {
+  discordRuntimeApiPromise ??= import("../../../../extensions/discord/runtime-api.js");
+  return await discordRuntimeApiPromise;
+}
+
+async function getFeishuApi() {
+  feishuApiPromise ??= import("../../../../extensions/feishu/api.js");
+  return await feishuApiPromise;
+}
+
+async function getMatrixApi() {
+  matrixApiPromise ??= import("../../../../extensions/matrix/api.js");
+  return await matrixApiPromise;
+}
+
+async function getMatrixRuntimeApi() {
+  matrixRuntimeApiPromise ??= import("../../../../extensions/matrix/runtime-api.js");
+  return await matrixRuntimeApiPromise;
 }
 
 function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
@@ -230,6 +251,8 @@ function resetMatrixSessionBindingStateDir() {
 
 async function createContractMatrixThreadBindingManager() {
   resetMatrixSessionBindingStateDir();
+  const { setMatrixRuntime } = await getMatrixRuntimeApi();
+  const { createMatrixThreadBindingManager } = await getMatrixApi();
   setMatrixRuntime({
     state: {
       resolveStateDir: () => matrixSessionBindingStateDir,
@@ -721,8 +744,9 @@ const sessionBindingContractEntries: Record<
       unbindSupported: true,
       placements: ["current", "child"],
     },
-    getCapabilities: () => {
-      createDiscordThreadBindingManager({
+    getCapabilities: async () => {
+      const { createThreadBindingManager } = await getDiscordRuntimeApi();
+      createThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -733,7 +757,8 @@ const sessionBindingContractEntries: Record<
       });
     },
     bindAndResolve: async () => {
-      createDiscordThreadBindingManager({
+      const { createThreadBindingManager } = await getDiscordRuntimeApi();
+      createThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -762,7 +787,8 @@ const sessionBindingContractEntries: Record<
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
-      const manager = createDiscordThreadBindingManager({
+      const { createThreadBindingManager } = await getDiscordRuntimeApi();
+      const manager = createThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -783,7 +809,8 @@ const sessionBindingContractEntries: Record<
       unbindSupported: true,
       placements: ["current"],
     },
-    getCapabilities: () => {
+    getCapabilities: async () => {
+      const { createFeishuThreadBindingManager } = await getFeishuApi();
       createFeishuThreadBindingManager({ cfg: baseSessionBindingCfg, accountId: "default" });
       return getSessionBindingService().getCapabilities({
         channel: "feishu",
@@ -791,6 +818,7 @@ const sessionBindingContractEntries: Record<
       });
     },
     bindAndResolve: async () => {
+      const { createFeishuThreadBindingManager } = await getFeishuApi();
       createFeishuThreadBindingManager({ cfg: baseSessionBindingCfg, accountId: "default" });
       const service = getSessionBindingService();
       const binding = await service.bind({
@@ -818,6 +846,7 @@ const sessionBindingContractEntries: Record<
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
+      const { createFeishuThreadBindingManager } = await getFeishuApi();
       const manager = createFeishuThreadBindingManager({
         cfg: baseSessionBindingCfg,
         accountId: "default",
@@ -933,6 +962,7 @@ const sessionBindingContractEntries: Record<
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
+      const { resetMatrixThreadBindingsForTests } = await getMatrixApi();
       resetMatrixThreadBindingsForTests();
       resetMatrixSessionBindingStateDir();
       expectClearedSessionBinding({
