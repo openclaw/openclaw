@@ -528,8 +528,8 @@ describe("isTransientHttpError", () => {
 });
 
 describe("classifyFailoverReasonFromHttpStatus", () => {
-  it("treats HTTP 401 permanent auth failures as auth_permanent", () => {
-    expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth_permanent");
+  it("treats HTTP 401 invalid_api_key as ambiguous auth", () => {
+    expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth");
   });
 
   it("treats HTTP 422 as format error", () => {
@@ -591,7 +591,7 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
   });
 
   it("preserves explicit billing and auth signals on HTTP 410", () => {
-    expect(classifyFailoverReasonFromHttpStatus(410, "invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReasonFromHttpStatus(410, "invalid_api_key")).toBe("auth");
     expect(classifyFailoverReasonFromHttpStatus(410, "authentication failed")).toBe("auth");
     expect(classifyFailoverReasonFromHttpStatus(410, "insufficient credits")).toBe("billing");
   });
@@ -613,7 +613,7 @@ describe("classifyFailoverReason", () => {
   });
 
   it("keeps explicit billing and auth signals on 410 text", () => {
-    expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth");
     expect(classifyFailoverReason("HTTP 410: authentication failed")).toBe("auth");
     expect(classifyFailoverReason("HTTP 410: insufficient credits")).toBe("billing");
   });
@@ -935,11 +935,15 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("LLM error: monthly limit reached")).toBe("rate_limit");
     expect(classifyFailoverReason("LLM error: daily limit exceeded")).toBe("rate_limit");
   });
-  it("classifies permanent auth errors as auth_permanent", () => {
-    expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
+  it("keeps only high-confidence auth failures in auth_permanent", () => {
+    expect(classifyFailoverReason("invalid_api_key")).toBe("auth");
+    expect(classifyFailoverReason("permission_error")).toBe("auth");
     expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
     expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
     expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
+    expect(
+      classifyFailoverReason("OAuth authentication is currently not allowed for this organization"),
+    ).toBe("auth_permanent");
   });
   it("classifies JSON api_error with transient signal as timeout", () => {
     expect(
@@ -1012,6 +1016,11 @@ describe("classifyFailoverReason", () => {
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"api_error","message":"permission_error"}}',
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"permission_error: OAuth authentication is currently not allowed for this organization"}}',
       ),
     ).toBe("auth_permanent");
   });

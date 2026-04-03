@@ -52,6 +52,20 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("auth.cooldowns auth_permanent backoff config", () => {
+  it("accepts auth_permanent backoff knobs", () => {
+    const result = OpenClawSchema.safeParse({
+      auth: {
+        cooldowns: {
+          authPermanentBackoffMinutes: 10,
+          authPermanentMaxMinutes: 60,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });

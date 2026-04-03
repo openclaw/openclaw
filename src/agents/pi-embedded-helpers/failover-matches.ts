@@ -81,13 +81,10 @@ const ERROR_PATTERNS = {
     /requires?\s+more\s+credits/i,
   ],
   authPermanent: [
-    /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,
-    "invalid_api_key",
+    /api[_ ]?key[_ ]?(?:revoked|deactivated|deleted)/i,
     "key has been disabled",
     "key has been revoked",
     "account has been deactivated",
-    /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
-    "permission_error",
     "not allowed for this organization",
   ],
   auth: [
@@ -97,6 +94,8 @@ const ERROR_PATTERNS = {
     "authentication",
     "re-authenticate",
     "oauth token refresh failed",
+    /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
+    "permission_error",
     "unauthorized",
     "forbidden",
     "access denied",

@@ -22,13 +22,12 @@ export type AuthConfig = {
     /** Billing backoff cap (hours). Default: 24. */
     billingMaxHours?: number;
     /**
-     * Base backoff for permanent-auth failures (minutes). These errors (e.g.
-     * API_KEY_INVALID) can be caused by transient provider outages, so the
-     * default is much shorter than billing backoff. Default: 10.
+     * Base backoff for high-confidence permanent-auth failures (minutes).
+     * Default: 10.
      */
     authPermanentBackoffMinutes?: number;
     /**
-     * Cap for permanent-auth backoff (minutes). Default: 60.
+     * Cap for high-confidence permanent-auth backoff (minutes). Default: 60.
      */
     authPermanentMaxMinutes?: number;
     /**
