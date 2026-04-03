@@ -56,7 +56,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - No real keys required
   - Should be fast and stable
 - Projects note:
-  - `pnpm test`, `pnpm test:projects`, and `pnpm test:watch` all invoke the same native Vitest `projects` config now.
+  - `pnpm test` and `pnpm test:watch` both use the same native Vitest `projects` config now.
   - The tiny script wrapper only strips pnpm's passthrough separator; scheduling stays native Vitest.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,

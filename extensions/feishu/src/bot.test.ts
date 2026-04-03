@@ -1652,7 +1652,7 @@ describe("handleFeishuMessage command authorization", () => {
           get: mockGetMerged,
         },
       },
-    });
+    } as unknown as PluginRuntime);
 
     const cfg: ClawdbotConfig = {
       channels: {
