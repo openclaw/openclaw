@@ -1,6 +1,9 @@
 import type { Api } from "@mariozechner/pi-ai";
 import type { ModelDefinitionConfig } from "../config/types.js";
-import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
+import type {
+  ConfiguredModelProviderRequest,
+  ConfiguredProviderRequest,
+} from "../config/types.provider-request.js";
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type {
@@ -294,6 +297,25 @@ export function sanitizeConfiguredProviderRequest(
     ...(auth ? { auth } : {}),
     ...(proxy ? { proxy } : {}),
     ...(tls ? { tls } : {}),
+  };
+}
+
+const MODEL_PROVIDER_REQUEST_TRANSPORT_MESSAGE =
+  "models.providers.*.request only supports headers and auth overrides; proxy and TLS transport settings are not wired for model-provider requests";
+
+export function sanitizeConfiguredModelProviderRequest(
+  request: ConfiguredModelProviderRequest | ConfiguredProviderRequest | undefined,
+): ProviderRequestTransportOverrides | undefined {
+  const sanitized = sanitizeConfiguredProviderRequest(request);
+  if (!sanitized) {
+    return undefined;
+  }
+  if (sanitized.proxy || sanitized.tls) {
+    throw new Error(MODEL_PROVIDER_REQUEST_TRANSPORT_MESSAGE);
+  }
+  return {
+    ...(sanitized.headers ? { headers: sanitized.headers } : {}),
+    ...(sanitized.auth ? { auth: sanitized.auth } : {}),
   };
 }
 

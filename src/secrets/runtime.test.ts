@@ -982,6 +982,48 @@ describe("secrets runtime snapshot", () => {
     expect(second?.search.selectedProvider).toBe("gemini");
   });
 
+  it("resolves model provider request secret refs for headers and auth", async () => {
+    const config = asConfig({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            request: {
+              headers: {
+                "X-Tenant": { source: "env", provider: "default", id: "OPENAI_PROVIDER_TENANT" },
+              },
+              auth: {
+                mode: "authorization-bearer",
+                token: { source: "env", provider: "default", id: "OPENAI_PROVIDER_TOKEN" },
+              },
+            },
+            models: [],
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {
+        OPENAI_PROVIDER_TENANT: "tenant-acme",
+        OPENAI_PROVIDER_TOKEN: "sk-provider-runtime", // pragma: allowlist secret
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.models?.providers?.openai?.request).toEqual({
+      headers: {
+        "X-Tenant": "tenant-acme",
+      },
+      auth: {
+        mode: "authorization-bearer",
+        token: "sk-provider-runtime",
+      },
+    });
+  });
+
   it("resolves file refs via configured file provider", async () => {
     if (process.platform === "win32") {
       return;

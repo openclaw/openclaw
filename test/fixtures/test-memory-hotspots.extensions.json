@@ -12,10 +12,6 @@
       "deltaKb": 2474639,
       "sources": ["checks-fast-extensions:2026-04-03"]
     },
-    "extensions/browser/src/browser/server-context.remote-tab-ops.test.ts": {
-      "deltaKb": 1855980,
-      "sources": ["checks-fast-extensions:2026-04-03"]
-    },
     "extensions/acpx/src/runtime.test.ts": {
       "deltaKb": 1824522,
       "sources": ["checks-fast-extensions:2026-04-03"]

@@ -2,6 +2,8 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.GatewayTlsProbeFailure
+import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -77,7 +79,7 @@ class GatewayBootstrapAuthTest {
         NodeRuntime(
           app,
           prefs,
-          tlsFingerprintProbe = { _, _ -> "fp-1" },
+          tlsFingerprintProbe = { _, _ -> GatewayTlsProbeResult(fingerprintSha256 = "fp-1") },
         )
       val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
       val explicitAuth =
@@ -98,12 +100,46 @@ class GatewayBootstrapAuthTest {
       assertEquals("setup-bootstrap-token", desiredBootstrapToken(runtime, "operatorSession"))
     }
 
+  @Test
+  fun connect_showsSecureEndpointGuidanceWhenTlsProbeFails() {
+    val app = RuntimeEnvironment.getApplication()
+    val runtime =
+      NodeRuntime(
+        app,
+        tlsFingerprintProbe = { _, _ ->
+          GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE)
+        },
+      )
+
+    runtime.connect(
+      GatewayEndpoint.manual(host = "gateway.example", port = 18789),
+      NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
+    )
+
+    assertEquals(
+      "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
+      waitForStatusText(runtime),
+    )
+    assertNull(runtime.pendingGatewayTrust.value)
+  }
+
   private fun waitForGatewayTrustPrompt(runtime: NodeRuntime): NodeRuntime.GatewayTrustPrompt {
     repeat(50) {
       runtime.pendingGatewayTrust.value?.let { return it }
       Thread.sleep(10)
     }
     error("Expected pending gateway trust prompt")
+  }
+
+  private fun waitForStatusText(runtime: NodeRuntime): String {
+    repeat(50) {
+      val status = runtime.statusText.value
+      if (status != "Verify gateway TLS fingerprint…") {
+        return status
+      }
+      Thread.sleep(10)
+    }
+    error("Expected status text update")
   }
 
   private fun desiredBootstrapToken(runtime: NodeRuntime, sessionFieldName: String): String? {
