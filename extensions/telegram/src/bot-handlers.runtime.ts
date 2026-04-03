@@ -1216,9 +1216,25 @@ export const registerTelegramHandlers = ({
       }
       const senderId = callback.from?.id ? String(callback.from.id) : "";
       const senderUsername = callback.from?.username ?? "";
-      // DM callbacks must enforce the same sender authorization gate as normal DM commands.
+      // Exec approval callbacks from authorized approvers must not be blocked by the DM
+      // allowlist check. Approvers are trusted for approval operations regardless of
+      // whether they appear in channels.telegram.allowFrom. Without this, approval button
+      // presses from DM approvers time out and commands execute via askFallback="full",
+      // bypassing the configured exec approval policy entirely.
+      const isExecApprovalFromAuthorizedDmSender =
+        !isGroup &&
+        isApprovalCallback &&
+        Boolean(senderId) &&
+        isTelegramExecApprovalAuthorizedSender({
+          cfg: telegramDeps.loadConfig(),
+          accountId,
+          senderId,
+        });
+      // DM callbacks must enforce the same sender authorization gate as normal DM commands,
+      // except for authorized exec approvers handling approval button presses.
       const authorizationMode: TelegramEventAuthorizationMode =
-        !isGroup || (!execApprovalButtonsEnabled && inlineButtonsScope === "allowlist")
+        (!isGroup && !isExecApprovalFromAuthorizedDmSender) ||
+        (!execApprovalButtonsEnabled && inlineButtonsScope === "allowlist")
           ? "callback-allowlist"
           : "callback-scope";
       const senderAuthorization = authorizeTelegramEventSender({
