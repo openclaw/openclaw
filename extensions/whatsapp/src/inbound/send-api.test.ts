@@ -82,7 +82,7 @@ describe("createWebSendApi", () => {
     );
   });
 
-  it("supports audio as push-to-talk voice note", async () => {
+  it("supports ogg audio as push-to-talk voice note", async () => {
     const payload = Buffer.from("aud");
     await api.sendMessage("+1555", "", payload, "audio/ogg", { accountId: "alt" });
     expect(sendMessage).toHaveBeenCalledWith(
@@ -97,6 +97,15 @@ describe("createWebSendApi", () => {
       channel: "whatsapp",
       accountId: "alt",
       direction: "outbound",
+    });
+  });
+
+  it("does not mark regular audio attachments as push-to-talk voice notes", async () => {
+    const payload = Buffer.from("aud");
+    await api.sendMessage("+1555", "", payload, "audio/mpeg", { accountId: "alt" });
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      audio: payload,
+      mimetype: "audio/mpeg",
     });
   });
 

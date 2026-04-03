@@ -23,8 +23,8 @@ function resolveMediaMimetype(message: proto.IMessage): string | undefined {
   if (explicit) {
     return explicit;
   }
-  // WhatsApp voice messages (PTT) and audio use OGG Opus by default
-  if (message.audioMessage) {
+  // Only voice notes (PTT) are safely inferred as OGG Opus when MIME is missing.
+  if (message.audioMessage?.ptt) {
     return "audio/ogg; codecs=opus";
   }
   if (message.imageMessage) {

@@ -18,6 +18,16 @@ import { elide } from "./util.js";
 
 const REASONING_PREFIX = "reasoning:";
 
+function shouldSendAsPtt(contentType?: string | null): boolean {
+  if (typeof contentType !== "string") {
+    return false;
+  }
+  const normalized = contentType.trim().toLowerCase();
+  return (
+    normalized === "audio/ogg" || normalized.startsWith("audio/ogg;") || normalized === "audio/opus"
+  );
+}
+
 function shouldSuppressReasoningReply(payload: ReplyPayload): boolean {
   if (payload.isReasoning === true) {
     return true;
@@ -144,7 +154,7 @@ export async function deliverWebReply(params: {
           () =>
             msg.sendMedia({
               audio: media.buffer,
-              ptt: true,
+              ...(shouldSendAsPtt(media.contentType) ? { ptt: true } : {}),
               mimetype: media.contentType,
               caption,
             }),

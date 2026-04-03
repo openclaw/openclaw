@@ -232,7 +232,7 @@ describe("deliverWebReply", () => {
     );
   });
 
-  it("sends audio media as ptt voice note", async () => {
+  it("sends ogg audio media as ptt voice note", async () => {
     const msg = makeMsg();
     (
       loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
@@ -259,6 +259,32 @@ describe("deliverWebReply", () => {
         caption: "cap",
       }),
     );
+  });
+
+  it("does not mark non-ogg audio media as ptt voice note", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("aud"),
+      contentType: "audio/mpeg",
+      kind: "audio",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/a.mp3" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith({
+      audio: expect.any(Buffer),
+      mimetype: "audio/mpeg",
+      caption: "cap",
+    });
   });
 
   it("sends video media", async () => {

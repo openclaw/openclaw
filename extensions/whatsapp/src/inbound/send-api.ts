@@ -11,6 +11,13 @@ function recordWhatsAppOutbound(accountId: string) {
   });
 }
 
+function shouldSendAsPtt(mediaType: string): boolean {
+  const normalized = mediaType.trim().toLowerCase();
+  return (
+    normalized === "audio/ogg" || normalized.startsWith("audio/ogg;") || normalized === "audio/opus"
+  );
+}
+
 function resolveOutboundMessageId(result: unknown): string {
   return typeof result === "object" && result && "key" in result
     ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
@@ -42,7 +49,11 @@ export function createWebSendApi(params: {
             mimetype: mediaType,
           };
         } else if (mediaType.startsWith("audio/")) {
-          payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
+          payload = {
+            audio: mediaBuffer,
+            ...(shouldSendAsPtt(mediaType) ? { ptt: true } : {}),
+            mimetype: mediaType,
+          };
         } else if (mediaType.startsWith("video/")) {
           const gifPlayback = sendOptions?.gifPlayback;
           payload = {
