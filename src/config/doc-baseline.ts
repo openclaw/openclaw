@@ -3,14 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
-import {
-  collectChannelSchemaMetadata,
-  collectPluginSchemaMetadata,
-} from "./channel-config-metadata.js";
 import { FIELD_HELP } from "./schema.help.js";
 import type { ConfigSchemaResponse } from "./schema.js";
-import { buildConfigSchema } from "./schema.js";
 import { schemaHasChildren } from "./schema.shared.js";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -92,6 +86,8 @@ const DEFAULT_CORE_OUTPUT = "docs/.generated/config-baseline.core.json";
 const DEFAULT_CHANNEL_OUTPUT = "docs/.generated/config-baseline.channel.json";
 const DEFAULT_PLUGIN_OUTPUT = "docs/.generated/config-baseline.plugin.json";
 let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
+let cachedDocBaselineRuntimePromise: Promise<typeof import("./doc-baseline.runtime.js")> | null =
+  null;
 const uiHintIndexCache = new WeakMap<
   ConfigSchemaResponse["uiHints"],
   Map<
@@ -116,6 +112,11 @@ function resolveRepoRoot(): string {
     return fromPackage;
   }
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+}
+
+async function loadDocBaselineRuntime() {
+  cachedDocBaselineRuntimePromise ??= import("./doc-baseline.runtime.js");
+  return await cachedDocBaselineRuntimePromise;
 }
 
 function normalizeBaselinePath(rawPath: string): string {
@@ -352,6 +353,7 @@ function resolveEntryKind(configPath: string): ConfigDocBaselineKind {
 
 async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> {
   const repoRoot = resolveRepoRoot();
+  const runtime = await loadDocBaselineRuntime();
   const env = {
     ...process.env,
     HOME: os.tmpdir(),
@@ -359,7 +361,7 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
   };
 
-  const manifestRegistry = loadPluginManifestRegistry({
+  const manifestRegistry = runtime.loadPluginManifestRegistry({
     cache: false,
     env,
     config: {},
@@ -369,14 +371,14 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     ...manifestRegistry,
     plugins: manifestRegistry.plugins.filter((plugin) => plugin.origin === "bundled"),
   };
-  const channelPlugins = collectChannelSchemaMetadata(bundledRegistry);
+  const channelPlugins = runtime.collectChannelSchemaMetadata(bundledRegistry);
   logConfigDocBaselineDebug(
     `loaded ${channelPlugins.length} bundled channel entries from metadata`,
   );
 
-  return buildConfigSchema({
+  return runtime.buildConfigSchema({
     cache: false,
-    plugins: collectPluginSchemaMetadata(bundledRegistry),
+    plugins: runtime.collectPluginSchemaMetadata(bundledRegistry),
     channels: channelPlugins,
   });
 }
