@@ -299,6 +299,28 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("escalates generic_repeat to critical at criticalThreshold", () => {
+      const state = createState();
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", { path: "/same.txt" }, `crit-${i}`);
+      }
+
+      const result = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/same.txt" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.level).toBe("critical");
+        expect(result.detector).toBe("generic_repeat");
+        expect(result.count).toBe(CRITICAL_THRESHOLD);
+        expect(result.message).toContain("BLOCKED");
+      }
+    });
+
     it("keeps generic loops warn-only below global breaker threshold", () => {
       const fixture = createReadNoProgressFixture();
       const loopResult = detectLoopAfterRepeatedCalls({

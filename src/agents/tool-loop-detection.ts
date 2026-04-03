@@ -480,7 +480,7 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.genericRepeat &&
     recentCount >= resolvedConfig.criticalThreshold
   ) {
-    log.warn(`Loop critical: ${toolName} called ${recentCount} times with identical arguments`);
+    log.error(`Loop critical: ${toolName} called ${recentCount} times with identical arguments`);
     return {
       stuck: true,
       level: "critical",
