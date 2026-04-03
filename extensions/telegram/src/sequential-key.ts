@@ -58,8 +58,13 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const threadId = isGroup
     ? resolveTelegramForumThreadId({ isForum, messageThreadId })
     : messageThreadId;
+  const messageId = msg?.message_id;
   if (typeof chatId === "number") {
-    return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
+    const base = threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
+    if (typeof messageId === "number") {
+      return `${base}:msg:${messageId}`;
+    }
+    return base;
   }
   return "telegram:unknown";
 }

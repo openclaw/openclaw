@@ -52,10 +52,19 @@ export type InboundDebounceCreateParams<T> = {
   resolveDebounceMs?: (item: T) => number | undefined;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
+  /**
+   * When true, items arriving while a previous flush for the same key is still
+   * running are buffered and coalesced into a single `onFlush` call once the
+   * active flush completes — even when `debounceMs` is 0 or `shouldDebounce`
+   * returns false.  This prevents serial one-at-a-time processing that blocks
+   * queue-level collect/coalesce logic in the agent runner.
+   */
+  coalesceWhileBusy?: boolean;
 };
 
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
   const buffers = new Map<string, DebounceBuffer<T>>();
+  const busyBuffers = new Map<string, T[]>();
   const keyChains = new Map<string, Promise<void>>();
   const defaultDebounceMs = Math.max(0, Math.trunc(params.debounceMs));
   const maxTrackedKeys = Math.max(1, Math.trunc(params.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS));
@@ -184,6 +193,25 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           return;
         }
         if (keyChains.has(key)) {
+          // When coalesceWhileBusy is enabled, buffer the item so it will be
+          // flushed together with other items that arrive while the current
+          // flush is still running, instead of queuing a separate serial task.
+          if (params.coalesceWhileBusy && canTrackKey(key)) {
+            const existing = busyBuffers.get(key);
+            if (existing) {
+              existing.push(item);
+              return;
+            }
+            const pending = [item];
+            busyBuffers.set(key, pending);
+            void enqueueKeyTask(key, async () => {
+              busyBuffers.delete(key);
+              if (pending.length > 0) {
+                await runFlush(pending);
+              }
+            });
+            return;
+          }
           await enqueueKeyTask(key, async () => {
             await runFlush([item]);
           });
