@@ -16,7 +16,7 @@ vi.mock("./custom-api-registry.js", () => ({
   ensureCustomApiRegistered,
 }));
 
-vi.mock("./openai-transport-stream.js", () => ({
+vi.mock("./provider-transport-stream.js", () => ({
   buildTransportAwareSimpleStreamFn,
   prepareTransportAwareSimpleModel,
 }));

@@ -3,22 +3,24 @@ import { describe, expect, it } from "vitest";
 import {
   buildOpenAIResponsesParams,
   buildOpenAICompletionsParams,
-  buildTransportAwareSimpleStreamFn,
-  isTransportAwareApiSupported,
   parseTransportChunkUsage,
-  prepareTransportAwareSimpleModel,
   resolveAzureOpenAIApiVersion,
-  resolveTransportAwareSimpleApi,
   sanitizeTransportPayloadText,
 } from "./openai-transport-stream.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
+import {
+  buildTransportAwareSimpleStreamFn,
+  isTransportAwareApiSupported,
+  prepareTransportAwareSimpleModel,
+  resolveTransportAwareSimpleApi,
+} from "./provider-transport-stream.js";
 
 describe("openai transport stream", () => {
   it("reports the supported transport-aware APIs", () => {
     expect(isTransportAwareApiSupported("openai-responses")).toBe(true);
     expect(isTransportAwareApiSupported("openai-completions")).toBe(true);
     expect(isTransportAwareApiSupported("azure-openai-responses")).toBe(true);
-    expect(isTransportAwareApiSupported("anthropic-messages")).toBe(false);
+    expect(isTransportAwareApiSupported("anthropic-messages")).toBe(true);
   });
 
   it("prepares a custom simple-completion api alias when transport overrides are attached", () => {
@@ -50,6 +52,39 @@ describe("openai transport stream", () => {
       api: "openclaw-openai-responses-transport",
       provider: "openai",
       id: "gpt-5.4",
+    });
+    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
+  });
+
+  it("prepares an Anthropic simple-completion api alias when transport overrides are attached", () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+        },
+      },
+    );
+
+    const prepared = prepareTransportAwareSimpleModel(model);
+
+    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-anthropic-messages-transport");
+    expect(prepared).toMatchObject({
+      api: "openclaw-anthropic-messages-transport",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
     });
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
   });
