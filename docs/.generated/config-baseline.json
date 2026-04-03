@@ -4013,6 +4013,26 @@
       "hasChildren": true
     },
     {
+      "path": "agents.defaults.subagents.allowAgents",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.subagents.allowAgents.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.subagents.announceTimeoutMs",
       "kind": "core",
       "type": "integer",
@@ -15600,7 +15620,7 @@
         "models"
       ],
       "label": "Model Provider Request Overrides",
-      "help": "Optional request overrides for model-provider requests. Today this path supports header and auth overrides only; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
+      "help": "Optional request overrides for model-provider requests. Use this only for header and auth overrides today; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
       "hasChildren": true
     },
     {
