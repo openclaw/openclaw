@@ -23,6 +23,7 @@ import {
 } from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import {
+  attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
@@ -355,18 +356,21 @@ function applyConfiguredProviderOverrides(params: {
     capability: "llm",
     transport: "stream",
   });
-  return {
-    ...discoveredModel,
-    api: requestConfig.api ?? "openai-responses",
-    baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
-    reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
-    input: normalizedInput,
-    cost: configuredModel?.cost ?? discoveredModel.cost,
-    contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
-    maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
-    headers: requestConfig.headers,
-    compat: configuredModel?.compat ?? discoveredModel.compat,
-  };
+  return attachModelProviderRequestTransport(
+    {
+      ...discoveredModel,
+      api: requestConfig.api ?? "openai-responses",
+      baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
+      reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
+      input: normalizedInput,
+      cost: configuredModel?.cost ?? discoveredModel.cost,
+      contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
+      maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
+      headers: requestConfig.headers,
+      compat: configuredModel?.compat ?? discoveredModel.compat,
+    },
+    providerRequest,
+  );
 }
 
 export function buildInlineProviderModels(
@@ -401,13 +405,16 @@ export function buildInlineProviderModels(
         capability: "llm",
         transport: "stream",
       });
-      return {
-        ...model,
-        provider: trimmed,
-        baseUrl: requestConfig.baseUrl,
-        api: requestConfig.api ?? model.api,
-        headers: requestConfig.headers,
-      };
+      return attachModelProviderRequestTransport(
+        {
+          ...model,
+          provider: trimmed,
+          baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
+          api: requestConfig.api ?? model.api,
+          headers: requestConfig.headers,
+        },
+        providerRequest,
+      );
     });
   });
 }
@@ -571,25 +578,28 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     cfg,
     agentDir,
-    model: {
-      id: modelId,
-      name: modelId,
-      api: requestConfig.api ?? "openai-responses",
-      provider,
-      baseUrl: requestConfig.baseUrl,
-      reasoning: configuredModel?.reasoning ?? false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow:
-        configuredModel?.contextWindow ??
-        providerConfig?.models?.[0]?.contextWindow ??
-        DEFAULT_CONTEXT_TOKENS,
-      maxTokens:
-        configuredModel?.maxTokens ??
-        providerConfig?.models?.[0]?.maxTokens ??
-        DEFAULT_CONTEXT_TOKENS,
-      headers: requestConfig.headers,
-    } as Model<Api>,
+    model: attachModelProviderRequestTransport(
+      {
+        id: modelId,
+        name: modelId,
+        api: requestConfig.api ?? "openai-responses",
+        provider,
+        baseUrl: requestConfig.baseUrl,
+        reasoning: configuredModel?.reasoning ?? false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow:
+          configuredModel?.contextWindow ??
+          providerConfig?.models?.[0]?.contextWindow ??
+          DEFAULT_CONTEXT_TOKENS,
+        maxTokens:
+          configuredModel?.maxTokens ??
+          providerConfig?.models?.[0]?.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+        headers: requestConfig.headers,
+      } as Model<Api>,
+      providerRequest,
+    ),
     runtimeHooks,
   });
 }

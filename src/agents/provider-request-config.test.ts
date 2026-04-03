@@ -310,8 +310,8 @@ describe("provider request config", () => {
     ).toThrow(/request\.(headers\.X-Tenant|auth\.token|tls\.cert): unresolved SecretRef/i);
   });
 
-  it("rejects model-provider transport overrides that the llm path cannot carry", () => {
-    expect(() =>
+  it("keeps model-provider transport overrides once the llm path can carry them", () => {
+    expect(
       sanitizeConfiguredModelProviderRequest({
         headers: {
           "X-Tenant": "acme",
@@ -321,7 +321,15 @@ describe("provider request config", () => {
           url: "http://proxy.internal:8443",
         },
       }),
-    ).toThrow(/models\.providers\.\*\.request only supports headers and auth overrides/i);
+    ).toEqual({
+      headers: {
+        "X-Tenant": "acme",
+      },
+      proxy: {
+        mode: "explicit-proxy",
+        url: "http://proxy.internal:8443",
+      },
+    });
   });
 
   it("merges configured request overrides with later entries winning", () => {
