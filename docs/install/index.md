@@ -146,6 +146,7 @@ Deploy OpenClaw on a cloud server or VPS:
   <Card title="GCP" href="/install/gcp">Google Cloud</Card>
   <Card title="Azure" href="/install/azure">Azure</Card>
   <Card title="Railway" href="/install/railway">Railway</Card>
+  <Card title="Railway + Telegram" href="/install/railway-telegram-setup">Railway with Telegram Bot</Card>
   <Card title="Render" href="/install/render">Render</Card>
   <Card title="Northflank" href="/install/northflank">Northflank</Card>
 </CardGroup>
