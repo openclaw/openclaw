@@ -3,7 +3,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
+import { openTrackedWs } from "./device-authz.test-helpers.js";
 import {
+  connectReq,
   connectOk,
   installGatewayTestHooks,
   rpcReq,
@@ -882,6 +884,110 @@ process.stdin.on("end", () => {
       expect(postResolve.ok).toBe(true);
       expect(postResolve.payload?.assignments?.[0]?.path).toBe("gateway.auth.token");
       expect(postResolve.payload?.assignments?.[0]?.value).toBe(tokenValue);
+    } finally {
+      testState.gatewayAuth = previousGatewayAuth;
+      if (previousGatewayTokenEnv === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousGatewayTokenEnv;
+      }
+      envSnapshot.restore();
+      ws.close();
+      await server.close();
+    }
+  });
+
+  it("uses refreshed gateway auth for new websocket connects after secrets reload", async () => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("OPENCLAW_STATE_DIR is not set");
+    }
+    const resolverScriptPath = path.join(stateDir, "gateway-auth-refresh-resolver.cjs");
+    const tokenPath = path.join(stateDir, "gateway-auth-refresh-token.txt");
+    await fs.mkdir(path.dirname(resolverScriptPath), { recursive: true });
+    await fs.writeFile(
+      resolverScriptPath,
+      `const fs = require("node:fs");
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+});
+process.stdin.on("end", () => {
+  const tokenPath = process.argv[2];
+  const token = fs.readFileSync(tokenPath, "utf8").trim();
+  let ids = ["gateway/token"];
+  try {
+    const parsed = JSON.parse(input || "{}");
+    if (Array.isArray(parsed.ids) && parsed.ids.length > 0) {
+      ids = parsed.ids.map((entry) => String(entry));
+    }
+  } catch {}
+
+  const values = {};
+  for (const id of ids) {
+    values[id] = token;
+  }
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, values }) + "\\n");
+});
+`,
+      "utf8",
+    );
+    await fs.writeFile(tokenPath, "token-before-reload\n", "utf8");
+    await writeConfigFile({
+      gateway: {
+        auth: {
+          mode: "token",
+          token: { source: "exec", provider: "vault", id: "gateway/token" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: {
+            source: "exec",
+            command: process.execPath,
+            allowSymlinkCommand: true,
+            args: [resolverScriptPath, tokenPath],
+          },
+        },
+      },
+    });
+
+    const previousGatewayAuth = testState.gatewayAuth;
+    const previousGatewayTokenEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
+    testState.gatewayAuth = undefined;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+
+    const started = await startServerWithClient();
+    const { server, ws, port, envSnapshot } = started;
+    try {
+      await connectOk(ws, { token: "token-before-reload" });
+
+      await fs.writeFile(tokenPath, "token-after-reload\n", "utf8");
+      const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
+      expect(reload.ok).toBe(true);
+
+      const staleWs = await openTrackedWs(port);
+      try {
+        const staleConnect = await connectReq(staleWs, {
+          token: "token-before-reload",
+          skipDefaultAuth: true,
+        });
+        expect(staleConnect.ok).toBe(false);
+        expect(staleConnect.error?.message ?? "").toContain("gateway token mismatch");
+      } finally {
+        staleWs.close();
+      }
+
+      const freshWs = await openTrackedWs(port);
+      try {
+        await connectOk(freshWs, {
+          token: "token-after-reload",
+          skipDefaultAuth: true,
+        });
+      } finally {
+        freshWs.close();
+      }
     } finally {
       testState.gatewayAuth = previousGatewayAuth;
       if (previousGatewayTokenEnv === undefined) {
