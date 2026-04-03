@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import {
   cancel,
   confirm as clackConfirm,
@@ -5,6 +6,7 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import { z } from "zod";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -23,7 +25,9 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { CODEX_CLI_PROFILE_ID } from "../../plugin-sdk/provider-auth.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
+import { writeOAuthCredentials } from "../../plugins/provider-auth-storage.js";
 import { resolvePluginProviders } from "../../plugins/providers.runtime.js";
 import type {
   ProviderAuthMethod,
@@ -310,6 +314,91 @@ async function runProviderAuthMethod(params: {
     prompter: params.prompter,
     setDefault: params.setDefault,
   });
+}
+
+const ImportedOAuthProfileSchema = z
+  .object({
+    access: z.string().min(1),
+    refresh: z.string().min(1),
+    expires: z.number().int().positive(),
+    email: z.string().trim().min(1).optional(),
+    displayName: z.string().trim().min(1).optional(),
+    profileName: z.string().trim().min(1).optional(),
+    enterpriseUrl: z.string().trim().min(1).optional(),
+    projectId: z.string().trim().min(1).optional(),
+    accountId: z.string().trim().min(1).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.profileName === "codex-cli") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["profileName"],
+        message: `profileName "codex-cli" is reserved for deprecated profile ${CODEX_CLI_PROFILE_ID}`,
+      });
+    }
+  });
+
+const ImportedOAuthProfilesSchema = z.array(ImportedOAuthProfileSchema).min(1);
+
+type ImportedOAuthProfile = z.infer<typeof ImportedOAuthProfileSchema>;
+
+function parseImportedOAuthProfiles(raw: string): ImportedOAuthProfile[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid JSON for imported OAuth profiles: ${message}`, { cause: error });
+  }
+  return ImportedOAuthProfilesSchema.parse(parsed);
+}
+
+export async function modelsAuthImportOAuthCommand(
+  opts: {
+    provider?: string;
+    profilesJson?: string;
+    profilesFile?: string;
+  },
+  runtime: RuntimeEnv,
+) {
+  const { agentDir } = await resolveModelsAuthContext();
+  const rawProvider = opts.provider?.trim();
+  if (!rawProvider) {
+    throw new Error("Missing --provider.");
+  }
+  const provider = normalizeProviderId(rawProvider);
+  const hasJson = typeof opts.profilesJson === "string" && opts.profilesJson.trim().length > 0;
+  const hasFile = typeof opts.profilesFile === "string" && opts.profilesFile.trim().length > 0;
+  if (hasJson === hasFile) {
+    throw new Error("Provide exactly one of --profiles-json or --profiles-file.");
+  }
+
+  const rawProfiles = hasJson
+    ? String(opts.profilesJson)
+    : await fs.readFile(String(opts.profilesFile), "utf8");
+  const profiles = parseImportedOAuthProfiles(rawProfiles);
+
+  for (const profile of profiles) {
+    const profileId = await writeOAuthCredentials(
+      provider,
+      {
+        access: profile.access,
+        refresh: profile.refresh,
+        expires: profile.expires,
+        ...(profile.email ? { email: profile.email } : {}),
+        ...(profile.enterpriseUrl ? { enterpriseUrl: profile.enterpriseUrl } : {}),
+        ...(profile.projectId ? { projectId: profile.projectId } : {}),
+        ...(profile.accountId ? { accountId: profile.accountId } : {}),
+      },
+      agentDir,
+      {
+        ...(profile.profileName ? { profileName: profile.profileName } : {}),
+        ...(profile.displayName ? { displayName: profile.displayName } : {}),
+      },
+    );
+    runtime.log(`Imported auth profile: ${profileId} (${provider}/oauth)`);
+  }
+  runtime.log(`Imported ${profiles.length} OAuth profile(s) for ${provider}.`);
 }
 
 export async function modelsAuthSetupTokenCommand(

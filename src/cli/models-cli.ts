@@ -4,6 +4,7 @@ import {
   modelsAliasesListCommand,
   modelsAliasesRemoveCommand,
   modelsAuthAddCommand,
+  modelsAuthImportOAuthCommand,
   modelsAuthLoginCommand,
   modelsAuthOrderClearCommand,
   modelsAuthOrderGetCommand,
@@ -299,6 +300,25 @@ export function registerModelsCli(program: Command) {
     .action(async () => {
       await runModelsCommand(async () => {
         await modelsAuthAddCommand({}, defaultRuntime);
+      });
+    });
+
+  auth
+    .command("import-oauth")
+    .description("Import OAuth credentials into auth-profiles.json without prompting")
+    .requiredOption("--provider <name>", "Provider id (e.g. openai-codex)")
+    .option("--profiles-json <json>", "JSON array of OAuth profile entries")
+    .option("--profiles-file <path>", "Path to a JSON file containing OAuth profile entries")
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsAuthImportOAuthCommand(
+          {
+            provider: opts.provider as string | undefined,
+            profilesJson: opts.profilesJson as string | undefined,
+            profilesFile: opts.profilesFile as string | undefined,
+          },
+          defaultRuntime,
+        );
       });
     });
 

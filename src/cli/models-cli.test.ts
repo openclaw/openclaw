@@ -6,10 +6,11 @@ import { registerModelsCli } from "./models-cli.js";
 const mocks = vi.hoisted(() => ({
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
+  modelsAuthImportOAuthCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { modelsStatusCommand, modelsAuthLoginCommand } = mocks;
+const { modelsStatusCommand, modelsAuthImportOAuthCommand, modelsAuthLoginCommand } = mocks;
 
 vi.mock("../commands/models.js", () => ({
   modelsStatusCommand: mocks.modelsStatusCommand,
@@ -17,6 +18,7 @@ vi.mock("../commands/models.js", () => ({
   modelsAliasesListCommand: mocks.noopAsync,
   modelsAliasesRemoveCommand: mocks.noopAsync,
   modelsAuthAddCommand: mocks.noopAsync,
+  modelsAuthImportOAuthCommand: mocks.modelsAuthImportOAuthCommand,
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
   modelsAuthOrderClearCommand: mocks.noopAsync,
   modelsAuthOrderGetCommand: mocks.noopAsync,
@@ -39,6 +41,7 @@ vi.mock("../commands/models.js", () => ({
 
 describe("models cli", () => {
   beforeEach(() => {
+    modelsAuthImportOAuthCommand.mockClear();
     modelsAuthLoginCommand.mockClear();
     modelsStatusCommand.mockClear();
   });
@@ -109,5 +112,26 @@ describe("models cli", () => {
       const error = err as { exitCode?: number };
       expect(error.exitCode).toBe(0);
     }
+  });
+
+  it("wires models auth import-oauth options through to the command", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "import-oauth",
+      "--provider",
+      "openai-codex",
+      "--profiles-file",
+      "/tmp/codex-profiles.json",
+    ]);
+
+    expect(modelsAuthImportOAuthCommand).toHaveBeenCalledWith(
+      {
+        provider: "openai-codex",
+        profilesJson: undefined,
+        profilesFile: "/tmp/codex-profiles.json",
+      },
+      expect.any(Object),
+    );
   });
 });

@@ -284,6 +284,57 @@ describe("scripts/docker/setup.sh", () => {
     expect(identityDirStat.isDirectory()).toBe(true);
   });
 
+  it("seeds Codex OAuth profiles before onboarding without persisting them into .env", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CODEX_OAUTH_PROFILES_JSON: JSON.stringify([
+        {
+          profileName: "acct-a",
+          access: "access-a",
+          refresh: "refresh-a",
+          expires: 1700000000000,
+        },
+      ]),
+    });
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).not.toContain("OPENCLAW_CODEX_OAUTH_PROFILES_JSON");
+
+    const lines = await readDockerLogLines(activeSandbox);
+    const importIdx = lines.findIndex((line) =>
+      line.includes(
+        "dist/index.js models auth import-oauth --provider openai-codex --profiles-file /home/node/.openclaw/openai-codex-oauth-profiles.import.json",
+      ),
+    );
+    const onboardIdx = lines.findIndex((line) =>
+      line.includes("dist/index.js onboard --mode local --no-install-daemon"),
+    );
+    expect(importIdx).toBeGreaterThanOrEqual(0);
+    expect(onboardIdx).toBeGreaterThan(importIdx);
+    await expect(
+      stat(join(activeSandbox.rootDir, "config", "openai-codex-oauth-profiles.import.json")),
+    ).rejects.toThrow();
+  });
+
+  it("rejects conflicting Codex OAuth profile sources", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const profilesFile = join(activeSandbox.rootDir, "codex-profiles.json");
+    await writeFile(profilesFile, "[]\n");
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CODEX_OAUTH_PROFILES_JSON: "[]",
+      OPENCLAW_CODEX_OAUTH_PROFILES_FILE: profilesFile,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Provide only one of OPENCLAW_CODEX_OAUTH_PROFILES_JSON or OPENCLAW_CODEX_OAUTH_PROFILES_FILE.",
+    );
+  });
+
   it("writes OPENCLAW_TZ into .env when given a real IANA timezone", async () => {
     const activeSandbox = requireSandbox(sandbox);
 

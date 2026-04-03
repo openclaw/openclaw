@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
+  writeOAuthCredentials: vi.fn(),
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => ({
@@ -71,12 +72,20 @@ vi.mock("../../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
 }));
 
+vi.mock("../../plugins/provider-auth-storage.js", () => ({
+  writeOAuthCredentials: mocks.writeOAuthCredentials,
+}));
+
 vi.mock("../onboard-helpers.js", () => ({
   openUrl: mocks.openUrl,
 }));
 
-const { modelsAuthLoginCommand, modelsAuthPasteTokenCommand, modelsAuthSetupTokenCommand } =
-  await import("./auth.js");
+const {
+  modelsAuthImportOAuthCommand,
+  modelsAuthLoginCommand,
+  modelsAuthPasteTokenCommand,
+  modelsAuthSetupTokenCommand,
+} = await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -142,6 +151,7 @@ describe("modelsAuthLoginCommand", () => {
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
     mocks.upsertAuthProfile.mockReset();
+    mocks.writeOAuthCredentials.mockReset();
 
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
@@ -185,6 +195,17 @@ describe("modelsAuthLoginCommand", () => {
     mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {}, usageStats: {} });
     mocks.listProfilesForProvider.mockReturnValue([]);
     mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
+    mocks.writeOAuthCredentials.mockImplementation(
+      async (
+        provider: string,
+        creds: { email?: string },
+        _agentDir: string,
+        options?: { profileName?: string },
+      ) => {
+        const suffix = options?.profileName ?? creds.email ?? "default";
+        return `${provider}:${suffix}`;
+      },
+    );
   });
 
   afterEach(() => {
@@ -443,5 +464,109 @@ describe("modelsAuthLoginCommand", () => {
       },
       agentDir: "/tmp/openclaw/agents/main",
     });
+  });
+});
+
+describe("modelsAuthImportOAuthCommand", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.resolveDefaultAgentId.mockReturnValue("main");
+    mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
+    mocks.resolveDefaultAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
+    mocks.loadValidConfigOrThrow.mockImplementation(async () => ({}));
+    mocks.writeOAuthCredentials.mockImplementation(
+      async (
+        provider: string,
+        creds: { email?: string },
+        _agentDir: string,
+        options?: { profileName?: string },
+      ) => {
+        const suffix = options?.profileName ?? creds.email ?? "default";
+        return `${provider}:${suffix}`;
+      },
+    );
+  });
+
+  it("imports multiple OAuth profiles from JSON", async () => {
+    const runtime = createRuntime();
+
+    await modelsAuthImportOAuthCommand(
+      {
+        provider: "openai-codex",
+        profilesJson: JSON.stringify([
+          {
+            profileName: "acct-a",
+            access: "access-a",
+            refresh: "refresh-a",
+            expires: 1_700_000_000_000,
+            email: "a@example.com",
+            displayName: "Account A",
+          },
+          {
+            profileName: "acct-b",
+            access: "access-b",
+            refresh: "refresh-b",
+            expires: 1_700_000_000_100,
+          },
+        ]),
+      },
+      runtime,
+    );
+
+    expect(mocks.writeOAuthCredentials).toHaveBeenCalledTimes(2);
+    expect(mocks.writeOAuthCredentials).toHaveBeenNthCalledWith(
+      1,
+      "openai-codex",
+      expect.objectContaining({
+        access: "access-a",
+        refresh: "refresh-a",
+        email: "a@example.com",
+      }),
+      "/tmp/openclaw/agents/main",
+      expect.objectContaining({ profileName: "acct-a", displayName: "Account A" }),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Imported auth profile: openai-codex:acct-a (openai-codex/oauth)",
+    );
+    expect(runtime.log).toHaveBeenCalledWith("Imported 2 OAuth profile(s) for openai-codex.");
+  });
+
+  it("rejects reserved codex-cli profile ids", async () => {
+    const runtime = createRuntime();
+
+    await expect(
+      modelsAuthImportOAuthCommand(
+        {
+          provider: "openai-codex",
+          profilesJson: JSON.stringify([
+            {
+              profileName: "codex-cli",
+              access: "access-a",
+              refresh: "refresh-a",
+              expires: 1_700_000_000_000,
+            },
+          ]),
+        },
+        runtime,
+      ),
+    ).rejects.toThrow(/codex-cli/);
+
+    expect(mocks.writeOAuthCredentials).not.toHaveBeenCalled();
+  });
+
+  it("requires exactly one input source", async () => {
+    const runtime = createRuntime();
+
+    await expect(
+      modelsAuthImportOAuthCommand(
+        {
+          provider: "openai-codex",
+          profilesJson: "[]",
+          profilesFile: "/tmp/profiles.json",
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("Provide exactly one of --profiles-json or --profiles-file.");
   });
 });
