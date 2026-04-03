@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 
 afterEach(() => {
   vi.doUnmock("../../plugins/discovery.js");
@@ -7,7 +8,6 @@ afterEach(() => {
 
 describe("bundled channel entry shape guards", () => {
   it("treats missing bundled discovery results as empty", async () => {
-    vi.resetModules();
     vi.doMock("../../plugins/discovery.js", () => ({
       discoverOpenClawPlugins: () => ({
         candidates: [],
@@ -21,7 +21,10 @@ describe("bundled channel entry shape guards", () => {
       }),
     }));
 
-    const bundled = await import("./bundled.js");
+    const bundled = await importFreshModule<typeof import("./bundled.js")>(
+      import.meta.url,
+      "./bundled.js?scope=missing-bundled-discovery",
+    );
 
     expect(bundled.listBundledChannelPlugins()).toEqual([]);
     expect(bundled.listBundledChannelSetupPlugins()).toEqual([]);

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 
 describe("bundled channel config runtime", () => {
   beforeEach(() => {
-    vi.resetModules();
     vi.doUnmock("../channels/plugins/bundled.js");
   });
 
@@ -11,7 +11,9 @@ describe("bundled channel config runtime", () => {
       listBundledChannelPlugins: () => undefined,
     }));
 
-    const runtimeModule = await import("./bundled-channel-config-runtime.js");
+    const runtimeModule = await importFreshModule<
+      typeof import("./bundled-channel-config-runtime.js")
+    >(import.meta.url, "./bundled-channel-config-runtime.js?scope=missing-bundled-list");
 
     expect(runtimeModule.getBundledChannelConfigSchemaMap().get("msteams")).toBeDefined();
     expect(runtimeModule.getBundledChannelRuntimeMap().get("msteams")).toBeDefined();
@@ -26,7 +28,10 @@ describe("bundled channel config runtime", () => {
       };
     });
 
-    const runtime = await import("./bundled-channel-config-runtime.js");
+    const runtime = await importFreshModule<typeof import("./bundled-channel-config-runtime.js")>(
+      import.meta.url,
+      "./bundled-channel-config-runtime.js?scope=tdz-reference-error",
+    );
     const configSchemaMap = runtime.getBundledChannelConfigSchemaMap();
 
     expect(configSchemaMap.has("msteams")).toBe(true);
