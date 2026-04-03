@@ -3,8 +3,8 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
+import { resolveDmGroupAccessWithLists } from "openclaw/plugin-sdk/security-runtime";
 import { vi } from "vitest";
-import { resolveDmGroupAccessWithLists } from "../../../src/security/dm-policy-shared.js";
 
 export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {
   (...args: TArgs): Promise<TResult>;
