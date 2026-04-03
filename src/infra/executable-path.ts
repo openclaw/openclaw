@@ -19,6 +19,41 @@ function getPathDelimiterForPlatform(platform?: string | null): string {
   return isWindowsPlatform(platform) ? ";" : ":";
 }
 
+export function isDriveLessWindowsRootedPath(value: string, platform?: string | null): boolean {
+  return isWindowsPlatform(platform) && /^:[\\/]/.test(value);
+}
+
+export function resolveExecutablePathCandidate(
+  rawExecutable: string,
+  options?: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    requirePathSeparator?: boolean;
+    platform?: string | null;
+    resolutionMode?: ExecutableResolutionMode;
+  },
+): string | undefined {
+  const expanded = rawExecutable.startsWith("~")
+    ? expandHomePrefix(rawExecutable, { env: options?.env })
+    : rawExecutable;
+  if (isDriveLessWindowsRootedPath(expanded, options?.platform)) {
+    return undefined;
+  }
+  const hasPathSeparator = expanded.includes("/") || expanded.includes("\\");
+  if (options?.requirePathSeparator && !hasPathSeparator) {
+    return undefined;
+  }
+  if (!hasPathSeparator) {
+    return expanded;
+  }
+  const targetPath = getPathModuleForPlatform(options?.platform);
+  if (targetPath.isAbsolute(expanded)) {
+    return targetPath.normalize(expanded);
+  }
+  const base = options?.cwd && options.cwd.trim() ? options.cwd.trim() : process.cwd();
+  return targetPath.resolve(base, expanded);
+}
+
 function resolveVirtualExecutableFromPathHints(
   executable: string,
   pathEnv: string,
@@ -154,20 +189,12 @@ export function resolveExecutablePath(
     resolutionMode?: ExecutableResolutionMode;
   },
 ): string | undefined {
-  const targetPath = getPathModuleForPlatform(options?.platform);
   const resolutionMode = options?.resolutionMode ?? "host";
-  const expanded = rawExecutable.startsWith("~")
-    ? expandHomePrefix(rawExecutable, { env: options?.env })
-    : rawExecutable;
-  if (expanded.includes("/") || expanded.includes("\\")) {
-    if (targetPath.isAbsolute(expanded)) {
-      if (resolutionMode === "virtual") {
-        return targetPath.normalize(expanded);
-      }
-      return isExecutableFile(expanded, options) ? expanded : undefined;
-    }
-    const base = options?.cwd && options.cwd.trim() ? options.cwd.trim() : process.cwd();
-    const candidate = targetPath.resolve(base, expanded);
+  const candidate = resolveExecutablePathCandidate(rawExecutable, options);
+  if (!candidate) {
+    return undefined;
+  }
+  if (candidate.includes("/") || candidate.includes("\\")) {
     if (resolutionMode === "virtual") {
       return candidate;
     }
@@ -175,5 +202,5 @@ export function resolveExecutablePath(
   }
   const envPath =
     options?.env?.PATH ?? options?.env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
-  return resolveExecutableFromPathEnv(expanded, envPath, options?.env, options);
+  return resolveExecutableFromPathEnv(candidate, envPath, options?.env, options);
 }

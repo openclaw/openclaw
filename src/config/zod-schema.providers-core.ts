@@ -20,6 +20,7 @@ import {
 import {
   BlockStreamingChunkSchema,
   BlockStreamingCoalesceSchema,
+  ContextVisibilityModeSchema,
   DmConfigSchema,
   DmPolicySchema,
   ExecutableTokenSchema,
@@ -46,9 +47,22 @@ const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional
 
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
-  .refine((value) => typeof value === "string", {
-    message: "Discord IDs must be strings (wrap numeric IDs in quotes).",
-  });
+  .transform((value, ctx) => {
+    if (typeof value === "number") {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `Discord ID "${String(value)}" is not a valid non-negative safe integer. ` +
+            `Wrap it in quotes in your config file.`,
+        });
+        return z.NEVER;
+      }
+      return String(value);
+    }
+    return value;
+  })
+  .pipe(z.string());
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
@@ -75,6 +89,7 @@ const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional(
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     skills: z.array(z.string()).optional(),
@@ -90,6 +105,7 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,
@@ -209,6 +225,7 @@ export const TelegramAccountSchemaBase = z
     defaultTo: z.union([z.string(), z.number()]).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -496,6 +513,7 @@ export const DiscordAccountSchema = z
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -897,6 +915,7 @@ export const SlackAccountSchema = z
     dangerouslyAllowNameMatching: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -961,6 +980,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   signingSecret: SecretInputSchema.optional().register(sensitive),
   webhookPath: z.string().optional().default("/slack/events"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
   accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
@@ -1028,6 +1048,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
 const SignalGroupEntrySchema = z
   .object({
     requireMention: z.boolean().optional(),
+    ingest: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
   })
@@ -1059,6 +1080,7 @@ export const SignalAccountSchemaBase = z
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
     groups: SignalGroupsSchema,
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
@@ -1181,6 +1203,7 @@ export const IrcAccountSchemaBase = z
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
     groups: z.record(z.string(), IrcGroupSchema.optional()).optional(),
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().min(0).optional(),
@@ -1291,6 +1314,7 @@ export const IMessageAccountSchemaBase = z
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -1420,6 +1444,7 @@ export const BlueBubblesAccountSchemaBase = z
     allowFrom: z.array(BlueBubblesAllowFromEntry).optional(),
     groupAllowFrom: z.array(BlueBubblesAllowFromEntry).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -1432,6 +1457,7 @@ export const BlueBubblesAccountSchemaBase = z
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
+    enrichGroupParticipantsFromContacts: z.boolean().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),
@@ -1534,6 +1560,7 @@ export const MSTeamsConfigSchema = z
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),

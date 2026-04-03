@@ -84,6 +84,7 @@ export function createTelegramInboundBufferRuntime(params: {
     runtime,
     telegramTransport,
   } = params;
+  const telegramCfg = cfg.channels?.telegram;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
     typeof opts.testTimings?.textFragmentGapMs === "number" &&
@@ -156,6 +157,7 @@ export function createTelegramInboundBufferRuntime(params: {
         mediaMaxBytes,
         opts.token,
         telegramTransport,
+        telegramCfg?.apiRoot,
       );
       if (!media) {
         return [];
@@ -186,7 +188,13 @@ export function createTelegramInboundBufferRuntime(params: {
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
+          media = await resolveMedia(
+            ctx,
+            mediaMaxBytes,
+            opts.token,
+            telegramTransport,
+            telegramCfg?.apiRoot,
+          );
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;

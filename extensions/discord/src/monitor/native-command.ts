@@ -17,6 +17,10 @@ import {
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -31,11 +35,6 @@ import {
   type CommandArgs,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
-import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import * as pluginRuntime from "openclaw/plugin-sdk/plugin-runtime";
 import {
   resolveSendableOutboundReplyParts,
@@ -46,6 +45,7 @@ import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/rep
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
@@ -960,6 +960,25 @@ async function dispatchDiscordCommandInteraction(params: {
   }
 
   const pluginMatch = matchPluginCommandImpl(prompt);
+  let nativeRouteStatePromise:
+    | ReturnType<typeof resolveDiscordNativeInteractionRouteStateImpl>
+    | undefined;
+  const getNativeRouteState = () =>
+    (nativeRouteStatePromise ??= resolveDiscordNativeInteractionRouteStateImpl({
+      cfg,
+      accountId,
+      guildId: interaction.guild?.id ?? undefined,
+      memberRoleIds,
+      isDirectMessage,
+      isGroupDm,
+      directUserId: user.id,
+      conversationId: rawChannelId || "unknown",
+      parentConversationId: threadParentId,
+      threadBinding: isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined,
+      enforceConfiguredBindingReadiness: !shouldBypassConfiguredAcpEnsure(
+        command.nativeName ?? command.key,
+      ),
+    }));
   if (pluginMatch) {
     if (suppressReplies) {
       return;
@@ -972,6 +991,7 @@ async function dispatchDiscordCommandInteraction(params: {
     const messageThreadId = !isDirectMessage && isThreadChannel ? channelId : undefined;
     const threadParentId =
       !isDirectMessage && isThreadChannel ? (interaction.channel.parentId ?? undefined) : undefined;
+    const { effectiveRoute } = await getNativeRouteState();
     const pluginReply = await executePluginCommandImpl({
       command: pluginMatch.command,
       args: pluginMatch.args,
@@ -979,6 +999,7 @@ async function dispatchDiscordCommandInteraction(params: {
       channel: "discord",
       channelId,
       isAuthorizedSender: commandAuthorized,
+      sessionKey: effectiveRoute.sessionKey,
       commandBody: prompt,
       config: cfg,
       from: isDirectMessage
@@ -1029,21 +1050,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const isGuild = Boolean(interaction.guild);
   const channelId = rawChannelId || "unknown";
   const interactionId = interaction.rawData.id;
-  const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined;
-  const commandName = command.nativeName ?? command.key;
-  const routeState = await resolveDiscordNativeInteractionRouteStateImpl({
-    cfg,
-    accountId,
-    guildId: interaction.guild?.id ?? undefined,
-    memberRoleIds,
-    isDirectMessage,
-    isGroupDm,
-    directUserId: user.id,
-    conversationId: channelId,
-    parentConversationId: threadParentId,
-    threadBinding,
-    enforceConfiguredBindingReadiness: !shouldBypassConfiguredAcpEnsure(commandName),
-  });
+  const routeState = await getNativeRouteState();
   if (routeState.bindingReadiness && !routeState.bindingReadiness.ok) {
     const configuredBinding = routeState.configuredBinding;
     if (configuredBinding) {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { buildDockerExecArgs } from "./bash-tools.shared.js";
@@ -53,6 +53,11 @@ function createExecApprovals(): ExecApprovalsResolved {
       askFallback: "full",
       autoAllowSkills: false,
     },
+    agentSources: {
+      security: "defaults.security",
+      ask: "defaults.ask",
+      askFallback: "defaults.askFallback",
+    },
     allowlist: [],
     file: {
       version: 1,
@@ -87,7 +92,6 @@ async function loadFreshBashExecPathModulesForTest() {
     createExecTool: bashExec.createExecTool,
   };
 }
-
 const normalizeText = (value?: string) =>
   sanitizeBinaryOutput(value ?? "")
     .replace(/\r\n/g, "\n")
@@ -139,7 +143,11 @@ function createRecordingSandboxWithPaths(
 describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ createExecTool } = await import("./bash-tools.exec.js"));
+  });
+
+  beforeEach(() => {
     envSnapshot = captureEnv(["PATH", "SHELL"]);
     execApprovalsMocks.resolveExecApprovals.mockReset();
     execApprovalsMocks.resolveExecApprovals.mockImplementation(() => createExecApprovals());
@@ -147,7 +155,6 @@ describe("exec PATH login shell merge", () => {
     shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReturnValue(1234);
-    ({ createExecTool } = await loadFreshBashExecPathModulesForTest());
   });
 
   afterEach(() => {
@@ -302,7 +309,6 @@ describe("exec host env validation", () => {
     const original = process.env.SSLKEYLOGFILE;
     process.env.SSLKEYLOGFILE = "/tmp/openclaw-ssl-keys.log";
     try {
-      const { createExecTool } = await import("./bash-tools.exec.js");
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
       const result = await tool.execute("call1", {
         command: "printf '%s' \"${SSLKEYLOGFILE:-}\"",

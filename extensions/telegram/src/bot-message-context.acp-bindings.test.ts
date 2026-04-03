@@ -136,7 +136,6 @@ function createConfiguredTelegramRoute() {
 
 describe("buildTelegramMessageContext ACP configured bindings", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ buildTelegramMessageContextForTest } =
       await import("./bot-message-context.test-harness.js"));
   });

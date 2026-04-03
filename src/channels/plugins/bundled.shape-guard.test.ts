@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 afterEach(() => {
   vi.doUnmock("../../plugins/discovery.js");
   vi.doUnmock("../../plugins/manifest-registry.js");
-  vi.resetModules();
 });
 
 describe("bundled channel entry shape guards", () => {

@@ -111,4 +111,21 @@ describe("executable path helpers", () => {
       }),
     ).toBe(path.win32.normalize(windowsAbsolute));
   });
+
+  it("does not treat drive-less rooted windows paths as cwd-relative executables", () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    expect(
+      resolveExecutablePath(String.raw`:\Users\demo\AI\system\openclaw\git.exe`, {
+        cwd: String.raw`C:\Users\demo\AI\system\openclaw`,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveExecutablePath(String.raw`:/Users/demo/AI/system/openclaw/git.exe`, {
+        cwd: String.raw`C:\Users\demo\AI\system\openclaw`,
+      }),
+    ).toBeUndefined();
+  });
 });

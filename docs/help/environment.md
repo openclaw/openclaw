@@ -127,7 +127,7 @@ When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.home
 <key>EnvironmentVariables</key>
 <dict>
   <key>OPENCLAW_HOME</key>
-  <string>/Users/kira</string>
+  <string>/Users/user</string>
 </dict>
 ```
 

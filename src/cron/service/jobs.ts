@@ -687,6 +687,14 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.model === "string") {
     next.model = patch.model;
   }
+  if (Array.isArray(patch.fallbacks)) {
+    next.fallbacks = patch.fallbacks;
+  }
+  if (Array.isArray(patch.toolsAllow)) {
+    next.toolsAllow = patch.toolsAllow;
+  } else if (patch.toolsAllow === null) {
+    delete next.toolsAllow;
+  }
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
   }
@@ -718,6 +726,8 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     kind: "agentTurn",
     message: patch.message,
     model: patch.model,
+    fallbacks: patch.fallbacks,
+    toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
