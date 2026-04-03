@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import {
   createTaskRecord,
   deleteTaskRecordById,
@@ -11,7 +12,10 @@ import {
   resetTaskRegistryForTests,
 } from "./task-registry.js";
 import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
-import { configureTaskRegistryRuntime, type TaskRegistryHookEvent } from "./task-registry.store.js";
+import {
+  configureTaskRegistryRuntime,
+  type TaskRegistryObserverEvent,
+} from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 function createStoredTask(): TaskRecord {
@@ -37,6 +41,7 @@ describe("task-registry store runtime", () => {
   afterEach(() => {
     delete process.env.OPENCLAW_STATE_DIR;
     resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("uses the configured task store for restore and save", () => {
@@ -78,8 +83,8 @@ describe("task-registry store runtime", () => {
     expect(latestSnapshot.tasks.get("task-restored")?.task).toBe("Restored task");
   });
 
-  it("emits incremental hook events for restore, mutation, and delete", () => {
-    const events: TaskRegistryHookEvent[] = [];
+  it("emits incremental observer events for restore, mutation, and delete", () => {
+    const events: TaskRegistryObserverEvent[] = [];
     configureTaskRegistryRuntime({
       store: {
         loadSnapshot: () => ({
@@ -88,7 +93,7 @@ describe("task-registry store runtime", () => {
         }),
         saveSnapshot: () => {},
       },
-      hooks: {
+      observers: {
         onEvent: (event) => {
           events.push(event);
         },
@@ -191,6 +196,32 @@ describe("task-registry store runtime", () => {
       taskId: created.taskId,
       sourceId: "job-123",
       task: "Run nightly cron",
+    });
+  });
+
+  it("persists parentFlowId with task rows", () => {
+    const flow = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/task-store-parent-flow",
+      goal: "Persist linked tasks",
+    });
+    const created = createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      parentFlowId: flow.flowId,
+      childSessionKey: "agent:codex:acp:new",
+      runId: "run-flow-linked",
+      task: "Linked task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+
+    resetTaskRegistryForTests({ persist: false });
+
+    expect(findTaskByRunId("run-flow-linked")).toMatchObject({
+      taskId: created.taskId,
+      parentFlowId: flow.flowId,
     });
   });
 

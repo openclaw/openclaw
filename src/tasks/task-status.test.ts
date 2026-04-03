@@ -4,6 +4,7 @@ import {
   buildTaskStatusSnapshot,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
+  sanitizeTaskStatusText,
 } from "./task-status.js";
 
 const NOW = 1_000_000_000_000;
@@ -72,5 +73,74 @@ describe("task status formatting", () => {
       "This progress detail is also intentionally long so the status line proves it truncates verbose task context",
     );
     expect(formatTaskStatusDetail(task)?.endsWith("…")).toBe(true);
+  });
+
+  it("strips leaked internal runtime context from task details", () => {
+    const task = makeTask({
+      status: "failed",
+      error: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+    });
+
+    expect(formatTaskStatusDetail(task)).toBeUndefined();
+  });
+
+  it("sanitizes task titles before truncation", () => {
+    const task = makeTask({
+      task: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+    });
+
+    expect(formatTaskStatusTitle(task)).toBe("Background task");
+  });
+
+  it("falls back to sanitized terminal summary when the error strips empty", () => {
+    const task = makeTask({
+      status: "failed",
+      error: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+      terminalSummary: "Needs login approval.",
+    });
+
+    expect(formatTaskStatusDetail(task)).toBe("Needs login approval.");
+  });
+
+  it("redacts raw exec denial detail from terminal task status", () => {
+    const task = makeTask({
+      status: "succeeded",
+      terminalOutcome: "blocked",
+      terminalSummary: "Exec denied (gateway id=req-1, approval-timeout): bash -lc ls",
+    });
+
+    expect(formatTaskStatusDetail(task)).toBe("Command did not run: approval timed out.");
+  });
+
+  it("sanitizes free-form task status text for reuse in other surfaces", () => {
+    expect(
+      sanitizeTaskStatusText(
+        [
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "[Internal task completion event]",
+          "source: subagent",
+        ].join("\n"),
+      ),
+    ).toBe("");
   });
 });

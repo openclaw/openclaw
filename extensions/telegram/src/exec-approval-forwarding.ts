@@ -1,5 +1,6 @@
 import {
   buildExecApprovalPendingReplyPayload,
+  resolveExecApprovalRequestAllowedDecisions,
   resolveExecApprovalCommandDisplay,
   type ExecApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
@@ -37,6 +38,7 @@ export function buildTelegramExecApprovalPendingPayload(params: {
     cwd: params.request.request.cwd ?? undefined,
     host: params.request.request.host === "node" ? "node" : "gateway",
     nodeId: params.request.request.nodeId ?? undefined,
+    allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
   });

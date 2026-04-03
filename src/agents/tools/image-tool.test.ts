@@ -975,6 +975,26 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("resolves relative image paths against workspaceDir", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir }) => {
+      // Place image in a subdirectory of the workspace
+      const subdir = path.join(workspaceDir, "inbox");
+      await fs.mkdir(subdir, { recursive: true });
+      const imagePath = path.join(subdir, "receipt.png");
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg = createMinimaxImageConfig();
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+
+        // Relative path should be resolved against workspaceDir
+        await expectImageToolExecOk(tool, "inbox/receipt.png");
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
   it("sandboxes image paths like the read tool", async () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
       await fs.writeFile(path.join(sandboxRoot, "img.png"), "fake", "utf8");

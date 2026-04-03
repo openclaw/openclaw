@@ -29,6 +29,10 @@ export type DiscordThreadChannel = {
 export type DiscordThreadStarter = {
   text: string;
   author: string;
+  authorId?: string;
+  authorName?: string;
+  authorTag?: string;
+  memberRoleIds?: string[];
   timestamp?: number;
 };
 
@@ -223,6 +227,18 @@ export async function resolveDiscordThreadStarter(params: {
     const payload: DiscordThreadStarter = {
       text,
       author,
+      authorId: starter.author?.id ?? undefined,
+      authorName: starter.author?.username ?? undefined,
+      authorTag:
+        starter.author?.username && starter.author?.discriminator
+          ? starter.author.discriminator !== "0"
+            ? `${starter.author.username}#${starter.author.discriminator}`
+            : starter.author.username
+          : undefined,
+      memberRoleIds: (() => {
+        const roles = (starter.member as { roles?: string[] } | undefined)?.roles;
+        return Array.isArray(roles) ? roles.map((roleId) => String(roleId)) : undefined;
+      })(),
       timestamp: timestamp ?? undefined,
     };
     setCachedThreadStarter(cacheKey, payload, Date.now());

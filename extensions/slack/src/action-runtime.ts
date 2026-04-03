@@ -1,21 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { resolveSlackAccount } from "./accounts.js";
-import {
-  deleteSlackMessage,
-  downloadSlackFile,
-  editSlackMessage,
-  getSlackMemberInfo,
-  listSlackEmojis,
-  listSlackPins,
-  listSlackReactions,
-  pinSlackMessage,
-  reactSlackMessage,
-  readSlackMessages,
-  removeOwnSlackReactions,
-  removeSlackReaction,
-  sendSlackMessage,
-  unpinSlackMessage,
-} from "./actions.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import {
   createActionGate,
@@ -42,23 +25,49 @@ const messagingActions = new Set([
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 
+type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
+type SlackAccountsRuntimeModule = typeof import("./accounts.runtime.js");
+
+let slackActionsRuntimePromise: Promise<SlackActionsRuntimeModule> | undefined;
+let slackAccountsRuntimePromise: Promise<SlackAccountsRuntimeModule> | undefined;
+
+function loadSlackActionsRuntime(): Promise<SlackActionsRuntimeModule> {
+  slackActionsRuntimePromise ??= import("./actions.runtime.js");
+  return slackActionsRuntimePromise;
+}
+
+function loadSlackAccountsRuntime(): Promise<SlackAccountsRuntimeModule> {
+  slackAccountsRuntimePromise ??= import("./accounts.runtime.js");
+  return slackAccountsRuntimePromise;
+}
+
+function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
+  key: K,
+): SlackActionsRuntimeModule[K] {
+  return (async (...args: unknown[]) => {
+    const runtime = await loadSlackActionsRuntime();
+    const action = runtime[key] as (...actionArgs: unknown[]) => unknown;
+    return action(...args);
+  }) as SlackActionsRuntimeModule[K];
+}
+
 export const slackActionRuntime = {
-  deleteSlackMessage,
-  downloadSlackFile,
-  editSlackMessage,
-  getSlackMemberInfo,
-  listSlackEmojis,
-  listSlackPins,
-  listSlackReactions,
+  deleteSlackMessage: createLazySlackAction("deleteSlackMessage"),
+  downloadSlackFile: createLazySlackAction("downloadSlackFile"),
+  editSlackMessage: createLazySlackAction("editSlackMessage"),
+  getSlackMemberInfo: createLazySlackAction("getSlackMemberInfo"),
+  listSlackEmojis: createLazySlackAction("listSlackEmojis"),
+  listSlackPins: createLazySlackAction("listSlackPins"),
+  listSlackReactions: createLazySlackAction("listSlackReactions"),
   parseSlackBlocksInput,
-  pinSlackMessage,
-  reactSlackMessage,
-  readSlackMessages,
+  pinSlackMessage: createLazySlackAction("pinSlackMessage"),
+  reactSlackMessage: createLazySlackAction("reactSlackMessage"),
+  readSlackMessages: createLazySlackAction("readSlackMessages"),
   recordSlackThreadParticipation,
-  removeOwnSlackReactions,
-  removeSlackReaction,
-  sendSlackMessage,
-  unpinSlackMessage,
+  removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
+  removeSlackReaction: createLazySlackAction("removeSlackReaction"),
+  sendSlackMessage: createLazySlackAction("sendSlackMessage"),
+  unpinSlackMessage: createLazySlackAction("unpinSlackMessage"),
 };
 
 export type SlackActionContext = {
@@ -136,6 +145,7 @@ export async function handleSlackAction(
     );
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
+  const { resolveSlackAccount } = await loadSlackAccountsRuntime();
   const account = resolveSlackAccount({ cfg, accountId });
   const actionConfig = account.actions ?? cfg.channels?.slack?.actions;
   const isActionEnabled = createActionGate(actionConfig);
