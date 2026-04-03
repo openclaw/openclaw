@@ -1,3 +1,4 @@
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -13,8 +14,7 @@ import {
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
-import { normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-targets.js";
-import { resolveWhatsAppAccount } from "../../plugin-sdk/whatsapp.js";
+import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
 
@@ -152,26 +152,32 @@ export async function resolveDeliveryTarget(
     };
   }
 
-  let allowFromOverride: string[] | undefined;
-  if (channel === "whatsapp") {
-    const resolvedAccountId = normalizeAccountId(accountId);
-    const configuredAllowFromRaw =
-      resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? [];
-    const configuredAllowFrom = configuredAllowFromRaw
-      .map((entry) => String(entry).trim())
-      .filter((entry) => entry && entry !== "*")
-      .map((entry) => normalizeWhatsAppTarget(entry))
-      .filter((entry): entry is string => Boolean(entry));
-    const storeAllowFrom = readChannelAllowFromStoreSync("whatsapp", process.env, resolvedAccountId)
-      .map((entry) => normalizeWhatsAppTarget(entry))
-      .filter((entry): entry is string => Boolean(entry));
-    allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+  const channelPlugin = getChannelPlugin(channel);
+  const resolvedAccountId = normalizeAccountId(accountId);
+  const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
+    cfg,
+    accountId: resolvedAccountId,
+  });
+  const configuredAllowFrom = configuredAllowFromRaw
+    ? mapAllowFromEntries(configuredAllowFromRaw)
+    : [];
+  const storeAllowFrom = mapAllowFromEntries(
+    readChannelAllowFromStoreSync(channel, process.env, resolvedAccountId),
+  );
+  const allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+  const effectiveAllowFrom = mode === "implicit" ? allowFromOverride : undefined;
 
-    if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
-      const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
-      if (!normalizedCurrentTarget || !allowFromOverride.includes(normalizedCurrentTarget)) {
-        toCandidate = allowFromOverride[0];
-      }
+  if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
+    const currentTargetResolution = resolveOutboundTarget({
+      channel,
+      to: toCandidate,
+      cfg,
+      accountId,
+      mode,
+      allowFrom: effectiveAllowFrom,
+    });
+    if (!currentTargetResolution.ok) {
+      toCandidate = allowFromOverride[0];
     }
   }
 
@@ -181,7 +187,7 @@ export async function resolveDeliveryTarget(
     cfg,
     accountId,
     mode,
-    allowFrom: allowFromOverride,
+    allowFrom: effectiveAllowFrom,
   });
   if (!docked.ok) {
     return {

@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
@@ -52,6 +52,7 @@ let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolv
 let resolveProviderReasoningOutputModeWithPlugin: typeof import("./provider-runtime.js").resolveProviderReasoningOutputModeWithPlugin;
 let resolveProviderReplayPolicyWithPlugin: typeof import("./provider-runtime.js").resolveProviderReplayPolicyWithPlugin;
 let resolveProviderSyntheticAuthWithPlugin: typeof import("./provider-runtime.js").resolveProviderSyntheticAuthWithPlugin;
+let shouldDeferProviderSyntheticProfileAuthWithPlugin: typeof import("./provider-runtime.js").shouldDeferProviderSyntheticProfileAuthWithPlugin;
 let sanitizeProviderReplayHistoryWithPlugin: typeof import("./provider-runtime.js").sanitizeProviderReplayHistoryWithPlugin;
 let resolveProviderUsageSnapshotWithPlugin: typeof import("./provider-runtime.js").resolveProviderUsageSnapshotWithPlugin;
 let resolveProviderCapabilitiesWithPlugin: typeof import("./provider-runtime.js").resolveProviderCapabilitiesWithPlugin;
@@ -234,7 +235,7 @@ async function expectResolvedAsyncValues(
 }
 
 describe("provider-runtime", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
@@ -269,6 +270,7 @@ describe("provider-runtime", () => {
       resolveProviderReasoningOutputModeWithPlugin,
       resolveProviderReplayPolicyWithPlugin,
       resolveProviderSyntheticAuthWithPlugin,
+      shouldDeferProviderSyntheticProfileAuthWithPlugin,
       sanitizeProviderReplayHistoryWithPlugin,
       resolveProviderUsageSnapshotWithPlugin,
       resolveProviderCapabilitiesWithPlugin,
@@ -285,6 +287,9 @@ describe("provider-runtime", () => {
       validateProviderReplayTurnsWithPlugin,
       wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
+  });
+
+  beforeEach(() => {
     resetProviderRuntimeHookCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
@@ -498,6 +503,9 @@ describe("provider-runtime", () => {
       source: "models.providers.demo (synthetic local key)",
       mode: "api-key" as const,
     }));
+    const shouldDeferSyntheticProfileAuth = vi.fn(
+      ({ resolvedApiKey }: { resolvedApiKey?: string }) => resolvedApiKey === "demo-local",
+    );
     const buildUnknownModelHint = vi.fn(
       ({ modelId }: { modelId: string }) => `Use demo setup for ${modelId}`,
     );
@@ -559,6 +567,7 @@ describe("provider-runtime", () => {
           },
           createEmbeddingProvider,
           resolveSyntheticAuth,
+          shouldDeferSyntheticProfileAuth,
           normalizeResolvedModel: ({ model }) => ({
             ...model,
             api: "openai-codex-responses",
@@ -967,6 +976,17 @@ describe("provider-runtime", () => {
       },
       {
         actual: () =>
+          shouldDeferProviderSyntheticProfileAuthWithPlugin({
+            provider: DEMO_PROVIDER_ID,
+            context: {
+              provider: DEMO_PROVIDER_ID,
+              resolvedApiKey: "demo-local",
+            },
+          }),
+        expected: true,
+      },
+      {
+        actual: () =>
           buildProviderUnknownModelHintWithPlugin({
             provider: "openai",
             env: process.env,
@@ -993,6 +1013,7 @@ describe("provider-runtime", () => {
       resolveReasoningOutputMode,
       refreshOAuth,
       resolveSyntheticAuth,
+      shouldDeferSyntheticProfileAuth,
       buildUnknownModelHint,
       prepareRuntimeAuth,
       resolveUsageAuth,

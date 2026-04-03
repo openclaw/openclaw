@@ -5,9 +5,14 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/public-artifacts.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+
+const TEST_BUNDLED_RUNTIME_SIDECAR_PATHS = [
+  "dist/extensions/discord/runtime-api.js",
+  "dist/extensions/slack/helper-api.js",
+  "dist/extensions/telegram/thread-bindings-runtime.js",
+] as const;
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -45,6 +50,7 @@ vi.mock("../infra/update-runner.js", () => ({
 
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(),
+  resolveOpenClawPackageRootSync: vi.fn(() => process.cwd()),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -53,24 +59,58 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: vi.fn(() => 18789),
 }));
 
-vi.mock("../infra/update-check.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/update-check.js")>();
-  return {
-    ...actual,
-    checkUpdateStatus: vi.fn(),
-    fetchNpmPackageTargetStatus: vi.fn(),
-    fetchNpmTagVersion: vi.fn(),
-    resolveNpmChannelTag: vi.fn(),
-  };
-});
+vi.mock("../infra/update-check.js", () => ({
+  checkUpdateStatus: vi.fn(),
+  compareSemverStrings: vi.fn((left: string | null, right: string | null) => {
+    const parse = (value: string | null) => {
+      if (!value) {
+        return null;
+      }
+      const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
+      if (!match) {
+        return null;
+      }
+      return [
+        Number.parseInt(match[1] ?? "0", 10),
+        Number.parseInt(match[2] ?? "0", 10),
+        Number.parseInt(match[3] ?? "0", 10),
+      ] as const;
+    };
+    const a = parse(left);
+    const b = parse(right);
+    if (!a || !b) {
+      return null;
+    }
+    for (let index = 0; index < a.length; index += 1) {
+      const diff = a[index] - b[index];
+      if (diff !== 0) {
+        return diff;
+      }
+    }
+    return 0;
+  }),
+  fetchNpmPackageTargetStatus: vi.fn(),
+  fetchNpmTagVersion: vi.fn(),
+  resolveNpmChannelTag: vi.fn(),
+}));
 
-vi.mock("../infra/runtime-guard.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/runtime-guard.js")>();
-  return {
-    ...actual,
-    nodeVersionSatisfiesEngine,
-  };
-});
+vi.mock("../infra/runtime-guard.js", () => ({
+  nodeVersionSatisfiesEngine,
+  parseSemver: (version: string | null) => {
+    if (!version) {
+      return null;
+    }
+    const match = version.match(/(\d+)\.(\d+)\.(\d+)/);
+    if (!match) {
+      return null;
+    }
+    return {
+      major: Number.parseInt(match[1] ?? "0", 10),
+      minor: Number.parseInt(match[2] ?? "0", 10),
+      patch: Number.parseInt(match[3] ?? "0", 10),
+    };
+  },
+}));
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -91,28 +131,17 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
-vi.mock("../utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../utils.js")>();
-  return {
-    ...actual,
-    pathExists: (...args: unknown[]) => pathExists(...args),
-  };
-});
+vi.mock("../utils.js", () => ({
+  displayString: (input: string) => input,
+  isRecord: (value: unknown) =>
+    typeof value === "object" && value !== null && !Array.isArray(value),
+  pathExists: (...args: unknown[]) => pathExists(...args),
+}));
 
 vi.mock("../plugins/update.js", () => ({
   syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
 }));
-
-vi.mock("./update-cli/shared.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./update-cli/shared.js")>();
-  return {
-    ...actual,
-    readPackageName,
-    readPackageVersion,
-    resolveGlobalManager,
-  };
-});
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: vi.fn(() => ({
@@ -157,7 +186,8 @@ const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
 const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime } = await import("../runtime.js");
 const { updateCommand, updateStatusCommand, updateWizardCommand } = await import("./update-cli.js");
-const { resolveGitInstallDir } = await import("./update-cli/shared.js");
+const updateCliShared = await import("./update-cli/shared.js");
+const { resolveGitInstallDir } = updateCliShared;
 
 type UpdateCliScenario = {
   name: string;
@@ -365,6 +395,9 @@ describe("update-cli", () => {
       killed: false,
       termination: "exit",
     });
+    vi.spyOn(updateCliShared, "readPackageName").mockImplementation(readPackageName);
+    vi.spyOn(updateCliShared, "readPackageVersion").mockImplementation(readPackageVersion);
+    vi.spyOn(updateCliShared, "resolveGlobalManager").mockImplementation(resolveGlobalManager);
     readPackageName.mockResolvedValue("openclaw");
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
@@ -671,14 +704,14 @@ describe("update-cli", () => {
       JSON.stringify({ name: "openclaw", version: "2026.3.23" }),
       "utf-8",
     );
-    for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+    for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
       const absolutePath = path.join(pkgRoot, relativePath);
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, "export {};\n", "utf-8");
     }
     readPackageVersion.mockResolvedValue("2026.3.23");
     pathExists.mockImplementation(async (candidate: string) =>
-      BUNDLED_RUNTIME_SIDECAR_PATHS.some(
+      TEST_BUNDLED_RUNTIME_SIDECAR_PATHS.some(
         (relativePath) => candidate === path.join(pkgRoot, relativePath),
       ),
     );

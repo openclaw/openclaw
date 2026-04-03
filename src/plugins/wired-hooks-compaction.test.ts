@@ -1,7 +1,7 @@
 /**
  * Test: before_compaction & after_compaction hook wiring
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 
 const hookMocks = vi.hoisted(() => ({
@@ -17,15 +17,7 @@ describe("compaction hook wiring", () => {
   let handleAutoCompactionStart: typeof import("../agents/pi-embedded-subscribe.handlers.compaction.js").handleAutoCompactionStart;
   let handleAutoCompactionEnd: typeof import("../agents/pi-embedded-subscribe.handlers.compaction.js").handleAutoCompactionEnd;
 
-  beforeEach(async () => {
-    vi.resetModules();
-    hookMocks.runner.hasHooks.mockClear();
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    hookMocks.runner.runBeforeCompaction.mockClear();
-    hookMocks.runner.runBeforeCompaction.mockResolvedValue(undefined);
-    hookMocks.runner.runAfterCompaction.mockClear();
-    hookMocks.runner.runAfterCompaction.mockResolvedValue(undefined);
-    hookMocks.emitAgentEvent.mockClear();
+  beforeAll(async () => {
     vi.doMock("../plugins/hook-runner-global.js", () => ({
       getGlobalHookRunner: () => hookMocks.runner,
     }));
@@ -34,6 +26,16 @@ describe("compaction hook wiring", () => {
     }));
     ({ handleAutoCompactionStart, handleAutoCompactionEnd } =
       await import("../agents/pi-embedded-subscribe.handlers.compaction.js"));
+  });
+
+  beforeEach(() => {
+    hookMocks.runner.hasHooks.mockClear();
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runBeforeCompaction.mockClear();
+    hookMocks.runner.runBeforeCompaction.mockResolvedValue(undefined);
+    hookMocks.runner.runAfterCompaction.mockClear();
+    hookMocks.runner.runAfterCompaction.mockResolvedValue(undefined);
+    hookMocks.emitAgentEvent.mockClear();
   });
 
   function createCompactionEndCtx(params: {

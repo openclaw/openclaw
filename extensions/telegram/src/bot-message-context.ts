@@ -341,10 +341,12 @@ export const buildTelegramMessageContext = async ({
     allMedia,
     isGroup,
     chatId,
+    accountId: account.accountId,
     senderId,
     senderUsername,
     resolvedThreadId,
     routeAgentId: route.agentId,
+    sessionKey,
     effectiveGroupAllow,
     effectiveDmAllow,
     groupConfig,
@@ -490,6 +492,7 @@ export const buildTelegramMessageContext = async ({
     locationData: bodyResult.locationData,
     options,
     dmAllowFrom,
+    effectiveGroupAllow,
     commandAuthorized: bodyResult.commandAuthorized,
   });
 

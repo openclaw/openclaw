@@ -10,6 +10,7 @@ import {
   normalizeProviderId,
   normalizeProviderIdForAuth,
   modelKey,
+  resolvePersistedModelRef,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveSubagentConfiguredModelSelection,
@@ -271,6 +272,46 @@ describe("model-selection", () => {
     });
     it.each(["", "  ", "/", "anthropic/", "/model"])("returns null for invalid ref %j", (raw) => {
       expect(parseModelRef(raw, "anthropic")).toBeNull();
+    });
+  });
+
+  describe("resolvePersistedModelRef", () => {
+    it("splits legacy combined refs when provider is not stored separately", () => {
+      expect(
+        resolvePersistedModelRef({
+          defaultProvider: "anthropic",
+          overrideModel: "ollama-beelink2/qwen2.5-coder:7b",
+        }),
+      ).toEqual({
+        provider: "ollama-beelink2",
+        model: "qwen2.5-coder:7b",
+      });
+    });
+
+    it("preserves explicit runtime provider for vendor-prefixed model ids", () => {
+      expect(
+        resolvePersistedModelRef({
+          defaultProvider: "anthropic",
+          runtimeProvider: "openrouter",
+          runtimeModel: "anthropic/claude-haiku-4.5",
+        }),
+      ).toEqual({
+        provider: "openrouter",
+        model: "anthropic/claude-haiku-4.5",
+      });
+    });
+
+    it("normalizes explicit override providers without reparsing runtime semantics", () => {
+      expect(
+        resolvePersistedModelRef({
+          defaultProvider: "anthropic",
+          overrideProvider: "kimi-coding",
+          overrideModel: "kimi-code",
+        }),
+      ).toEqual({
+        provider: "kimi",
+        model: "kimi-code",
+      });
     });
   });
 

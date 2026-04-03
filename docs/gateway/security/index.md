@@ -169,6 +169,26 @@ If more than one person can DM your bot:
 - Never combine shared DMs with broad tool access.
 - This hardens cooperative/shared inboxes, but is not designed as hostile co-tenant isolation when users share host/config write access.
 
+## Context visibility model
+
+OpenClaw separates two concepts:
+
+- **Trigger authorization**: who can trigger the agent (`dmPolicy`, `groupPolicy`, allowlists, mention gates).
+- **Context visibility**: what supplemental context is injected into model input (reply body, quoted text, thread history, forwarded metadata).
+
+Allowlists gate triggers and command authorization. The `contextVisibility` setting controls how supplemental context (quoted replies, thread roots, fetched history) is filtered:
+
+- `contextVisibility: "all"` (default) keeps supplemental context as received.
+- `contextVisibility: "allowlist"` filters supplemental context to senders allowed by the active allowlist checks.
+- `contextVisibility: "allowlist_quote"` behaves like `allowlist`, but still keeps one explicit quoted reply.
+
+Set `contextVisibility` per channel or per room/conversation. See [Group Chats](/channels/groups#context-visibility) for setup details.
+
+Advisory triage guidance:
+
+- Claims that only show "model can see quoted or historical text from non-allowlisted senders" are hardening findings addressable with `contextVisibility`, not auth or sandbox boundary bypasses by themselves.
+- To be security-impacting, reports still need a demonstrated trust-boundary bypass (auth, policy, sandbox, approval, or another documented boundary).
+
 ## What the audit checks (high level)
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
@@ -995,7 +1015,7 @@ Important: `tools.elevated` is the global baseline escape hatch that runs exec o
 If you allow session tools, treat delegated sub-agent runs as another boundary decision:
 
 - Deny `sessions_spawn` unless the agent truly needs delegation.
-- Keep `agents.list[].subagents.allowAgents` restricted to known-safe target agents.
+- Keep `agents.defaults.subagents.allowAgents` and any per-agent `agents.list[].subagents.allowAgents` overrides restricted to known-safe target agents.
 - For any workflow that must remain sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `inherit`).
 - `sandbox: "require"` fails fast when the target child runtime is not sandboxed.
 

@@ -912,6 +912,13 @@ export type ProviderSyntheticAuthResult = {
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
 };
 
+export type ProviderDeferSyntheticProfileAuthContext = {
+  config?: OpenClawConfig;
+  provider: string;
+  providerConfig?: ModelProviderConfig;
+  resolvedApiKey?: string;
+};
+
 /** Text-inference provider capability registered by a plugin. */
 export type ProviderPlugin = {
   id: string;
@@ -1310,6 +1317,16 @@ export type ProviderPlugin = {
   resolveSyntheticAuth?: (
     ctx: ProviderResolveSyntheticAuthContext,
   ) => ProviderSyntheticAuthResult | null | undefined;
+  /**
+   * Provider-owned precedence rule for stored synthetic auth profiles.
+   *
+   * Return true when a stored profile API key is only a provider-owned
+   * synthetic placeholder and should yield to env/config-backed auth before
+   * OpenClaw falls back to that stored profile.
+   */
+  shouldDeferSyntheticProfileAuth?: (
+    ctx: ProviderDeferSyntheticProfileAuthContext,
+  ) => boolean | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
@@ -1605,6 +1622,13 @@ export type OpenClawPluginCommandDefinition = {
    * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
    */
   nativeNames?: Partial<Record<string, string>> & { default?: string };
+  /**
+   * Optional Telegram-native progress placeholder text.
+   * When set, Telegram native/plugin command delivery sends this text
+   * immediately, then edits that same message in place if the final reply
+   * is a simple text-only payload.
+   */
+  telegramNativeProgressMessage?: string;
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */
@@ -2475,11 +2499,25 @@ export type PluginHookSessionStartEvent = {
 };
 
 // session_end hook
+export type PluginHookSessionEndReason =
+  | "new"
+  | "reset"
+  | "idle"
+  | "daily"
+  | "compaction"
+  | "deleted"
+  | "unknown";
+
 export type PluginHookSessionEndEvent = {
   sessionId: string;
   sessionKey?: string;
   messageCount: number;
   durationMs?: number;
+  reason?: PluginHookSessionEndReason;
+  sessionFile?: string;
+  transcriptArchived?: boolean;
+  nextSessionId?: string;
+  nextSessionKey?: string;
 };
 
 // Subagent context

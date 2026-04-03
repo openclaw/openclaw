@@ -42,7 +42,6 @@ describe("channel tools", () => {
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    errorSpy.mockClear();
   });
 
   it("skips crashing plugins and logs once", () => {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startBrowserControlServerFromConfig, stopBrowserControlServer } from "./server.js";
 import { getFreePort } from "./test-port.js";
 
 const mocks = vi.hoisted(() => ({
@@ -56,23 +57,16 @@ vi.mock("./pw-ai-state.js", () => ({
   isPwAiLoaded: vi.fn(() => false),
 }));
 
-let startBrowserControlServerFromConfig: typeof import("./server.js").startBrowserControlServerFromConfig;
-let stopBrowserControlServer: typeof import("./server.js").stopBrowserControlServer;
-
 describe("browser control auth bootstrap failures", () => {
   beforeEach(async () => {
     mocks.controlPort = await getFreePort();
     mocks.ensureBrowserControlAuth.mockClear();
     mocks.resolveBrowserControlAuth.mockClear();
     mocks.ensureExtensionRelayForProfiles.mockClear();
-    vi.resetModules();
-    ({ startBrowserControlServerFromConfig, stopBrowserControlServer } =
-      await import("./server.js"));
   });
 
   afterEach(async () => {
     await stopBrowserControlServer();
-    vi.resetModules();
   });
 
   it("fails closed when auth bootstrap throws and no auth is configured", async () => {

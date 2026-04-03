@@ -222,7 +222,7 @@ describe("provider attribution", () => {
     });
   });
 
-  it("keeps documented OpenRouter attribution centralized while leaving host-gating deferred", () => {
+  it("gates documented OpenRouter attribution to known OpenRouter endpoints", () => {
     expect(
       resolveProviderRequestPolicy({
         provider: "openrouter",
@@ -244,11 +244,7 @@ describe("provider attribution", () => {
         transport: "stream",
         capability: "llm",
       }),
-    ).toEqual({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
-    });
+    ).toBeUndefined();
   });
 
   it("models other provider families without enabling hidden attribution", () => {

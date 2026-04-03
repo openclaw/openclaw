@@ -442,6 +442,15 @@ export function resolveRuntimePluginRegistry(
   return getCompatibleActivePluginRegistry(options) ?? loadOpenClawPlugins(options);
 }
 
+export function resolveCompatibleRuntimePluginRegistry(
+  options?: PluginLoadOptions,
+): PluginRegistry | undefined {
+  // Check whether the active runtime registry is already compatible with these
+  // load options. Unlike resolveRuntimePluginRegistry, this never triggers a
+  // fresh plugin load on cache miss.
+  return getCompatibleActivePluginRegistry(options);
+}
+
 function validatePluginConfig(params: {
   schema?: Record<string, unknown>;
   cacheKey?: string;
@@ -1157,6 +1166,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       config: normalized,
       rootConfig: cfg,
       enabledByDefault: manifestRecord.enabledByDefault,
+      sourceConfig: activationSourceNormalized,
+      sourceRootConfig: activationSourceConfig,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
@@ -1708,6 +1719,8 @@ export async function loadOpenClawPluginCliRegistry(
       config: normalized,
       rootConfig: cfg,
       enabledByDefault: manifestRecord.enabledByDefault,
+      sourceConfig: activationSourceNormalized,
+      sourceRootConfig: activationSourceConfig,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({

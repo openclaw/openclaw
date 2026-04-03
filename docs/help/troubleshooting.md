@@ -165,7 +165,7 @@ flowchart TD
 
     Common log signatures:
 
-    - `Gateway start blocked: set gateway.mode=local` → gateway mode is unset/remote.
+    - `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → gateway mode is remote, or the config file is missing the local-mode stamp and should be repaired.
     - `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
     - `another gateway instance is already listening` or `EADDRINUSE` → port already taken.
 
@@ -231,7 +231,7 @@ flowchart TD
     Deep pages:
 
     - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
-    - [/automation/troubleshooting](/automation/troubleshooting)
+    - [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
     - [/gateway/heartbeat](/gateway/heartbeat)
 
   </Accordion>
@@ -278,6 +278,7 @@ flowchart TD
 
     - If `tools.exec.host` is unset, the default is `auto`.
     - `host=auto` resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.
+    - `host=auto` is routing only; the no-prompt "YOLO" behavior comes from `security=full` plus `ask=off` on gateway/node.
     - On `gateway` and `node`, unset `tools.exec.security` defaults to `full`.
     - Unset `tools.exec.ask` defaults to `off`.
     - Result: if you are seeing approvals, some host-local or per-session policy tightened exec away from the current defaults.
@@ -349,4 +350,4 @@ flowchart TD
 - [Gateway Troubleshooting](/gateway/troubleshooting) — gateway-specific issues
 - [Doctor](/gateway/doctor) — automated health checks and repairs
 - [Channel Troubleshooting](/channels/troubleshooting) — channel connectivity issues
-- [Automation Troubleshooting](/automation/troubleshooting) — cron and heartbeat issues
+- [Automation Troubleshooting](/automation/cron-jobs#troubleshooting) — cron and heartbeat issues
