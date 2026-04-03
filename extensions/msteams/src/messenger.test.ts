@@ -7,13 +7,15 @@ import { SILENT_REPLY_TOKEN, type PluginRuntime } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareOneDrive: vi.fn(),
+  uploadAndShareSharePoint: vi.fn(),
+  getDriveItemProperties: vi.fn(),
 }));
 
-vi.mock("./graph-upload.js", async () => {
-  const actual = await vi.importActual<typeof import("./graph-upload.js")>("./graph-upload.js");
+vi.mock("./graph-upload.js", () => {
   return {
-    ...actual,
     uploadAndShareOneDrive: graphUploadMockState.uploadAndShareOneDrive,
+    uploadAndShareSharePoint: graphUploadMockState.uploadAndShareSharePoint,
+    getDriveItemProperties: graphUploadMockState.getDriveItemProperties,
   };
 });
 
@@ -115,6 +117,8 @@ describe("msteams messenger", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
     graphUploadMockState.uploadAndShareOneDrive.mockReset();
+    graphUploadMockState.uploadAndShareSharePoint.mockReset();
+    graphUploadMockState.getDriveItemProperties.mockReset();
     graphUploadMockState.uploadAndShareOneDrive.mockResolvedValue({
       itemId: "item123",
       webUrl: "https://onedrive.example.com/item123",
