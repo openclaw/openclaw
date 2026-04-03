@@ -600,7 +600,18 @@ export async function spawnSubagentDirect(
         subagentFs?.workspaceOnly === true ||
         sessionsSpawnFs?.workspaceOnly === true ||
         params.fsPolicy?.workspaceOnly === true,
-      allowedPaths: subagentFs?.allowedPaths ?? sessionsSpawnFs?.allowedPaths ?? params.fsPolicy?.allowedPaths,
+      allowedPaths: (() => {
+        const lists = [subagentFs?.allowedPaths, sessionsSpawnFs?.allowedPaths, params.fsPolicy?.allowedPaths]
+          .filter((value): value is string[] => Array.isArray(value));
+        if (lists.length === 0) {
+          return undefined;
+        }
+        const intersect = (a: string[], b: string[]) => {
+          const bSet = new Set(b);
+          return a.filter((item) => bSet.has(item));
+        };
+        return lists.reduce((acc, list) => intersect(acc, list));
+      })(),
       denyPaths:
         subagentFs?.denyPaths || sessionsSpawnFs?.denyPaths || params.fsPolicy?.denyPaths
           ? [
