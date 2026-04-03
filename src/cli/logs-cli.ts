@@ -1,5 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
+import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { isLoopbackHost } from "../gateway/net.js";
+import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -25,6 +28,7 @@ type LogsTailPayload = {
   lines?: string[];
   truncated?: boolean;
   reset?: boolean;
+  localFallback?: boolean;
 };
 
 type LogsCliOptions = {
@@ -42,6 +46,8 @@ type LogsCliOptions = {
   expectFinal?: boolean;
 };
 
+const LOCAL_FALLBACK_NOTICE = "Gateway pairing required; reading local log file instead.";
+
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) {
     return fallback;
@@ -57,16 +63,52 @@ async function fetchLogs(
 ): Promise<LogsTailPayload> {
   const limit = parsePositiveInt(opts.limit, 200);
   const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
-  const payload = await callGatewayFromCli(
-    "logs.tail",
-    opts,
-    { cursor, limit, maxBytes },
-    { progress: showProgress },
-  );
-  if (!payload || typeof payload !== "object") {
-    throw new Error("Unexpected logs.tail response");
+  try {
+    const payload = await callGatewayFromCli(
+      "logs.tail",
+      opts,
+      { cursor, limit, maxBytes },
+      { progress: showProgress },
+    );
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Unexpected logs.tail response");
+    }
+    return payload as LogsTailPayload;
+  } catch (error) {
+    if (!shouldUseLocalLogsFallback(opts, error)) {
+      throw error;
+    }
+    return {
+      ...(await readConfiguredLogTail({ cursor, limit, maxBytes })),
+      localFallback: true,
+    };
   }
-  return payload as LogsTailPayload;
+}
+
+function normalizeErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
+  const message = normalizeErrorMessage(error).toLowerCase();
+  if (!message.includes("pairing required")) {
+    return false;
+  }
+  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
+    return false;
+  }
+  const connection = buildGatewayConnectionDetails();
+  if (connection.urlSource !== "local loopback") {
+    return false;
+  }
+  try {
+    return isLoopbackHost(new URL(connection.url).hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function formatLogTimestamp(
@@ -294,6 +336,11 @@ export function registerLogsCli(program: Command) {
           }
         }
       } else {
+        if (first && payload.file && payload.localFallback === true) {
+          if (!errorLine(colorize(rich, theme.warn, LOCAL_FALLBACK_NOTICE))) {
+            return;
+          }
+        }
         if (first && payload.file) {
           const prefix = pretty ? colorize(rich, theme.muted, "Log file:") : "Log file:";
           if (!logLine(`${prefix} ${payload.file}`)) {
