@@ -41,7 +41,7 @@ const CLEANUP_STATE_KEY = Symbol.for("openclaw.sessionWriteLockCleanupState");
 const HELD_LOCKS_KEY = Symbol.for("openclaw.sessionWriteLockHeldLocks");
 const WATCHDOG_STATE_KEY = Symbol.for("openclaw.sessionWriteLockWatchdogState");
 
-const DEFAULT_STALE_MS = 30 * 60 * 1000;
+const DEFAULT_STALE_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;

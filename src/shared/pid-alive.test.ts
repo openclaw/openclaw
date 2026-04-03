@@ -1,3 +1,4 @@
+import * as childProcess from "node:child_process";
 import fsSync from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { getProcessStartTime, isPidAlive } from "./pid-alive.js";
@@ -104,10 +105,38 @@ describe("getProcessStartTime", () => {
     });
   });
 
-  it("returns null on non-Linux platforms", () => {
-    return withProcessPlatform("darwin", async () => {
+  it("returns null on unsupported platforms", () => {
+    return withProcessPlatform("win32", async () => {
       expect(getProcessStartTime(process.pid)).toBeNull();
     });
+  });
+
+  it("parses macOS ps lstart output on darwin", async () => {
+    if (process.platform !== "darwin") {
+      // On non-darwin, we test by mocking the platform + child_process
+      vi.spyOn(childProcess, "execFileSync").mockReturnValue("Mon Jan  6 14:30:00 2025\n" as never);
+    }
+    await withProcessPlatform("darwin", async () => {
+      const result = getProcessStartTime(process.platform === "darwin" ? process.pid : 42);
+      expect(result).toBeTypeOf("number");
+      expect(result).toBeGreaterThan(0);
+    });
+  });
+
+  it("returns null on darwin when ps fails for nonexistent pid", async () => {
+    await withProcessPlatform("darwin", async () => {
+      // Use an absurdly high PID that won't exist
+      expect(getProcessStartTime(2 ** 30)).toBeNull();
+    });
+  });
+
+  it("returns a real value for the current process on the native platform", () => {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      return;
+    }
+    const result = getProcessStartTime(process.pid);
+    expect(result).toBeTypeOf("number");
+    expect(result).toBeGreaterThan(0);
   });
 
   it("returns null for invalid PIDs", () => {

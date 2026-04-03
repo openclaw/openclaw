@@ -347,7 +347,7 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("reclaims lock files with recycled PIDs", async () => {
-    if (process.platform !== "linux") {
+    if (process.platform !== "linux" && process.platform !== "darwin") {
       return;
     }
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
