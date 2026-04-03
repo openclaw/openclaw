@@ -146,8 +146,9 @@ vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
 }));
 
-vi.mock("../infra/ssh-tunnel.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/ssh-tunnel.js")>();
+vi.mock("../infra/ssh-tunnel.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/ssh-tunnel.js")>("../infra/ssh-tunnel.js");
   return {
     ...actual,
     startSshPortForward: mocks.startSshPortForward,
