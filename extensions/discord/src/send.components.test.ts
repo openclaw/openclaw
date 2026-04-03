@@ -18,6 +18,16 @@ vi.mock("./components-registry.js", () => ({
   registerDiscordComponentEntries: vi.fn(),
 }));
 
+const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
+vi.mock("./send.outbound.js", () => ({
+  sendMessageDiscord: sendMessageDiscordMock,
+}));
+
+const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
+vi.mock("./runtime-api.js", () => ({
+  loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
+}));
+
 let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
 let editDiscordComponentMessage: typeof import("./send.components.js").editDiscordComponentMessage;
 let registerBuiltDiscordComponentMessage: typeof import("./send.components.js").registerBuiltDiscordComponentMessage;
@@ -37,6 +47,13 @@ describe("sendDiscordComponentMessage", () => {
 
   beforeEach(() => {
     registerMock = vi.mocked(registerDiscordComponentEntries);
+    sendMessageDiscordMock.mockReset();
+    sendMessageDiscordMock.mockResolvedValue({ messageId: "msg1", channelId: "chan-1" });
+    loadOutboundMediaFromUrlMock.mockReset();
+    loadOutboundMediaFromUrlMock.mockResolvedValue({
+      buffer: Buffer.from("media"),
+      fileName: "report.pdf",
+    });
     vi.clearAllMocks();
   });
 
@@ -116,5 +133,102 @@ describe("sendDiscordComponentMessage", () => {
       modals: [{ id: "modal-1", title: "Modal", fields: [] }],
       messageId: "msg1",
     });
+  });
+});
+
+describe("sendDiscordComponentMessage classic message downgrade", () => {
+  beforeEach(() => {
+    sendMessageDiscordMock.mockReset();
+    sendMessageDiscordMock.mockResolvedValue({ messageId: "msg1", channelId: "chan-1" });
+    loadOutboundMediaFromUrlMock.mockReset();
+    loadOutboundMediaFromUrlMock.mockResolvedValue({
+      buffer: Buffer.from("media"),
+      fileName: "report.pdf",
+    });
+    vi.clearAllMocks();
+  });
+
+  it("forwards mediaReadFile and mediaAccess to sendMessageDiscord", async () => {
+    const readFileMock = vi.fn().mockResolvedValue(Buffer.from("pdf"));
+    const mediaAccess = { localRoots: ["/tmp"], readFile: readFileMock };
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      { blocks: [{ type: "text", text: "report" }] },
+      {
+        token: "t",
+        mediaUrl: "https://example.com/report.pdf",
+        mediaReadFile: readFileMock,
+        mediaAccess,
+      },
+    );
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:chan-1",
+      "report",
+      expect.objectContaining({
+        mediaReadFile: readFileMock,
+        mediaAccess,
+      }),
+    );
+  });
+
+  it("keeps modal component messages on the component path", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    const registerMock = vi.mocked(registerDiscordComponentEntries);
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "report",
+        modal: {
+          title: "Feedback",
+          fields: [{ type: "text", label: "Notes" }],
+        },
+      },
+      {
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/report.pdf",
+      },
+    );
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(registerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modals: [expect.objectContaining({ title: "Feedback" })],
+      }),
+    );
+  });
+
+  it("keeps spoiler file blocks on the component path", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "report",
+        blocks: [{ type: "file", file: "attachment://report.pdf", spoiler: true }],
+      },
+      {
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/report.pdf",
+      },
+    );
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledTimes(1);
   });
 });

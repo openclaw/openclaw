@@ -122,11 +122,11 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "recommended · newcomer-friendly",
     configuredScore: 1,
     unconfiguredScore: 10,
-    resolveConfigured: ({ cfg }) =>
-      listTelegramAccountIds(cfg).some((accountId) => {
-        const account = inspectTelegramAccount({ cfg, accountId });
-        return account.configured;
-      }),
+    resolveConfigured: ({ cfg, accountId }) =>
+      (accountId ? [accountId] : listTelegramAccountIds(cfg)).some((resolvedAccountId) => {
+        const account = inspectTelegramAccount({ cfg, accountId: resolvedAccountId });
+          return account.configured;
+        }),
   }),
   prepare: async ({ cfg, accountId, credentialValues }) => ({
     cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),

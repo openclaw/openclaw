@@ -172,6 +172,7 @@ export function createStandardChannelSetupStatus(params: {
   resolveConfigured: ChannelSetupWizardStatus["resolveConfigured"];
   resolveExtraStatusLines?: (params: {
     cfg: OpenClawConfig;
+    accountId?: string;
     configured: boolean;
   }) => string[] | Promise<string[]>;
 }): ChannelSetupWizardStatus {
@@ -190,13 +191,14 @@ export function createStandardChannelSetupStatus(params: {
   };
 
   if (params.includeStatusLine || params.resolveExtraStatusLines) {
-    status.resolveStatusLines = async ({ cfg, configured }) => {
+    status.resolveStatusLines = async ({ cfg, accountId, configured }) => {
       const lines = params.includeStatusLine
         ? [
             `${params.channelLabel}: ${configured ? params.configuredLabel : params.unconfiguredLabel}`,
           ]
         : [];
-      const extraLines = (await params.resolveExtraStatusLines?.({ cfg, configured })) ?? [];
+      const extraLines =
+        (await params.resolveExtraStatusLines?.({ cfg, accountId, configured })) ?? [];
       return [...lines, ...extraLines];
     };
   }

@@ -41,8 +41,15 @@ export async function notifyIMessageApproval(id: string): Promise<void> {
   await sendMessageIMessage(id, PAIRING_APPROVED_MESSAGE);
 }
 
-export async function probeIMessageAccount(timeoutMs?: number) {
-  return await probeIMessage(timeoutMs);
+export async function probeIMessageAccount(params?: {
+  timeoutMs?: number;
+  cliPath?: string;
+  dbPath?: string;
+}) {
+  return await probeIMessage(params?.timeoutMs, {
+    cliPath: params?.cliPath,
+    dbPath: params?.dbPath,
+  });
 }
 
 export async function startIMessageGatewayAccount(

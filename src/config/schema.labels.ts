@@ -573,7 +573,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.snapshotDefaults": "Browser Snapshot Defaults",
   "browser.snapshotDefaults.mode": "Browser Snapshot Mode",
   "browser.ssrfPolicy": "Browser SSRF Policy",
-  "browser.ssrfPolicy.allowPrivateNetwork": "Browser Allow Private Network",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": "Browser Dangerously Allow Private Network",
   "browser.ssrfPolicy.allowedHostnames": "Browser Allowed Hostnames",
   "browser.ssrfPolicy.hostnameAllowlist": "Browser Hostname Allowlist",
@@ -722,10 +721,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "canvasHost.port": "Canvas Host Port",
   "canvasHost.liveReload": "Canvas Host Live Reload",
   talk: "Talk",
-  "talk.voiceId": "Talk Voice ID",
-  "talk.voiceAliases": "Talk Voice Aliases",
-  "talk.modelId": "Talk Model ID",
-  "talk.outputFormat": "Talk Output Format",
   "talk.interruptOnSpeech": "Talk Interrupt on Speech",
   "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
   messages: "Messages",
@@ -763,7 +758,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.providers.*.modelId": "Talk Provider Model ID",
   "talk.providers.*.outputFormat": "Talk Provider Output Format",
   "talk.providers.*.apiKey": "Talk Provider API Key", // pragma: allowlist secret
-  "talk.apiKey": "Talk API Key", // pragma: allowlist secret
   channels: "Channels",
   "channels.defaults": "Channel Defaults",
   "channels.defaults.groupPolicy": "Default Group Policy",

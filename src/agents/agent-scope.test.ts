@@ -321,7 +321,7 @@ describe("resolveAgentConfig", () => {
   });
 
   it("should return agent-specific sandbox config", () => {
-    const cfg: OpenClawConfig = {
+    const cfg = {
       agents: {
         list: [
           {
@@ -337,7 +337,7 @@ describe("resolveAgentConfig", () => {
           },
         ],
       },
-    };
+    } as unknown as OpenClawConfig;
     const result = resolveAgentConfig(cfg, "work");
     expect(result?.sandbox).toEqual({
       mode: "all",

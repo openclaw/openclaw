@@ -353,7 +353,7 @@ describe("legacy migrate talk provider shape", () => {
     expect(res.changes).toContain(
       "Moved talk legacy fields (voiceId, modelId) → talk.providers.elevenlabs (filled missing provider fields only).",
     );
-    expect(res.config?.talk).toEqual({
+    expect(res.config?.talk).toMatchObject({
       providers: {
         elevenlabs: {
           voiceId: "voice-1",

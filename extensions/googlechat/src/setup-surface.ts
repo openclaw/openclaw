@@ -92,10 +92,14 @@ export const googlechatSetupWizard: ChannelSetupWizard = {
     configuredHint: "configured",
     unconfiguredHint: "needs auth",
     includeStatusLine: true,
-    resolveConfigured: ({ cfg }) =>
-      listGoogleChatAccountIds(cfg).some(
-        (accountId) => resolveGoogleChatAccount({ cfg, accountId }).credentialSource !== "none",
-      ),
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? resolveGoogleChatAccount({ cfg, accountId }).credentialSource !== "none"
+        : listGoogleChatAccountIds(cfg).some(
+            (resolvedAccountId) =>
+              resolveGoogleChatAccount({ cfg, accountId: resolvedAccountId }).credentialSource !==
+              "none",
+          ),
   }),
   introNote: {
     title: "Google Chat setup",

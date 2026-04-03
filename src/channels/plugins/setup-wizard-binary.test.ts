@@ -9,6 +9,7 @@ import type { ChannelSetupWizard } from "./setup-wizard.js";
 
 describe("createDetectedBinaryStatus", () => {
   it("builds status lines, hint, and score from binary detection", async () => {
+    const resolveConfigured = vi.fn(() => true);
     const status = createDetectedBinaryStatus({
       channelLabel: "Signal",
       binaryLabel: "signal-cli",
@@ -18,12 +19,13 @@ describe("createDetectedBinaryStatus", () => {
       unconfiguredHint: "signal-cli missing",
       configuredScore: 1,
       unconfiguredScore: 0,
-      resolveConfigured: () => true,
+      resolveConfigured,
       resolveBinaryPath: () => "/usr/local/bin/signal-cli",
       detectBinary: vi.fn(async () => true),
     });
 
-    expect(await status.resolveConfigured({ cfg: {} })).toBe(true);
+    expect(await status.resolveConfigured({ cfg: {}, accountId: "work" })).toBe(true);
+    expect(resolveConfigured).toHaveBeenCalledWith({ cfg: {}, accountId: "work" });
     expect(await status.resolveStatusLines?.({ cfg: {}, configured: true })).toEqual([
       "Signal: configured",
       "signal-cli: found (/usr/local/bin/signal-cli)",
