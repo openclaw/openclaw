@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
 import { voteMatrixPoll } from "./actions/polls.js";
@@ -147,8 +147,6 @@ function resetMatrixSendRuntimeMocks() {
 }
 
 describe("sendMessageMatrix media", () => {
-  beforeAll(() => {});
-
   beforeEach(() => {
     resetMatrixSendRuntimeMocks();
   });

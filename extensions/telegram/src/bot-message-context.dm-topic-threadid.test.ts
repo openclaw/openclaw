@@ -46,7 +46,6 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
-    recordInboundSessionMock.mockClear();
   });
 
   beforeAll(async () => {
