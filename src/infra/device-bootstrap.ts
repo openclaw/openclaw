@@ -169,6 +169,23 @@ export async function revokeDeviceBootstrapToken(params: {
   });
 }
 
+export async function getDeviceBootstrapTokenProfile(params: {
+  token: string;
+  baseDir?: string;
+}): Promise<DeviceBootstrapProfile | null> {
+  return await withLock(async () => {
+    const providedToken = params.token.trim();
+    if (!providedToken) {
+      return null;
+    }
+    const state = await loadState(params.baseDir);
+    const found = Object.values(state).find((candidate) =>
+      verifyPairingToken(providedToken, candidate.token),
+    );
+    return found ? resolvePersistedBootstrapProfile(found) : null;
+  });
+}
+
 export async function verifyDeviceBootstrapToken(params: {
   token: string;
   deviceId: string;

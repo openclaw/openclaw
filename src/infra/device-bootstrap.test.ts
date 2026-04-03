@@ -5,6 +5,7 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearDeviceBootstrapTokens,
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
+  getDeviceBootstrapTokenProfile,
   issueDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
@@ -91,6 +92,19 @@ describe("device bootstrap tokens", () => {
       deviceId: "device-123",
       publicKey: "public-key-123",
     });
+  });
+
+  it("loads the issued bootstrap profile for a valid token", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
+      {
+        roles: ["node", "operator"],
+        scopes: ["operator.read", "operator.talk.secrets", "operator.write"],
+      },
+    );
+    await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
   });
 
   it("clears outstanding bootstrap tokens on demand", async () => {

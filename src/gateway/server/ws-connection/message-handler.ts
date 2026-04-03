@@ -3,6 +3,7 @@ import os from "node:os";
 import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
 import {
+  getDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
@@ -31,6 +32,7 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserOperatorUiClient,
@@ -142,6 +144,44 @@ function resolvePinnedClientMetadata(params: {
     pinnedPlatform: hasPinnedPlatform ? params.pairedPlatform : undefined,
     pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
   };
+}
+
+function resolveBootstrapProfileScopes(role: string, scopes: readonly string[]): string[] {
+  if (role === "operator") {
+    return scopes.filter((scope) => scope.startsWith("operator."));
+  }
+  return scopes.filter((scope) => !scope.startsWith("operator."));
+}
+
+function pairedDeviceSatisfiesBootstrapProfile(
+  pairedDevice: Awaited<ReturnType<typeof getPairedDevice>>,
+  bootstrapProfile: DeviceBootstrapProfile,
+): boolean {
+  if (!pairedDevice) {
+    return false;
+  }
+  const approvedScopes = Array.isArray(pairedDevice.approvedScopes)
+    ? pairedDevice.approvedScopes
+    : Array.isArray(pairedDevice.scopes)
+      ? pairedDevice.scopes
+      : [];
+  for (const bootstrapRole of bootstrapProfile.roles) {
+    if (!hasEffectivePairedDeviceRole(pairedDevice, bootstrapRole)) {
+      return false;
+    }
+    const requestedScopes = resolveBootstrapProfileScopes(bootstrapRole, bootstrapProfile.scopes);
+    if (
+      requestedScopes.length > 0 &&
+      !roleScopesAllow({
+        role: bootstrapRole,
+        requestedScopes,
+        allowedScopes: approvedScopes,
+      })
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function attachGatewayWsMessageHandler(params: {
@@ -696,6 +736,10 @@ export function attachGatewayWsMessageHandler(params: {
           rejectUnauthorized(authResult);
           return;
         }
+        const bootstrapProfile =
+          authMethod === "bootstrap-token" && bootstrapTokenCandidate
+            ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
+            : null;
 
         const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
           isControlUi,
@@ -791,9 +835,9 @@ export function attachGatewayWsMessageHandler(params: {
               isWebchat,
               reason,
             });
-            // QR bootstrap onboarding is node-only and single-use. When a fresh device presents
-            // a valid bootstrap token for the baseline node profile, complete pairing in the same
-            // handshake so iOS does not get stuck retrying with an already-consumed bootstrap token.
+            // Bootstrap setup can silently pair the first fresh node connect. Keep the token alive
+            // until the issued profile is fully redeemed so follow-up operator connects can still
+            // present the same bootstrap token while approval is pending.
             const allowSilentBootstrapPairing =
               authMethod === "bootstrap-token" &&
               reason === "not-paired" &&
@@ -832,16 +876,6 @@ export function attachGatewayWsMessageHandler(params: {
                 callerScopes: scopes,
               });
               if (approved?.status === "approved") {
-                if (allowSilentBootstrapPairing && bootstrapTokenCandidate) {
-                  const revoked = await revokeDeviceBootstrapToken({
-                    token: bootstrapTokenCandidate,
-                  });
-                  if (!revoked.removed) {
-                    logGateway.warn(
-                      `bootstrap token revoke skipped after silent auto-approval device=${approved.device.deviceId}`,
-                    );
-                  }
-                }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
                 );
@@ -991,6 +1025,22 @@ export function attachGatewayWsMessageHandler(params: {
         const deviceToken = device
           ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
           : null;
+        if (
+          authMethod === "bootstrap-token" &&
+          bootstrapProfile &&
+          bootstrapTokenCandidate &&
+          device &&
+          pairedDeviceSatisfiesBootstrapProfile(await getPairedDevice(device.id), bootstrapProfile)
+        ) {
+          const revoked = await revokeDeviceBootstrapToken({
+            token: bootstrapTokenCandidate,
+          });
+          if (!revoked.removed) {
+            logGateway.warn(
+              `bootstrap token revoke skipped after profile redemption device=${device.id}`,
+            );
+          }
+        }
 
         if (role === "node") {
           const reconciliation = await reconcileNodePairingOnConnect({
