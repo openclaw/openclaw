@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
-import type { ClawdbotConfig } from "../runtime-api.js";
+import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -54,6 +53,79 @@ function buildResolvedRoute(matchedBy: "binding.channel" | "default" = "binding.
   };
 }
 
+function createTestRuntime(overrides?: {
+  readAllowFromStore?: () => Promise<unknown[]>;
+  upsertPairingRequest?: () => Promise<{ code: string; created: boolean }>;
+  resolveAgentRoute?: () => ReturnType<typeof buildResolvedRoute>;
+  dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+  withReplyDispatcher?: PluginRuntime["channel"]["reply"]["withReplyDispatcher"];
+}) {
+  const finalizeInboundContext = vi.fn((ctx: Record<string, unknown>) => ctx);
+  const dispatchReplyFromConfig =
+    overrides?.dispatchReplyFromConfig ??
+    vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    }));
+  const withReplyDispatcher =
+    overrides?.withReplyDispatcher ??
+    vi.fn(
+      async ({
+        run,
+        onSettled,
+      }: {
+        run: () => Promise<unknown>;
+        onSettled?: () => Promise<void> | void;
+      }) => {
+        try {
+          return await run();
+        } finally {
+          await onSettled?.();
+        }
+      },
+    );
+  const recordInboundSession = vi.fn(async () => {});
+
+  return {
+    channel: {
+      routing: {
+        buildAgentSessionKey: vi.fn(
+          ({
+            agentId,
+            channel,
+            peer,
+          }: {
+            agentId: string;
+            channel: string;
+            peer?: { kind?: string; id?: string };
+          }) => `agent:${agentId}:${channel}:${peer?.kind ?? "direct"}:${peer?.id ?? "peer"}`,
+        ),
+        resolveAgentRoute: vi.fn(overrides?.resolveAgentRoute ?? (() => buildResolvedRoute())),
+      },
+      reply: {
+        finalizeInboundContext,
+        dispatchReplyFromConfig,
+        withReplyDispatcher,
+      },
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
+        recordInboundSession,
+      },
+      pairing: {
+        readAllowFromStore: vi.fn(overrides?.readAllowFromStore ?? (async () => [])),
+        upsertPairingRequest: vi.fn(
+          overrides?.upsertPairingRequest ??
+            (async () => ({
+              code: "TESTCODE",
+              created: true,
+            })),
+        ),
+        buildPairingReply: vi.fn((code: string) => `Pairing code: ${code}`),
+      },
+    },
+  } as unknown as PluginRuntime;
+}
+
 describe("handleFeishuCommentEvent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -82,26 +154,7 @@ describe("handleFeishuCommentEvent", () => {
       reply_id: "r1",
     });
 
-    const runtime = createPluginRuntimeMock({
-      channel: {
-        routing: {
-          resolveAgentRoute: vi.fn(() => buildResolvedRoute()),
-        },
-        reply: {
-          dispatchReplyFromConfig: vi.fn(async () => ({
-            queuedFinal: true,
-            counts: { tool: 0, block: 0, final: 1 },
-          })),
-          withReplyDispatcher: vi.fn(async ({ run, onSettled }) => {
-            try {
-              return await run();
-            } finally {
-              await onSettled?.();
-            }
-          }),
-        },
-      },
-    });
+    const runtime = createTestRuntime();
     setFeishuRuntime(runtime);
 
     createFeishuCommentReplyDispatcherMock.mockReturnValue({
@@ -152,29 +205,7 @@ describe("handleFeishuCommentEvent", () => {
   });
 
   it("allows comment senders matched by user_id allowlist entries", async () => {
-    const runtime = createPluginRuntimeMock({
-      channel: {
-        pairing: {
-          readAllowFromStore: vi.fn(async () => []),
-        },
-        routing: {
-          resolveAgentRoute: vi.fn(() => buildResolvedRoute()),
-        },
-        reply: {
-          dispatchReplyFromConfig: vi.fn(async () => ({
-            queuedFinal: true,
-            counts: { tool: 0, block: 0, final: 1 },
-          })),
-          withReplyDispatcher: vi.fn(async ({ run, onSettled }) => {
-            try {
-              return await run();
-            } finally {
-              await onSettled?.();
-            }
-          }),
-        },
-      },
-    });
+    const runtime = createTestRuntime();
     setFeishuRuntime(runtime);
 
     await handleFeishuCommentEvent({
@@ -204,17 +235,7 @@ describe("handleFeishuCommentEvent", () => {
   });
 
   it("issues a pairing challenge in the comment thread when dmPolicy=pairing", async () => {
-    const runtime = createPluginRuntimeMock({
-      channel: {
-        pairing: {
-          readAllowFromStore: vi.fn(async () => []),
-          upsertPairingRequest: vi.fn(async () => ({ code: "TESTCODE", created: true })),
-        },
-        routing: {
-          resolveAgentRoute: vi.fn(() => buildResolvedRoute()),
-        },
-      },
-    });
+    const runtime = createTestRuntime();
     setFeishuRuntime(runtime);
 
     await handleFeishuCommentEvent({
