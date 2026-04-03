@@ -10357,6 +10357,35 @@
       "hasChildren": false
     },
     {
+      "path": "gateway.auth.trustedProxy.authHeader",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "network"
+      ],
+      "label": "Gateway Trusted Proxy Auth Header",
+      "help": "Optional reverse-proxy authenticity header name that must match gateway.auth.trustedProxy.authValue exactly. Set this when allowing loopback proxies so direct localhost processes cannot spoof identity headers.",
+      "hasChildren": false
+    },
+    {
+      "path": "gateway.auth.trustedProxy.authValue",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "network",
+        "security"
+      ],
+      "label": "Gateway Trusted Proxy Auth Value",
+      "help": "Shared secret value expected in gateway.auth.trustedProxy.authHeader for trusted-proxy requests. Store securely and rotate periodically; use alongside tight trustedProxies CIDRs.",
+      "hasChildren": false
+    },
+    {
       "path": "gateway.auth.trustedProxy.requiredHeaders",
       "kind": "core",
       "type": "array",
