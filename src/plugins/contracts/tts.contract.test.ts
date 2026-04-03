@@ -132,7 +132,7 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
         },
       },
     },
-  };
+  } as unknown as OpenClawConfig;
 }
 
 function createAudioBuffer(length = 2): Buffer {
@@ -650,7 +650,7 @@ describe("tts", () => {
             },
           },
         },
-      });
+      } as unknown as OpenClawConfig);
 
       expect(config.provider).toBe("microsoft");
       expect(getTtsProvider(config, "/tmp/tts-prefs-normalized.json")).toBe("microsoft");
@@ -965,7 +965,7 @@ describe("tts", () => {
   });
 
   describe("maybeApplyTtsToPayload", () => {
-    const baseCfg: OpenClawConfig = {
+    const baseCfg = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: {
         tts: {
@@ -974,7 +974,7 @@ describe("tts", () => {
           openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
         },
       },
-    };
+    } as unknown as OpenClawConfig;
 
     const withMockedAutoTtsFetch = async (
       run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
