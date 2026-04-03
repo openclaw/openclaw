@@ -1,5 +1,4 @@
 import { expect, it, vi, type Mock } from "vitest";
-import { slackOutbound } from "../../../../test/channel-outbounds.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type {
@@ -11,6 +10,7 @@ import type {
   SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { createNonExitingRuntime } from "../../../runtime.js";
+import { loadBundledPluginTestApiSync } from "../../../test-utils/bundled-plugin-public-surface.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
@@ -23,6 +23,7 @@ import type {
 import type {
   ChannelMessageActionName,
   ChannelMessageCapability,
+  ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../types.js";
 import { primeChannelOutboundSendMock } from "./test-helpers.js";
@@ -54,6 +55,17 @@ function resolveContractMessageDiscovery(params: {
 }
 
 const contractRuntime = createNonExitingRuntime();
+let slackOutboundCache: ChannelOutboundAdapter | undefined;
+
+function getSlackOutbound(): ChannelOutboundAdapter {
+  if (!slackOutboundCache) {
+    ({ slackOutbound: slackOutboundCache } = loadBundledPluginTestApiSync<{
+      slackOutbound: ChannelOutboundAdapter;
+    }>("slack"));
+  }
+  return slackOutboundCache;
+}
+
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
   expect(["user", "group", "channel"]).toContain(entry.kind);
   expect(typeof entry.id).toBe("string");
@@ -144,7 +156,7 @@ export function createSlackOutboundPayloadHarness(params: {
     },
   };
   return {
-    run: async () => await slackOutbound.sendPayload!(ctx),
+    run: async () => await getSlackOutbound().sendPayload!(ctx),
     sendMock: sendSlack,
     to: ctx.to,
   };
