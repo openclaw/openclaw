@@ -71,4 +71,12 @@ describe("unit vitest config", () => {
     const unitConfig = createUnitVitestConfig({});
     expect(unitConfig.test?.isolate).toBe(false);
   });
+
+  it("adds the OpenClaw runtime setup hooks on top of the base setup", () => {
+    const unitConfig = createUnitVitestConfig({});
+    expect(unitConfig.test?.setupFiles).toEqual([
+      "test/setup.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
+  });
 });

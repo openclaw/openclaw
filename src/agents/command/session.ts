@@ -76,16 +76,21 @@ export function resolveSessionKeyForRequest(opts: {
     (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
   ) {
     const matches: Array<[string, SessionEntry]> = [];
+    const primaryStoreMatches: Array<[string, SessionEntry]> = [];
     const storeByKey = new Map<string, SessionKeyResolution>();
     const addMatches = (
       candidateStore: Record<string, SessionEntry>,
       candidateStorePath: string,
+      options?: { primary?: boolean },
     ): void => {
       for (const [candidateKey, candidateEntry] of Object.entries(candidateStore)) {
         if (candidateEntry?.sessionId !== opts.sessionId) {
           continue;
         }
         matches.push([candidateKey, candidateEntry]);
+        if (options?.primary) {
+          primaryStoreMatches.push([candidateKey, candidateEntry]);
+        }
         storeByKey.set(candidateKey, {
           sessionKey: candidateKey,
           sessionStore: candidateStore,
@@ -94,7 +99,7 @@ export function resolveSessionKeyForRequest(opts: {
       }
     };
 
-    addMatches(sessionStore, storePath);
+    addMatches(sessionStore, storePath, { primary: true });
     const allAgentIds = listAgentIds(opts.cfg);
     for (const agentId of allAgentIds) {
       if (agentId === storeAgentId) {
@@ -106,12 +111,15 @@ export function resolveSessionKeyForRequest(opts: {
     }
 
     const preferredKey = resolvePreferredSessionKeyForSessionIdMatches(matches, opts.sessionId);
-    if (preferredKey) {
-      const preferred = storeByKey.get(preferredKey);
+    const currentStorePreferredKey =
+      preferredKey ??
+      resolvePreferredSessionKeyForSessionIdMatches(primaryStoreMatches, opts.sessionId);
+    if (currentStorePreferredKey) {
+      const preferred = storeByKey.get(currentStorePreferredKey);
       if (preferred) {
         return preferred;
       }
-      sessionKey = preferredKey;
+      sessionKey = currentStorePreferredKey;
     }
   }
 
