@@ -53,6 +53,12 @@ export type TelegramNetworkConfig = {
    * Default: "ipv4first" on Node 22+ to avoid common fetch failures.
    */
   dnsResultOrder?: "ipv4first" | "verbatim";
+  /**
+   * Dangerous opt-in for Telegram media downloads in trusted fake-IP or
+   * transparent-proxy environments that resolve api.telegram.org to
+   * private/internal/special-use addresses.
+   */
+  dangerouslyAllowPrivateNetwork?: boolean;
 };
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";

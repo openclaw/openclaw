@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { mergeTelegramAccountConfig } from "./accounts.js";
 import {
   hasInboundMedia,
   isRecoverableMediaGroupError,
@@ -84,7 +85,9 @@ export function createTelegramInboundBufferRuntime(params: {
     runtime,
     telegramTransport,
   } = params;
-  const telegramCfg = cfg.channels?.telegram;
+  const telegramCfg = accountId
+    ? mergeTelegramAccountConfig(cfg, accountId)
+    : cfg.channels?.telegram;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
     typeof opts.testTimings?.textFragmentGapMs === "number" &&
@@ -158,6 +161,7 @@ export function createTelegramInboundBufferRuntime(params: {
         opts.token,
         telegramTransport,
         telegramCfg?.apiRoot,
+        telegramCfg?.network?.dangerouslyAllowPrivateNetwork,
       );
       if (!media) {
         return [];
@@ -188,7 +192,14 @@ export function createTelegramInboundBufferRuntime(params: {
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport, telegramCfg?.apiRoot);
+          media = await resolveMedia(
+            ctx,
+            mediaMaxBytes,
+            opts.token,
+            telegramTransport,
+            telegramCfg?.apiRoot,
+            telegramCfg?.network?.dangerouslyAllowPrivateNetwork,
+          );
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;

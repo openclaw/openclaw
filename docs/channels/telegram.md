@@ -914,6 +914,24 @@ channels:
       autoSelectFamily: false
 ```
 
+    - If a trusted fake-IP or transparent proxy rewrites `api.telegram.org` to
+      private/internal/special-use addresses during media downloads, you can
+      opt in to the Telegram-only bypass:
+
+```yaml
+channels:
+  telegram:
+    network:
+      dangerouslyAllowPrivateNetwork: true
+```
+
+    <Warning>
+      `channels.telegram.network.dangerouslyAllowPrivateNetwork` weakens Telegram
+      media SSRF protections. Use it only for trusted operator-controlled proxy
+      environments such as fake-IP routing. Leave it off for normal public
+      internet Telegram access.
+    </Warning>
+
     - Environment overrides (temporary):
       - `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1`
       - `OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY=1`
@@ -980,6 +998,7 @@ Primary reference:
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
 - `channels.telegram.network.dnsResultOrder`: override DNS result order (`ipv4first` or `verbatim`). Defaults to `ipv4first` on Node 22+.
+- `channels.telegram.network.dangerouslyAllowPrivateNetwork`: dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve `api.telegram.org` to private/internal/special-use addresses.
 - `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
 - `channels.telegram.webhookUrl`: enable webhook mode (requires `channels.telegram.webhookSecret`).
 - `channels.telegram.webhookSecret`: webhook secret (required when webhookUrl is set).
@@ -1006,7 +1025,7 @@ Telegram-specific high-signal fields:
 - threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
-- media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
+- media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
 - reactions: `reactionNotifications`, `reactionLevel`
