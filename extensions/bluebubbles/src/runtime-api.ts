@@ -1,4 +1,4 @@
-export { resolveAckReaction } from "openclaw/plugin-sdk/bluebubbles";
+export { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
 export {
   createActionGate,
   jsonResult,
