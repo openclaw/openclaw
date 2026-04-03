@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { clearCommandLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
+import {
+  clearCommandLane,
+  setCommandLaneConcurrency,
+  waitForActiveTasks,
+} from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import {
   createAbortAwareIsolatedRunner,
@@ -351,6 +355,7 @@ describe("cron service ops regressions", () => {
 
     secondRun.resolve({ status: "ok", summary: "second queued run" });
     await bothFinished.promise;
+    await waitForActiveTasks(5_000);
     const jobs = state.store?.jobs ?? [];
     expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
