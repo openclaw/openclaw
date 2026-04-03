@@ -108,7 +108,7 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun resolveTlsParamsForEndpoint_manualPrivateLanCanStayCleartextWhenToggleIsOff() {
+  fun resolveTlsParamsForEndpoint_manualPrivateLanRequiresTlsWhenToggleIsOff() {
     val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
 
     val params =
@@ -118,7 +118,9 @@ class ConnectionManagerTest {
         manualTlsEnabled = false,
       )
 
-    assertNull(params)
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
   }
 
   @Test
@@ -146,7 +148,7 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun resolveTlsParamsForEndpoint_discoveryPrivateLanWithoutHintsCanStayCleartext() {
+  fun resolveTlsParamsForEndpoint_discoveryPrivateLanWithoutHintsRequiresTls() {
     val endpoint =
       GatewayEndpoint(
         stableId = "_openclaw-gw._tcp.|local.|Test",
@@ -164,7 +166,9 @@ class ConnectionManagerTest {
         manualTlsEnabled = false,
       )
 
-    assertNull(params)
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
   }
 
   @Test

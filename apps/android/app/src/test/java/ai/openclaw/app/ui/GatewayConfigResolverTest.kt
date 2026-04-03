@@ -290,6 +290,14 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun parseGatewayEndpointResultFlagsInsecureLanCleartextGateway() {
+    val parsed = parseGatewayEndpointResult("ws://192.168.1.20:18789")
+
+    assertNull(parsed.config)
+    assertEquals(GatewayEndpointValidationError.INSECURE_REMOTE_URL, parsed.error)
+  }
+
+  @Test
   fun decodeGatewaySetupCodeParsesBootstrapToken() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")

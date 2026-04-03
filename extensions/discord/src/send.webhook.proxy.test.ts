@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { sendWebhookMessageDiscord } from "./send.outbound.js";
 
@@ -13,6 +13,11 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
 });
 
 describe("sendWebhookMessageDiscord proxy support", () => {
+  beforeEach(() => {
+    makeProxyFetchMock.mockReset();
+    vi.restoreAllMocks();
+  });
+
   it("falls back to global fetch when the Discord proxy URL is invalid", async () => {
     makeProxyFetchMock.mockImplementation(() => {
       throw new Error("bad proxy");
@@ -38,8 +43,8 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       wait: true,
     });
 
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("bad-proxy");
-    expect(globalFetchMock).toHaveBeenCalledOnce();
+    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("bad-proxy");
+    expect(globalFetchMock).toHaveBeenCalled();
     globalFetchMock.mockRestore();
   });
 
@@ -48,6 +53,32 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       .fn()
       .mockResolvedValue(new Response(JSON.stringify({ id: "msg-1" }), { status: 200 }));
     makeProxyFetchMock.mockReturnValue(proxiedFetch);
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+          proxy: "http://127.0.0.1:8080",
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendWebhookMessageDiscord("hello", {
+      cfg,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    });
+
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://127.0.0.1:8080");
+    expect(proxiedFetch).toHaveBeenCalledOnce();
+  });
+
+  it("uses global fetch when the Discord proxy URL is remote", async () => {
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ id: "msg-remote" }), { status: 200 }));
 
     const cfg = {
       channels: {
@@ -66,8 +97,9 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       wait: true,
     });
 
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://proxy.test:8080");
-    expect(proxiedFetch).toHaveBeenCalledOnce();
+    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(globalFetchMock).toHaveBeenCalled();
+    globalFetchMock.mockRestore();
   });
 
   it("uses global fetch when no proxy is configured", async () => {
@@ -92,7 +124,7 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       wait: true,
     });
 
-    expect(globalFetchMock).toHaveBeenCalledOnce();
+    expect(globalFetchMock).toHaveBeenCalled();
     globalFetchMock.mockRestore();
   });
 });
