@@ -451,6 +451,12 @@ export function registerPluginsCli(program: Command) {
       }
       lines.push("");
       lines.push(`${theme.muted("Status:")} ${inspect.plugin.status}`);
+      if (inspect.plugin.failurePhase) {
+        lines.push(`${theme.muted("Failure phase:")} ${inspect.plugin.failurePhase}`);
+      }
+      if (inspect.plugin.failedAt) {
+        lines.push(`${theme.muted("Failed at:")} ${inspect.plugin.failedAt.toISOString()}`);
+      }
       lines.push(`${theme.muted("Format:")} ${inspect.plugin.format ?? "openclaw"}`);
       if (inspect.plugin.bundleFormat) {
         lines.push(`${theme.muted("Bundle format:")} ${inspect.plugin.bundleFormat}`);
@@ -815,7 +821,8 @@ export function registerPluginsCli(program: Command) {
       if (errors.length > 0) {
         lines.push(theme.error("Plugin errors:"));
         for (const entry of errors) {
-          lines.push(`- ${entry.id}: ${entry.error ?? "failed to load"} (${entry.source})`);
+          const phase = entry.failurePhase ? ` [${entry.failurePhase}]` : "";
+          lines.push(`- ${entry.id}${phase}: ${entry.error ?? "failed to load"} (${entry.source})`);
         }
       }
       if (diags.length > 0) {

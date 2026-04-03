@@ -619,6 +619,7 @@ function recordPluginError(params: {
   seenIds: Map<string, PluginRecord["origin"]>;
   pluginId: string;
   origin: PluginRecord["origin"];
+  phase: PluginRecord["failurePhase"];
   error: unknown;
   logPrefix: string;
   diagnosticMessagePrefix: string;
@@ -637,6 +638,8 @@ function recordPluginError(params: {
   params.logger.error(`${params.logPrefix}${displayError}`);
   params.record.status = "error";
   params.record.error = displayError;
+  params.record.failedAt = new Date();
+  params.record.failurePhase = params.phase;
   params.registry.plugins.push(params.record);
   params.seenIds.set(params.pluginId, params.origin);
   params.registry.diagnostics.push({
@@ -645,6 +648,20 @@ function recordPluginError(params: {
     source: params.record.source,
     message: `${params.diagnosticMessagePrefix}${displayError}`,
   });
+}
+
+function formatPluginFailureSummary(failedPlugins: PluginRecord[]): string {
+  const grouped = new Map<NonNullable<PluginRecord["failurePhase"]>, string[]>();
+  for (const plugin of failedPlugins) {
+    const phase = plugin.failurePhase ?? "load";
+    const ids = grouped.get(phase);
+    if (ids) {
+      ids.push(plugin.id);
+      continue;
+    }
+    grouped.set(phase, [plugin.id]);
+  }
+  return [...grouped.entries()].map(([phase, ids]) => `${phase}: ${ids.join(", ")}`).join("; ");
 }
 
 function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]) {
@@ -1192,6 +1209,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const pushPluginLoadError = (message: string) => {
       record.status = "error";
       record.error = message;
+      record.failedAt = new Date();
+      record.failurePhase = "validation";
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       registry.diagnostics.push({
@@ -1402,6 +1421,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         seenIds,
         pluginId,
         origin: candidate.origin,
+        phase: "load",
         error: err,
         logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
         diagnosticMessagePrefix: "failed to load plugin: ",
@@ -1546,6 +1566,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         seenIds,
         pluginId,
         origin: candidate.origin,
+        phase: "register",
         error: err,
         logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
         diagnosticMessagePrefix: "plugin failed during register: ",
@@ -1571,6 +1592,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   });
 
   maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
+
+  if (shouldActivate && options.mode !== "validate") {
+    const failedPlugins = registry.plugins.filter((plugin) => plugin.failedAt != null);
+    if (failedPlugins.length > 0) {
+      logger.warn(
+        `[plugins] ${failedPlugins.length} plugin(s) failed to initialize (${formatPluginFailureSummary(
+          failedPlugins,
+        )}). Run 'openclaw plugins list' for details.`,
+      );
+    }
+  }
 
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, {
@@ -1745,6 +1777,8 @@ export async function loadOpenClawPluginCliRegistry(
     const pushPluginLoadError = (message: string) => {
       record.status = "error";
       record.error = message;
+      record.failedAt = new Date();
+      record.failurePhase = "validation";
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       registry.diagnostics.push({
@@ -1812,6 +1846,7 @@ export async function loadOpenClawPluginCliRegistry(
         seenIds,
         pluginId,
         origin: candidate.origin,
+        phase: "load",
         error: err,
         logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
         diagnosticMessagePrefix: "failed to load plugin: ",
@@ -1901,6 +1936,7 @@ export async function loadOpenClawPluginCliRegistry(
         seenIds,
         pluginId,
         origin: candidate.origin,
+        phase: "register",
         error: err,
         logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
         diagnosticMessagePrefix: "plugin failed during register: ",

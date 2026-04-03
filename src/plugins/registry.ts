@@ -205,6 +205,8 @@ export type PluginRecord = {
   activationReason?: string;
   status: "loaded" | "disabled" | "error";
   error?: string;
+  failedAt?: Date;
+  failurePhase?: "validation" | "load" | "register";
   toolNames: string[];
   hookNames: string[];
   channelIds: string[];
