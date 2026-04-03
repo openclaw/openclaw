@@ -318,12 +318,12 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const cfg = subagentAnnounceDeliveryDeps.loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
-  if (!requesterIsSubagent) {
-    toUserFacingContent({
-      payload: item.display,
-      source: "queued-announce-display",
-    });
-  }
+  const userFacing = !requesterIsSubagent
+    ? toUserFacingContent({
+        payload: item.display,
+        source: "queued-announce-display",
+      })
+    : undefined;
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
@@ -338,7 +338,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     method: "agent",
     params: {
       sessionKey: item.sessionKey,
-      message: item.execution.agentPrompt,
+      message: requesterIsSubagent ? item.execution.agentPrompt : userFacing?.text ?? "",
       channel: requesterIsSubagent ? undefined : origin?.channel,
       accountId: requesterIsSubagent ? undefined : origin?.accountId,
       to: requesterIsSubagent ? undefined : origin?.to,

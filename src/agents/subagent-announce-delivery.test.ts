@@ -86,7 +86,7 @@ describe("resolveAnnounceOrigin telegram forum topics", () => {
 });
 
 describe("queued announce delivery execution boundary", () => {
-  it("sends queued announce items from execution.agentPrompt, not display text", async () => {
+  it("sends external queued announce items from validated display text, not execution.agentPrompt", async () => {
     const calls: Array<{ method?: string; params?: { message?: string } }> = [];
     __testing.setDepsForTest({
       loadConfig: () => ({ agents: { subagentAnnounceTimeoutMs: 1000 } }) as never,
@@ -107,8 +107,8 @@ describe("queued announce delivery execution boundary", () => {
       });
 
       expect(calls).toHaveLength(1);
-      expect(calls[0]?.params?.message).toBe("internal trigger payload");
-      expect(calls[0]?.params?.message).not.toBe("safe display payload");
+      expect(calls[0]?.params?.message).toBe("safe display payload");
+      expect(calls[0]?.params?.message).not.toBe("internal trigger payload");
     } finally {
       __testing.setDepsForTest();
     }
