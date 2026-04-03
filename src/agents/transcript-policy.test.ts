@@ -183,6 +183,20 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
+  it("falls back to transport defaults when a plugin replay hook returns undefined", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "kilocode",
+      modelId: "kilocode-default",
+      modelApi: "openai-completions",
+    });
+
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
   it("enables Anthropic-compatible policies for Bedrock provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "amazon-bedrock",

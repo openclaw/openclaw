@@ -162,8 +162,9 @@ export function resolveTranscriptPolicy(params: {
     model: params.model,
   };
 
-  if (runtimePlugin?.buildReplayPolicy) {
-    return mergeTranscriptPolicy(runtimePlugin.buildReplayPolicy(context) ?? undefined);
+  const pluginPolicy = runtimePlugin?.buildReplayPolicy?.(context);
+  if (pluginPolicy != null) {
+    return mergeTranscriptPolicy(pluginPolicy);
   }
 
   return mergeTranscriptPolicy(

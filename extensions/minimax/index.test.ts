@@ -8,7 +8,7 @@ import {
 import minimaxPlugin from "./index.js";
 
 describe("minimax provider hooks", () => {
-  it("owns tagged reasoning mode for MiniMax transports", () => {
+  it("keeps native reasoning mode for MiniMax transports", () => {
     const { providers } = registerProviderPlugin({
       plugin: minimaxPlugin,
       id: "minimax",
@@ -24,7 +24,7 @@ describe("minimax provider hooks", () => {
         modelApi: "anthropic-messages",
         modelId: "MiniMax-M2.7",
       } as never),
-    ).toBe("tagged");
+    ).toBe("native");
 
     expect(portalProvider.hookAliases).toContain("minimax-portal-cn");
     expect(
@@ -33,7 +33,7 @@ describe("minimax provider hooks", () => {
         modelApi: "anthropic-messages",
         modelId: "MiniMax-M2.7",
       } as never),
-    ).toBe("tagged");
+    ).toBe("native");
   });
 
   it("owns fast-mode stream wrapping for MiniMax transports", () => {

@@ -16,6 +16,8 @@ function applySharedOpenAIWrappers(
   streamFn: ProviderWrapStreamFnContext["streamFn"],
   ctx: ProviderWrapStreamFnContext,
 ) {
+  // Transport-default ownership lives in prepareExtraParams. These wrappers stay
+  // intentionally identical across direct OpenAI, Azure OpenAI, and Codex.
   let nextStreamFn = createOpenAIAttributionHeadersWrapper(streamFn);
 
   if (resolveOpenAIFastMode(ctx.extraParams)) {

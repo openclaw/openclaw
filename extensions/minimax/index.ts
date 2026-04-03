@@ -33,8 +33,10 @@ const DEFAULT_MODEL = MINIMAX_DEFAULT_MODEL_ID;
 const DEFAULT_BASE_URL_CN = "https://api.minimaxi.com/anthropic";
 const DEFAULT_BASE_URL_GLOBAL = "https://api.minimax.io/anthropic";
 
-function resolveMinimaxReasoningOutputMode(): "tagged" {
-  return "tagged";
+function resolveMinimaxReasoningOutputMode(): "native" {
+  // Keep MiniMax on native reasoning mode. Tagged enforcement previously
+  // suppressed normal assistant replies on this Anthropic-compatible surface.
+  return "native";
 }
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {

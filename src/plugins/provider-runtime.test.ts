@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
@@ -235,7 +235,7 @@ async function expectResolvedAsyncValues(
 }
 
 describe("provider-runtime", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
@@ -287,6 +287,9 @@ describe("provider-runtime", () => {
       validateProviderReplayTurnsWithPlugin,
       wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
+  });
+
+  beforeEach(() => {
     resetProviderRuntimeHookCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);

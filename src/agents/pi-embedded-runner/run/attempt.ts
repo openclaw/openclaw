@@ -223,9 +223,21 @@ export function resolveEmbeddedAgentStreamFn(params: {
   sessionId: string;
   signal?: AbortSignal;
   model: EmbeddedRunAttemptParams["model"];
+  authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
 }): StreamFn {
   if (params.providerStreamFn) {
-    return params.providerStreamFn;
+    const inner = params.providerStreamFn;
+    // Provider-owned transports bypass pi-coding-agent's default auth lookup,
+    // so keep injecting the resolved runtime apiKey for streamSimple-compatible
+    // transports that still read credentials from options.apiKey.
+    if (params.authStorage) {
+      const { authStorage, model } = params;
+      return async (m, context, options) => {
+        const apiKey = await authStorage.getApiKey(model.provider);
+        return inner(m, context, { ...options, apiKey: apiKey ?? options?.apiKey });
+      };
+    }
+    return inner;
   }
 
   const currentStreamFn = params.currentStreamFn ?? streamSimple;
@@ -940,6 +952,7 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         signal: runAbortController.signal,
         model: params.model,
+        authStorage: params.authStorage,
       });
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
