@@ -483,16 +483,70 @@ describe("config strict validation", () => {
     }
   });
 
-  it("rejects removed legacy config entries without auto-migrating", async () => {
+  it("accepts top-level memorySearch via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
-        memorySearch: { provider: "local", fallback: "none" },
+        memorySearch: {
+          provider: "local",
+          fallback: "none",
+          query: { maxResults: 7 },
+        },
       });
 
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
+      expect(snap.sourceConfig.agents?.defaults?.memorySearch).toMatchObject({
+        provider: "local",
+        fallback: "none",
+        query: { maxResults: 7 },
+      });
+      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toBeUndefined();
+    });
+  });
+
+  it("accepts top-level heartbeat agent settings via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        heartbeat: {
+          every: "30m",
+          model: "anthropic/claude-3-5-haiku-20241022",
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
+      expect(snap.sourceConfig.agents?.defaults?.heartbeat).toMatchObject({
+        every: "30m",
+        model: "anthropic/claude-3-5-haiku-20241022",
+      });
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
+    });
+  });
+
+  it("accepts top-level heartbeat visibility via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        heartbeat: {
+          showOk: true,
+          showAlerts: false,
+          useIndicator: true,
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
+      expect(snap.sourceConfig.channels?.defaults?.heartbeat).toMatchObject({
+        showOk: true,
+        showAlerts: false,
+        useIndicator: true,
+      });
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
     });
   });
 
