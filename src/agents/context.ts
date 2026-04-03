@@ -385,6 +385,7 @@ export function resolveContextTokensForModel(params: {
     provider: params.provider,
     model: params.model,
   });
+  const explicitProvider = params.provider?.trim();
   if (ref) {
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
@@ -397,10 +398,10 @@ export function resolveContextTokensForModel(params: {
     // cfg.models.providers.google in that case would return Google's configured
     // window and misreport context limits for the OpenRouter session.
     // See status.ts log-usage fallback which calls with only { model } set.
-    if (params.provider) {
+    if (explicitProvider) {
       const configuredWindow = resolveConfiguredProviderContextWindow(
         params.cfg,
-        ref.provider,
+        explicitProvider,
         ref.model,
       );
       if (configuredWindow !== undefined) {
