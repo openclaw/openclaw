@@ -35,6 +35,7 @@ export type ProviderEndpointClass =
   | "default"
   | "anthropic-public"
   | "github-copilot-native"
+  | "mistral-public"
   | "moonshot-native"
   | "modelstudio-native"
   | "openai-public"
@@ -201,6 +202,9 @@ export function resolveProviderEndpoint(
   }
   if (host === "api.anthropic.com") {
     return { endpointClass: "anthropic-public", hostname: host };
+  }
+  if (host === "api.mistral.ai") {
+    return { endpointClass: "mistral-public", hostname: host };
   }
   if (host.endsWith(".githubcopilot.com")) {
     return { endpointClass: "github-copilot-native", hostname: host };
@@ -498,6 +502,7 @@ export function resolveProviderRequestCapabilities(
   const isKnownNativeEndpoint =
     endpointClass === "anthropic-public" ||
     endpointClass === "github-copilot-native" ||
+    endpointClass === "mistral-public" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||
     endpointClass === "openai-public" ||

@@ -13,6 +13,7 @@ import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestTransport,
@@ -1317,6 +1318,18 @@ async function processOpenAICompletionsStream(
 function detectCompat(model: OpenAIModeModel) {
   const provider = model.provider;
   const baseUrl = model.baseUrl ?? "";
+  const capabilities = resolveProviderRequestCapabilities({
+    provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    capability: "llm",
+    transport: "stream",
+    modelId: model.id,
+    compat:
+      model.compat && typeof model.compat === "object"
+        ? (model.compat as { supportsStore?: boolean })
+        : undefined,
+  });
   const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
   const isNonStandard =
     provider === "cerebras" ||
@@ -1353,7 +1366,9 @@ function detectCompat(model: OpenAIModeModel) {
     requiresThinkingAsText: false,
     thinkingFormat: isZai
       ? "zai"
-      : provider === "openrouter" || baseUrl.includes("openrouter.ai")
+      : provider === "openrouter" ||
+          capabilities.endpointClass === "openrouter" ||
+          capabilities.attributionProvider === "openrouter"
         ? "openrouter"
         : "openai",
     openRouterRouting: {},
