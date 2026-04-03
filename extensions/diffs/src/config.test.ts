@@ -6,7 +6,7 @@ import {
   ResolvingThemes,
 } from "@pierre/diffs";
 import AjvPkg from "ajv";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
@@ -14,10 +14,16 @@ import {
   resolveDiffImageRenderOptions,
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
+  resolveDiffsPluginViewerBaseUrl,
 } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
-import { getServedViewerAsset, VIEWER_LOADER_PATH, VIEWER_RUNTIME_PATH } from "./viewer-assets.js";
+import {
+  getServedViewerAsset,
+  resolveViewerRuntimeFileUrl,
+  VIEWER_LOADER_PATH,
+  VIEWER_RUNTIME_PATH,
+} from "./viewer-assets.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 const FULL_DEFAULTS = {
@@ -36,6 +42,15 @@ const FULL_DEFAULTS = {
   fileMaxWidth: 1280,
   mode: "file",
 } as const;
+
+function compileManifestConfigSchema() {
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as { configSchema: Record<string, unknown> };
+  const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
+  const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
+  return ajv.compile(manifest.configSchema);
+}
 
 describe("resolveDiffsPluginDefaults", () => {
   it("returns built-in defaults when config is missing", () => {
@@ -167,12 +182,7 @@ describe("resolveDiffsPluginDefaults", () => {
   });
 
   it("keeps loader-applied schema defaults from shadowing aliases and quality-derived defaults", () => {
-    const manifest = JSON.parse(
-      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
-    ) as { configSchema: Record<string, unknown> };
-    const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
-    const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
-    const validate = ajv.compile(manifest.configSchema);
+    const validate = compileManifestConfigSchema();
 
     const aliasOnly = {
       defaults: {
@@ -214,10 +224,34 @@ describe("resolveDiffsPluginSecurity", () => {
   });
 });
 
+describe("resolveDiffsPluginViewerBaseUrl", () => {
+  it("defaults to undefined when config is missing", () => {
+    expect(resolveDiffsPluginViewerBaseUrl(undefined)).toBeUndefined();
+  });
+
+  it("normalizes configured viewer base URLs", () => {
+    expect(
+      resolveDiffsPluginViewerBaseUrl({
+        viewerBaseUrl: "https://example.com/openclaw/",
+      }),
+    ).toBe("https://example.com/openclaw");
+  });
+});
+
 describe("diffs plugin schema surfaces", () => {
+  it("rejects invalid viewerBaseUrl values at manifest-validation time too", () => {
+    const validate = compileManifestConfigSchema();
+
+    expect(validate({ viewerBaseUrl: "javascript:alert(1)" })).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw?x=1" })).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw#frag" })).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw/" })).toBe(true);
+  });
+
   it("preserves defaults and security for direct safeParse callers", () => {
     expect(
       diffsPluginConfigSchema.safeParse?.({
+        viewerBaseUrl: "https://example.com/openclaw/",
         defaults: {
           theme: "light",
         },
@@ -228,6 +262,7 @@ describe("diffs plugin schema surfaces", () => {
     ).toMatchObject({
       success: true,
       data: {
+        viewerBaseUrl: "https://example.com/openclaw",
         defaults: {
           fontFamily: "Fira Code",
           fontSize: 15,
@@ -268,6 +303,24 @@ describe("diffs plugin schema surfaces", () => {
           fileScale: 2.5,
           fileMaxWidth: 1200,
         },
+      },
+    });
+  });
+
+  it("rejects invalid viewerBaseUrl config values", () => {
+    expect(
+      diffsPluginConfigSchema.safeParse?.({
+        viewerBaseUrl: "javascript:alert(1)",
+      }),
+    ).toMatchObject({
+      success: false,
+      error: {
+        issues: [
+          {
+            path: ["viewerBaseUrl"],
+            message: "viewerBaseUrl must use http or https: javascript:alert(1)",
+          },
+        ],
       },
     });
   });
@@ -324,12 +377,28 @@ describe("diffs viewer URL helpers", () => {
     ).toBe("https://example.com/openclaw/plugins/diffs/view/id/token");
   });
 
+  it("prefers normalized viewerBaseUrl strings too", () => {
+    expect(
+      buildViewerUrl({
+        config: {},
+        baseUrl: "https://example.com/openclaw/",
+        viewerPath: "/plugins/diffs/view/id/token",
+      }),
+    ).toBe("https://example.com/openclaw/plugins/diffs/view/id/token");
+  });
+
   it("rejects base URLs with query/hash", () => {
     expect(() => normalizeViewerBaseUrl("https://example.com?a=1")).toThrow(
       "baseUrl must not include query/hash",
     );
     expect(() => normalizeViewerBaseUrl("https://example.com#frag")).toThrow(
       "baseUrl must not include query/hash",
+    );
+  });
+
+  it("uses the configured field name in viewerBaseUrl validation errors", () => {
+    expect(() => normalizeViewerBaseUrl("https://example.com?a=1", "viewerBaseUrl")).toThrow(
+      "viewerBaseUrl must not include query/hash",
     );
   });
 });
@@ -540,6 +609,47 @@ describe("renderDiffDocument", () => {
 });
 
 describe("viewer assets", () => {
+  it("prefers the built plugin asset layout when present", async () => {
+    const stat = vi.fn(async (path: string) => {
+      if (path === "/repo/dist/extensions/diffs/assets/viewer-runtime.js") {
+        return { mtimeMs: 1 };
+      }
+      const error = Object.assign(new Error(`missing: ${path}`), { code: "ENOENT" });
+      throw error;
+    });
+
+    await expect(
+      resolveViewerRuntimeFileUrl({
+        baseUrl: "file:///repo/dist/extensions/diffs/index.js",
+        stat,
+      }),
+    ).resolves.toMatchObject({
+      pathname: "/repo/dist/extensions/diffs/assets/viewer-runtime.js",
+    });
+    expect(stat).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the source asset layout when the built artifact is absent", async () => {
+    const stat = vi.fn(async (path: string) => {
+      if (path === "/repo/extensions/diffs/assets/viewer-runtime.js") {
+        return { mtimeMs: 1 };
+      }
+      const error = Object.assign(new Error(`missing: ${path}`), { code: "ENOENT" });
+      throw error;
+    });
+
+    await expect(
+      resolveViewerRuntimeFileUrl({
+        baseUrl: "file:///repo/extensions/diffs/src/viewer-assets.js",
+        stat,
+      }),
+    ).resolves.toMatchObject({
+      pathname: "/repo/extensions/diffs/assets/viewer-runtime.js",
+    });
+    expect(stat).toHaveBeenNthCalledWith(1, "/repo/extensions/diffs/src/assets/viewer-runtime.js");
+    expect(stat).toHaveBeenNthCalledWith(2, "/repo/extensions/diffs/assets/viewer-runtime.js");
+  });
+
   it("serves a stable loader that points at the current runtime bundle", async () => {
     const loader = await getServedViewerAsset(VIEWER_LOADER_PATH);
 

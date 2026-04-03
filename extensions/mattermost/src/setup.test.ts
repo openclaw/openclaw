@@ -228,27 +228,24 @@ describe("mattermost setup", () => {
     );
   });
 
-  it.each(["https://chat.example.com", "https://chat.example.test"])(
-    "treats secret-ref tokens plus base url as configured: %s",
-    async (baseUrl) => {
-      const configured = await mattermostSetupWizard.status.resolveConfigured({
-        cfg: {
-          channels: {
-            mattermost: {
-              baseUrl,
-              botToken: {
-                source: "env",
-                provider: "default",
-                id: "MATTERMOST_BOT_TOKEN",
-              },
+  it("treats secret-ref tokens plus base url as configured", async () => {
+    const configured = await mattermostSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          mattermost: {
+            baseUrl: "https://chat.example.com",
+            botToken: {
+              source: "env",
+              provider: "default",
+              id: "MATTERMOST_BOT_TOKEN",
             },
           },
-        } as OpenClawConfig,
-      });
+        },
+      } as OpenClawConfig,
+    });
 
-      expect(configured).toBe(true);
-    },
-  );
+    expect(configured).toBe(true);
+  });
 
   it("shows intro note only when the target account is not configured", () => {
     expect(

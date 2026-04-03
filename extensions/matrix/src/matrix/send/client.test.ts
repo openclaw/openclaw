@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
   expectExplicitMatrixClientConfig,
@@ -38,10 +38,12 @@ let withResolvedMatrixControlClient: typeof import("./client.js").withResolvedMa
 let withResolvedMatrixSendClient: typeof import("./client.js").withResolvedMatrixSendClient;
 
 describe("matrix send client helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ withResolvedMatrixControlClient, withResolvedMatrixSendClient } =
       await import("./client.js"));
+  });
+
+  beforeEach(() => {
     primeMatrixClientResolverMocks({
       resolved: {},
     });

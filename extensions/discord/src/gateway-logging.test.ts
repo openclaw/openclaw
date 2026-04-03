@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: vi.fn(),
@@ -23,11 +23,6 @@ describe("attachDiscordGatewayLogging", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
   it("logs debug events and promotes reconnect/close to info", () => {
     const emitter = new EventEmitter();
     const runtime = makeRuntime();
@@ -37,20 +32,25 @@ describe("attachDiscordGatewayLogging", () => {
       runtime,
     });
 
-    emitter.emit("debug", "WebSocket connection opened");
-    emitter.emit("debug", "WebSocket connection closed with code 1001");
-    emitter.emit("debug", "Reconnecting with backoff: 1000ms after code 1001");
+    emitter.emit("debug", "Gateway websocket opened");
+    emitter.emit("debug", "Gateway websocket closed: 1001");
+    emitter.emit("debug", "Gateway reconnect scheduled in 1000ms (close, resume=true)");
+    emitter.emit("debug", "Gateway forcing fresh IDENTIFY after 3 failed resume attempts");
 
     const logVerboseMock = vi.mocked(logVerbose);
-    expect(logVerboseMock).toHaveBeenCalledTimes(3);
-    expect(runtime.log).toHaveBeenCalledTimes(2);
+    expect(logVerboseMock).toHaveBeenCalledTimes(4);
+    expect(runtime.log).toHaveBeenCalledTimes(3);
     expect(runtime.log).toHaveBeenNthCalledWith(
       1,
-      "discord gateway: WebSocket connection closed with code 1001",
+      "discord gateway: Gateway websocket closed: 1001",
     );
     expect(runtime.log).toHaveBeenNthCalledWith(
       2,
-      "discord gateway: Reconnecting with backoff: 1000ms after code 1001",
+      "discord gateway: Gateway reconnect scheduled in 1000ms (close, resume=true)",
+    );
+    expect(runtime.log).toHaveBeenNthCalledWith(
+      3,
+      "discord gateway: Gateway forcing fresh IDENTIFY after 3 failed resume attempts",
     );
 
     cleanup();
@@ -88,7 +88,7 @@ describe("attachDiscordGatewayLogging", () => {
     const logVerboseMock = vi.mocked(logVerbose);
     logVerboseMock.mockClear();
 
-    emitter.emit("debug", "WebSocket connection closed with code 1001");
+    emitter.emit("debug", "Gateway websocket closed: 1001");
     emitter.emit("warning", "High latency detected: 1200ms");
     emitter.emit("metrics", { latency: 42 });
 

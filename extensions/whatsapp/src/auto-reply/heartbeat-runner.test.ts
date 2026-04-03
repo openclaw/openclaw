@@ -162,7 +162,6 @@ describe("runWebHeartbeatOnce", () => {
   });
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ runWebHeartbeatOnce } = await import("./heartbeat-runner.js"));
   });
 

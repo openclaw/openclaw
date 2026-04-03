@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { normalizeStoredCronJobs } from "../store-migration.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
@@ -33,18 +32,23 @@ export async function ensureLoaded(
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
-  const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
-  const { mutated } = normalizeStoredCronJobs(jobs);
-  state.store = { version: 1, jobs: jobs as unknown as CronJob[] };
+  const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
+  for (const job of jobs) {
+    // Persisted legacy jobs may predate the required `enabled` field.
+    // Keep runtime behavior backward-compatible without rewriting the store.
+    if (typeof job.enabled !== "boolean") {
+      job.enabled = true;
+    }
+  }
+  state.store = {
+    version: 1,
+    jobs,
+  };
   state.storeLoadedAtMs = state.deps.nowMs();
   state.storeFileMtimeMs = fileMtimeMs;
 
   if (!opts?.skipRecompute) {
     recomputeNextRuns(state);
-  }
-
-  if (mutated) {
-    await persist(state, { skipBackup: true });
   }
 }
 

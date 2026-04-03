@@ -326,9 +326,16 @@ async function refreshOAuthTokenFromStoreWithLock(params: {
       context: cred,
     });
     if (pluginRefreshed) {
+      const refreshedCredentials: OAuthCredential = {
+        ...cred,
+        ...pluginRefreshed,
+        type: "oauth",
+      };
+      store.profiles[params.profileId] = refreshedCredentials;
+      saveAuthProfileStore(store, params.agentDir);
       return {
-        apiKey: await buildOAuthApiKey(cred.provider, pluginRefreshed),
-        newCredentials: pluginRefreshed,
+        apiKey: await buildOAuthApiKey(cred.provider, refreshedCredentials),
+        newCredentials: refreshedCredentials,
       };
     }
 

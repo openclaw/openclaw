@@ -512,6 +512,7 @@ export type ChannelApprovalDeliveryAdapter = {
   hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
   shouldSuppressForwardingFallback?: (params: {
     cfg: OpenClawConfig;
+    approvalKind: ChannelApprovalKind;
     target: ChannelApprovalForwardTarget;
     request: ExecApprovalRequest;
   }) => boolean;
@@ -586,6 +587,11 @@ export type ChannelApprovalRenderAdapter = {
       target: ChannelApprovalForwardTarget;
     }) => ReplyPayload | null;
   };
+};
+
+export type ChannelApprovalCapability = ChannelApprovalAdapter & {
+  authorizeActorAction?: ChannelAuthAdapter["authorizeActorAction"];
+  getActionAvailabilityState?: ChannelAuthAdapter["getActionAvailabilityState"];
 };
 
 export type ChannelApprovalAdapter = {
