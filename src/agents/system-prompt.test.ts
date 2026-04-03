@@ -751,6 +751,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("using session_status when available");
     expect(prompt).toContain("explicit timezone or numeric UTC offset");
   });
+
+  it("keeps session_status optional in reminder guidance when the tool is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["cron"],
+    });
+
+    expect(prompt).toContain("relative or ambiguous times");
+    expect(prompt).toContain("using session_status when available");
+    expect(prompt).not.toContain(
+      "If you need the current date, time, or day of week, run session_status",
+    );
+    expect(prompt).not.toContain("- session_status:");
+  });
 });
 
 describe("buildSubagentSystemPrompt", () => {
