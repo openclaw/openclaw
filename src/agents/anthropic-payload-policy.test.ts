@@ -4,6 +4,12 @@ import {
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 
+type TestPayload = {
+  messages: Array<{ role: string; content: unknown }>;
+  service_tier?: string;
+  system?: unknown;
+};
+
 describe("anthropic payload policy", () => {
   it("applies native Anthropic service tier and cache markers without widening cache scope", () => {
     const policy = resolveAnthropicPayloadPolicy({
@@ -14,7 +20,7 @@ describe("anthropic payload policy", () => {
       enableCacheControl: true,
       serviceTier: "standard_only",
     });
-    const payload: Record<string, unknown> = {
+    const payload: TestPayload = {
       system: [
         { type: "text", text: "Follow policy." },
         { type: "text", text: "Use tools carefully." },
@@ -76,7 +82,7 @@ describe("anthropic payload policy", () => {
       enableCacheControl: true,
       serviceTier: "auto",
     });
-    const payload: Record<string, unknown> = {
+    const payload: TestPayload = {
       system: [{ type: "text", text: "Follow policy." }],
       messages: [{ role: "user", content: "Hello" }],
     };
