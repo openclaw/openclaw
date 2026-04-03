@@ -4,9 +4,8 @@ import {
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import * as dedup from "./dedup.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import {
@@ -67,6 +66,24 @@ function buildMonitorAccount(): ResolvedFeishuAccount {
       connectionMode: "websocket",
     },
   } as ResolvedFeishuAccount;
+}
+
+function createFeishuMonitorRuntime(params?: {
+  createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+  resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
+}): PluginRuntime {
+  return {
+    channel: {
+      debounce: {
+        createInboundDebouncer: params?.createInboundDebouncer ?? createInboundDebouncer,
+        resolveInboundDebounceMs: params?.resolveInboundDebounceMs ?? resolveInboundDebounceMs,
+      },
+      text: {
+        hasControlCommand: params?.hasControlCommand ?? hasControlCommand,
+      },
+    },
+  } as unknown as PluginRuntime;
 }
 
 function makeDriveCommentEvent(
@@ -483,19 +500,7 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     vi.spyOn(dedup, "tryBeginFeishuMessageProcessing").mockReturnValue(true);
     vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
     vi.spyOn(dedup, "hasProcessedFeishuMessage").mockResolvedValue(false);
-    setFeishuRuntime(
-      createPluginRuntimeMock({
-        channel: {
-          debounce: {
-            resolveInboundDebounceMs,
-            createInboundDebouncer,
-          },
-          text: {
-            hasControlCommand,
-          },
-        },
-      }),
-    );
+    setFeishuRuntime(createFeishuMonitorRuntime());
   });
 
   afterEach(() => {
