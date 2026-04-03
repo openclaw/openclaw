@@ -313,7 +313,7 @@ describe("openai transport stream", () => {
         name: "Grok 4.1 Fast",
         api: "openai-responses",
         provider: "xai",
-        baseUrl: "",
+        baseUrl: "https://api.x.ai/v1",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
