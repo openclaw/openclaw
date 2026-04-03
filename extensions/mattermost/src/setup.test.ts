@@ -257,6 +257,32 @@ describe("mattermost setup", () => {
     expect(configured).toBe(true);
   });
 
+  it("does not inherit configured state from a sibling when defaultAccount is named", async () => {
+    const configured = await mattermostSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          mattermost: {
+            defaultAccount: "work",
+            accounts: {
+              alerts: {
+                baseUrl: "https://chat.example.com",
+                botToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "MATTERMOST_BOT_TOKEN",
+                },
+              },
+              work: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: undefined,
+    });
+
+    expect(configured).toBe(false);
+  });
+
   it("shows intro note only when the target account is not configured", () => {
     expect(
       mattermostSetupWizard.introNote?.shouldShow?.({
