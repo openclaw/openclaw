@@ -1,7 +1,6 @@
-import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
-type DiscordThreadBindingsModule = PluginSdkFacadeTypeMap["discord-thread-bindings"]["module"];
+type DiscordThreadBindingsModule = typeof import("../../extensions/discord/runtime-api.js");
 
 export const unbindThreadBindingsBySessionKey: DiscordThreadBindingsModule["unbindThreadBindingsBySessionKey"] =
   ((...args) => {

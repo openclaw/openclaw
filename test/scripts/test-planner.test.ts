@@ -78,6 +78,75 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
   });
 
+  it("keeps bundled-plugin-dependent core tests off the default unit surface", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "10",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit", "bundled"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    expect(plan.selectedUnits.some((unit) => unit.surface === "bundled")).toBe(true);
+    expect(
+      plan.selectedUnits
+        .filter((unit) => unit.surface === "unit")
+        .every((unit) => unit.env?.OPENCLAW_DISABLE_BUNDLED_PLUGINS === "1"),
+    ).toBe(true);
+    expect(plan.selectedUnits.find((unit) => unit.surface === "bundled")?.args).toContain(
+      "vitest.bundled.config.ts",
+    );
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("runs boundary inventory suites on the lean boundary config", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "10",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const boundaryUnit = plan.selectedUnits.find((unit) => unit.id === "unit-boundary");
+
+    expect(boundaryUnit).toBeTruthy();
+    expect(boundaryUnit?.args).toContain("vitest.boundary.config.ts");
+    expect(boundaryUnit?.env?.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe("1");
+    expect(
+      plan.selectedUnits
+        .filter((unit) => unit.id.startsWith("unit-fast"))
+        .every((unit) => !unit.includeFiles?.includes("test/web-search-provider-boundary.test.ts")),
+    ).toBe(true);
+    artifacts.cleanupTempArtifacts();
+  });
+
   it("uses smaller shared extension batches on constrained local hosts", () => {
     const env = {
       RUNNER_OS: "macOS",
@@ -172,6 +241,70 @@ describe("test planner", () => {
     expect(hotspotUnit).toBeTruthy();
     expect(hotspotUnit?.isolate).toBe(true);
     expect(hotspotUnit?.reasons).toContain("extensions-timed-heavy");
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("auto-isolates memory-heavy extension suites in CI", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const hotspotFile = bundledPluginFile("feishu", "src/bot.test.ts");
+    const hotspotUnit = plan.selectedUnits.find((unit) => unit.args.includes(hotspotFile));
+
+    expect(hotspotUnit).toBeTruthy();
+    expect(hotspotUnit?.isolate).toBe(true);
+    expect(hotspotUnit?.reasons).toContain("extensions-memory-heavy");
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("auto-isolates newly-seeded extension memory survivors in CI", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const hotspotFile = bundledPluginFile("bluebubbles", "src/send.test.ts");
+    const hotspotUnit = plan.selectedUnits.find((unit) => unit.args.includes(hotspotFile));
+
+    expect(hotspotUnit).toBeTruthy();
+    expect(hotspotUnit?.isolate).toBe(true);
+    expect(hotspotUnit?.reasons).toContain("extensions-memory-heavy");
     artifacts.cleanupTempArtifacts();
   });
 
@@ -391,6 +524,29 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
   });
 
+  it.each(["test/extension-test-boundary.test.ts", "test/web-search-provider-boundary.test.ts"])(
+    "routes targeted boundary inventories through the lean boundary config: %s",
+    (file) => {
+      const artifacts = createExecutionArtifacts({});
+      const plan = buildExecutionPlan(
+        {
+          mode: "local",
+          surfaces: [],
+          passthroughArgs: [file],
+        },
+        {
+          env: {},
+          writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+        },
+      );
+
+      expect(plan.targetedUnits).toHaveLength(1);
+      expect(plan.targetedUnits[0]?.surface).toBe("unit");
+      expect(plan.targetedUnits[0]?.args).toContain("vitest.boundary.config.ts");
+      artifacts.cleanupTempArtifacts();
+    },
+  );
+
   it("normalizes --bail=0 into collect-all failure policy", () => {
     const artifacts = createExecutionArtifacts({});
     const plan = buildExecutionPlan(
@@ -425,6 +581,21 @@ describe("test planner", () => {
     expect(explanation.pool).toBe("forks");
     expect(explanation.reasons).toContain("base-pinned-manifest");
     expect(explanation.intentProfile).toBe("normal");
+  });
+
+  it("routes synthetic bundled-plugin fixture tests through the bundled surface", () => {
+    const explanation = explainExecutionTarget(
+      {
+        mode: "local",
+        fileFilters: ["src/plugin-sdk/facade-runtime.test.ts"],
+      },
+      {
+        env: {},
+      },
+    );
+
+    expect(explanation.surface).toBe("bundled");
+    expect(explanation.args).toContain("vitest.bundled.config.ts");
   });
 
   it("uses hotspot-backed memory isolation when explaining unit tests", () => {
@@ -651,16 +822,25 @@ describe("test planner", () => {
 
     expect(manifest.jobs.buildArtifacts.enabled).toBe(true);
     expect(manifest.shardCounts.unit).toBe(4);
-    expect(manifest.shardCounts.channels).toBe(4);
+    expect(manifest.shardCounts.channels).toBe(3);
     expect(manifest.shardCounts.extensionFast).toBeGreaterThanOrEqual(4);
     expect(manifest.shardCounts.extensionFast).toBeLessThanOrEqual(6);
     expect(manifest.shardCounts.windows).toBe(6);
     expect(manifest.shardCounts.macosNode).toBe(9);
-    expect(manifest.jobs.checks.matrix.include).toHaveLength(8);
+    expect(manifest.jobs.checks.matrix.include).toHaveLength(7);
     expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(6);
     expect(manifest.jobs.macosNode.matrix.include).toHaveLength(9);
     expect(manifest.jobs.checksFast.matrix.include).toHaveLength(
-      manifest.shardCounts.extensionFast + 1,
+      manifest.shardCounts.extensionFast + 2,
+    );
+    expect(manifest.requiredCheckNames).toContain("checks-fast-bundled");
+    expect(manifest.jobs.checksFast.matrix.include).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          check_name: "checks-fast-bundled",
+          command: "pnpm test:bundled",
+        }),
+      ]),
     );
     expect(
       manifest.jobs.checksFast.matrix.include

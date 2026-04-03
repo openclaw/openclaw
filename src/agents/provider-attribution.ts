@@ -450,12 +450,11 @@ export function resolveProviderRequestPolicy(
   ) {
     attributionProvider = "openai-codex";
   } else if (provider === "openrouter" && policy?.enabledByDefault) {
-    // OpenRouter attribution is documented and intentionally remains
-    // provider-key-gated for this pass, including custom base URLs configured
-    // under the openrouter provider. The endpoint class is still surfaced so a
-    // later host-gating decision can reuse the same classifier without changing
-    // callers again.
-    attributionProvider = "openrouter";
+    // OpenRouter attribution is documented, but only apply it to known
+    // OpenRouter endpoints or the default (unset) baseUrl path.
+    if (endpointClass === "openrouter" || endpointClass === "default") {
+      attributionProvider = "openrouter";
+    }
   }
 
   const attributionHeaders = attributionProvider

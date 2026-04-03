@@ -47,7 +47,7 @@ describe("plugin activation boundary", () => {
   let browserAmbientImportsPromise: Promise<void> | undefined;
   let discordMaintenancePromise:
     | Promise<{
-        unbindThreadBindingsBySessionKey: typeof import("./plugin-sdk/discord-thread-bindings.js").unbindThreadBindingsBySessionKey;
+        unbindThreadBindingsBySessionKey: typeof import("./plugin-sdk/discord-maintenance.js").unbindThreadBindingsBySessionKey;
       }>
     | undefined;
 
@@ -111,11 +111,9 @@ describe("plugin activation boundary", () => {
   }
 
   function importDiscordMaintenance() {
-    discordMaintenancePromise ??= import("./plugin-sdk/discord-thread-bindings.js").then(
-      (module) => ({
-        unbindThreadBindingsBySessionKey: module.unbindThreadBindingsBySessionKey,
-      }),
-    );
+    discordMaintenancePromise ??= import("./plugin-sdk/discord-maintenance.js").then((module) => ({
+      unbindThreadBindingsBySessionKey: module.unbindThreadBindingsBySessionKey,
+    }));
     return discordMaintenancePromise;
   }
 
@@ -129,7 +127,14 @@ describe("plugin activation boundary", () => {
     const { isChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
 
     expect(isChannelConfigured({}, "whatsapp", {})).toBe(false);
-    expect(resolveEnvApiKey("anthropic-vertex", {})).toBeNull();
+    expect(
+      resolveEnvApiKey("anthropic-vertex", {
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+      }),
+    ).toEqual({
+      apiKey: "gcp-vertex-credentials",
+      source: "gcloud adc",
+    });
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
