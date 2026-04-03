@@ -88,6 +88,44 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
     fixedExtension: false,
     platform: "node",
     inputOptions: buildInputOptions,
+    outputOptions(options) {
+      const previousChunkFileNames = options.chunkFileNames;
+      return {
+        ...options,
+        chunkFileNames(chunkInfo) {
+          const moduleIds = chunkInfo.moduleIds || [];
+          const extensionIds = new Set<string>();
+          let hasNonPluginModules = false;
+          for (const id of moduleIds) {
+            if (id.startsWith("\0")) {
+              continue;
+            }
+            const absoluteId = path.resolve(process.cwd(), id);
+            const relativeToRoot = path.relative(process.cwd(), absoluteId);
+            const parts = relativeToRoot.split(path.sep);
+
+            if (parts[0] === "extensions" && parts.length > 2) {
+              extensionIds.add(parts[1]);
+            } else if (parts.includes("node_modules")) {
+              continue;
+            } else {
+              hasNonPluginModules = true;
+            }
+          }
+          if (extensionIds.size === 1 && !hasNonPluginModules) {
+            const extId = Array.from(extensionIds)[0];
+            return `extensions/${extId}/[name]-[hash].js`;
+          }
+          if (typeof previousChunkFileNames === "function") {
+            return previousChunkFileNames(chunkInfo);
+          }
+          if (typeof previousChunkFileNames === "string") {
+            return previousChunkFileNames;
+          }
+          return `[name]-[hash].js`;
+        },
+      };
+    },
   };
 }
 
