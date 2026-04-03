@@ -1,9 +1,10 @@
 export {
   createCliRuntimeCapture,
-  isLiveTestEnabled,
   type CliMockOutputRuntime,
   type CliRuntimeCapture,
-} from "openclaw/plugin-sdk/testing";
+  isLiveTestEnabled,
+} from "../../src/cli/test-runtime-capture.js";
+export { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 export { type OpenClawConfig } from "openclaw/plugin-sdk/browser-support";
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../../src/test-utils/auth-token-assertions.js";
 export { withEnv, withEnvAsync } from "../../test/helpers/plugins/env.ts";
