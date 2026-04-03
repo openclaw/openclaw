@@ -303,7 +303,7 @@ describe("runtime config snapshot writes", () => {
             minimax: {
               baseUrl: "https://api.minimax.io/v1",
               apiKey: "sk-actual-secret-value", // pragma: allowlist secret
-              models: [{ name: "MiniMax-Text-01", provider: "minimax" }],
+              models: [{ name: "MiniMax-Text-01" }],
             },
           },
         },
@@ -317,7 +317,7 @@ describe("runtime config snapshot writes", () => {
               baseUrl: "https://api.minimax.io/v1",
               // Simulate what the UI sends back after displaying a redacted form field
               apiKey: "__OPENCLAW_REDACTED__" as unknown as string,
-              models: [{ name: "MiniMax-Text-01", provider: "minimax" }],
+              models: [{ name: "MiniMax-Text-01" }],
             },
           },
         },
