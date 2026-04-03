@@ -114,42 +114,36 @@ export async function listFishAudioVoices(params: {
 }): Promise<Array<{ id: string; name: string }>> {
   const base = normalizeFishAudioBaseUrl(params.baseUrl);
 
-  // List the authenticated user's own voices (cloned/trained).
-  // Fish Audio has no stable API for fetching a curated "official" voice
-  // catalogue — the public model listing returns the entire community corpus
-  // (1M+ entries) and filtering by undocumented author IDs would be fragile.
-  // Users can browse and select voices at https://fish.audio and configure
-  // their chosen voiceId directly.
   const PAGE_SIZE = 100;
-  const allItems: Array<{ _id?: string; title?: string }> = [];
+  const headers = { Authorization: `Bearer ${params.apiKey}` };
+
+  type RawItem = { _id?: string; title?: string };
+  type ApiResponse = { total?: number; items?: RawItem[] };
+
+  // --- 1. User's own voices (cloned/trained), paginated ---
+  const ownItems: RawItem[] = [];
   let page = 1;
 
-  // Paginate through all results — the Fish Audio API returns `total` and
-  // supports `page_number` (1-indexed) + `page_size`.
   while (true) {
     const res = await fetch(
       `${base}/model?type=tts&self=true&page_size=${PAGE_SIZE}&page_number=${page}`,
-      { headers: { Authorization: `Bearer ${params.apiKey}` } },
+      { headers },
     );
 
     if (!res.ok) {
       throw new Error(`Fish Audio voices API error (${res.status})`);
     }
 
-    const json = (await res.json()) as {
-      total?: number;
-      items?: Array<{ _id?: string; title?: string }>;
-    };
+    const json = (await res.json()) as ApiResponse;
 
     if (!Array.isArray(json.items) || json.items.length === 0) {
       break;
     }
 
-    allItems.push(...json.items);
+    ownItems.push(...json.items);
 
-    // Stop when we've collected all items or the page was not full.
     if (
-      (typeof json.total === "number" && allItems.length >= json.total) ||
+      (typeof json.total === "number" && ownItems.length >= json.total) ||
       json.items.length < PAGE_SIZE
     ) {
       break;
@@ -158,10 +152,35 @@ export async function listFishAudioVoices(params: {
     page++;
   }
 
-  return allItems
-    .map((v) => ({
-      id: v._id?.trim() ?? "",
-      name: v.title?.trim() || v._id?.trim() || "",
-    }))
-    .filter((v) => v.id.length > 0);
+  // --- 2. Popular public voices (single page, sorted by score) ---
+  // Provides usable defaults for new users who have no cloned voices yet.
+  // We fetch one page of the top-ranked community voices rather than the
+  // entire corpus.
+  let popularItems: RawItem[] = [];
+  try {
+    const res = await fetch(
+      `${base}/model?type=tts&sort_by=score&page_size=${PAGE_SIZE}&page_number=1`,
+      { headers },
+    );
+
+    if (res.ok) {
+      const json = (await res.json()) as ApiResponse;
+      popularItems = Array.isArray(json.items) ? json.items : [];
+    }
+  } catch {
+    // Non-fatal — user's own voices are still returned.
+  }
+
+  // --- 3. Merge & deduplicate (own voices first) ---
+  const seen = new Set<string>();
+  const merged: Array<{ id: string; name: string }> = [];
+
+  for (const v of [...ownItems, ...popularItems]) {
+    const id = v._id?.trim() ?? "";
+    if (id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    merged.push({ id, name: v.title?.trim() || id });
+  }
+
+  return merged;
 }
