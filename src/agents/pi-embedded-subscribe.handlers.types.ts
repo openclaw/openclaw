@@ -132,6 +132,7 @@ export type EmbeddedPiSubscribeContext = {
     errorMessage?: string,
     requestText?: string,
     replyText?: string,
+    toolCalls?: { name: string; input: string }[],
   ) => void;
   incrementCompactionCount: () => void;
   getUsageTotals: () => NormalizedUsage | undefined;

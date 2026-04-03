@@ -342,6 +342,90 @@ export function handleMessageUpdate(
   }
 }
 
+type ToolUseBlock = {
+  type: "tool_use";
+  name: string;
+  input: Record<string, unknown>;
+  id: string;
+};
+
+/**
+ * Extract tool calls from an assistant message.
+ * Returns an array of {name, input} where input is the primary parameter
+ * as a compact string (max 240 chars).
+ */
+function extractToolCalls(assistantMessage: AgentMessage): { name: string; input: string }[] {
+  // Cast to access content - only AssistantMessage (role=assistant) has content
+  const msg = assistantMessage as unknown as { content?: unknown };
+  const content = msg.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const toolCalls: { name: string; input: string }[] = [];
+
+  for (const block of content) {
+    if (
+      typeof block === "object" &&
+      block !== null &&
+      (block as ToolUseBlock).type === "tool_use"
+    ) {
+      const toolBlock = block as ToolUseBlock;
+      const name = toolBlock.name;
+
+      // Extract the primary input parameter as a compact string.
+      // Known tools: exec (command), Read (file/file_path), Write (file_path),
+      // web_search (query), web_fetch (url), etc.
+      const inputObj = toolBlock.input;
+      let inputStr = "";
+
+      if (inputObj) {
+        // Try common parameter names first
+        const primaryParams = [
+          "command",
+          "file",
+          "file_path",
+          "path",
+          "query",
+          "url",
+          "prompt",
+          "code",
+          "text",
+          "message",
+        ];
+        for (const param of primaryParams) {
+          if (typeof inputObj[param] === "string" && inputObj[param]) {
+            inputStr = inputObj[param];
+            break;
+          }
+        }
+
+        // If no common param found, use the first string value
+        if (!inputStr) {
+          for (const value of Object.values(inputObj)) {
+            if (typeof value === "string" && value) {
+              inputStr = value;
+              break;
+            }
+          }
+        }
+
+        // Fallback: stringify the entire input object
+        if (!inputStr) {
+          inputStr = JSON.stringify(inputObj);
+        }
+      }
+
+      // Compact: replace newlines and truncate to 240 chars
+      inputStr = inputStr.replace(/\n+/g, " ").substring(0, 240);
+
+      toolCalls.push({ name, input: inputStr });
+    }
+  }
+
+  return toolCalls;
+}
+
 export function handleMessageEnd(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -365,8 +449,11 @@ export function handleMessageEnd(
     ? ctx.params.triggerText.replace(/\n+/g, " ").substring(0, 240)
     : undefined;
 
+  // Extract tool calls from the assistant message
+  const toolCalls = extractToolCalls(assistantMessage);
+
   // Emit per-call trace event (model.call) — only if onLlmCallComplete is set.
-  ctx.noteLlmCallEnd(rawUsage, undefined, requestText, replyText);
+  ctx.noteLlmCallEnd(rawUsage, undefined, requestText, replyText, toolCalls);
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }

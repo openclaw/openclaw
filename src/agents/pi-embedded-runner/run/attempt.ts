@@ -1283,6 +1283,7 @@ export async function runEmbeddedAttempt(
                       costUsd?: number;
                       requestText?: string;
                       replyText?: string;
+                      toolCalls?: { name: string; input: string }[];
                     }) => {
                       const costConfig = resolveModelCostConfig({
                         provider: params.provider,
@@ -1306,6 +1307,7 @@ export async function runEmbeddedAttempt(
                         ...(costUsd != null ? { costUsd } : {}),
                         ...(evt.requestText ? { requestText: evt.requestText } : {}),
                         ...(evt.replyText ? { replyText: evt.replyText } : {}),
+                        ...(evt.toolCalls?.length ? { toolCalls: evt.toolCalls } : {}),
                       });
                     }
                   : undefined,

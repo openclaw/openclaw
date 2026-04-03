@@ -61,6 +61,8 @@ export type SubscribeEmbeddedPiSessionParams = {
     requestText?: string;
     /** The assistant reply text (max 240 chars, newlines compressed). */
     replyText?: string;
+    /** Tool calls executed in this LLM response (max 240 chars per input). */
+    toolCalls?: { name: string; input: string }[];
   }) => void;
   /**
    * Called after every internal tool execution completes (tool.call trace).
