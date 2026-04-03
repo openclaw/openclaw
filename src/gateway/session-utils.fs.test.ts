@@ -698,6 +698,35 @@ describe("readSessionMessages — reset archive fallback", () => {
     const out = readSessionMessages(sessionId, storePath);
     expect(out).toHaveLength(0);
   });
+
+  test("finds reset archive in legacy ~/.openclaw/sessions dir when not in store dir", () => {
+    const sessionId = "aa000000-0000-4000-8000-000000000005";
+    // Simulate a legacy-layout archive: home dir is remapped to tmpDir so the
+    // legacy path becomes <tmpDir>/.openclaw/sessions.
+    const legacyDir = path.join(tmpDir, ".openclaw", "sessions");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    const archivePath = path.join(legacyDir, `${sessionId}.jsonl.reset.2026-03-12T04-00-00.000Z`);
+    fs.writeFileSync(
+      archivePath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "legacy archived message" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    // Point HOME at tmpDir so resolveRequiredHomeDir resolves the fake legacy path.
+    const origHome = process.env.HOME;
+    process.env.HOME = tmpDir;
+    try {
+      const out = readSessionMessages(sessionId, storePath);
+      expect(out).toHaveLength(1);
+      expect((out[0] as { role: string; content: string }).content).toBe("legacy archived message");
+    } finally {
+      process.env.HOME = origHome;
+      fs.rmSync(legacyDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {

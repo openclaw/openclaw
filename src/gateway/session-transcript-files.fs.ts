@@ -273,14 +273,40 @@ export async function cleanupArchivedSessionTranscripts(opts: {
  * session, or undefined if none exist. Used as a fallback in readSessionMessages
  * so that chat.history returns archived content instead of an empty response
  * after a daily or manual session reset.
+ *
+ * Searches both the provided sessions dir and the legacy `~/.openclaw/sessions`
+ * directory, consistent with how resolveSessionTranscriptCandidates locates
+ * primary transcripts.
  */
 export function findLatestResetArchive(sessionId: string, sessionsDir: string): string | undefined {
+  const prefix = `${sessionId}.jsonl.reset.`;
+
+  // Mirror the legacy-dir fallback in resolveSessionTranscriptCandidates so
+  // archives created before a state-dir migration are also found.
+  const dirsToSearch: string[] = [sessionsDir];
   try {
-    const prefix = `${sessionId}.jsonl.reset.`;
-    const files = fs.readdirSync(sessionsDir);
-    const archives = files.filter((name) => name.startsWith(prefix)).toSorted(); // archive timestamps are ISO-derived and sort lexicographically
-    return archives.length > 0 ? path.join(sessionsDir, archives[archives.length - 1]) : undefined;
+    const home = resolveRequiredHomeDir(process.env, os.homedir);
+    const legacyDir = path.join(home, ".openclaw", "sessions");
+    if (path.resolve(legacyDir) !== path.resolve(sessionsDir)) {
+      dirsToSearch.push(legacyDir);
+    }
   } catch {
-    return undefined;
+    // Ignore home-dir resolution failures; primary dir is still searched.
   }
+
+  for (const dir of dirsToSearch) {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      const archives = entries
+        .filter((d) => d.isFile() && d.name.startsWith(prefix))
+        .map((d) => d.name)
+        .toSorted(); // archive timestamps are ISO-derived and sort lexicographically
+      if (archives.length > 0) {
+        return path.join(dir, archives[archives.length - 1]);
+      }
+    } catch {
+      // Skip unreadable dirs (missing legacy dir is the common case).
+    }
+  }
+  return undefined;
 }
