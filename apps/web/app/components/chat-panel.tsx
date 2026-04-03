@@ -1070,7 +1070,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 			selectedDenchModel: cloudState?.selectedDenchModel ?? null,
 			models: cloudState?.models ?? [],
 		});
-		const hasModelPicker = false;
+		const hasModelPicker =
+			Boolean(currentSessionId) &&
+			Boolean(cloudState?.isDenchPrimary) &&
+			(cloudState?.models.filter((m) => m.provider === "anthropic").length ?? 0) > 0;
 		const preferServerVoiceInput = Boolean(
 			cloudState?.status === "valid" && cloudState.elevenLabsEnabled,
 		);
@@ -2435,7 +2438,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							hasModelPicker ? (
 								<div className="min-w-0 w-full max-w-full">
 									<ChatModelSelector
-										models={cloudState?.models ?? []}
+										models={(cloudState?.models ?? []).filter((m) => m.provider === "anthropic")}
 										selectedModel={activeChatModel}
 										onSelect={(id) => {
 											void handleSelectChatModel(id);
