@@ -1103,6 +1103,7 @@ export function attachGatewayWsMessageHandler(params: {
           socket,
           connect: connectParams,
           connId,
+          usesSharedGatewayAuth: authMethod === "token" || authMethod === "password",
           presenceKey,
           clientIp: reportedClientIp,
           canvasHostUrl,
