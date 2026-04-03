@@ -1039,7 +1039,14 @@ export function resolveSessionModelRef(
   // runtime identity helper below.
   const storedModelOverride = entry?.modelOverride?.trim();
   if (storedModelOverride) {
-    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
+    const explicitOverrideProvider = entry?.providerOverride?.trim();
+    if (explicitOverrideProvider) {
+      return {
+        provider: explicitOverrideProvider,
+        model: storedModelOverride,
+      };
+    }
+    const overrideProvider = provider || DEFAULT_PROVIDER;
     const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
     if (parsedOverride) {
       provider = parsedOverride.provider;

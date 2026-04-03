@@ -118,6 +118,33 @@ describe("live model switch", () => {
     });
   });
 
+  it("uses the default provider when only modelOverride is persisted", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        modelOverride: "gpt-5.4",
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "gpt-5.4",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+  });
+
   it("queues a live switch only when an active run was aborted", async () => {
     state.abortEmbeddedPiRunMock.mockReturnValue(true);
 

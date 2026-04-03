@@ -638,6 +638,26 @@ describe("resolveSessionModelRef", () => {
     expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
   });
 
+  test("keeps explicit override provider for vendor-prefixed override models", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-openrouter-override",
+      updatedAt: Date.now(),
+      providerOverride: "openrouter",
+      modelOverride: "anthropic/claude-haiku-4.5",
+      modelProvider: "openrouter",
+      model: "openrouter/minimax/minimax-m2.7",
+    });
+
+    expect(resolved).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-haiku-4.5",
+    });
+  });
+
   test("preserves openrouter provider when model contains vendor prefix", () => {
     const cfg = createModelDefaultsConfig({
       primary: "openrouter/minimax/minimax-m2.7",

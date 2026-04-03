@@ -52,8 +52,9 @@ export function resolveLiveSessionModelSelection(params: {
   const overrideModel = entry?.modelOverride?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
   const runtimeModel = entry?.model?.trim();
-  const provider =
-    (overrideModel ? overrideProvider : undefined) || runtimeProvider || defaultModelRef.provider;
+  const provider = overrideModel
+    ? overrideProvider || defaultModelRef.provider
+    : runtimeProvider || defaultModelRef.provider;
   const model = overrideModel || runtimeModel || defaultModelRef.model;
   const authProfileId = entry?.authProfileOverride?.trim() || undefined;
   return {
