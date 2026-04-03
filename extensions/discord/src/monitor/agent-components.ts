@@ -15,7 +15,7 @@ import {
   type StringSelectMenuInteraction,
   type UserSelectMenuInteraction,
 } from "@buape/carbon";
-import type { APIStringSelectComponent } from "discord-api-types/v10";
+import type { APIStringSelectComponent, ModalSubmitLabelComponent } from "discord-api-types/v10";
 import { ButtonStyle, ChannelType, ComponentType } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "../../../../src/agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
@@ -713,9 +713,7 @@ function resolveRadioGroupValueFromRaw(
 ): string | null {
   for (const component of interaction.rawData.data.components ?? []) {
     if (component.type === ComponentType.Label) {
-      const sub = (
-        component as { component?: { type: number; custom_id?: string; value?: string | null } }
-      ).component;
+      const sub = (component as ModalSubmitLabelComponent).component;
       if (sub?.custom_id === fieldId && sub.type === ComponentType.RadioGroup) {
         return sub.value ?? null;
       }
