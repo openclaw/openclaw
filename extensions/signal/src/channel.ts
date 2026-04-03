@@ -4,6 +4,10 @@ import {
   attachChannelToResult,
   attachChannelToResults,
 } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  looksLikeSignalTargetId,
+  normalizeSignalMessagingTarget,
+} from "openclaw/plugin-sdk/channel-targets";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
@@ -14,7 +18,6 @@ import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js"
 import { signalApprovalAuth } from "./approval-auth.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import { signalMessageActions } from "./message-actions.js";
-import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import {
