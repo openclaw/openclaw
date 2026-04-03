@@ -29,15 +29,15 @@ describe("normalizeChatType", () => {
 
 describe("WA_WEB_AUTH_DIR", () => {
   afterEach(() => {
-    vi.doUnmock("../plugins/runtime/runtime-whatsapp-boundary.js");
+    vi.doUnmock("../plugins/runtime/runtime-web-channel-plugin.js");
   });
 
   it("resolves lazily and caches across the legacy and channels/web entrypoints", async () => {
-    const resolveWaWebAuthDir = vi.fn(() => "/tmp/openclaw-whatsapp-auth");
+    const resolveWebChannelAuthDir = vi.fn(() => "/tmp/openclaw-whatsapp-auth");
 
     vi.resetModules();
-    vi.doMock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
-      createWaSocket: vi.fn(),
+    vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
+      createWebChannelSocket: vi.fn(),
       extractMediaPlaceholder: vi.fn(),
       extractText: vi.fn(),
       formatError: vi.fn(),
@@ -49,20 +49,20 @@ describe("WA_WEB_AUTH_DIR", () => {
       monitorWebInbox: vi.fn(),
       pickWebChannel: vi.fn(),
       resolveHeartbeatRecipients: vi.fn(),
-      resolveWaWebAuthDir,
+      resolveWebChannelAuthDir,
       runWebHeartbeatOnce: vi.fn(),
-      sendMessageWhatsApp: vi.fn(),
-      sendReactionWhatsApp: vi.fn(),
-      waitForWaConnection: vi.fn(),
+      sendWebChannelMessage: vi.fn(),
+      sendWebChannelReaction: vi.fn(),
+      waitForWebChannelConnection: vi.fn(),
       webAuthExists: vi.fn(),
     }));
 
     const channelWeb = await import("../channel-web.js");
     const webEntry = await import("./web/index.js");
 
-    expect(resolveWaWebAuthDir).not.toHaveBeenCalled();
+    expect(resolveWebChannelAuthDir).not.toHaveBeenCalled();
     expect(String(channelWeb.WA_WEB_AUTH_DIR)).toBe("/tmp/openclaw-whatsapp-auth");
     expect(String(webEntry.WA_WEB_AUTH_DIR)).toBe("/tmp/openclaw-whatsapp-auth");
-    expect(resolveWaWebAuthDir).toHaveBeenCalledTimes(1);
+    expect(resolveWebChannelAuthDir).toHaveBeenCalledTimes(1);
   });
 });

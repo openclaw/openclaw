@@ -1,8 +1,5 @@
-import {
-  BUNDLED_PLUGIN_PATH_PREFIX,
-  BUNDLED_PLUGIN_TEST_GLOB,
-} from "./scripts/lib/bundled-plugin-paths.mjs";
-import { channelTestExclude } from "./vitest.channel-paths.mjs";
+import { BUNDLED_PLUGIN_TEST_GLOB } from "./scripts/lib/bundled-plugin-paths.mjs";
+import { extensionExcludedChannelTestGlobs } from "./vitest.channel-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
@@ -19,10 +16,10 @@ export function createExtensionsVitestConfig(
     dir: "extensions",
     env,
     passWithNoTests: true,
-    // Channel implementations live under the bundled plugin tree but are tested by
-    // vitest.channels.config.ts (pnpm test:channels) which provides
-    // the heavier mock scaffolding they need.
-    exclude: channelTestExclude.filter((pattern) => pattern.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)),
+    setupFiles: ["test/setup.extensions.ts"],
+    // Some bundled plugins still run on the channel surface; keep those roots
+    // out of the shared extensions lane.
+    exclude: extensionExcludedChannelTestGlobs,
   });
 }
 

@@ -49,6 +49,11 @@ let cachedBoundaryResolvedConfig:
     }
   | undefined;
 
+const bundledFacadeIdentityCache = new Map<
+  string,
+  { id: string; origin: "bundled"; enabledByDefault?: boolean } | null
+>();
+
 function resolveSourceFirstPublicSurfacePath(params: {
   bundledPluginsDir?: string;
   dirName: string;
@@ -148,6 +153,8 @@ function getFacadeBoundaryResolvedConfig() {
     return cachedBoundaryResolvedConfig;
   }
 
+  bundledFacadeIdentityCache.clear();
+
   const autoEnabled = applyPluginAutoEnable({
     config: rawConfig,
     env: process.env,
@@ -170,6 +177,10 @@ function resolveBundledFacadeIdentityByDirName(dirName: string): {
   origin: "bundled";
   enabledByDefault?: boolean;
 } | null {
+  const cached = bundledFacadeIdentityCache.get(dirName);
+  if (cached !== undefined || bundledFacadeIdentityCache.has(dirName)) {
+    return cached ?? null;
+  }
   const { config } = getFacadeBoundaryResolvedConfig();
   const normalized = normalizePluginsConfig(config.plugins);
   const discovery = discoverOpenClawPlugins({
@@ -191,17 +202,19 @@ function resolveBundledFacadeIdentityByDirName(dirName: string): {
     minHostVersion: candidate.packageManifest?.install?.minHostVersion,
   });
   if (!minHostVersionCheck.ok) {
+    bundledFacadeIdentityCache.set(dirName, null);
     return null;
   }
 
   const manifestRes = loadPluginManifest(candidate.rootDir, false);
   if (!manifestRes.ok) {
+    bundledFacadeIdentityCache.set(dirName, null);
     return null;
   }
 
   return {
     id: manifestRes.manifest.id,
-    origin: "bundled",
+    origin: "bundled" as const,
     enabledByDefault: manifestRes.manifest.enabledByDefault === true ? true : undefined,
   };
 }

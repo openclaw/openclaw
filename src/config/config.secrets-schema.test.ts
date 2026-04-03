@@ -136,6 +136,59 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts model provider request secret refs for auth and headers", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            request: {
+              headers: {
+                "X-Tenant": { source: "env", provider: "default", id: "OPENAI_TENANT_HEADER" },
+              },
+              auth: {
+                mode: "authorization-bearer",
+                token: { source: "env", provider: "default", id: "OPENAI_PROVIDER_TOKEN" },
+              },
+            },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects model provider request proxy and tls overrides", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            request: {
+              proxy: {
+                mode: "explicit-proxy",
+                url: "http://proxy.example:8080",
+              },
+              tls: {
+                cert: { source: "file", provider: "filemain", id: "/tls/provider-cert" },
+              },
+            },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(
+        result.issues.some((issue) => issue.path.includes("models.providers.openai.request")),
+      ).toBe(true);
+    }
+  });
+
   it('accepts file refs with id "value" for singleValue mode providers', () => {
     const result = validateConfigObjectRaw({
       secrets: {

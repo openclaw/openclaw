@@ -1,9 +1,7 @@
-import { sendMessageSlack as sendMessageSlackImpl } from "../../plugin-sdk/slack.js";
+import { createPluginBoundaryRuntimeSend } from "./plugin-boundary-send.js";
 
-type RuntimeSend = {
-  sendMessage: typeof import("../../plugin-sdk/slack.js").sendMessageSlack;
-};
-
-export const runtimeSend = {
-  sendMessage: sendMessageSlackImpl,
-} satisfies RuntimeSend;
+export const runtimeSend = createPluginBoundaryRuntimeSend({
+  pluginId: "slack",
+  exportName: "sendMessageSlack",
+  missingLabel: "Slack plugin runtime",
+});

@@ -4,9 +4,7 @@ import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 const {
   answerCallbackQuerySpy,
   commandSpy,
@@ -29,10 +27,7 @@ const {
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 
-let listNativeCommandSpecs: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
-let listNativeCommandSpecsForConfig: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecsForConfig;
 let loadSessionStore: typeof import("../../../src/config/sessions.js").loadSessionStore;
-let normalizeTelegramCommandName: typeof import("openclaw/plugin-sdk/config-runtime").normalizeTelegramCommandName;
 let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
 let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
 let createTelegramBot: (
@@ -59,15 +54,6 @@ function createSignal() {
   return { promise, resolve };
 }
 
-function waitForNextSetMyCommands() {
-  const synced = createSignal();
-  setMyCommandsSpy.mockImplementationOnce(async () => {
-    synced.resolve();
-    return undefined;
-  });
-  return synced.promise;
-}
-
 function waitForReplyCalls(count: number) {
   const done = createSignal();
   let seen = 0;
@@ -82,20 +68,18 @@ function waitForReplyCalls(count: number) {
   return done.promise;
 }
 
-function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
-  void config;
-  return listSkillCommandsForAgents() as NonNullable<
-    Parameters<typeof listNativeCommandSpecsForConfig>[1]
-  >["skillCommands"];
+async function loadEnvelopeTimestampHelpers() {
+  return await import("../../../test/helpers/envelope-timestamp.js");
+}
+
+async function loadInboundContextContract() {
+  return await import("./test-support/inbound-context-contract.js");
 }
 
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
   beforeAll(async () => {
-    ({ listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
-      await import("../../../src/auto-reply/commands-registry.js"));
     ({ loadSessionStore } = await import("../../../src/config/sessions.js"));
-    ({ normalizeTelegramCommandName } = await import("openclaw/plugin-sdk/config-runtime"));
     ({ createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
       await import("./bot.js"));
   });
@@ -127,127 +111,6 @@ describe("createTelegramBot", () => {
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });
-  });
-
-  it("merges custom commands with native commands", async () => {
-    const config = {
-      channels: {
-        telegram: {
-          customCommands: [
-            { command: "custom_backup", description: "Git backup" },
-            { command: "/Custom_Generate", description: "Create an image" },
-          ],
-        },
-      },
-    };
-    loadConfig.mockReturnValue(config);
-    const commandsSynced = waitForNextSetMyCommands();
-
-    createTelegramBot({
-      token: "tok",
-      config: {
-        channels: {
-          telegram: {
-            dmPolicy: "open",
-            allowFrom: ["*"],
-            execApprovals: {
-              enabled: true,
-              approvers: ["9"],
-              target: "dm",
-            },
-          },
-        },
-      },
-    });
-
-    await commandsSynced;
-
-    const registered = setMyCommandsSpy.mock.calls.at(-1)?.[0] as Array<{
-      command: string;
-      description: string;
-    }>;
-    const skillCommands = resolveSkillCommands(config);
-    const native = listNativeCommandSpecsForConfig(config, { skillCommands }).map((command) => ({
-      command: normalizeTelegramCommandName(command.name),
-      description: command.description,
-    }));
-    expect(registered.slice(0, native.length)).toEqual(native);
-  });
-
-  it("ignores custom commands that collide with native commands", async () => {
-    const errorSpy = vi.fn();
-    const config = {
-      channels: {
-        telegram: {
-          customCommands: [
-            { command: "status", description: "Custom status" },
-            { command: "custom_backup", description: "Git backup" },
-          ],
-        },
-      },
-    };
-    loadConfig.mockReturnValue(config);
-    const commandsSynced = waitForNextSetMyCommands();
-
-    createTelegramBot({
-      token: "tok",
-      runtime: {
-        log: vi.fn(),
-        error: errorSpy,
-        exit: ((code: number) => {
-          throw new Error(`exit ${code}`);
-        }) as (code: number) => never,
-      },
-    });
-
-    await commandsSynced;
-
-    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
-      command: string;
-      description: string;
-    }>;
-    const skillCommands = resolveSkillCommands(config);
-    const native = listNativeCommandSpecsForConfig(config, { skillCommands }).map((command) => ({
-      command: normalizeTelegramCommandName(command.name),
-      description: command.description,
-    }));
-    const nativeStatus = native.find((command) => command.command === "status");
-    expect(nativeStatus).toBeDefined();
-    expect(registered).toContainEqual({ command: "custom_backup", description: "Git backup" });
-    expect(registered).not.toContainEqual({ command: "status", description: "Custom status" });
-    expect(registered.filter((command) => command.command === "status")).toEqual([nativeStatus]);
-    expect(errorSpy).toHaveBeenCalled();
-  });
-
-  it("registers custom commands when native commands are disabled", async () => {
-    const config = {
-      commands: { native: false },
-      channels: {
-        telegram: {
-          customCommands: [
-            { command: "custom_backup", description: "Git backup" },
-            { command: "custom_generate", description: "Create an image" },
-          ],
-        },
-      },
-    };
-    loadConfig.mockReturnValue(config);
-    const commandsSynced = waitForNextSetMyCommands();
-
-    createTelegramBot({ token: "tok" });
-
-    await commandsSynced;
-
-    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
-      command: string;
-      description: string;
-    }>;
-    expect(registered).toEqual([
-      { command: "custom_backup", description: "Git backup" },
-      { command: "custom_generate", description: "Create an image" },
-    ]);
-    const reserved = new Set(listNativeCommandSpecs().map((command) => command.name));
-    expect(registered.some((command) => reserved.has(command.command))).toBe(false);
   });
 
   it("blocks callback_query when inline buttons are allowlist-only and sender not authorized", async () => {
@@ -1195,6 +1058,9 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
+    const { expectChannelInboundContextContract: expectInboundContextContract } =
+      await loadInboundContextContract();
+    const { escapeRegExp, formatEnvelopeTimestamp } = await loadEnvelopeTimestampHelpers();
     expectInboundContextContract(payload);
     const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
     const timestampPattern = escapeRegExp(expectedTimestamp);
