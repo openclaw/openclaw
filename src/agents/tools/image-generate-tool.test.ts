@@ -415,6 +415,89 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it("does not treat inferred edit resolution as an OpenAI override", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "gpt-image-1",
+        models: ["gpt-image-1"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+          edit: {
+            enabled: true,
+            maxCount: 4,
+            maxInputImages: 5,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+          geometry: {
+            sizes: ["1024x1024", "1024x1536", "1536x1024"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "edited.png",
+        },
+      ],
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("input-image"),
+      contentType: "image/jpeg",
+    });
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+      width: 3200,
+      height: 1800,
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
+      workspaceDir: process.cwd(),
+    });
+
+    await expect(
+      tool.execute("call-openai-edit", {
+        prompt: "Remove the subject but keep the rest unchanged.",
+        image: "./fixtures/reference.png",
+      }),
+    ).resolves.toBeDefined();
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelOverride: undefined,
+        resolution: undefined,
+        inputImages: [
+          expect.objectContaining({
+            buffer: Buffer.from("input-image"),
+            mimeType: "image/jpeg",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("forwards explicit aspect ratio and supports up to 5 reference images", async () => {
     const generateImage = stubEditedImageFlow();
     const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {

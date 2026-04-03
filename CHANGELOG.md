@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - Infra/tailscale: ignore `OPENCLAW_TEST_TAILSCALE_BINARY` outside explicit test environments and block it from workspace `.env`, so test-only binary overrides cannot be injected through trusted repository state. (#58468) Thanks @eleqtrizit.
 - Agents/tool policy: preserve restrictive plugin-only allowlists instead of silently widening access to core tools, and keep allowlist warnings aligned with the enforced policy. (#58476) Thanks @eleqtrizit.
 - Hooks/session_end: preserve deterministic reason metadata for custom reset aliases and overlapping idle-plus-daily rollovers so plugins can rely on lifecycle reason reporting. (#59715) Thanks @jalehman.
+- Tools/image generation: stop inferring unsupported resolution overrides for OpenAI reference-image edits when no explicit `size` or `resolution` is provided, so default edit flows no longer fail before the provider request is sent.
 
 ## 2026.4.2
 
