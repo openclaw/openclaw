@@ -6,11 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   decorateOpenClawProfile,
   ensureProfileCleanExit,
   findChromeExecutableMac,
   findChromeExecutableWindows,
+  getChromeWebSocketUrl,
   isChromeCdpReady,
   isChromeReachable,
   resolveBrowserExecutableForPlatform,
@@ -326,6 +328,39 @@ describe("browser chrome helpers", () => {
     ).resolves.toBe(false);
 
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks cross-host websocket pivots returned by /json/version in strict SSRF mode", async () => {
+    const server = createServer((req, res) => {
+      if (req.url === "/json/version") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            webSocketDebuggerUrl: "ws://169.254.169.254:9222/devtools/browser/pivot",
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+      server.once("error", reject);
+    });
+
+    try {
+      const addr = server.address() as AddressInfo;
+      await expect(
+        getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 50, {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        }),
+      ).rejects.toBeInstanceOf(SsrFBlockedError);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("reports cdpReady only when Browser.getVersion command succeeds", async () => {

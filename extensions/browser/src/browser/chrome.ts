@@ -200,7 +200,9 @@ export async function getChromeWebSocketUrl(
   if (!wsUrl) {
     return null;
   }
-  return normalizeCdpWsUrl(wsUrl, cdpUrl);
+  const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, cdpUrl);
+  await assertCdpEndpointAllowed(normalizedWsUrl, ssrfPolicy);
+  return normalizedWsUrl;
 }
 
 async function canRunCdpHealthCommand(
