@@ -1,14 +1,17 @@
-import { execFile } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configHandlers, resolveConfigOpenCommand } from "./config.js";
 import { createConfigHandlerHarness } from "./config.test-helpers.js";
+
+const execFileMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("../../../test/helpers/node-builtin-mocks.js");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
-      execFile: vi.fn() as unknown as typeof import("node:child_process").execFile,
+      execFile: Object.assign(execFileMock, {
+        __promisify__: vi.fn(),
+      }) as typeof import("node:child_process").execFile,
     },
   );
 });
@@ -55,12 +58,12 @@ describe("config.openFile", () => {
 
   it("opens the configured file without shell interpolation", async () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/config $(touch pwned).json";
-    vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
       expect(["open", "xdg-open", "powershell.exe"]).toContain(args[0]);
       expect(args[1]).toEqual(["/tmp/config $(touch pwned).json"]);
       invokeExecFileCallback(args, null);
       return {} as never;
-    }) as unknown as typeof execFile);
+    });
 
     const { options, respond } = createConfigHandlerHarness({ method: "config.openFile" });
     await configHandlers["config.openFile"](options);
@@ -77,13 +80,13 @@ describe("config.openFile", () => {
 
   it("returns a generic error and logs details when the opener fails", async () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
-    vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
       invokeExecFileCallback(
         args,
         Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }),
       );
       return {} as never;
-    }) as unknown as typeof execFile);
+    });
 
     const { options, respond, logGateway } = createConfigHandlerHarness({
       method: "config.openFile",
