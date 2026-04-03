@@ -30,6 +30,20 @@ function createRetryingSend() {
   return { send, prompts, waitForSecondAttempt };
 }
 
+function getSentItem<T>(send: { mock: { calls: T[][] } }, index: number): T {
+  const call = send.mock.calls.at(index);
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`expected send.mock.calls[${index}] to exist`);
+  }
+  const [item] = call;
+  expect(item).toBeDefined();
+  if (!item) {
+    throw new Error(`expected send.mock.calls[${index}][0] to exist`);
+  }
+  return item;
+}
+
 describe("subagent-announce-queue", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -204,13 +218,11 @@ describe("subagent-announce-queue", () => {
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalledTimes(2);
     });
-    const firstSent = send.mock.calls[0]![0];
-    const secondSent = send.mock.calls[1]![0];
-    expect(firstSent).toBeDefined();
-    expect(secondSent).toBeDefined();
-    expect(firstSent!.display.text).toBe("first visible");
-    expect(secondSent!.display.summaryLine).toBeUndefined();
-    expect(secondSent!.execution.agentPrompt).toBe("second internal");
+    const firstSent = getSentItem(send, 0);
+    const secondSent = getSentItem(send, 1);
+    expect(firstSent.display.text).toBe("first visible");
+    expect(secondSent.display.summaryLine).toBeUndefined();
+    expect(secondSent.execution.agentPrompt).toBe("second internal");
   });
 
   it("keeps individual-drain fallback across retries after collect render failure", async () => {
@@ -306,9 +318,8 @@ describe("subagent-announce-queue", () => {
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalledTimes(1);
     });
-    const overflowSent = send.mock.calls[0]![0];
-    expect(overflowSent).toBeDefined();
-    const overflowSummary = overflowSent!.display.text ?? "";
+    const overflowSent = getSentItem(send, 0);
+    const overflowSummary = overflowSent.display.text ?? "";
     expect(overflowSummary).toContain("[Queue overflow]");
     expect(overflowSummary).toContain("[summary unavailable]");
     expect(overflowSummary).not.toContain("hidden fallback prompt");
@@ -347,9 +358,8 @@ describe("subagent-announce-queue", () => {
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalledTimes(1);
     });
-    const overflowSent = send.mock.calls[0]![0];
-    expect(overflowSent).toBeDefined();
-    const overflowSummary = overflowSent!.display.text ?? "";
+    const overflowSent = getSentItem(send, 0);
+    const overflowSummary = overflowSent.display.text ?? "";
     expect(overflowSummary).toContain("[Queue overflow]");
     expect(overflowSummary).toContain("[summary unavailable]");
     expect(overflowSummary).not.toContain("hidden execution fallback");
@@ -385,10 +395,9 @@ describe("subagent-announce-queue", () => {
       expect(send).toHaveBeenCalledTimes(2);
     });
 
-    const prompts = send.mock.calls.map((call) => {
-      const item = call[0];
-      expect(item).toBeDefined();
-      return item!.display.text ?? item!.display.summaryLine ?? item!.execution.agentPrompt ?? "";
+    const prompts = send.mock.calls.map((_, index) => {
+      const item = getSentItem(send, index);
+      return item.display.text ?? item.display.summaryLine ?? item.execution.agentPrompt ?? "";
     });
     expect(prompts[0]).toContain("[Queue overflow]");
     expect(prompts[0]).toContain("first visible");
