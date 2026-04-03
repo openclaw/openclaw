@@ -5,6 +5,7 @@ import {
   mockedEnsureRuntimePluginsLoaded,
   mockedRunEmbeddedAttempt,
 } from "./run.overflow-compaction.harness.js";
+import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
@@ -12,6 +13,9 @@ let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 function makeAttemptResult(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
+  const toolMetas = overrides.toolMetas ?? [];
+  const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
+  const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
     timedOut: false,
@@ -20,9 +24,16 @@ function makeAttemptResult(
     sessionIdUsed: "test-session",
     messagesSnapshot: [],
     assistantTexts: [],
-    toolMetas: [],
+    toolMetas,
     lastAssistant: undefined,
-    didSendViaMessagingTool: false,
+    replayMetadata:
+      overrides.replayMetadata ??
+      buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool,
+        successfulCronAdds,
+      }),
+    didSendViaMessagingTool,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
