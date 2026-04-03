@@ -37,14 +37,19 @@ export const movePathToTrash: BrowserRuntimeModule["movePathToTrash"] = (async (
     }
     return targetPath;
   } catch {
-    const trashDir = path.join(os.homedir(), ".Trash");
+    const homeDir = os.homedir();
+    const pathRuntime = homeDir.startsWith("/") ? path.posix : path;
+    const trashDir = pathRuntime.join(homeDir, ".Trash");
     await fs.mkdir(trashDir, { recursive: true });
-    const base = path.basename(targetPath);
+    const base = pathRuntime.basename(targetPath);
     const timestamp = Date.now();
-    let destination = path.join(trashDir, `${base}-${timestamp}`);
+    let destination = pathRuntime.join(trashDir, `${base}-${timestamp}`);
     try {
       await fs.access(destination);
-      destination = path.join(trashDir, `${base}-${timestamp}-${createTrashCollisionSuffix()}`);
+      destination = pathRuntime.join(
+        trashDir,
+        `${base}-${timestamp}-${createTrashCollisionSuffix()}`,
+      );
     } catch {
       // The initial destination is free to use.
     }

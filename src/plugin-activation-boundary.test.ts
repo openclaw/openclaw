@@ -35,9 +35,12 @@ describe("plugin activation boundary", () => {
         DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
         DEFAULT_UPLOAD_DIR: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_UPLOAD_DIR;
         closeTrackedBrowserTabsForSessions: typeof import("./plugin-sdk/browser-runtime.js").closeTrackedBrowserTabsForSessions;
+        parseBrowserMajorVersion: typeof import("./plugin-sdk/browser-runtime.js").parseBrowserMajorVersion;
         redactCdpUrl: typeof import("./plugin-sdk/browser-runtime.js").redactCdpUrl;
+        readBrowserVersion: typeof import("./plugin-sdk/browser-runtime.js").readBrowserVersion;
         resolveBrowserConfig: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserConfig;
         resolveBrowserControlAuth: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserControlAuth;
+        resolveGoogleChromeExecutableForPlatform: typeof import("./plugin-sdk/browser-runtime.js").resolveGoogleChromeExecutableForPlatform;
         resolveProfile: typeof import("./plugin-sdk/browser-runtime.js").resolveProfile;
       }>
     | undefined;
@@ -84,9 +87,12 @@ describe("plugin activation boundary", () => {
       DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: module.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
       DEFAULT_UPLOAD_DIR: module.DEFAULT_UPLOAD_DIR,
       closeTrackedBrowserTabsForSessions: module.closeTrackedBrowserTabsForSessions,
+      parseBrowserMajorVersion: module.parseBrowserMajorVersion,
       redactCdpUrl: module.redactCdpUrl,
+      readBrowserVersion: module.readBrowserVersion,
       resolveBrowserConfig: module.resolveBrowserConfig,
       resolveBrowserControlAuth: module.resolveBrowserControlAuth,
+      resolveGoogleChromeExecutableForPlatform: module.resolveGoogleChromeExecutableForPlatform,
       resolveProfile: module.resolveProfile,
     }));
     return browserHelpersPromise;
@@ -96,6 +102,7 @@ describe("plugin activation boundary", () => {
     browserAmbientImportsPromise ??= Promise.all([
       import("./agents/sandbox/browser.js"),
       import("./agents/sandbox/context.js"),
+      import("./commands/doctor-browser.js"),
       import("./node-host/runner.js"),
       import("./security/audit.js"),
       import("./security/audit-extra.sync.js"),
@@ -122,7 +129,10 @@ describe("plugin activation boundary", () => {
     const { isChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
 
     expect(isChannelConfigured({}, "whatsapp", {})).toBe(false);
-    expect(resolveEnvApiKey("anthropic-vertex", {})).toBeNull();
+    // Anthropic Vertex auth depends on ambient ADC state on the current machine.
+    expect([null, { apiKey: "gcp-vertex-credentials", source: "gcloud adc" }]).toContainEqual(
+      resolveEnvApiKey("anthropic-vertex", {}),
+    );
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
@@ -148,6 +158,7 @@ describe("plugin activation boundary", () => {
     expect(browser.DEFAULT_OPENCLAW_BROWSER_COLOR).toBe("#FF4500");
     expect(browser.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME).toBe("openclaw");
     expect(browser.DEFAULT_UPLOAD_DIR).toContain("uploads");
+    expect(browser.parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
     expect(browser.resolveBrowserControlAuth({}, {} as NodeJS.ProcessEnv)).toEqual({
       token: undefined,
       password: undefined,
@@ -162,6 +173,8 @@ describe("plugin activation boundary", () => {
     expect(
       browser.redactCdpUrl("wss://user:secret@example.com/devtools/browser/123"),
     ).not.toContain("secret");
+    expect(browser.readBrowserVersion("/path/that/does/not/exist")).toBeNull();
+    expect(browser.resolveGoogleChromeExecutableForPlatform("aix")).toBeNull();
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 

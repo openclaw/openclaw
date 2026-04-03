@@ -490,6 +490,7 @@ export const buildTelegramMessageContext = async ({
     locationData: bodyResult.locationData,
     options,
     dmAllowFrom,
+    effectiveGroupAllow,
     commandAuthorized: bodyResult.commandAuthorized,
   });
 

@@ -226,9 +226,12 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       DEFAULT_UPLOAD_DIR: "./browser-config.js",
       closeTrackedBrowserTabsForSessions: "./browser-maintenance.js",
       movePathToTrash: "./browser-maintenance.js",
+      parseBrowserMajorVersion: "./browser-host-inspection.js",
       redactCdpUrl: "./browser-config.js",
+      readBrowserVersion: "./browser-host-inspection.js",
       resolveBrowserConfig: "./browser-config.js",
       resolveBrowserControlAuth: "./browser-config.js",
+      resolveGoogleChromeExecutableForPlatform: "./browser-host-inspection.js",
       resolveProfile: "./browser-config.js",
     },
     exports: [

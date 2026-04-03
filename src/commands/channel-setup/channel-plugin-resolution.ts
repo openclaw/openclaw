@@ -7,6 +7,7 @@ import {
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizePluginsConfig, resolveEnableState } from "../../plugins/config-state.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -70,6 +71,51 @@ function findScopedChannelPlugin(
   );
 }
 
+function isTrustedWorkspaceChannelCatalogEntry(
+  entry: ChannelPluginCatalogEntry | undefined,
+  cfg: OpenClawConfig,
+): boolean {
+  if (entry?.origin !== "workspace") {
+    return true;
+  }
+  if (!entry.pluginId) {
+    return false;
+  }
+  return resolveEnableState(entry.pluginId, "workspace", normalizePluginsConfig(cfg.plugins))
+    .enabled;
+}
+
+function resolveTrustedCatalogEntry(params: {
+  rawChannel?: string | null;
+  channelId?: ChannelId;
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  catalogEntry?: ChannelPluginCatalogEntry;
+}): ChannelPluginCatalogEntry | undefined {
+  if (isTrustedWorkspaceChannelCatalogEntry(params.catalogEntry, params.cfg)) {
+    return params.catalogEntry;
+  }
+  if (params.rawChannel) {
+    const trimmed = params.rawChannel.trim().toLowerCase();
+    return listChannelPluginCatalogEntries({
+      workspaceDir: params.workspaceDir,
+      excludeWorkspace: true,
+    }).find((entry) => {
+      if (entry.id.toLowerCase() === trimmed) {
+        return true;
+      }
+      return (entry.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === trimmed);
+    });
+  }
+  if (!params.channelId) {
+    return undefined;
+  }
+  return getChannelPluginCatalogEntry(params.channelId, {
+    workspaceDir: params.workspaceDir,
+    excludeWorkspace: true,
+  });
+}
+
 function loadScopedChannelPlugin(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -99,13 +145,20 @@ export async function resolveInstallableChannelPlugin(params: {
   const supports = params.supports ?? (() => true);
   let nextCfg = params.cfg;
   const workspaceDir = resolveWorkspaceDir(nextCfg);
-  const catalogEntry =
+  const unresolvedCatalogEntry =
     (params.rawChannel ? resolveCatalogChannelEntry(params.rawChannel, nextCfg) : undefined) ??
     (params.channelId
       ? getChannelPluginCatalogEntry(params.channelId, {
           workspaceDir,
         })
       : undefined);
+  const catalogEntry = resolveTrustedCatalogEntry({
+    rawChannel: params.rawChannel,
+    channelId: params.channelId,
+    cfg: nextCfg,
+    workspaceDir,
+    catalogEntry: unresolvedCatalogEntry,
+  });
   const channelId =
     params.channelId ??
     resolveResolvedChannelId({

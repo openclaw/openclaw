@@ -10,11 +10,15 @@ describeLive("xai x_search live", () => {
   it("queries X through xAI Responses", async () => {
     const tool = createXSearchTool({
       config: {
-        tools: {
-          web: {
-            x_search: {
-              enabled: true,
-              model: "grok-4-1-fast-non-reasoning",
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                xSearch: {
+                  enabled: true,
+                  model: "grok-4-1-fast-non-reasoning",
+                },
+              },
             },
           },
         },
