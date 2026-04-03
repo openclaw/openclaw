@@ -118,6 +118,13 @@ vi.mock("../monitor/agent-components.runtime.js", () => {
   };
 });
 
+vi.mock("../interactive-dispatch.js", () => {
+  return {
+    dispatchDiscordPluginInteractiveHandler: (...args: unknown[]) =>
+      dispatchPluginInteractiveHandlerMock(...args),
+  };
+});
+
 vi.mock("../monitor/agent-components.deps.runtime.js", () => {
   return {
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),

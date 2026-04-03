@@ -32,13 +32,13 @@ function resolveMatrixExecApprovalConfig(params: {
 }) {
   const account = resolveMatrixAccount(params);
   const config = account.config.execApprovals;
-  if (!config) {
-    return undefined;
+  if (!config || !account.enabled || !account.configured || config.enabled !== true) {
+    return { enabled: false } as const;
   }
   return {
     ...config,
-    enabled: account.enabled && account.configured ? config.enabled : false,
-  };
+    enabled: true as const,
+  } as const;
 }
 
 function countMatrixExecApprovalEligibleAccounts(params: {
@@ -54,7 +54,7 @@ function countMatrixExecApprovalEligibleAccounts(params: {
       cfg: params.cfg,
       accountId,
     });
-    if (!config?.enabled) {
+    if (!config.enabled) {
       return false;
     }
     return (
