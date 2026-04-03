@@ -7,16 +7,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-<<<<<<< feature/pathguard-39672
-import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { resolveAgentConfig } from "./agent-scope.js";
-import { combineToolFsPolicies, resolveToolFsConfig } from "./tool-fs-policy.js";
-import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
-import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
-=======
->>>>>>> main
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,

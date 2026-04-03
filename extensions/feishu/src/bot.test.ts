@@ -204,11 +204,8 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       },
       ...(overrides.channel ?? {}),
     },
-<<<<<<< feature/pathguard-39672
-=======
     ...(overrides.system ? { system: overrides.system as PluginRuntime["system"] } : {}),
     ...(overrides.media ? { media: overrides.media as PluginRuntime["media"] } : {}),
->>>>>>> main
   } as unknown as PluginRuntime;
 }
 
@@ -545,21 +542,8 @@ describe("handleFeishuMessage command authorization", () => {
         media: {
           detectMime: vi.fn(async () => "application/octet-stream"),
         },
-<<<<<<< feature/pathguard-39672
-        pairing: {
-          readAllowFromStore: mockReadAllowFromStore,
-          upsertPairingRequest: mockUpsertPairingRequest,
-          buildPairingReply: mockBuildPairingReply,
-        },
-      },
-      media: {
-        detectMime: vi.fn(async () => "application/octet-stream"),
-      },
-    } as unknown as PluginRuntime);
-=======
       }),
     );
->>>>>>> main
   });
 
   it("does not enqueue inbound preview text as system events", async () => {
