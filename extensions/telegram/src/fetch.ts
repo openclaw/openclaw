@@ -647,7 +647,13 @@ function isIpv4LoopbackOrPrivate(hostname: string): boolean {
     return false;
   }
   const [a, b] = octets;
-  return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  return (
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
 }
 
 function isIpv6LoopbackOrPrivate(hostname: string): boolean {
