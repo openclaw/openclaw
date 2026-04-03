@@ -76,26 +76,37 @@ function parseMatrixCredentialsFile(filePath: string): MatrixStoredCredentials |
   return parsed as MatrixStoredCredentials;
 }
 
-function loadCurrentMatrixCredentialsIfPresent(credPath: string): MatrixStoredCredentials | null {
+function loadMatrixCredentialsFile(filePath: string):
+  | {
+      kind: "loaded";
+      credentials: MatrixStoredCredentials | null;
+    }
+  | {
+      kind: "missing";
+    } {
   try {
-    return fs.existsSync(credPath) ? parseMatrixCredentialsFile(credPath) : null;
-  } catch {
-    return null;
+    return {
+      kind: "loaded",
+      credentials: parseMatrixCredentialsFile(filePath),
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { kind: "missing" };
+    }
+    throw error;
   }
 }
 
-function parseLegacyMatrixCredentialsWithRetry(params: {
+function loadLegacyMatrixCredentialsWithCurrentRetry(params: {
   legacyPath: string;
   credPath: string;
 }): MatrixStoredCredentials | null {
-  try {
-    return parseMatrixCredentialsFile(params.legacyPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      throw error;
-    }
-    return loadCurrentMatrixCredentialsIfPresent(params.credPath);
+  const legacy = loadMatrixCredentialsFile(params.legacyPath);
+  if (legacy.kind === "loaded") {
+    return legacy.credentials;
   }
+  const current = loadMatrixCredentialsFile(params.credPath);
+  return current.kind === "loaded" ? current.credentials : null;
 }
 
 export function resolveMatrixCredentialsDir(
@@ -120,16 +131,17 @@ export function loadMatrixCredentials(
 ): MatrixStoredCredentials | null {
   const credPath = resolveMatrixCredentialsPath(env, accountId);
   try {
-    if (fs.existsSync(credPath)) {
-      return parseMatrixCredentialsFile(credPath);
+    const current = loadMatrixCredentialsFile(credPath);
+    if (current.kind === "loaded") {
+      return current.credentials;
     }
 
     const legacyPath = resolveLegacyMigrationSourcePath(env, accountId);
-    if (!legacyPath || !fs.existsSync(legacyPath)) {
+    if (!legacyPath) {
       return null;
     }
 
-    const parsed = parseLegacyMatrixCredentialsWithRetry({ legacyPath, credPath });
+    const parsed = loadLegacyMatrixCredentialsWithCurrentRetry({ legacyPath, credPath });
     if (!parsed) {
       return null;
     }
