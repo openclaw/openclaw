@@ -53,6 +53,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram autoSelectFamily",
     help: "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
   },
+  "network.dangerouslyAllowPrivateNetwork": {
+    label: "Telegram Dangerously Allow Private Network",
+    help: "Dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve api.telegram.org to private/internal/special-use addresses.",
+  },
   timeoutSeconds: {
     label: "Telegram API Timeout (seconds)",
     help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",

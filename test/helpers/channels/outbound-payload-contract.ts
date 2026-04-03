@@ -1,4 +1,9 @@
 import { vi } from "vitest";
+import {
+  chunkTextForOutbound as chunkZaloTextForOutbound,
+  sendPayloadWithChunkedTextAndMedia as sendZaloPayloadWithChunkedTextAndMedia,
+} from "../../../extensions/zalo/runtime-api.js";
+import { sendPayloadWithChunkedTextAndMedia as sendZalouserPayloadWithChunkedTextAndMedia } from "../../../extensions/zalouser/runtime-api.js";
 import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import {
   createSlackOutboundPayloadHarness,
@@ -7,11 +12,6 @@ import {
 } from "../../../src/channels/plugins/contracts/suites.js";
 import { createDirectTextMediaOutbound } from "../../../src/channels/plugins/outbound/direct-text-media.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
-import {
-  chunkTextForOutbound as chunkZaloTextForOutbound,
-  sendPayloadWithChunkedTextAndMedia as sendZaloPayloadWithChunkedTextAndMedia,
-} from "../../../src/plugin-sdk/zalo.js";
-import { sendPayloadWithChunkedTextAndMedia as sendZalouserPayloadWithChunkedTextAndMedia } from "../../../src/plugin-sdk/zalouser.js";
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 type ParseZalouserOutboundTarget = (raw: string) => { threadId: string; isGroup: boolean };
 

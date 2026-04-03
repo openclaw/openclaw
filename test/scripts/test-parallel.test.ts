@@ -58,7 +58,6 @@ const targetedChannelProxyFiles = [
   ...sharedTargetedChannelProxyFiles,
   bundledPluginFile("discord", "src/monitor/message-handler.preflight.acp-bindings.test.ts"),
   bundledPluginFile("discord", "src/monitor/monitor.agent-components.test.ts"),
-  bundledPluginFile("telegram", "src/bot.create-telegram-bot.test.ts"),
   bundledPluginFile("whatsapp", "src/monitor-inbox.streams-inbound-messages.test.ts"),
 ];
 
@@ -253,6 +252,34 @@ describe("scripts/test-parallel memory trace parsing", () => {
       ],
     });
   });
+
+  it("parses memory trace summaries from gh run job logs", () => {
+    const summaries = parseMemoryTraceSummaryLines(
+      [
+        "checks-fast-extensions-6\tRun extensions (node)\t2026-04-03T04:07:10.5924943Z [test-parallel][mem] summary extensions-batch-22-shard-6 files=15 peak=2.66GiB totalDelta=+470.5MiB peakAt=poll top=extensions/microsoft-foundry/index.test.ts:+1.35GiB, extensions/acpx/src/service.test.ts:+212.1MiB",
+      ].join("\n"),
+    );
+
+    expect(summaries).toEqual([
+      {
+        lane: "extensions-batch-22-shard-6",
+        files: 15,
+        peakRssKb: parseMemoryValueKb("2.66GiB"),
+        totalDeltaKb: parseMemoryValueKb("+470.5MiB"),
+        peakAt: "poll",
+        top: [
+          {
+            file: "extensions/microsoft-foundry/index.test.ts",
+            deltaKb: parseMemoryValueKb("+1.35GiB"),
+          },
+          {
+            file: "extensions/acpx/src/service.test.ts",
+            deltaKb: parseMemoryValueKb("+212.1MiB"),
+          },
+        ],
+      },
+    ]);
+  });
 });
 
 describe("scripts/test-parallel lane planning", () => {
@@ -417,6 +444,18 @@ describe("scripts/test-parallel lane planning", () => {
     expect(output).toContain("surface=contracts");
     expect(output).toContain("vitest.contracts.config.ts");
     expect(output).not.toContain("vitest.unit.config.ts");
+  });
+
+  it("routes telegram plugin coverage through the extensions config", () => {
+    const output = runPlannerPlan([
+      "--explain",
+      bundledPluginFile("telegram", "src/bot.create-telegram-bot.test.ts"),
+    ]);
+
+    expect(output).toContain("surface=extensions");
+    expect(output).toContain("extensions-surface");
+    expect(output).toContain("vitest.extensions.config.ts");
+    expect(output).not.toContain("vitest.channels.config.ts");
   });
 
   it("prints the planner-backed CI manifest as JSON", () => {

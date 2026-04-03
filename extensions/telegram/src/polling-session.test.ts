@@ -30,14 +30,11 @@ vi.mock("./api-logging.js", () => ({
   withTelegramApiErrorLogging: async ({ fn }: { fn: () => Promise<unknown> }) => await fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    computeBackoff: computeBackoffMock,
-    sleepWithAbort: sleepWithAbortMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  computeBackoff: computeBackoffMock,
+  formatDurationPrecise: vi.fn((ms: number) => `${ms}ms`),
+  sleepWithAbort: sleepWithAbortMock,
+}));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
 

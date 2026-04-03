@@ -5,8 +5,8 @@ import {
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
-} from "../../runtime-api.js";
-import type { SsrFPolicy } from "../../runtime-api.js";
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/ssrf-policy";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =

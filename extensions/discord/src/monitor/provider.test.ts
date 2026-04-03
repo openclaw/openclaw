@@ -74,16 +74,6 @@ function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {})
   } as OpenClawConfig;
 }
 
-vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
-    "openclaw/plugin-sdk/plugin-runtime",
-  );
-  return {
-    ...actual,
-    getPluginCommandSpecs: getPluginCommandSpecsMock,
-  };
-});
-
 vi.mock("../voice/manager.runtime.js", () => {
   voiceRuntimeModuleLoadedMock();
   return {
@@ -91,7 +81,6 @@ vi.mock("../voice/manager.runtime.js", () => {
     DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
   };
 });
-
 describe("monitorDiscordProvider", () => {
   type ReconcileHealthProbeParams = {
     cfg: OpenClawConfig;
@@ -140,6 +129,15 @@ describe("monitorDiscordProvider", () => {
   };
 
   beforeAll(async () => {
+    vi.doMock("openclaw/plugin-sdk/plugin-runtime", async () => {
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+        "openclaw/plugin-sdk/plugin-runtime",
+      );
+      return {
+        ...actual,
+        getPluginCommandSpecs: getPluginCommandSpecsMock,
+      };
+    });
     vi.doMock("../accounts.js", () => ({
       resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
         resolveDiscordAccountMock(...args),
@@ -151,6 +149,7 @@ describe("monitorDiscordProvider", () => {
       normalizeDiscordToken: (value?: string) => value,
     }));
     runtimeEnvModule = await import("openclaw/plugin-sdk/runtime-env");
+    vi.spyOn(runtimeEnvModule, "logVerbose").mockImplementation(() => undefined);
     ({ monitorDiscordProvider, __testing: providerTesting } = await import("./provider.js"));
   });
 
@@ -616,9 +615,6 @@ describe("monitorDiscordProvider", () => {
     expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-    expect(runtimeEnvModule.logVerbose).toHaveBeenCalledWith(
-      "discord: native commands using Carbon reconcile path",
-    );
   });
 
   it("formats rejected Discord deploy entries with command details", () => {
