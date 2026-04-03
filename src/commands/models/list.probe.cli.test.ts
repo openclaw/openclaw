@@ -40,7 +40,7 @@ vi.mock("../../agents/model-auth.js", async (importOriginal) => {
 });
 
 vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: (...args: unknown[]) => loadModelCatalogMock(...args),
+  loadModelCatalog: loadModelCatalogMock,
 }));
 
 vi.mock("../../agents/cli-runner.js", () => ({
@@ -111,8 +111,11 @@ describe("runAuthProbes CLI backend dispatch", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        prompt:
+          "Reply with exactly OK and nothing else. Do not use tools. Keep the reply to at most 16 tokens.",
         provider: "claude-cli",
         model: "opus",
+        streamParams: { maxTokens: 16 },
       }),
     );
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
@@ -123,5 +126,44 @@ describe("runAuthProbes CLI backend dispatch", () => {
         status: "ok",
       }),
     ]);
+  });
+
+  it("uses a singular token label when the probe cap is one token", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "OK" }],
+      meta: {
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "opus",
+        },
+      },
+    });
+
+    await runAuthProbes({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      providers: ["claude-cli"],
+      modelCandidates: ["claude-cli/opus"],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 1,
+      },
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt:
+          "Reply with exactly OK and nothing else. Do not use tools. Keep the reply to at most 1 token.",
+      }),
+    );
   });
 });
