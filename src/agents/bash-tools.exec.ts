@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
@@ -787,6 +788,16 @@ async function validateScriptFileForShellBleed(params: {
     const absPath = path.isAbsolute(relOrAbsPath)
       ? path.resolve(relOrAbsPath)
       : path.resolve(params.workdir, relOrAbsPath);
+
+    // Avoid blocking preflight on FIFOs/devices: only attempt safe reads for regular files.
+    try {
+      const stat = await fs.lstat(absPath);
+      if (!stat.isFile()) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
 
     // Best-effort: only validate when we can safely open and pin a file inside workdir.
     let content: string;
