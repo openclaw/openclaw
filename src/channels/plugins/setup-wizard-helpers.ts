@@ -651,12 +651,16 @@ export function createLegacyCompatChannelDmPolicy(params: {
             }
           | undefined) ?? {};
       const accountConfig =
-        accountId && accountId !== DEFAULT_ACCOUNT_ID ? channelConfig.accounts?.[accountId] : undefined;
-      return accountConfig?.dmPolicy ??
+        accountId && accountId !== DEFAULT_ACCOUNT_ID
+          ? channelConfig.accounts?.[accountId]
+          : undefined;
+      return (
+        accountConfig?.dmPolicy ??
         accountConfig?.dm?.policy ??
         channelConfig.dmPolicy ??
         channelConfig.dm?.policy ??
-        "pairing";
+        "pairing"
+      );
     },
     setPolicy: (cfg, policy, accountId) =>
       accountId && accountId !== DEFAULT_ACCOUNT_ID
@@ -843,6 +847,7 @@ export function createAccountScopedGroupAccessSection<TResolved>(params: {
 type AccountScopedChannel =
   | "bluebubbles"
   | "discord"
+  | "feishu"
   | "imessage"
   | "line"
   | "signal"

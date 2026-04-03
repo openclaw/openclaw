@@ -5,6 +5,7 @@ import {
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
+  type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 
 vi.mock("./probe.js", () => ({

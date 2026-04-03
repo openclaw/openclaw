@@ -13,10 +13,14 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
-import { inspectFeishuCredentials, listFeishuAccountIds, resolveFeishuAccount } from "./accounts.js";
+import {
+  inspectFeishuCredentials,
+  listFeishuAccountIds,
+  resolveFeishuAccount,
+} from "./accounts.js";
 import { probeFeishu } from "./probe.js";
 import { feishuSetupAdapter } from "./setup-core.js";
-import type { FeishuConfig } from "./types.js";
+import type { FeishuAccountConfig, FeishuConfig } from "./types.js";
 
 const channel = "feishu" as const;
 
@@ -28,12 +32,15 @@ function normalizeString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function getScopedFeishuConfig(cfg: OpenClawConfig, accountId: string): FeishuConfig {
+function getScopedFeishuConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): FeishuConfig | FeishuAccountConfig {
   const feishuCfg = (cfg.channels?.feishu as FeishuConfig | undefined) ?? {};
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return feishuCfg;
   }
-  return (feishuCfg.accounts?.[accountId] as FeishuConfig | undefined) ?? {};
+  return (feishuCfg.accounts?.[accountId] as FeishuAccountConfig | undefined) ?? {};
 }
 
 function patchFeishuConfig(
@@ -138,9 +145,13 @@ async function promptFeishuAllowFrom(params: {
   const entry = await params.prompter.text({
     message: "Feishu allowFrom (user open_ids)",
     placeholder: "ou_xxxxx, ou_yyyyy",
-    initialValue: existingAllowFrom.length > 0 ? existingAllowFrom.map(String).join(", ") : undefined,
+    initialValue:
+      existingAllowFrom.length > 0 ? existingAllowFrom.map(String).join(", ") : undefined,
   });
-  const mergedAllowFrom = mergeAllowFromEntries(existingAllowFrom, splitSetupEntries(String(entry)));
+  const mergedAllowFrom = mergeAllowFromEntries(
+    existingAllowFrom,
+    splitSetupEntries(String(entry)),
+  );
   return setFeishuAllowFrom(params.cfg, params.accountId, mergedAllowFrom);
 }
 
@@ -363,7 +374,10 @@ export const feishuSetupWizard: ChannelSetupWizard = {
     next = patchFeishuConfig(next, resolvedAccountId, { connectionMode });
 
     if (connectionMode === "webhook") {
-      const currentVerificationToken = getScopedFeishuConfig(next, resolvedAccountId).verificationToken;
+      const currentVerificationToken = getScopedFeishuConfig(
+        next,
+        resolvedAccountId,
+      ).verificationToken;
       const verificationTokenResult = await promptSingleChannelSecretInput({
         cfg: next,
         prompter,
