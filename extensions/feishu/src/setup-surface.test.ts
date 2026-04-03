@@ -71,6 +71,28 @@ describe("feishu setup wizard", () => {
     ).toBe("work");
   });
 
+  it("setup adapter uses configured defaultAccount when accountId is omitted", () => {
+    expect(
+      feishuPlugin.setup?.resolveAccountId?.({
+        cfg: {
+          channels: {
+            feishu: {
+              defaultAccount: "work",
+              accounts: {
+                work: {
+                  appId: "work-app",
+                  appSecret: "work-secret", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        } as never,
+        accountId: undefined,
+        input: {},
+      } as never),
+    ).toBe("work");
+  });
+
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi
       .fn()
