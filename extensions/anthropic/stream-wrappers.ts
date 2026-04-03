@@ -1,6 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
+import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
@@ -52,14 +52,18 @@ function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
 }
 
-function isAnthropicPublicApiBaseUrl(baseUrl: unknown): boolean {
-  if (baseUrl == null) {
-    return true;
-  }
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return true;
-  }
-  return resolveProviderEndpoint(baseUrl).endpointClass === "anthropic-public";
+function allowsAnthropicServiceTier(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  return resolveProviderRequestCapabilities({
+    provider: typeof model.provider === "string" ? model.provider : undefined,
+    api: typeof model.api === "string" ? model.api : undefined,
+    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+    capability: "llm",
+    transport: "stream",
+  }).allowsAnthropicServiceTier;
 }
 
 function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier {
@@ -157,11 +161,7 @@ export function createAnthropicFastModeWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   const serviceTier = resolveAnthropicFastServiceTier(enabled);
   return (model, context, options) => {
-    if (
-      model.api !== "anthropic-messages" ||
-      model.provider !== "anthropic" ||
-      !isAnthropicPublicApiBaseUrl(model.baseUrl)
-    ) {
+    if (!allowsAnthropicServiceTier(model)) {
       return underlying(model, context, options);
     }
 
@@ -179,11 +179,7 @@ export function createAnthropicServiceTierWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (
-      model.api !== "anthropic-messages" ||
-      model.provider !== "anthropic" ||
-      !isAnthropicPublicApiBaseUrl(model.baseUrl)
-    ) {
+    if (!allowsAnthropicServiceTier(model)) {
       return underlying(model, context, options);
     }
 

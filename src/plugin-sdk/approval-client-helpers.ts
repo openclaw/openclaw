@@ -9,9 +9,10 @@ import { normalizeAccountId } from "./routing.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalTarget = "dm" | "channel" | "both";
+type ChannelExecApprovalEnableMode = boolean | "auto";
 
 type ChannelApprovalConfig = {
-  enabled?: boolean;
+  enabled?: ChannelExecApprovalEnableMode;
   target?: ApprovalTarget;
   agentFilter?: string[];
   sessionFilter?: string[];
@@ -33,6 +34,16 @@ function isApprovalTargetsMode(cfg: OpenClawConfig): boolean {
     return false;
   }
   return execApprovals.mode === "targets" || execApprovals.mode === "both";
+}
+
+export function isChannelExecApprovalClientEnabledFromConfig(params: {
+  enabled?: ChannelExecApprovalEnableMode;
+  approverCount: number;
+}): boolean {
+  if (params.approverCount <= 0) {
+    return false;
+  }
+  return params.enabled !== false;
 }
 
 export function isChannelExecApprovalTargetRecipient(params: {
@@ -91,7 +102,10 @@ export function createChannelExecApprovalProfile(params: {
 
   const isClientEnabled = (input: ApprovalProfileParams): boolean => {
     const config = params.resolveConfig(input);
-    return Boolean(config?.enabled && params.resolveApprovers(input).length > 0);
+    return isChannelExecApprovalClientEnabledFromConfig({
+      enabled: config?.enabled,
+      approverCount: params.resolveApprovers(input).length,
+    });
   };
 
   const isApprover = (input: ApprovalProfileParams & { senderId?: string | null }): boolean => {
@@ -119,16 +133,19 @@ export function createChannelExecApprovalProfile(params: {
       return false;
     }
     const config = params.resolveConfig(input);
-    if (!config?.enabled) {
-      return false;
-    }
-    if (params.resolveApprovers(input).length === 0) {
+    const approverCount = params.resolveApprovers(input).length;
+    if (
+      !isChannelExecApprovalClientEnabledFromConfig({
+        enabled: config?.enabled,
+        approverCount,
+      })
+    ) {
       return false;
     }
     return matchesApprovalRequestFilters({
       request: input.request.request,
-      agentFilter: config.agentFilter,
-      sessionFilter: config.sessionFilter,
+      agentFilter: config?.agentFilter,
+      sessionFilter: config?.sessionFilter,
       fallbackAgentIdFromSessionKey: params.fallbackAgentIdFromSessionKey === true,
     });
   };

@@ -23,18 +23,29 @@ export type SecretRefCredentialMatrixDocument = {
 
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
   const entries: CredentialMatrixEntry[] = listSecretTargetRegistryEntries()
-    .map((entry) => ({
-      id: entry.id,
-      configFile: entry.configFile,
-      path: entry.pathPattern,
-      ...(entry.refPathPattern ? { refPath: entry.refPathPattern } : {}),
-      ...(entry.authProfileType ? { when: { type: entry.authProfileType } } : {}),
-      secretShape: entry.secretShape,
-      optIn: true as const,
-      ...(entry.id.startsWith("channels.googlechat.")
-        ? { notes: "Google Chat compatibility exception: sibling ref field remains canonical." }
-        : {}),
-    }))
+    .map((entry) => {
+      const isCanonicalFirecrawlWebFetchEntry =
+        entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey";
+      const canonicalId = isCanonicalFirecrawlWebFetchEntry
+        ? "tools.web.fetch.firecrawl.apiKey"
+        : entry.id;
+      const canonicalPath = isCanonicalFirecrawlWebFetchEntry
+        ? "tools.web.fetch.firecrawl.apiKey"
+        : entry.pathPattern;
+
+      return {
+        id: canonicalId,
+        configFile: entry.configFile,
+        path: canonicalPath,
+        ...(entry.refPathPattern ? { refPath: entry.refPathPattern } : {}),
+        ...(entry.authProfileType ? { when: { type: entry.authProfileType } } : {}),
+        secretShape: entry.secretShape,
+        optIn: true as const,
+        ...(entry.id.startsWith("channels.googlechat.")
+          ? { notes: "Google Chat compatibility exception: sibling ref field remains canonical." }
+          : {}),
+      };
+    })
     .toSorted((a, b) => a.id.localeCompare(b.id));
 
   return {
