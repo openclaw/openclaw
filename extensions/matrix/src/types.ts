@@ -64,6 +64,21 @@ export type MatrixThreadBindingsConfig = {
   spawnAcpSessions?: boolean;
 };
 
+export type MatrixExecApprovalTarget = "dm" | "channel" | "both";
+
+export type MatrixExecApprovalConfig = {
+  /** If true, deliver exec approvals through Matrix-native prompts. */
+  enabled?: boolean;
+  /** Optional approver Matrix user IDs. Falls back to dm.allowFrom. */
+  approvers?: Array<string | number>;
+  /** Optional agent allowlist for approval delivery. */
+  agentFilter?: string[];
+  /** Optional session allowlist for approval delivery. */
+  sessionFilter?: string[];
+  /** Where approval prompts should go. Default: dm. */
+  target?: MatrixExecApprovalTarget;
+};
+
 /** Per-account Matrix config (excludes the accounts field to prevent recursion). */
 export type MatrixAccountConfig = Omit<MatrixConfig, "accounts">;
 
@@ -154,6 +169,8 @@ export type MatrixConfig = {
   autoJoinAllowlist?: Array<string | number>;
   /** Direct message policy + allowlist overrides. */
   dm?: MatrixDmConfig;
+  /** Matrix-native exec approval delivery config. */
+  execApprovals?: MatrixExecApprovalConfig;
   /** Room config allowlist keyed by room ID or alias (names resolved to IDs when possible). */
   groups?: Record<string, MatrixRoomConfig>;
   /** Room config allowlist keyed by room ID or alias. Legacy; use groups. */

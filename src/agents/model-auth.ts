@@ -26,6 +26,7 @@ import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
+  OLLAMA_LOCAL_AUTH_MARKER,
 } from "./model-auth-markers.js";
 import {
   requireApiKey,
@@ -304,6 +305,16 @@ function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
   return { mode: "aws-sdk", source: "aws-sdk default chain" };
 }
 
+function shouldDeferSyntheticOllamaProfileAuth(params: {
+  provider: string;
+  resolvedApiKey: string | undefined;
+}): boolean {
+  return (
+    normalizeProviderId(params.provider) === "ollama" &&
+    params.resolvedApiKey?.trim() === OLLAMA_LOCAL_AUTH_MARKER
+  );
+}
+
 export async function resolveApiKeyForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -311,6 +322,9 @@ export async function resolveApiKeyForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  /** When true, treat profileId as a user-locked selection that must not be
+   *  silently overridden by env/config credentials (e.g. ollama-local). */
+  lockedProfile?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
@@ -326,12 +340,28 @@ export async function resolveApiKeyForProvider(params: {
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
     const mode = store.profiles[profileId]?.type;
-    return {
+    const result: ResolvedProviderAuth = {
       apiKey: resolved.apiKey,
       profileId,
       source: `profile:${profileId}`,
       mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
     };
+    // When the resolved key is the synthetic ollama-local marker and the
+    // caller has not locked this profile, fall through to env/config
+    // resolution so real cloud credentials take precedence. The auth
+    // controller iterates profile candidates and passes each as an explicit
+    // profileId, so we cannot assume explicit === user-locked.
+    if (
+      !params.lockedProfile &&
+      shouldDeferSyntheticOllamaProfileAuth({
+        provider,
+        resolvedApiKey: resolved.apiKey,
+      })
+    ) {
+      return resolveApiKeyForProvider({ ...params, profileId: undefined, lockedProfile: true }) //
+        .catch(() => result);
+    }
+    return result;
   }
 
   const authOverride = resolveProviderAuthOverride(cfg, provider);
@@ -345,6 +375,7 @@ export async function resolveApiKeyForProvider(params: {
     provider,
     preferredProfile,
   });
+  let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   for (const candidate of order) {
     try {
       const resolved = await resolveApiKeyForProfile({
@@ -363,6 +394,15 @@ export async function resolveApiKeyForProvider(params: {
           source: `profile:${candidate}`,
           mode: resolvedMode,
         };
+        if (
+          shouldDeferSyntheticOllamaProfileAuth({
+            provider,
+            resolvedApiKey: resolved.apiKey,
+          })
+        ) {
+          deferredAuthProfileResult ??= result;
+          continue;
+        }
         return result;
       }
     } catch (err) {
@@ -387,6 +427,10 @@ export async function resolveApiKeyForProvider(params: {
   if (customKey) {
     const result = { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" as const };
     return result;
+  }
+
+  if (deferredAuthProfileResult) {
+    return deferredAuthProfileResult;
   }
 
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
@@ -554,6 +598,7 @@ export async function getApiKeyForModel(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  lockedProfile?: boolean;
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
     provider: params.model.provider,
@@ -562,6 +607,7 @@ export async function getApiKeyForModel(params: {
     preferredProfile: params.preferredProfile,
     store: params.store,
     agentDir: params.agentDir,
+    lockedProfile: params.lockedProfile,
   });
 }
 

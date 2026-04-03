@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
+import { CHANNEL_IDS } from "../channels/ids.js";
+import { normalizeChatChannelId } from "../channels/chat-meta.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
 import {
