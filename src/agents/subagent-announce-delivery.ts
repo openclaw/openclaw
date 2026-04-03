@@ -450,6 +450,10 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
+    const isExternalQueuedDelivery = !isInternalAnnounceRequesterSession(canonicalKey);
+    if (isExternalQueuedDelivery && !params.summaryLine?.trim()) {
+      return "dropped";
+    }
     const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {

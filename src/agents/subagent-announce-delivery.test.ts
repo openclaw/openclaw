@@ -207,4 +207,5 @@ describe("direct announce outbound visibility guard", () => {
       __testing.setDepsForTest();
     }
   });
+
 });
