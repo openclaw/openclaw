@@ -11,6 +11,7 @@ export {
   loadConfig,
   readBestEffortConfig,
   parseConfigJson5,
+  recoverConfigFile,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   readSourceConfigSnapshot,
@@ -21,7 +22,7 @@ export {
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
-export type { ConfigWriteNotification } from "./io.js";
+export type { ConfigWriteNotification, RecoverConfigFileResult } from "./io.js";
 export { migrateLegacyConfig } from "./legacy-migrate.js";
 export { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
 export * from "./paths.js";

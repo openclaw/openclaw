@@ -16,7 +16,7 @@ import {
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
-import { maintainConfigBackups } from "./backup-rotation.js";
+import { listConfigBackupPaths, maintainConfigBackups } from "./backup-rotation.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import {
   type EnvSubstitutionWarning,
@@ -221,6 +221,8 @@ export type ConfigWriteOptions = {
    * even if schema/default normalization reintroduces them.
    */
   unsetPaths?: string[][];
+  sessionKey?: string;
+  deliveryContext?: ConfigWriteNotification["deliveryContext"];
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -243,6 +245,51 @@ export type ConfigWriteNotification = {
   runtimeConfig: OpenClawConfig;
   persistedHash: string;
   writtenAtMs: number;
+  sessionKey?: string;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+};
+
+type ConfigRecoveryFailureKind = "missing" | "empty" | "parse" | "schema" | "suspicious";
+
+type ConfigRecoveryCandidate = {
+  source: string;
+  path: string;
+  exists: boolean;
+  fingerprint: ConfigHealthFingerprint | null;
+  valid: boolean;
+  issues: string[];
+};
+
+type ConfigRecoveryPlan = {
+  configPath: string;
+  broken: boolean;
+  failureKind: ConfigRecoveryFailureKind | null;
+  currentIssues: string[];
+  candidates: ConfigRecoveryCandidate[];
+  selected: ConfigRecoveryCandidate | null;
+};
+
+type RecoverConfigFileOptions = {
+  from?: string;
+  dryRun?: boolean;
+};
+
+export type RecoverConfigFileResult = {
+  configPath: string;
+  broken: boolean;
+  failureKind: ConfigRecoveryFailureKind | null;
+  currentIssues: string[];
+  recovered: boolean;
+  dryRun: boolean;
+  selectedSource: string | null;
+  restoredPath: string | null;
+  clobberedPath: string | null;
+  candidates: ConfigRecoveryCandidate[];
 };
 
 export class ConfigRuntimeRefreshError extends Error {
@@ -824,7 +871,7 @@ function resolveConfigObserveSuspiciousReasons(params: {
   if (!baseline) {
     return reasons;
   }
-  if (baseline.bytes >= 512 && params.bytes < Math.floor(baseline.bytes * 0.5)) {
+  if (baseline.bytes >= 512 && params.bytes < Math.floor(baseline.bytes * 0.25)) {
     reasons.push(`size-drop-vs-last-good:${baseline.bytes}->${params.bytes}`);
   }
   if (baseline.hasMeta && !params.hasMeta) {
@@ -929,6 +976,275 @@ function persistClobberedConfigSnapshotSync(params: {
   }
 }
 
+function resolveRecoveryCandidatePaths(configPath: string): Array<{ source: string; path: string }> {
+  return listConfigBackupPaths(configPath).map((backupPath) => ({
+    source: path.basename(backupPath).replace(/^.*?\.bak/, "bak"),
+    path: backupPath,
+  }));
+}
+
+async function validateRecoveryCandidate(params: {
+  deps: Required<ConfigIoDeps>;
+  candidatePath: string;
+  source: string;
+}): Promise<ConfigRecoveryCandidate> {
+  try {
+    const raw = await params.deps.fs.promises.readFile(params.candidatePath, "utf-8");
+    const parsedRes = parseConfigJson5(raw, params.deps.json5);
+    if (!parsedRes.ok) {
+      return {
+        source: params.source,
+        path: params.candidatePath,
+        exists: true,
+        fingerprint: await readConfigFingerprintForPath(params.deps, params.candidatePath),
+        valid: false,
+        issues: [`JSON5 parse failed: ${parsedRes.error}`],
+      };
+    }
+    const validated = validateConfigObjectWithPlugins(parsedRes.parsed, { env: params.deps.env });
+    return {
+      source: params.source,
+      path: params.candidatePath,
+      exists: true,
+      fingerprint: await readConfigFingerprintForPath(params.deps, params.candidatePath),
+      valid: validated.ok,
+      issues: validated.ok
+        ? []
+        : validated.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`),
+    };
+  } catch {
+    return {
+      source: params.source,
+      path: params.candidatePath,
+      exists: false,
+      fingerprint: null,
+      valid: false,
+      issues: ["backup not found"],
+    };
+  }
+}
+
+function validateRecoveryCandidateSync(params: {
+  deps: Required<ConfigIoDeps>;
+  candidatePath: string;
+  source: string;
+}): ConfigRecoveryCandidate {
+  try {
+    const raw = params.deps.fs.readFileSync(params.candidatePath, "utf-8");
+    const parsedRes = parseConfigJson5(raw, params.deps.json5);
+    if (!parsedRes.ok) {
+      return {
+        source: params.source,
+        path: params.candidatePath,
+        exists: true,
+        fingerprint: readConfigFingerprintForPathSync(params.deps, params.candidatePath),
+        valid: false,
+        issues: [`JSON5 parse failed: ${parsedRes.error}`],
+      };
+    }
+    const validated = validateConfigObjectWithPlugins(parsedRes.parsed, { env: params.deps.env });
+    return {
+      source: params.source,
+      path: params.candidatePath,
+      exists: true,
+      fingerprint: readConfigFingerprintForPathSync(params.deps, params.candidatePath),
+      valid: validated.ok,
+      issues: validated.ok
+        ? []
+        : validated.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`),
+    };
+  } catch {
+    return {
+      source: params.source,
+      path: params.candidatePath,
+      exists: false,
+      fingerprint: null,
+      valid: false,
+      issues: ["backup not found"],
+    };
+  }
+}
+
+function shouldAutoRecoverSuspiciousConfig(params: {
+  suspicious: string[];
+  parseFailed?: boolean;
+  schemaFailed?: boolean;
+  isEmpty?: boolean;
+}): boolean {
+  if (params.isEmpty || params.parseFailed || params.schemaFailed) {
+    return true;
+  }
+  return params.suspicious.some(
+    (reason) => reason === "update-channel-only-root" || reason.startsWith("size-drop-vs-last-good:"),
+  );
+}
+
+async function inspectCurrentConfigRecoveryState(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+}): Promise<ConfigRecoveryPlan> {
+  const candidates = await Promise.all(
+    resolveRecoveryCandidatePaths(params.configPath).map((candidate) =>
+      validateRecoveryCandidate({
+        deps: params.deps,
+        candidatePath: candidate.path,
+        source: candidate.source,
+      }),
+    ),
+  );
+  const selected = candidates.find((candidate) => candidate.valid) ?? null;
+
+  let raw: string;
+  try {
+    raw = await params.deps.fs.promises.readFile(params.configPath, "utf-8");
+  } catch (err) {
+    return {
+      configPath: params.configPath,
+      broken: true,
+      failureKind: "missing",
+      currentIssues: [`read failed: ${String(err)}`],
+      candidates,
+      selected,
+    };
+  }
+
+  if (raw.trim().length === 0) {
+    return {
+      configPath: params.configPath,
+      broken: true,
+      failureKind: "empty",
+      currentIssues: ["config file is empty"],
+      candidates,
+      selected,
+    };
+  }
+
+  const parsedRes = parseConfigJson5(raw, params.deps.json5);
+  if (!parsedRes.ok) {
+    return {
+      configPath: params.configPath,
+      broken: true,
+      failureKind: "parse",
+      currentIssues: [`JSON5 parse failed: ${parsedRes.error}`],
+      candidates,
+      selected,
+    };
+  }
+
+  const validated = validateConfigObjectWithPlugins(parsedRes.parsed, { env: params.deps.env });
+  if (!validated.ok) {
+    return {
+      configPath: params.configPath,
+      broken: true,
+      failureKind: "schema",
+      currentIssues: validated.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`),
+      candidates,
+      selected,
+    };
+  }
+
+  const healthState = await readConfigHealthState(params.deps);
+  const entry = getConfigHealthEntry(healthState, params.configPath);
+  const baseline = entry.lastKnownGood ?? selected?.fingerprint ?? undefined;
+  const suspicious = resolveConfigObserveSuspiciousReasons({
+    bytes: Buffer.byteLength(raw, "utf-8"),
+    hasMeta: hasConfigMeta(parsedRes.parsed),
+    gatewayMode: resolveGatewayMode(parsedRes.parsed),
+    parsed: parsedRes.parsed,
+    lastKnownGood: baseline,
+  });
+  return {
+    configPath: params.configPath,
+    broken: shouldAutoRecoverSuspiciousConfig({ suspicious }),
+    failureKind: suspicious.length > 0 ? "suspicious" : null,
+    currentIssues: suspicious,
+    candidates,
+    selected,
+  };
+}
+
+function inspectCurrentConfigRecoveryStateSync(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+}): ConfigRecoveryPlan {
+  const candidates = resolveRecoveryCandidatePaths(params.configPath).map((candidate) =>
+    validateRecoveryCandidateSync({
+      deps: params.deps,
+      candidatePath: candidate.path,
+      source: candidate.source,
+    }),
+  );
+  const selected = candidates.find((candidate) => candidate.valid) ?? null;
+
+  let raw: string;
+  try {
+    raw = params.deps.fs.readFileSync(params.configPath, "utf-8");
+  } catch (err) {
+    return {
+      configPath: params.configPath,
+      broken: true,
+      failureKind: "missing",
+      currentIssues: [`read failed: ${String(err)}`],
+      candidates,
+      selected,
+    };
+  }
+
+  if (raw.trim().length === 0) {
+    return {
+      configPath: params.configPath,
+      broken: true,
+      failureKind: "empty",
+      currentIssues: ["config file is empty"],
+      candidates,
+      selected,
+    };
+  }
+
+  const parsedRes = parseConfigJson5(raw, params.deps.json5);
+  if (!parsedRes.ok) {
+    return {
+      configPath: params.configPath,
+      broken: true,
+      failureKind: "parse",
+      currentIssues: [`JSON5 parse failed: ${parsedRes.error}`],
+      candidates,
+      selected,
+    };
+  }
+
+  const validated = validateConfigObjectWithPlugins(parsedRes.parsed, { env: params.deps.env });
+  if (!validated.ok) {
+    return {
+      configPath: params.configPath,
+      broken: true,
+      failureKind: "schema",
+      currentIssues: validated.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`),
+      candidates,
+      selected,
+    };
+  }
+
+  const healthState = readConfigHealthStateSync(params.deps);
+  const entry = getConfigHealthEntry(healthState, params.configPath);
+  const baseline = entry.lastKnownGood ?? selected?.fingerprint ?? undefined;
+  const suspicious = resolveConfigObserveSuspiciousReasons({
+    bytes: Buffer.byteLength(raw, "utf-8"),
+    hasMeta: hasConfigMeta(parsedRes.parsed),
+    gatewayMode: resolveGatewayMode(parsedRes.parsed),
+    parsed: parsedRes.parsed,
+    lastKnownGood: baseline,
+  });
+  return {
+    configPath: params.configPath,
+    broken: shouldAutoRecoverSuspiciousConfig({ suspicious }),
+    failureKind: suspicious.length > 0 ? "suspicious" : null,
+    currentIssues: suspicious,
+    candidates,
+    selected,
+  };
+}
+
 type SuspiciousConfigRecoverySyncResult = {
   raw: string;
   parsed: unknown;
@@ -953,23 +1269,25 @@ async function maybeRecoverSuspiciousConfigRead(params: {
     observedAt: now,
   };
 
+  const recoveryPlan = await inspectCurrentConfigRecoveryState({
+    deps: params.deps,
+    configPath: params.configPath,
+  });
+  if (!recoveryPlan.broken || !recoveryPlan.selected?.valid) {
+    return { raw: params.raw, parsed: params.parsed };
+  }
+
   let healthState = await readConfigHealthState(params.deps);
   const entry = getConfigHealthEntry(healthState, params.configPath);
-  const backupPath = `${params.configPath}.bak`;
+  const backupPath = recoveryPlan.selected.path;
   const backupBaseline =
     entry.lastKnownGood ??
     (await readConfigFingerprintForPath(params.deps, backupPath)) ??
     undefined;
-  const suspicious = resolveConfigObserveSuspiciousReasons({
-    bytes: current.bytes,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    parsed: params.parsed,
-    lastKnownGood: backupBaseline,
-  });
-  if (!suspicious.includes("update-channel-only-root")) {
-    return { raw: params.raw, parsed: params.parsed };
-  }
+  const suspicious =
+    recoveryPlan.failureKind === "suspicious"
+      ? recoveryPlan.currentIssues
+      : [`invalid-config:${recoveryPlan.failureKind ?? "unknown"}`];
 
   const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
   const backupRaw = await params.deps.fs.promises.readFile(backupPath, "utf-8").catch(() => null);
@@ -1083,21 +1401,23 @@ function maybeRecoverSuspiciousConfigReadSync(params: {
     observedAt: now,
   };
 
-  let healthState = readConfigHealthStateSync(params.deps);
-  const entry = getConfigHealthEntry(healthState, params.configPath);
-  const backupPath = `${params.configPath}.bak`;
-  const backupBaseline =
-    entry.lastKnownGood ?? readConfigFingerprintForPathSync(params.deps, backupPath) ?? undefined;
-  const suspicious = resolveConfigObserveSuspiciousReasons({
-    bytes: current.bytes,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    parsed: params.parsed,
-    lastKnownGood: backupBaseline,
+  const recoveryPlan = inspectCurrentConfigRecoveryStateSync({
+    deps: params.deps,
+    configPath: params.configPath,
   });
-  if (!suspicious.includes("update-channel-only-root")) {
+  if (!recoveryPlan.broken || !recoveryPlan.selected?.valid) {
     return { raw: params.raw, parsed: params.parsed };
   }
+
+  let healthState = readConfigHealthStateSync(params.deps);
+  const entry = getConfigHealthEntry(healthState, params.configPath);
+  const backupPath = recoveryPlan.selected.path;
+  const backupBaseline =
+    entry.lastKnownGood ?? readConfigFingerprintForPathSync(params.deps, backupPath) ?? undefined;
+  const suspicious =
+    recoveryPlan.failureKind === "suspicious"
+      ? recoveryPlan.currentIssues
+      : [`invalid-config:${recoveryPlan.failureKind ?? "unknown"}`];
 
   const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
   let backupRaw: string;
@@ -1701,7 +2021,50 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         return {};
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
-      const parsed = deps.json5.parse(raw);
+      let parsed: unknown;
+      try {
+        parsed = deps.json5.parse(raw);
+      } catch {
+        const recovered = maybeRecoverSuspiciousConfigReadSync({
+          deps,
+          configPath,
+          raw,
+          parsed: {},
+        });
+        parsed = recovered.parsed;
+        if (recovered.raw !== raw) {
+          const readResolution = resolveConfigForRead(
+            resolveConfigIncludesForRead(parsed, configPath, deps),
+            deps.env,
+          );
+          const resolvedConfig = readResolution.resolvedConfigRaw;
+          const legacyResolution = resolveLegacyConfigForRead(resolvedConfig, parsed);
+          const validated = validateConfigObjectWithPlugins(legacyResolution.effectiveConfigRaw, {
+            env: deps.env,
+          });
+          if (!validated.ok) {
+            throw new Error(`Invalid config at ${configPath}`);
+          }
+          const cfg = materializeRuntimeConfig(validated.config, "load");
+          observeLoadConfigSnapshot({
+            ...createConfigFileSnapshot({
+              path: configPath,
+              exists: true,
+              raw: recovered.raw,
+              parsed,
+              sourceConfig: coerceConfig(legacyResolution.effectiveConfigRaw),
+              valid: true,
+              runtimeConfig: cfg,
+              hash: hashConfigRaw(recovered.raw),
+              issues: [],
+              warnings: validated.warnings,
+              legacyIssues: legacyResolution.sourceLegacyIssues,
+            }),
+          });
+          return applyConfigOverrides(cfg);
+        }
+        throw new Error(`Failed to parse config at ${configPath}`);
+      }
       const recovered = maybeRecoverSuspiciousConfigReadSync({
         deps,
         configPath,
@@ -1909,6 +2272,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const rawHash = hashConfigRaw(raw);
       const parsedRes = parseConfigJson5(raw, deps.json5);
       if (!parsedRes.ok) {
+        const recovery = await recoverConfigFile({}, deps);
+        if (recovery.recovered) {
+          return await readConfigFileSnapshotInternal();
+        }
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
             path: configPath,
@@ -2499,6 +2866,71 @@ export function loadConfig(): OpenClawConfig {
   return runtimeConfigSnapshot ?? config;
 }
 
+export async function recoverConfigFile(
+  options: RecoverConfigFileOptions = {},
+  overrides: ConfigIoDeps = {},
+): Promise<RecoverConfigFileResult> {
+  const deps = normalizeDeps(overrides);
+  const configPath = resolveConfigPathForDeps(deps);
+  const plan = await inspectCurrentConfigRecoveryState({ deps, configPath });
+  const selected =
+    options.from != null
+      ? plan.candidates.find((candidate) => candidate.source === options.from) ?? null
+      : plan.selected;
+
+  if (!plan.broken || !selected?.valid) {
+    return {
+      configPath,
+      broken: plan.broken,
+      failureKind: plan.failureKind,
+      currentIssues: plan.currentIssues,
+      recovered: false,
+      dryRun: Boolean(options.dryRun),
+      selectedSource: selected?.source ?? null,
+      restoredPath: selected?.path ?? null,
+      clobberedPath: null,
+      candidates: plan.candidates,
+    };
+  }
+  if (options.dryRun) {
+    return {
+      configPath,
+      broken: true,
+      failureKind: plan.failureKind,
+      currentIssues: plan.currentIssues,
+      recovered: false,
+      dryRun: true,
+      selectedSource: selected.source,
+      restoredPath: selected.path,
+      clobberedPath: null,
+      candidates: plan.candidates,
+    };
+  }
+
+  const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8").catch(() => "");
+  const clobberedPath = await persistClobberedConfigSnapshot({
+    deps,
+    configPath,
+    raw: currentRaw,
+    observedAt: new Date().toISOString(),
+  });
+  await deps.fs.promises.copyFile(selected.path, configPath);
+  deps.logger.warn(`Config recovered from ${selected.source}: ${configPath}`);
+
+  return {
+    configPath,
+    broken: true,
+    failureKind: plan.failureKind,
+    currentIssues: plan.currentIssues,
+    recovered: true,
+    dryRun: false,
+    selectedSource: selected.source,
+    restoredPath: selected.path,
+    clobberedPath,
+    candidates: plan.candidates,
+  };
+}
+
 export function getRuntimeConfig(): OpenClawConfig {
   return loadConfig();
 }
@@ -2552,6 +2984,8 @@ export async function writeConfigFile(
       runtimeConfig: runtimeConfigSnapshot,
       persistedHash: writeResult.persistedHash,
       writtenAtMs: Date.now(),
+      sessionKey: options.sessionKey,
+      deliveryContext: options.deliveryContext,
     });
   };
   // Keep the last-known-good runtime snapshot active until the specialized refresh path

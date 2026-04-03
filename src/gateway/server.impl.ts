@@ -17,6 +17,7 @@ import {
   isNixMode,
   loadConfig,
   migrateLegacyConfig,
+  recoverConfigFile,
   registerConfigWriteListener,
   readConfigFileSnapshot,
   writeConfigFile,
@@ -37,6 +38,8 @@ import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
   detectPluginInstallPathIssue,
@@ -153,6 +156,7 @@ import {
   mergeGatewayTailscaleConfig,
 } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
+import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
@@ -250,6 +254,50 @@ function applyGatewayAuthOverridesForStartupPreflight(
       tailscale: mergeGatewayTailscaleConfig(config.gateway?.tailscale, overrides.tailscale),
     },
   };
+}
+
+async function notifyConfigReloadFailure(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+  text: string;
+}) {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return;
+  }
+  enqueueSystemEvent(params.text, {
+    sessionKey,
+    deliveryContext: params.deliveryContext,
+  });
+  const channel = params.deliveryContext?.channel
+    ? (normalizeMessageChannel(params.deliveryContext.channel) ?? params.deliveryContext.channel)
+    : undefined;
+  const to = params.deliveryContext?.to;
+  if (!channel || !to || !isDeliverableMessageChannel(channel)) {
+    return;
+  }
+  try {
+    await deliverOutboundPayloads({
+      cfg: params.cfg,
+      channel,
+      to,
+      accountId: params.deliveryContext?.accountId,
+      threadId: params.deliveryContext?.threadId,
+      payloads: [{ text: params.text }],
+      session: buildOutboundSessionContext({
+        cfg: params.cfg,
+        sessionKey,
+      }),
+    });
+  } catch (err) {
+    logReload.warn(`config reload failure notice delivery failed: ${String(err)}`);
+  }
 }
 
 function assertValidGatewayStartupConfigSnapshot(
@@ -418,6 +466,13 @@ export async function startGatewayServer(
   }
 
   configSnapshot = await readConfigFileSnapshot();
+  if (configSnapshot.exists && !configSnapshot.valid) {
+    const recovered = await recoverConfigFile();
+    if (recovered.recovered) {
+      log.warn(`gateway: config auto-recovered from ${recovered.selectedSource ?? "backup"} before startup`);
+      configSnapshot = await readConfigFileSnapshot();
+    }
+  }
   if (configSnapshot.exists) {
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
@@ -1444,7 +1499,16 @@ export async function startGatewayServer(
             initialConfig: cfgAtStart,
             initialInternalWriteHash: startupInternalWriteHash,
             readSnapshot: readConfigFileSnapshot,
+            recoverConfig: recoverConfigFile,
             subscribeToWrites: registerConfigWriteListener,
+            notifyReloadFailure: async ({ sessionKey, deliveryContext, text }) => {
+              await notifyConfigReloadFailure({
+                cfg: getRuntimeConfig(),
+                sessionKey,
+                deliveryContext,
+                text,
+              });
+            },
             onHotReload: async (plan, nextConfig) => {
               const previousSnapshot = getActiveSecretsRuntimeSnapshot();
               const prepared = await activateRuntimeSecrets(nextConfig, {

@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
-import type { OpenClawConfig } from "../config/config.js";
-import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import type { OpenClawConfig, RecoverConfigFileResult } from "../config/config.js";
+import { readConfigFileSnapshot, recoverConfigFile, replaceConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
@@ -1304,6 +1304,73 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
   }
 }
 
+function formatRecoveryCandidateLine(candidate: RecoverConfigFileResult["candidates"][number]): string {
+  return `- ${candidate.source} -> ${shortenHomePath(candidate.path)}${candidate.valid ? " (valid)" : " (invalid)"}`;
+}
+
+export async function runConfigRecover(opts: {
+  from?: string;
+  dryRun?: boolean;
+  json?: boolean;
+  runtime?: RuntimeEnv;
+} = {}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    const result = await recoverConfigFile({
+      from: opts.from,
+      dryRun: Boolean(opts.dryRun),
+    });
+    if (opts.json) {
+      writeRuntimeJson(runtime, result, 0);
+      if (result.broken && !result.recovered && !result.dryRun) {
+        runtime.exit(1);
+      }
+      return;
+    }
+    if (!result.broken) {
+      runtime.log(success(`Config is healthy: ${shortenHomePath(result.configPath)}`));
+      return;
+    }
+    runtime.log(info(`Detected broken config: ${shortenHomePath(result.configPath)}`));
+    if (result.failureKind) {
+      runtime.log(info(`Failure kind: ${result.failureKind}`));
+    }
+    for (const issue of result.currentIssues) {
+      runtime.log(`- ${issue}`);
+    }
+    runtime.log("");
+    runtime.log(info("Recovery candidates:"));
+    for (const candidate of result.candidates) {
+      runtime.log(formatRecoveryCandidateLine(candidate));
+    }
+    if (result.dryRun) {
+      if (!result.selectedSource) {
+        runtime.error(danger("Dry run: no valid recovery source available."));
+        runtime.exit(1);
+        return;
+      }
+      runtime.log(
+        info(
+          `Dry run: would recover from ${result.selectedSource} (${shortenHomePath(result.restoredPath ?? "")})`,
+        ),
+      );
+      return;
+    }
+    if (!result.recovered) {
+      runtime.error(danger("No valid recovery source available."));
+      runtime.exit(1);
+      return;
+    }
+    runtime.log(success(`Recovered config from ${result.selectedSource}.`));
+    if (result.clobberedPath) {
+      runtime.log(info(`Saved broken file to ${shortenHomePath(result.clobberedPath)}.`));
+    }
+  } catch (err) {
+    runtime.error(danger(`Config recover error: ${String(err)}`));
+    runtime.exit(1);
+  }
+}
+
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
@@ -1441,5 +1508,19 @@ export function registerConfigCli(program: Command) {
     .option("--json", "Output validation result as JSON", false)
     .action(async (opts) => {
       await runConfigValidate({ json: Boolean(opts.json) });
+    });
+
+  cmd
+    .command("recover")
+    .description("Recover a broken config from validated backup candidates (.bak, .bak.N)")
+    .option("--from <source>", "Recovery source to use (for example: bak, bak.1, bak.2)")
+    .option("--dry-run", "Inspect and validate recovery candidates without writing config", false)
+    .option("--json", "Output recovery result as JSON", false)
+    .action(async (opts) => {
+      await runConfigRecover({
+        from: opts.from,
+        dryRun: Boolean(opts.dryRun),
+        json: Boolean(opts.json),
+      });
     });
 }

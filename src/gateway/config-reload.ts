@@ -5,7 +5,9 @@ import type {
   ConfigFileSnapshot,
   ConfigWriteNotification,
   GatewayReloadMode,
+  RecoverConfigFileResult,
 } from "../config/config.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { isPlainObject } from "../utils.js";
 import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
@@ -78,6 +80,7 @@ export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
   initialInternalWriteHash?: string | null;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
+  recoverConfig?: () => Promise<RecoverConfigFileResult>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   subscribeToWrites?: (listener: (event: ConfigWriteNotification) => void) => () => void;
@@ -87,6 +90,11 @@ export function startGatewayConfigReloader(opts: {
     error: (msg: string) => void;
   };
   watchPath: string;
+  notifyReloadFailure?: (params: {
+    sessionKey?: string;
+    deliveryContext?: ConfigWriteNotification["deliveryContext"];
+    text: string;
+  }) => Promise<void>;
 }): GatewayConfigReloader {
   let currentConfig = opts.initialConfig;
   let settings = resolveGatewayReloadSettings(currentConfig);
@@ -98,6 +106,23 @@ export function startGatewayConfigReloader(opts: {
   let missingConfigRetries = 0;
   let pendingInProcessConfig: OpenClawConfig | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
+  let lastWriteEvent: ConfigWriteNotification | null = null;
+
+  const notifyReloadFailure = async (text: string) => {
+    const sessionKey = lastWriteEvent?.sessionKey?.trim();
+    if (!sessionKey) {
+      return;
+    }
+    if (opts.notifyReloadFailure) {
+      await opts.notifyReloadFailure({
+        sessionKey,
+        deliveryContext: lastWriteEvent?.deliveryContext,
+        text,
+      });
+      return;
+    }
+    enqueueSystemEvent(text, { sessionKey, deliveryContext: lastWriteEvent?.deliveryContext });
+  };
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -222,6 +247,18 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       if (handleInvalidSnapshot(snapshot)) {
+        if (opts.recoverConfig) {
+          const recovered = await opts.recoverConfig();
+          if (recovered.recovered) {
+            await notifyReloadFailure(
+              `Config hot reload failed validation and was auto-rolled back from ${recovered.selectedSource ?? "backup"}. Broken file saved to ${recovered.clobberedPath ?? "<unknown>"}.`,
+            );
+            const retried = await opts.readSnapshot();
+            if (!handleMissingSnapshot(retried) && !handleInvalidSnapshot(retried)) {
+              await applySnapshot(retried.config);
+            }
+          }
+        }
         return;
       }
       await applySnapshot(snapshot.config);
@@ -253,6 +290,7 @@ export function startGatewayConfigReloader(opts: {
       }
       pendingInProcessConfig = event.runtimeConfig;
       lastAppliedWriteHash = event.persistedHash;
+      lastWriteEvent = event;
       scheduleAfter(0);
     }) ?? (() => {});
 

@@ -2,6 +2,15 @@ import path from "node:path";
 
 export const CONFIG_BACKUP_COUNT = 5;
 
+export function listConfigBackupPaths(configPath: string): string[] {
+  return [
+    `${configPath}.bak`,
+    ...Array.from({ length: Math.max(CONFIG_BACKUP_COUNT - 1, 0) }, (_, index) =>
+      `${configPath}.bak.${index + 1}`,
+    ),
+  ];
+}
+
 export interface BackupRotationFs {
   unlink: (path: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
