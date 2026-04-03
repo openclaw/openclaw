@@ -45,11 +45,6 @@ describe("talk normalization", () => {
           apiKey: "secret-key", // pragma: allowlist secret
         },
       },
-      voiceId: "voice-123",
-      voiceAliases: { Clawd: "EXAVITQu4vr4xnSDxMaL" },
-      modelId: "eleven_v3",
-      outputFormat: "pcm_44100",
-      apiKey: "secret-key", // pragma: allowlist secret
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
@@ -76,7 +71,6 @@ describe("talk normalization", () => {
           custom: true,
         },
       },
-      voiceId: "legacy-voice",
       interruptOnSpeech: true,
     });
   });
@@ -109,8 +103,6 @@ describe("talk normalization", () => {
           modelId: "acme-model",
         },
       },
-      voiceId: "acme-voice",
-      modelId: "acme-model",
       interruptOnSpeech: true,
     });
   });
@@ -151,7 +143,6 @@ describe("talk normalization", () => {
           expect(snapshot.config.talk?.provider).toBeUndefined();
           expect(snapshot.config.talk?.providers?.elevenlabs?.voiceId).toBe("voice-123");
           expect(snapshot.config.talk?.providers?.elevenlabs?.apiKey).toBe(elevenLabsApiKey);
-          expect(snapshot.config.talk?.apiKey).toBe(elevenLabsApiKey);
         },
       );
     });
@@ -177,7 +168,6 @@ describe("talk normalization", () => {
           expect(snapshot.config.talk?.provider).toBe("acme");
           expect(snapshot.config.talk?.providers?.acme?.voiceId).toBe("acme-voice");
           expect(snapshot.config.talk?.providers?.acme?.apiKey).toBeUndefined();
-          expect(snapshot.config.talk?.apiKey).toBeUndefined();
         },
       );
     });
@@ -200,12 +190,11 @@ describe("talk normalization", () => {
         async (configPath) => {
           const io = createConfigIO({ configPath });
           const snapshot = await io.readConfigFileSnapshot();
-          expect(snapshot.config.talk?.apiKey).toEqual({
+          expect(snapshot.config.talk?.providers?.elevenlabs?.apiKey).toEqual({
             source: "env",
             provider: "default",
             id: "ELEVENLABS_API_KEY",
           });
-          expect(snapshot.config.talk?.providers?.elevenlabs?.apiKey).toBeUndefined();
         },
       );
     });

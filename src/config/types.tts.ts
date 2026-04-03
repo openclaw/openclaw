@@ -1,5 +1,3 @@
-import type { SecretInput } from "./types.secrets.js";
-
 export type TtsProvider = string;
 
 export type TtsMode = "final" | "all";
@@ -27,65 +25,7 @@ export type TtsModelOverrideConfig = {
 
 export type TtsProviderConfigMap = Record<string, Record<string, unknown>>;
 
-export type LegacyTtsConfigCompat = {
-  /** Legacy ElevenLabs configuration. Prefer providers.elevenlabs. */
-  elevenlabs?: {
-    apiKey?: SecretInput;
-    baseUrl?: string;
-    voiceId?: string;
-    modelId?: string;
-    seed?: number;
-    applyTextNormalization?: "auto" | "on" | "off";
-    languageCode?: string;
-    voiceSettings?: {
-      stability?: number;
-      similarityBoost?: number;
-      style?: number;
-      useSpeakerBoost?: boolean;
-      speed?: number;
-    };
-  };
-  /** Legacy OpenAI configuration. Prefer providers.openai. */
-  openai?: {
-    apiKey?: SecretInput;
-    baseUrl?: string;
-    model?: string;
-    voice?: string;
-    /** Playback speed (0.25–4.0, default 1.0). */
-    speed?: number;
-    /** System-level instructions for the TTS model (gpt-4o-mini-tts only). */
-    instructions?: string;
-  };
-  /** Legacy alias for Microsoft speech configuration. Prefer providers.microsoft. */
-  edge?: {
-    /** Explicitly allow Microsoft speech usage (no API key required). */
-    enabled?: boolean;
-    voice?: string;
-    lang?: string;
-    outputFormat?: string;
-    pitch?: string;
-    rate?: string;
-    volume?: string;
-    saveSubtitles?: boolean;
-    proxy?: string;
-    timeoutMs?: number;
-  };
-  /** Legacy Microsoft speech configuration. Prefer providers.microsoft. */
-  microsoft?: {
-    enabled?: boolean;
-    voice?: string;
-    lang?: string;
-    outputFormat?: string;
-    pitch?: string;
-    rate?: string;
-    volume?: string;
-    saveSubtitles?: boolean;
-    proxy?: string;
-    timeoutMs?: number;
-  };
-};
-
-export type TtsConfig = LegacyTtsConfigCompat & {
+export type TtsConfig = {
   /** Auto-TTS mode (preferred). */
   auto?: TtsAutoMode;
   /** Legacy: enable auto-TTS when `auto` is not set. */

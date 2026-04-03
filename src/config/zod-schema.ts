@@ -181,11 +181,6 @@ const TalkSchema = z
   .object({
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
-    voiceId: z.string().optional(),
-    voiceAliases: z.record(z.string(), z.string()).optional(),
-    modelId: z.string().optional(),
-    outputFormat: z.string().optional(),
-    apiKey: SecretInputSchema.optional().register(sensitive),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
   })
@@ -375,7 +370,6 @@ export const OpenClawSchema = z
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
         ssrfPolicy: z
           .object({
-            allowPrivateNetwork: z.boolean().optional(),
             dangerouslyAllowPrivateNetwork: z.boolean().optional(),
             allowedHostnames: z.array(z.string()).optional(),
             hostnameAllowlist: z.array(z.string()).optional(),

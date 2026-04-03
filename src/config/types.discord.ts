@@ -264,14 +264,8 @@ export type DiscordAccountConfig = {
    * - "partial": edit a single preview message
    * - "block": stream in chunked preview updates
    * - "progress": alias that maps to "partial" on Discord
-   *
-   * Legacy boolean values are still accepted and auto-migrated.
    */
-  streaming?: DiscordStreamMode | boolean;
-  /**
-   * @deprecated Legacy key; migrated automatically to `streaming`.
-   */
-  streamMode?: "partial" | "block" | "off";
+  streaming?: DiscordStreamMode;
   /** Chunking config for Discord stream previews in `streaming: "block"`. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
