@@ -213,68 +213,67 @@ export async function monitorWebSocket({
     botNames.delete(accountId);
   };
 
-  if (abortSignal?.aborted) {
-    cleanup();
-    return;
-  }
-
-  let supervisorAttempt = 0;
-
-  // Supervisor loop: each iteration creates a fresh WSClient and runs it until
-  // either (a) abort is requested or (b) the SDK's internal retry budget is
-  // exhausted. We then back off and start a new cycle.
-  while (!abortSignal?.aborted) {
-    log(
-      `feishu[${accountId}]: starting WebSocket connection... (supervisor cycle ${supervisorAttempt + 1})`,
-    );
-
-    let wsClient: Lark.WSClient;
-    try {
-      wsClient = createFeishuWSClient(account);
-    } catch (err) {
-      // Non-recoverable config error (missing credentials, etc.).
-      cleanup();
-      throw err;
+  try {
+    if (abortSignal?.aborted) {
+      return;
     }
 
-    wsClients.set(accountId, wsClient);
+    let supervisorAttempt = 0;
 
-    try {
-      await runFeishuWSClientUntilDead({
-        wsClient,
-        eventDispatcher,
-        accountId,
-        log,
-        abortSignal,
-      });
-    } finally {
-      // Always close the stale SDK client before creating a fresh one.
+    // Supervisor loop: each iteration creates a fresh WSClient and runs it until
+    // either (a) abort is requested or (b) the SDK's internal retry budget is
+    // exhausted. We then back off and start a new cycle.
+    while (!abortSignal?.aborted) {
+      log(
+        `feishu[${accountId}]: starting WebSocket connection... (supervisor cycle ${supervisorAttempt + 1})`,
+      );
+
+      const wsClient = createFeishuWSClient(account);
+      wsClients.set(accountId, wsClient);
+
       try {
-        wsClient.close({ force: true });
+        await runFeishuWSClientUntilDead({
+          wsClient,
+          eventDispatcher,
+          accountId,
+          log,
+          abortSignal,
+        });
+      } finally {
+        // Always close the stale SDK client before creating a fresh one.
+        // NOTE: @larksuiteoapi/node-sdk's WSClient.reConnect() is known to leak timers
+        // (upstream larksuite/node-sdk#177, tracked in openclaw#40451). close({force:true})
+        // stops processing new events but does not cancel those orphaned timeouts.
+        // This supervisor makes restarts more frequent, so the leak becomes more visible.
+        try {
+          wsClient.close({ force: true });
+        } catch {
+          // Ignore close errors; the new client will start clean.
+        }
+      }
+
+      if (abortSignal?.aborted) {
+        break;
+      }
+
+      supervisorAttempt += 1;
+      const delayMs = computeBackoff(FEISHU_WS_SUPERVISOR_RECONNECT_POLICY, supervisorAttempt);
+      error(
+        `feishu[${accountId}]: WebSocket supervisor restarting (attempt ${supervisorAttempt}) in ${Math.round(delayMs / 1000)}s`,
+      );
+
+      try {
+        await sleepWithAbort(delayMs, abortSignal);
       } catch {
-        // Ignore close errors; the new client will start clean.
+        // Abort during sleep — exit loop.
+        break;
       }
     }
-
-    if (abortSignal?.aborted) {
-      break;
-    }
-
-    supervisorAttempt += 1;
-    const delayMs = computeBackoff(FEISHU_WS_SUPERVISOR_RECONNECT_POLICY, supervisorAttempt);
-    error(
-      `feishu[${accountId}]: WebSocket supervisor restarting (attempt ${supervisorAttempt}) in ${Math.round(delayMs / 1000)}s`,
-    );
-
-    try {
-      await sleepWithAbort(delayMs, abortSignal);
-    } catch {
-      // Abort during sleep — exit loop.
-      break;
-    }
+  } finally {
+    // Ensure we always clean up tracking maps, even if a nested SDK call throws
+    // synchronously (for example inside a Promise executor).
+    cleanup();
   }
-
-  cleanup();
 }
 
 export async function monitorWebhook({
