@@ -125,6 +125,39 @@ describe("applyGroupGating", () => {
     expect(result.shouldProcess).toBe(true);
   });
 
+  it("does not treat self-number quoted replies as implicit mention in selfChatMode groups", () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          selfChatMode: true,
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+    const { result } = runGroupGating({
+      cfg,
+      msg: createGroupMessage({
+        id: "m-self-reply",
+        to: "+15550000",
+        accountId: "default",
+        body: "following up on my own message",
+        timestamp: Date.now(),
+        senderE164: "+15551234567",
+        senderJid: "15551234567@s.whatsapp.net",
+        selfJid: "15551234567@s.whatsapp.net",
+        selfE164: "+15551234567",
+        replyToId: "m0",
+        replyToBody: "my earlier message",
+        replyToSender: "+15551234567",
+        replyToSenderJid: "15551234567@s.whatsapp.net",
+        replyToSenderE164: "+15551234567",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(false);
+  });
+
   it.each([
     { id: "g-new", command: "/new" },
     { id: "g-status", command: "/status" },
