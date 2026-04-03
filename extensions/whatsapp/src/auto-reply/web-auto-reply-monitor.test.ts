@@ -40,6 +40,7 @@ function runGroupGating(params: {
   msg: Record<string, unknown>;
   conversationId?: string;
   agentId?: string;
+  selfChatMode?: boolean;
 }) {
   const groupHistories = new Map<string, GroupHistoryEntry[]>();
   const conversationId = params.conversationId ?? "123@g.us";
@@ -55,6 +56,7 @@ function runGroupGating(params: {
     agentId,
     sessionKey,
     baseMentionConfig,
+    selfChatMode: params.selfChatMode,
     groupHistories,
     groupHistoryLimit: 10,
     groupMemberNames: new Map(),
@@ -137,6 +139,7 @@ describe("applyGroupGating", () => {
     });
     const { result } = runGroupGating({
       cfg,
+      selfChatMode: true,
       msg: createGroupMessage({
         id: "m-self-reply",
         to: "+15550000",
@@ -170,6 +173,7 @@ describe("applyGroupGating", () => {
     });
     const { result } = runGroupGating({
       cfg,
+      selfChatMode: true,
       msg: createGroupMessage({
         id: "m-other-reply",
         to: "+15550000",
@@ -206,8 +210,10 @@ describe("applyGroupGating", () => {
         },
       },
     });
+    // Per-account override: work account has selfChatMode: false despite root being true
     const { result } = runGroupGating({
       cfg,
+      selfChatMode: false,
       msg: createGroupMessage({
         id: "m-account-override",
         to: "+15550000",

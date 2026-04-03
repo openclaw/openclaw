@@ -6,7 +6,6 @@ import {
   getSenderIdentity,
   identitiesOverlap,
 } from "../../identity.js";
-import { resolveWhatsAppAccount } from "../../accounts.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
@@ -41,6 +40,7 @@ type ApplyGroupGatingParams = {
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryLimit: number;
   groupMemberNames: Map<string, Map<string, string>>;
+  selfChatMode?: boolean;
   logVerbose: (msg: string) => void;
   replyLogger: { debug: (obj: unknown, msg: string) => void };
 };
@@ -144,16 +144,14 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   });
   const requireMention = activation !== "always";
   const replyContext = getReplyContext(params.msg, params.authDir);
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
-  const sharedNumberSelfChat = account.selfChatMode === true;
+  const sharedNumberSelfChat = params.selfChatMode === true;
   // Detect reply-to-bot: compare JIDs, LIDs, and E.164 numbers.
   // WhatsApp may report the quoted message sender as either a phone JID
   // (xxxxx@s.whatsapp.net) or a LID (xxxxx@lid), so we compare both.
   // But in shared-number/selfChatMode setups, replies from the same self number
   // should not count as implicit bot mentions unless the message explicitly
   // mentioned the bot in text.
-  const implicitReplyToSelf =
-    sharedNumberSelfChat && identitiesOverlap(self, sender);
+  const implicitReplyToSelf = sharedNumberSelfChat && identitiesOverlap(self, sender);
   const implicitMention = !implicitReplyToSelf && identitiesOverlap(self, replyContext?.sender);
   const mentionGate = resolveMentionGating({
     requireMention,
