@@ -1,3 +1,4 @@
+import { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
@@ -114,6 +115,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
+  const typingEmoji = resolveAckReaction(cfg, agentId, {
+    channel: "feishu",
+    accountId,
+    channelDefault: "Typing",
+  });
   let typingState: TypingIndicatorState | null = null;
   const { typingCallbacks } = createChannelReplyPipeline({
     cfg,
@@ -149,6 +155,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           messageId: replyToMessageId,
           accountId,
           runtime: params.runtime,
+          emoji: typingEmoji,
         });
       },
       stop: async () => {

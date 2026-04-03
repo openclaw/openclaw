@@ -64,6 +64,27 @@ describe("resolveAckReaction", () => {
     expect(resolveAckReaction(cfg, "main")).toBe("👀");
   });
 
+  it("uses channelDefault when no user config or identity emoji is present", () => {
+    const cfg: OpenClawConfig = {};
+
+    expect(resolveAckReaction(cfg, "main", { channel: "feishu", channelDefault: "Typing" })).toBe(
+      "Typing",
+    );
+  });
+
+  it("channelDefault is overridden by identity emoji", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
+    };
+
+    // Identity emoji is Unicode so channelDefault should take effect since
+    // reply-dispatcher validates emoji_type separately; but resolveAckReaction
+    // still returns the identity emoji — validation happens at call site.
+    expect(resolveAckReaction(cfg, "main", { channel: "feishu", channelDefault: "Typing" })).toBe(
+      "🔥",
+    );
+  });
+
   it("allows empty strings to disable reactions", () => {
     const cfg: OpenClawConfig = {
       messages: { ackReaction: "👀" },

@@ -8,6 +8,7 @@ type StreamingSessionStub = {
   isActive: ReturnType<typeof vi.fn>;
 };
 
+const resolveAckReactionMock = vi.hoisted(() => vi.fn(() => "Typing"));
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
@@ -48,6 +49,9 @@ function mergeStreamingText(
   return `${previous}${next}`;
 }
 
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  resolveAckReaction: resolveAckReactionMock,
+}));
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
   resolveFeishuRuntimeAccount: resolveFeishuAccountMock,

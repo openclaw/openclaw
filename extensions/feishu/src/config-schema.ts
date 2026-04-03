@@ -182,6 +182,11 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  /** Emoji type name (Feishu API format, e.g. "THUMBSUP", "Celebrate") to use as the
+   * typing indicator reaction. Follows the same priority chain as other channels:
+   * account → channel → messages.ackReaction → identity.emoji → "Typing" (Feishu default).
+   * See: https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce */
+  ackReaction: z.string().optional(),
 };
 
 /**
