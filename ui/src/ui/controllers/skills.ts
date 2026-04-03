@@ -209,6 +209,7 @@ export async function searchClawHub(state: SkillsState, query: string) {
   if (!query.trim()) {
     state.clawhubSearchResults = null;
     state.clawhubSearchError = null;
+    state.clawhubSearchLoading = false;
     return;
   }
   state.clawhubSearchLoading = true;
@@ -260,6 +261,7 @@ export function closeClawHubDetail(state: SkillsState) {
   state.clawhubDetailSlug = null;
   state.clawhubDetail = null;
   state.clawhubDetailError = null;
+  state.clawhubDetailLoading = false;
 }
 
 export async function installFromClawHub(state: SkillsState, slug: string) {
