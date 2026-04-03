@@ -9,13 +9,19 @@
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ListResourcesRequestSchema,
+  ListToolsRequestSchema,
+  ReadResourceRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { VERSION } from "../version.js";
+import { resolvePluginResources, type McpResourceDefinition } from "./plugin-resources.js";
 
 function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
   const params = tool.parameters;
@@ -37,19 +43,27 @@ export function createPluginToolsMcpServer(
   params: {
     config?: OpenClawConfig;
     tools?: AnyAgentTool[];
+    resources?: McpResourceDefinition[];
   } = {},
 ): Server {
   const cfg = params.config ?? loadConfig();
   const tools = params.tools ?? resolveTools(cfg);
+  const resources =
+    params.resources ?? resolvePluginResources({ config: cfg, tools });
 
   const toolMap = new Map<string, AnyAgentTool>();
   for (const tool of tools) {
     toolMap.set(tool.name, tool);
   }
 
+  const resourceMap = new Map<string, McpResourceDefinition>();
+  for (const resource of resources) {
+    resourceMap.set(resource.uri, resource);
+  }
+
   const server = new Server(
     { name: "openclaw-plugin-tools", version: VERSION },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {}, resources: {} } },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -85,6 +99,31 @@ export function createPluginToolsMcpServer(
     }
   });
 
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: resources.map((resource) => ({
+      uri: resource.uri,
+      name: resource.name,
+      description: resource.description,
+      mimeType: resource.mimeType,
+    })),
+  }));
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const resource = resourceMap.get(request.params.uri);
+    if (!resource) {
+      throw new Error(`Unknown resource: ${request.params.uri}`);
+    }
+    return {
+      contents: [
+        {
+          uri: resource.uri,
+          mimeType: resource.mimeType,
+          text: resource.read(),
+        },
+      ],
+    };
+  });
+
   return server;
 }
 
@@ -94,9 +133,13 @@ export async function servePluginToolsMcp(): Promise<void> {
 
   const config = loadConfig();
   const tools = resolveTools(config);
-  const server = createPluginToolsMcpServer({ config, tools });
+  const resources = resolvePluginResources({ config, tools });
+  const server = createPluginToolsMcpServer({ config, tools, resources });
   if (tools.length === 0) {
     process.stderr.write("plugin-tools-serve: no plugin tools found\n");
+  }
+  if (resources.length > 0) {
+    process.stderr.write(`plugin-tools-serve: ${resources.length} resources available\n`);
   }
 
   const transport = new StdioServerTransport();
