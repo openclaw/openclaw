@@ -135,18 +135,22 @@ describe("mattermost websocket monitor", () => {
             return;
           }
           socket.emitOpen();
-          socket.emitClose(1000);
         });
         return socket;
       },
     });
 
-    await runWithReconnect(connectOnce, {
+    const run = runWithReconnect(connectOnce, {
       initialDelayMs: 1,
       onError,
       onReconnect: (delay) => reconnectDelays.push(delay),
-      shouldReconnect: ({ outcome }) => outcome === "rejected",
+      shouldReconnect: ({ attempt, outcome }) => outcome === "rejected" && attempt === 0,
     });
+
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    await vi.waitFor(() => expect(sockets[1]?.sent).toHaveLength(1));
+    sockets[1]?.emitClose(1000);
+    await run;
 
     expect(sockets).toHaveLength(2);
     expect(sockets[0].closeCalls).toBe(1);

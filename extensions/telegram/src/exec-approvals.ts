@@ -31,7 +31,15 @@ export function resolveTelegramExecApprovalConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): TelegramExecApprovalConfig | undefined {
-  return resolveTelegramAccount(params).config.execApprovals;
+  const account = resolveTelegramAccount(params);
+  const config = account.config.execApprovals;
+  if (!config) {
+    return undefined;
+  }
+  return {
+    ...config,
+    enabled: account.enabled && account.tokenSource !== "none" && config.enabled === true,
+  };
 }
 
 export function getTelegramExecApprovalApprovers(params: {

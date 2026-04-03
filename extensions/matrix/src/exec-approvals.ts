@@ -29,13 +29,14 @@ function resolveMatrixExecApprovalConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
-  const config = resolveMatrixAccount(params).config.execApprovals;
+  const account = resolveMatrixAccount(params);
+  const config = account.config.execApprovals;
   if (!config) {
     return { enabled: false } as const;
   }
   return {
     ...config,
-    enabled: config.enabled === true,
+    enabled: account.enabled && account.configured && config.enabled === true,
   };
 }
 
