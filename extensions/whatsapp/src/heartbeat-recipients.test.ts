@@ -43,15 +43,31 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
     vi.resetModules();
     loadSessionStoreMock.mockReset();
     readChannelAllowFromStoreSyncMock.mockReset();
-    vi.doMock("../../../src/config/sessions/store-summary.js", () => ({
-      loadSessionStoreSummary: loadSessionStoreMock,
-    }));
-    vi.doMock("../../../src/config/sessions/paths.js", () => ({
-      resolveStorePath: vi.fn(() => "/tmp/test-sessions.json"),
-    }));
-    vi.doMock("../../../src/pairing/pairing-store.js", () => ({
-      readChannelAllowFromStoreSync: readChannelAllowFromStoreSyncMock,
-    }));
+    vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+      return {
+        ...actual,
+        loadSessionStore: loadSessionStoreMock,
+        resolveStorePath: vi.fn(() => "/tmp/test-sessions.json"),
+      };
+    });
+    vi.doMock("openclaw/plugin-sdk/channel-pairing", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-pairing")>();
+      return {
+        ...actual,
+        readChannelAllowFromStoreSync: readChannelAllowFromStoreSyncMock,
+      };
+    });
+    vi.doMock("openclaw/plugin-sdk/channel-targets", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-targets")>();
+      return {
+        ...actual,
+        normalizeChannelId: (value?: string | null) => {
+          const trimmed = value?.trim().toLowerCase();
+          return trimmed ? (trimmed as "whatsapp") : null;
+        },
+      };
+    });
     ({ resolveWhatsAppHeartbeatRecipients } = await import("./runtime-api.js"));
     setAllowFromStore([]);
   });

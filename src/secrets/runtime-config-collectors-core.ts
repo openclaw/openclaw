@@ -1,4 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import {
+  matchesMediaEntryCapability,
+  resolveEffectiveMediaEntryCapabilities,
+} from "../media-understanding/entry-capabilities.js";
+import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
@@ -11,12 +17,20 @@ import { isRecord } from "./shared.js";
 type ProviderLike = {
   apiKey?: unknown;
   headers?: unknown;
+  request?: unknown;
   enabled?: unknown;
 };
 
 type SkillEntryLike = {
   apiKey?: unknown;
   enabled?: unknown;
+};
+
+type ProviderRequestLike = {
+  headers?: unknown;
+  auth?: unknown;
+  proxy?: unknown;
+  tls?: unknown;
 };
 
 function collectModelProviderAssignments(params: {
@@ -39,21 +53,33 @@ function collectModelProviderAssignments(params: {
       },
     });
     const headers = isRecord(provider.headers) ? provider.headers : undefined;
-    if (!headers) {
-      continue;
+    if (headers) {
+      for (const [headerKey, headerValue] of Object.entries(headers)) {
+        collectSecretInputAssignment({
+          value: headerValue,
+          path: `models.providers.${providerId}.headers.${headerKey}`,
+          expected: "string",
+          defaults: params.defaults,
+          context: params.context,
+          active: providerIsActive,
+          inactiveReason: "provider is disabled.",
+          apply: (value) => {
+            headers[headerKey] = value;
+          },
+        });
+      }
     }
-    for (const [headerKey, headerValue] of Object.entries(headers)) {
-      collectSecretInputAssignment({
-        value: headerValue,
-        path: `models.providers.${providerId}.headers.${headerKey}`,
-        expected: "string",
+
+    const request = isRecord(provider.request) ? provider.request : undefined;
+    if (request) {
+      collectProviderRequestAssignments({
+        request,
+        pathPrefix: `models.providers.${providerId}.request`,
         defaults: params.defaults,
         context: params.context,
         active: providerIsActive,
         inactiveReason: "provider is disabled.",
-        apply: (value) => {
-          headers[headerKey] = value;
-        },
+        collectTransportSecrets: false,
       });
     }
   }
@@ -275,6 +301,187 @@ function collectGatewayAssignments(params: {
   }
 }
 
+function collectProviderRequestAssignments(params: {
+  request: ProviderRequestLike;
+  pathPrefix: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  active?: boolean;
+  inactiveReason?: string;
+  collectTransportSecrets?: boolean;
+}): void {
+  const headers = isRecord(params.request.headers) ? params.request.headers : undefined;
+  if (headers) {
+    for (const [headerKey, headerValue] of Object.entries(headers)) {
+      collectSecretInputAssignment({
+        value: headerValue,
+        path: `${params.pathPrefix}.headers.${headerKey}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: params.active,
+        inactiveReason: params.inactiveReason,
+        apply: (value) => {
+          headers[headerKey] = value;
+        },
+      });
+    }
+  }
+
+  const auth = isRecord(params.request.auth) ? params.request.auth : undefined;
+  if (auth) {
+    collectSecretInputAssignment({
+      value: auth.token,
+      path: `${params.pathPrefix}.auth.token`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      apply: (value) => {
+        auth.token = value;
+      },
+    });
+    collectSecretInputAssignment({
+      value: auth.value,
+      path: `${params.pathPrefix}.auth.value`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      apply: (value) => {
+        auth.value = value;
+      },
+    });
+  }
+
+  const collectTlsAssignments = (tls: Record<string, unknown> | undefined, pathPrefix: string) => {
+    if (!tls) {
+      return;
+    }
+    for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+      collectSecretInputAssignment({
+        value: tls[key],
+        path: `${pathPrefix}.${key}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: params.active,
+        inactiveReason: params.inactiveReason,
+        apply: (value) => {
+          tls[key] = value;
+        },
+      });
+    }
+  };
+
+  if (params.collectTransportSecrets !== false) {
+    collectTlsAssignments(
+      isRecord(params.request.tls) ? params.request.tls : undefined,
+      `${params.pathPrefix}.tls`,
+    );
+    const proxy = isRecord(params.request.proxy) ? params.request.proxy : undefined;
+    collectTlsAssignments(
+      isRecord(proxy?.tls) ? proxy.tls : undefined,
+      `${params.pathPrefix}.proxy.tls`,
+    );
+  }
+}
+
+function collectMediaRequestAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const tools = isRecord(params.config.tools) ? params.config.tools : undefined;
+  const media = isRecord(tools?.media) ? tools.media : undefined;
+  if (!media) {
+    return;
+  }
+
+  const providerRegistry = buildMediaUnderstandingRegistry(undefined, params.config);
+  const capabilityKeys = ["audio", "image", "video"] as const;
+  const isCapabilityEnabled = (capability: (typeof capabilityKeys)[number]) =>
+    (isRecord(media[capability]) ? media[capability] : undefined)?.enabled !== false;
+
+  const collectModelAssignments = (
+    models: unknown,
+    pathPrefix: string,
+    resolveActivity: (rawModel: Record<string, unknown>) => {
+      active: boolean;
+      inactiveReason: string;
+    },
+  ) => {
+    if (!Array.isArray(models)) {
+      return;
+    }
+    models.forEach((rawModel, index) => {
+      if (!isRecord(rawModel) || !isRecord(rawModel.request)) {
+        return;
+      }
+      const { active, inactiveReason } = resolveActivity(rawModel);
+      collectProviderRequestAssignments({
+        request: rawModel.request,
+        pathPrefix: `${pathPrefix}.${index}.request`,
+        defaults: params.defaults,
+        context: params.context,
+        active,
+        inactiveReason,
+      });
+    });
+  };
+
+  collectModelAssignments(media.models, "tools.media.models", (rawModel) => {
+    const entry = rawModel as MediaUnderstandingModelConfig;
+    const capabilities = resolveEffectiveMediaEntryCapabilities({
+      entry,
+      source: "shared",
+      providerRegistry,
+    });
+    if (!capabilities || capabilities.length === 0) {
+      return {
+        active: false,
+        inactiveReason:
+          "shared media model does not declare capabilities and none could be inferred from its provider.",
+      };
+    }
+    return {
+      active: capabilities.some((capability) => isCapabilityEnabled(capability)),
+      inactiveReason: `all configured media capabilities for this shared model are disabled: ${capabilities.join(", ")}.`,
+    };
+  });
+
+  for (const capability of capabilityKeys) {
+    const section = isRecord(media[capability]) ? media[capability] : undefined;
+    const active = isCapabilityEnabled(capability);
+    const inactiveReason = `${capability} media understanding is disabled.`;
+    if (section && isRecord(section.request)) {
+      collectProviderRequestAssignments({
+        request: section.request,
+        pathPrefix: `tools.media.${capability}.request`,
+        defaults: params.defaults,
+        context: params.context,
+        active,
+        inactiveReason,
+      });
+    }
+    collectModelAssignments(section?.models, `tools.media.${capability}.models`, (rawModel) => ({
+      active:
+        active &&
+        matchesMediaEntryCapability({
+          entry: rawModel as MediaUnderstandingModelConfig,
+          source: "capability",
+          capability,
+          providerRegistry,
+        }),
+      inactiveReason: active
+        ? `${capability} media model is filtered out by its configured capabilities.`
+        : inactiveReason,
+    }));
+  }
+}
+
 function collectMessagesTtsAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -426,4 +633,5 @@ export function collectCoreConfigAssignments(params: {
   collectSandboxSshAssignments(params);
   collectMessagesTtsAssignments(params);
   collectCronAssignments(params);
+  collectMediaRequestAssignments(params);
 }

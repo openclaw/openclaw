@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
@@ -101,12 +101,11 @@ async function expectLegacyFeishuCardPayloadRejected(cfg: OpenClawConfig, card: 
   expect(sendCardFeishuMock).not.toHaveBeenCalled();
 }
 
-describe("feishuPlugin.status.probeAccount", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ feishuPlugin } = await import("./channel.js"));
-  });
+beforeAll(async () => {
+  ({ feishuPlugin } = await import("./channel.js"));
+});
 
+describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
       channels: {
@@ -145,9 +144,7 @@ describe("feishuPlugin.status.probeAccount", () => {
 });
 
 describe("feishuPlugin.pairing.notifyApproval", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ feishuPlugin } = await import("./channel.js"));
+  beforeEach(() => {
     sendMessageFeishuMock.mockReset();
     sendMessageFeishuMock.mockResolvedValue({ messageId: "pairing-msg", chatId: "ou_user" });
   });
@@ -184,11 +181,6 @@ describe("feishuPlugin.pairing.notifyApproval", () => {
 });
 
 describe("feishuPlugin messaging", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ feishuPlugin } = await import("./channel.js"));
-  });
-
   it("owns sender/topic session inheritance candidates", () => {
     expect(
       feishuPlugin.messaging?.resolveSessionConversation?.({
