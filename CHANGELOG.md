@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 - MS Teams/threading: preserve channel reply threading when proactive fallback reconstructs the conversation ID, so thread replies land in the originating thread instead of the channel root. (#55198) Thanks @hyojin.
 - Gateway/lock: detect PID recycling in gateway lock files on Windows and macOS so stale locks from crashed processes no longer block new gateway invocations. (#59843) Thanks @TonyDerek-dot.
 - Plugins/Ollama: prefer real cloud auth credentials over the local-only marker so Ollama instances behind authenticated proxies use the configured API key instead of skipping auth.
+- Plugins/Kimi Coding: parse tagged Kimi tool-call text into structured tool calls on the provider stream path so tools execute instead of echoing raw markup. (#60051) Thanks @obviyus.
 
 ## 2026.4.2
 
