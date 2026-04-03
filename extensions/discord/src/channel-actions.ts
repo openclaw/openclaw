@@ -9,7 +9,11 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
-import { createDiscordActionGate, listEnabledDiscordAccounts } from "./accounts.js";
+import {
+  createDiscordActionGate,
+  listEnabledDiscordAccounts,
+  resolveDiscordAccount,
+} from "./accounts.js";
 import { handleDiscordMessageAction } from "./actions/handle-action.js";
 import { createDiscordMessageToolComponentsSchema } from "./message-tool-schema.js";
 
@@ -30,12 +34,33 @@ function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscord
   };
 }
 
+function resolveScopedDiscordActionDiscovery(params: {
+  cfg: Parameters<typeof listEnabledDiscordAccounts>[0];
+  accountId?: string | null;
+}) {
+  if (!params.accountId) {
+    return resolveDiscordActionDiscovery(params.cfg);
+  }
+  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  if (!account.enabled || !account.token.trim()) {
+    return null;
+  }
+  const gate = createDiscordActionGate({
+    cfg: params.cfg,
+    accountId: account.accountId,
+  });
+  return {
+    isEnabled: (key: keyof DiscordActionConfig, defaultValue = true) => gate(key, defaultValue),
+  };
+}
+
 function describeDiscordMessageTool({
   cfg,
+  accountId,
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const discovery = resolveDiscordActionDiscovery(cfg);
+  const discovery = resolveScopedDiscordActionDiscovery({ cfg, accountId });
   if (!discovery) {
     return {
       actions: [],
