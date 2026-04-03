@@ -41,6 +41,12 @@ function findExtensionImports(source: string): string[] {
   ].map((match) => match[1]);
 }
 
+function isAllowedExtensionPublicImport(specifier: string): boolean {
+  return /(?:^|\/)extensions\/[^/]+\/(?:api|index|runtime-api|setup-entry|login-qr-api)\.js$/u.test(
+    specifier,
+  );
+}
+
 function findPluginSdkImports(source: string): string[] {
   return [
     ...source.matchAll(/from\s+["']((?:\.\.\/)+plugin-sdk\/[^"']+)["']/g),
@@ -78,7 +84,9 @@ describe("non-extension test boundaries", () => {
     const offenders = testFiles
       .map((file) => {
         const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-        const imports = findExtensionImports(source);
+        const imports = findExtensionImports(source).filter(
+          (specifier) => !isAllowedExtensionPublicImport(specifier),
+        );
         if (imports.length === 0) {
           return null;
         }

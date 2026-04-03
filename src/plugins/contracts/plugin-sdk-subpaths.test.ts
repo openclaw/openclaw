@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -45,8 +45,9 @@ import { pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import type { OpenClawPluginApi } from "../types.js";
 
-const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const PLUGIN_SDK_DIR = resolve(ROOT_DIR, "plugin-sdk");
+const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const REPO_ROOT = resolve(SRC_ROOT, "..");
+const PLUGIN_SDK_DIR = resolve(SRC_ROOT, "plugin-sdk");
 const sourceCache = new Map<string, string>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
 
@@ -61,6 +62,39 @@ function readPluginSdkSource(subpath: string): string {
   const text = readFileSync(file, "utf8");
   sourceCache.set(file, text);
   return text;
+}
+
+function listRepoTsFiles(dir: string): string[] {
+  const entries = readdirSync(dir, { withFileTypes: true });
+  return entries.flatMap((entry) => {
+    const absolute = resolve(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "dist" || entry.name === "node_modules") {
+        return [];
+      }
+      return listRepoTsFiles(absolute);
+    }
+    if (!entry.isFile()) {
+      return [];
+    }
+    return absolute.endsWith(".ts") ? [absolute] : [];
+  });
+}
+
+function findRepoFilesContaining(params: {
+  roots: readonly string[];
+  pattern: RegExp;
+  exclude?: readonly string[];
+  excludeFilesMatching?: readonly RegExp[];
+}) {
+  const excluded = new Set((params.exclude ?? []).map((entry) => resolve(REPO_ROOT, entry)));
+  return params.roots
+    .flatMap((root) => listRepoTsFiles(root))
+    .filter((file) => !excluded.has(file))
+    .filter((file) => !(params.excludeFilesMatching ?? []).some((pattern) => pattern.test(file)))
+    .filter((file) => params.pattern.test(readFileSync(file, "utf8")))
+    .map((file) => file.slice(REPO_ROOT.length + 1))
+    .toSorted();
 }
 
 function isIdentifierCode(code: number): boolean {
@@ -319,6 +353,33 @@ describe("plugin-sdk subpath exports", () => {
       "memory-core-host-runtime-files",
       'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
     );
+  });
+
+  it("keeps the deprecated channel-runtime shim unused in repo imports", () => {
+    const matches = findRepoFilesContaining({
+      roots: [
+        resolve(REPO_ROOT, "src"),
+        resolve(REPO_ROOT, "extensions"),
+        resolve(REPO_ROOT, "test"),
+      ],
+      pattern: /openclaw\/plugin-sdk\/channel-runtime/u,
+      exclude: ["src/plugins/sdk-alias.test.ts"],
+    });
+    expect(matches).toEqual([]);
+  });
+
+  it("keeps removed channel-named runtime boundaries out of core imports", () => {
+    const matches = findRepoFilesContaining({
+      roots: [resolve(REPO_ROOT, "src")],
+      pattern:
+        /plugins\/runtime\/runtime-(?:discord|imessage|line|signal|slack|telegram|whatsapp)(?:[-.][^"']*)?\.js/u,
+      exclude: [
+        "src/plugins/runtime/runtime-plugin-boundary.ts",
+        "src/plugins/runtime/runtime-web-channel-boundary.ts",
+      ],
+      excludeFilesMatching: [/\.test\.ts$/u, /\.test-harness\.ts$/u],
+    });
+    expect(matches).toEqual([]);
   });
 
   it("exports channel runtime helpers from the dedicated subpath", () => {
