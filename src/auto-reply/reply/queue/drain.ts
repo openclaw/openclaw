@@ -108,6 +108,18 @@ export function scheduleFollowupDrain(
             run: effectiveRunFollowup,
           });
           if (collectDrainResult === "empty") {
+            const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+            const run = queue.lastRun;
+            if (summaryPrompt && run) {
+              await effectiveRunFollowup({
+                execution: { visibility: "internal", agentPrompt: summaryPrompt },
+                display: { visibility: "user-visible", text: summaryPrompt },
+                run,
+                enqueuedAt: Date.now(),
+              });
+              clearQueueSummaryState(queue);
+              continue;
+            }
             break;
           }
           if (collectDrainResult === "drained") {

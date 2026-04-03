@@ -1580,6 +1580,34 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.execution.agentPrompt).toBe("second hidden item");
   });
 
+  it("emits summarize overflow when forced individual collect drain empties queued items", async () => {
+    const key = `test-followup-forced-individual-empty-overflow-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= 2) {
+        done.resolve();
+      }
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "first hidden item" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "second hidden item" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.execution.agentPrompt).toContain("[Queue overflow]");
+    expect(calls[0]?.execution.agentPrompt).toContain("[Hidden message]");
+    expect(calls[1]?.execution.agentPrompt).toBe("second hidden item");
+  });
+
   it("does not retry already-run collect fallback items after a later failure", async () => {
     const key = `test-collect-fallback-progress-${Date.now()}`;
     const calls: FollowupRun[] = [];
