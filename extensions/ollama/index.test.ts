@@ -573,17 +573,36 @@ describe("ollama plugin", () => {
       }
     });
 
-    it("returns undefined for HTTPS endpoints", () => {
+    it("returns undefined for HTTPS endpoints on public hosts", () => {
       const provider = registerProvider();
       for (const baseUrl of [
         "https://ollama.com",
         "https://my-ollama.example.com:11434",
-        "https://ollama-cloud.internal:443",
+        "https://cloud.ollama.ai",
       ]) {
         const result = provider.resolveSyntheticAuth?.({
           providerConfig: { baseUrl, api: "ollama", models: [] },
         });
         expect(result).toBeUndefined();
+      }
+    });
+
+    it("returns synthetic auth for HTTPS endpoints on private/local hosts", () => {
+      const provider = registerProvider();
+      for (const baseUrl of [
+        "https://localhost:11434",
+        "https://192.168.1.100:11434",
+        "https://10.0.0.5:11434",
+        "https://ollama.local:443",
+        "https://ollama.internal:443",
+        "https://gpu-node-server:11434",
+      ]) {
+        const result = provider.resolveSyntheticAuth?.({
+          providerConfig: { baseUrl, api: "ollama", models: [] },
+        });
+        expect(result).toEqual(
+          expect.objectContaining({ apiKey: "ollama-local", mode: "api-key" }),
+        );
       }
     });
 

@@ -287,16 +287,28 @@ export default definePluginEntry({
           return undefined;
         }
         // Only provide synthetic "ollama-local" auth for local/LAN instances.
-        // HTTPS endpoints (e.g. Ollama Cloud) require real credentials;
+        // Remote HTTPS endpoints (e.g. Ollama Cloud) require real credentials;
         // returning undefined forces the auth pipeline to resolve a real key.
-        // HTTP endpoints (localhost, LAN IPs, bare hostnames) get synthetic
-        // auth since local Ollama instances don't require authentication.
+        // HTTPS endpoints on local/private hosts (e.g. reverse-proxied Ollama)
+        // still get synthetic auth since they don't require Cloud credentials.
         const baseUrl = providerConfig?.baseUrl?.trim();
         if (baseUrl) {
           try {
             const parsed = new URL(baseUrl);
             if (parsed.protocol === "https:") {
-              return undefined;
+              const host = parsed.hostname.toLowerCase();
+              const isPrivateHost =
+                host === "localhost" ||
+                host === "127.0.0.1" ||
+                host === "0.0.0.0" ||
+                host === "[::1]" ||
+                host.endsWith(".local") ||
+                host.endsWith(".internal") ||
+                !host.includes(".") ||
+                /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(host);
+              if (!isPrivateHost) {
+                return undefined;
+              }
             }
           } catch {
             // invalid URL — fall through to synthetic auth
