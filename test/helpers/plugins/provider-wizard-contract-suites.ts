@@ -4,12 +4,12 @@ import {
   resolveProviderModelPickerEntries,
   resolveProviderPluginChoice,
   resolveProviderWizardOptions,
-} from "../provider-wizard.js";
-import type { ProviderAuthMethod, ProviderPlugin } from "../types.js";
+} from "../../../src/plugins/provider-wizard.js";
+import type { ProviderAuthMethod, ProviderPlugin } from "../../../src/plugins/types.js";
 
 const resolvePluginProvidersMock = vi.fn();
 
-vi.mock("../providers.runtime.js", () => ({
+vi.mock("../../../src/plugins/providers.runtime.js", () => ({
   resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
 }));
 
@@ -171,58 +171,68 @@ function expectAllChoicesResolve(
   ).toBe(true);
 }
 
-describe("provider wizard contract", () => {
-  beforeEach(() => {
-    resolvePluginProvidersMock.mockReset();
-    resolvePluginProvidersMock.mockReturnValue(TEST_PROVIDERS);
-  });
+beforeEach(() => {
+  resolvePluginProvidersMock.mockReset();
+  resolvePluginProvidersMock.mockReturnValue(TEST_PROVIDERS);
+});
 
-  it("exposes every wizard setup choice through the shared wizard layer", () => {
-    const options = resolveProviderWizardOptions({
-      config: {
-        plugins: {
-          enabled: true,
-          allow: TEST_PROVIDER_IDS,
-          slots: {
-            memory: "none",
+export function describeProviderWizardSetupOptionsContract() {
+  describe("provider wizard setup options contract", () => {
+    it("exposes every wizard setup choice through the shared wizard layer", () => {
+      const options = resolveProviderWizardOptions({
+        config: {
+          plugins: {
+            enabled: true,
+            allow: TEST_PROVIDER_IDS,
+            slots: {
+              memory: "none",
+            },
           },
         },
-      },
-      env: process.env,
+        env: process.env,
+      });
+
+      expect(sortedValues(options.map((option) => option.value))).toEqual(
+        resolveExpectedWizardChoiceValues(TEST_PROVIDERS),
+      );
+      expectUniqueValues(options.map((option) => option.value));
     });
-
-    expect(sortedValues(options.map((option) => option.value))).toEqual(
-      resolveExpectedWizardChoiceValues(TEST_PROVIDERS),
-    );
-    expectUniqueValues(options.map((option) => option.value));
   });
+}
 
-  it("round-trips every shared wizard choice back to its provider and auth method", () => {
-    const options = resolveProviderWizardOptions({ config: {}, env: process.env });
+export function describeProviderWizardChoiceResolutionContract() {
+  describe("provider wizard choice resolution contract", () => {
+    it("round-trips every shared wizard choice back to its provider and auth method", () => {
+      const options = resolveProviderWizardOptions({ config: {}, env: process.env });
 
-    expectAllChoicesResolve(
-      options.map((option) => option.value),
-      (choice) =>
-        resolveProviderPluginChoice({
-          providers: TEST_PROVIDERS,
-          choice,
-        }),
-    );
+      expectAllChoicesResolve(
+        options.map((option) => option.value),
+        (choice) =>
+          resolveProviderPluginChoice({
+            providers: TEST_PROVIDERS,
+            choice,
+          }),
+      );
+    });
   });
+}
 
-  it("exposes every model-picker entry through the shared wizard layer", () => {
-    const entries = resolveProviderModelPickerEntries({ config: {}, env: process.env });
+export function describeProviderWizardModelPickerContract() {
+  describe("provider wizard model picker contract", () => {
+    it("exposes every model-picker entry through the shared wizard layer", () => {
+      const entries = resolveProviderModelPickerEntries({ config: {}, env: process.env });
 
-    expect(sortedValues(entries.map((entry) => entry.value))).toEqual(
-      resolveExpectedModelPickerValues(TEST_PROVIDERS),
-    );
-    expectAllChoicesResolve(
-      entries.map((entry) => entry.value),
-      (choice) =>
-        resolveProviderPluginChoice({
-          providers: TEST_PROVIDERS,
-          choice,
-        }),
-    );
+      expect(sortedValues(entries.map((entry) => entry.value))).toEqual(
+        resolveExpectedModelPickerValues(TEST_PROVIDERS),
+      );
+      expectAllChoicesResolve(
+        entries.map((entry) => entry.value),
+        (choice) =>
+          resolveProviderPluginChoice({
+            providers: TEST_PROVIDERS,
+            choice,
+          }),
+      );
+    });
   });
-});
+}
