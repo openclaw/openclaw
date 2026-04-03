@@ -218,8 +218,14 @@ export async function searchClawHub(state: SkillsState, query: string) {
       query,
       limit: 20,
     });
+    if (query !== state.clawhubSearchQuery) {
+      return;
+    }
     state.clawhubSearchResults = res?.results ?? [];
   } catch (err) {
+    if (query !== state.clawhubSearchQuery) {
+      return;
+    }
     state.clawhubSearchError = getErrorMessage(err);
   } finally {
     state.clawhubSearchLoading = false;
@@ -236,8 +242,14 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
   state.clawhubDetail = null;
   try {
     const res = await state.client.request<ClawHubSkillDetail>("skills.detail", { slug });
+    if (slug !== state.clawhubDetailSlug) {
+      return;
+    }
     state.clawhubDetail = res ?? null;
   } catch (err) {
+    if (slug !== state.clawhubDetailSlug) {
+      return;
+    }
     state.clawhubDetailError = getErrorMessage(err);
   } finally {
     state.clawhubDetailLoading = false;
