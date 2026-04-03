@@ -433,6 +433,9 @@ Current deterministic manager action matrix:
   - `next_step = check_selected_model_config`
 - `selected_model_mismatch` + repeated mismatch / `skip_restart_repeated_mismatch`
   - `manager_action = stop_and_surface_diff`
+- `selected_model_mismatch` without repeated mismatch
+  - `manager_action = configure_model`
+  - `next_step = check_selected_model_config`
 - `gpu_not_ready`
   - `manager_action = configure_gpu_runtime`
 - `nim_not_ready`
@@ -468,6 +471,10 @@ For model remediation, the manager now distinguishes:
   - `retry_once`
 - `selected_model_not_ready` when retry is not allowed
   - `configure_model`
+- `selected_model_mismatch` when the mismatch is not yet repeated
+  - `configure_model`
+- `selected_model_mismatch` when the same diff repeats
+  - `stop_and_surface_diff`
 - `model_not_ready`
   - `configure_model`
 

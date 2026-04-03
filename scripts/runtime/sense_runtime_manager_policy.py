@@ -286,6 +286,24 @@ def main() -> int:
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
+    if final_state == 'selected_model_mismatch':
+        output = build_policy_output(
+            manager_action='configure_model',
+            manager_reason='selected model differs from configured selected model and model remediation should continue before runtime work',
+            next_step='check_selected_model_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'selected_model_mismatch_configure_model',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'configure_model',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
     if final_state == 'model_not_ready':
         output = build_policy_output(
             manager_action='configure_model',
@@ -360,7 +378,6 @@ def main() -> int:
         return 0
 
     if final_state in {
-        'selected_model_mismatch',
     }:
         output = build_policy_output(
             manager_action='manual_review',
