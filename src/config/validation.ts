@@ -832,6 +832,7 @@ function validateConfigObjectWithPluginsBase(
   const { registry } = ensureRegistry();
   const knownIds = ensureKnownIds();
   const normalizedPlugins = ensureNormalizedPlugins();
+  const effectiveConfig = ensureCompatConfig();
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
@@ -918,7 +919,7 @@ function validateConfigObjectWithPluginsBase(
       id: pluginId,
       origin: record.origin,
       config: normalizedPlugins,
-      rootConfig: config,
+      rootConfig: effectiveConfig,
     });
     let enabled = activationState.activated;
     let reason = activationState.reason;
