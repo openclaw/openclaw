@@ -206,6 +206,27 @@ describe("provider attribution", () => {
     });
   });
 
+  it("classifies native Mistral hosts centrally", () => {
+    expect(resolveProviderEndpoint("https://api.mistral.ai/v1")).toMatchObject({
+      endpointClass: "mistral-public",
+      hostname: "api.mistral.ai",
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "mistral",
+        api: "openai-completions",
+        baseUrl: "https://api.mistral.ai/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "mistral-public",
+      isKnownNativeEndpoint: true,
+      knownProviderFamily: "mistral",
+    });
+  });
+
   it("treats OpenRouter-hosted Responses routes as explicit proxy-like endpoints", () => {
     expect(
       resolveProviderRequestPolicy({

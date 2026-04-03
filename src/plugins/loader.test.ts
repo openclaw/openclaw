@@ -1017,7 +1017,7 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      name: "blocks bundled channel plugins when channels.<id>.enabled=true but plugins.allow excludes them",
+      name: "loads bundled channel plugins when channels.<id>.enabled=true even if plugins.allow excludes them",
       config: {
         channels: {
           telegram: {
@@ -1029,9 +1029,7 @@ describe("loadOpenClawPlugins", () => {
         },
       } satisfies PluginLoadConfig,
       assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-        const telegram = registry.plugins.find((entry) => entry.id === "telegram");
-        expect(telegram?.status).toBe("disabled");
-        expect(telegram?.error).toBe("not in allowlist");
+        expectTelegramLoaded(registry);
       },
     },
     {
@@ -1098,6 +1096,36 @@ describe("loadOpenClawPlugins", () => {
       activationSource: "auto",
       activationReason: "telegram configured",
     });
+  });
+
+  it("keeps auto-enabled bundled channels behind restrictive allowlists", () => {
+    setupBundledTelegramPlugin();
+    const rawConfig = {
+      channels: {
+        telegram: {
+          botToken: "x",
+        },
+      },
+      plugins: {
+        allow: ["browser"],
+      },
+    } satisfies PluginLoadConfig;
+    const autoEnabled = applyPluginAutoEnable({
+      config: rawConfig,
+      env: {},
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: cachedBundledTelegramDir,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    });
+
+    const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+    expect(telegram?.status).toBe("disabled");
+    expect(telegram?.error).toBe("not in allowlist");
   });
 
   it("preserves all auto-enable reasons in activation metadata", () => {

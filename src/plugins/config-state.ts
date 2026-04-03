@@ -17,6 +17,11 @@ export type PluginActivationState = {
   reason?: string;
 };
 
+export type PluginActivationConfigSource = {
+  plugins: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
+};
+
 export type NormalizedPluginsConfig = {
   enabled: boolean;
   allow: string[];
@@ -162,6 +167,16 @@ export const normalizePluginsConfig = (
   };
 };
 
+export function createPluginActivationSource(params: {
+  config?: OpenClawConfig;
+  plugins?: NormalizedPluginsConfig;
+}): PluginActivationConfigSource {
+  return {
+    plugins: params.plugins ?? normalizePluginsConfig(params.config?.plugins),
+    rootConfig: params.config,
+  };
+}
+
 const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.slots && Object.prototype.hasOwnProperty.call(plugins.slots, "memory"));
 
@@ -275,16 +290,25 @@ export function resolvePluginActivationState(params: {
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
-  sourceConfig?: NormalizedPluginsConfig;
-  sourceRootConfig?: OpenClawConfig;
+  activationSource?: PluginActivationConfigSource;
   autoEnabledReason?: string;
 }): PluginActivationState {
+  const activationSource =
+    params.activationSource ??
+    createPluginActivationSource({
+      config: params.rootConfig,
+      plugins: params.config,
+    });
   const explicitSelection = resolveExplicitPluginSelection({
     id: params.id,
     origin: params.origin,
-    config: params.sourceConfig ?? params.config,
-    rootConfig: params.sourceRootConfig ?? params.rootConfig,
+    config: activationSource.plugins,
+    rootConfig: activationSource.rootConfig,
   });
+  const explicitlyConfiguredBundledChannel =
+    params.origin === "bundled" &&
+    explicitSelection.explicitlyEnabled &&
+    explicitSelection.reason === "channel enabled in config";
 
   if (!params.config.enabled) {
     return {
@@ -333,7 +357,7 @@ export function resolvePluginActivationState(params: {
       reason: "selected memory slot",
     };
   }
-  if (params.config.allow.length > 0 && !explicitlyAllowed) {
+  if (params.config.allow.length > 0 && !explicitlyAllowed && !explicitlyConfiguredBundledChannel) {
     return {
       enabled: false,
       activated: false,
@@ -447,6 +471,7 @@ export function resolveEffectiveEnableState(params: {
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
+  activationSource?: PluginActivationConfigSource;
 }): { enabled: boolean; reason?: string } {
   const state = resolveEffectivePluginActivationState(params);
   return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
@@ -458,8 +483,7 @@ export function resolveEffectivePluginActivationState(params: {
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
-  sourceConfig?: NormalizedPluginsConfig;
-  sourceRootConfig?: OpenClawConfig;
+  activationSource?: PluginActivationConfigSource;
   autoEnabledReason?: string;
 }): PluginActivationState {
   return resolvePluginActivationState(params);

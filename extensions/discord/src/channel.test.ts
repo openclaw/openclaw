@@ -1,5 +1,5 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -99,9 +99,6 @@ beforeAll(async () => {
 describe("discordPlugin outbound", () => {
   it("forwards mediaLocalRoots to sendMessageDiscord", async () => {
     const sendMessageDiscord = vi.fn(async () => ({ messageId: "m1" }));
-    installDiscordRuntime({
-      sendMessageDiscord,
-    });
 
     const result = await discordPlugin.outbound!.sendMedia!({
       cfg: {} as OpenClawConfig,
@@ -110,6 +107,9 @@ describe("discordPlugin outbound", () => {
       mediaUrl: "/tmp/image.png",
       mediaLocalRoots: ["/tmp/agent-root"],
       accountId: "work",
+      deps: {
+        discord: sendMessageDiscord,
+      },
     });
 
     expect(sendMessageDiscord).toHaveBeenCalledWith(

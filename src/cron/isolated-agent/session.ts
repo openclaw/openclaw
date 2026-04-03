@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
-  loadSessionStore,
   resolveSessionResetPolicy,
-  resolveStorePath,
-  type SessionEntry,
-} from "../../config/sessions.js";
+} from "../../config/sessions/reset.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 
 export function resolveCronSession(params: {
   cfg: OpenClawConfig;

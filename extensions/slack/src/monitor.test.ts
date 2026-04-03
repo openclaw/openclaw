@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildSlackSlashCommandMatcher,
-  isSlackChannelAllowedByPolicy,
-  resolveSlackThreadTs,
-} from "./monitor.js";
+import { buildSlackSlashCommandMatcher } from "./monitor/commands.js";
+import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
+import { resolveSlackThreadTs } from "./monitor/replies.js";
 
 describe("slack groupPolicy gating", () => {
   it("allows when policy is open", () => {

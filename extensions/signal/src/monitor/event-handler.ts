@@ -14,6 +14,7 @@ import {
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { normalizeSignalMessagingTarget } from "openclaw/plugin-sdk/channel-targets";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import {
@@ -56,7 +57,6 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
-import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
