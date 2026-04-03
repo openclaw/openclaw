@@ -148,7 +148,8 @@ export async function runAgentTurnWithFallback(params: {
   );
   // Persist the fallback candidate before the next attempt starts so any
   // live-session reconciliation observes the selected model instead of the
-  // previous primary/default selection.
+  // previous primary/default selection. Skip only when this is the no-op
+  // primary attempt and there is nothing new to persist.
   const persistFallbackCandidateSelection = async (provider: string, model: string) => {
     if (
       !params.sessionKey ||
@@ -164,6 +165,8 @@ export async function runAgentTurnWithFallback(params: {
       return;
     }
 
+    const previousEntry = { ...activeSessionEntry };
+
     const scopedAuthProfile = resolveRunAuthProfile(params.followupRun.run, provider);
     const { updated } = applyModelOverrideToSessionEntry({
       entry: activeSessionEntry,
@@ -175,12 +178,26 @@ export async function runAgentTurnWithFallback(params: {
       return;
     }
 
-    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
-    if (params.storePath) {
-      await updateSessionStore(params.storePath, (store) => {
-        store[params.sessionKey!] = activeSessionEntry;
-      });
-    }
+    const writeEntry = async (snapshot: SessionEntry) => {
+      for (const key of Object.keys(activeSessionEntry)) {
+        if (!(key in snapshot)) {
+          delete activeSessionEntry[key as keyof SessionEntry];
+        }
+      }
+      Object.assign(activeSessionEntry, snapshot);
+      params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
+      if (params.storePath) {
+        await updateSessionStore(params.storePath, (store) => {
+          store[params.sessionKey!] = activeSessionEntry;
+        });
+      }
+    };
+
+    await writeEntry(activeSessionEntry);
+
+    return async () => {
+      await writeEntry({ ...previousEntry });
+    };
   };
 
   while (true) {
@@ -267,7 +284,17 @@ export async function runAgentTurnWithFallback(params: {
             thinkLevel: params.followupRun.run.thinkLevel,
           });
 
-          await persistFallbackCandidateSelection(provider, model);
+          let rollbackFallbackCandidateSelection: (() => Promise<void>) | undefined;
+          try {
+            rollbackFallbackCandidateSelection = await persistFallbackCandidateSelection(
+              provider,
+              model,
+            );
+          } catch (error) {
+            logVerbose(
+              `failed to persist fallback candidate selection (non-fatal): ${String(error)}`,
+            );
+          }
 
           if (isCliProvider(provider, params.followupRun.run.config)) {
             const startedAt = Date.now();
@@ -336,6 +363,15 @@ export async function runAgentTurnWithFallback(params: {
 
                 return result;
               } catch (err) {
+                if (rollbackFallbackCandidateSelection) {
+                  try {
+                    await rollbackFallbackCandidateSelection();
+                  } catch (rollbackError) {
+                    logVerbose(
+                      `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
+                    );
+                  }
+                }
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
@@ -547,6 +583,17 @@ export async function runAgentTurnWithFallback(params: {
               );
               attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
               return result;
+            } catch (err) {
+              if (rollbackFallbackCandidateSelection) {
+                try {
+                  await rollbackFallbackCandidateSelection();
+                } catch (rollbackError) {
+                  logVerbose(
+                    `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
+                  );
+                }
+              }
+              throw err;
             } finally {
               autoCompactionCount += attemptCompactionCount;
             }
