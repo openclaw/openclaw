@@ -3,7 +3,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import type { RuntimeEnv } from "../runtime.js";
+import type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
 
 const mocks = vi.hoisted(() => ({
@@ -37,6 +37,16 @@ describe("deliverAgentCommandResult", () => {
       log: vi.fn(),
       error: vi.fn(),
     } as unknown as RuntimeEnv;
+  }
+
+  function createJsonRuntime(): OutputRuntimeEnv {
+    return {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn() as never,
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
   }
 
   function createResult(text = "hi") {
@@ -317,5 +327,35 @@ describe("deliverAgentCommandResult", () => {
       ],
       meta: { durationMs: 1 },
     });
+  });
+
+  it("writes JSON payloads through the runtime JSON writer when available", async () => {
+    const runtime = createJsonRuntime();
+    await runDelivery({
+      runtime,
+      payloads: [{ text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true }],
+      opts: {
+        message: "hello",
+        deliver: false,
+        json: true,
+      },
+    });
+
+    expect(runtime.writeJson).toHaveBeenCalledTimes(1);
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      {
+        payloads: [
+          {
+            text: "voice caption",
+            mediaUrl: "file:///tmp/clip.mp3",
+            mediaUrls: ["file:///tmp/clip.mp3"],
+            audioAsVoice: true,
+          },
+        ],
+        meta: { durationMs: 1 },
+      },
+      2,
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining('"payloads"'));
   });
 });

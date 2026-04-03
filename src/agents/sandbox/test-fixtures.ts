@@ -30,6 +30,7 @@ export function createSandboxTestContext(params?: {
     enabled: true,
     backendId: "docker",
     sessionKey: "sandbox:test",
+    scopeKey: "sandbox:test",
     workspaceDir: "/tmp/workspace",
     agentWorkspaceDir: "/tmp/workspace",
     workspaceAccess: "rw",

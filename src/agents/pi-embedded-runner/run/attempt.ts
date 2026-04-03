@@ -75,7 +75,7 @@ import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
-import { resolveSandboxContext } from "../../sandbox.js";
+import { disposeSandboxContext, resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -336,7 +336,7 @@ export async function runEmbeddedAttempt(
   await fs.mkdir(resolvedWorkspace, { recursive: true });
 
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
-  const sandbox = await resolveSandboxContext({
+  let sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
@@ -1973,6 +1973,7 @@ export async function runEmbeddedAttempt(
       }
     }
   } finally {
+    await disposeSandboxContext(sandbox).catch(() => undefined);
     restoreSkillEnv?.();
   }
 }

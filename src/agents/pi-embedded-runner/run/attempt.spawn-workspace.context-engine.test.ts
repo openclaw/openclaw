@@ -278,4 +278,37 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(releaseMock).toHaveBeenCalledTimes(1);
     expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session");
   });
+
+  it("disposes the sandbox context after the attempt finishes", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const sandbox = {
+      enabled: false,
+      sessionKey,
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/openclaw-test-workspace",
+      agentWorkspaceDir: "/tmp/openclaw-test-workspace",
+      workspaceAccess: "rw",
+      backendId: "docker",
+      runtimeId: "test-runtime",
+      runtimeLabel: "Test Runtime",
+      containerName: "test-runtime",
+      containerWorkdir: "/workspace",
+      docker: {} as never,
+      tools: {} as never,
+      browserAllowHostControl: false,
+    };
+    hoisted.resolveSandboxContextMock.mockResolvedValue(sandbox);
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: {
+        bootstrap,
+        assemble,
+      },
+      sessionKey,
+      tempPaths,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(hoisted.disposeSandboxContextMock).toHaveBeenCalledWith(sandbox);
+  });
 });

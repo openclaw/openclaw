@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveFallbackRetryPrompt, sessionFileHasContent } from "./attempt-execution.js";
+import {
+  clearSessionScopedFieldsOnSessionIdRollover,
+  resolveFallbackRetryPrompt,
+  sessionFileHasContent,
+} from "./attempt-execution.js";
 
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
@@ -16,14 +20,14 @@ describe("resolveFallbackRetryPrompt", () => {
     ).toBe(originalBody);
   });
 
-  it("returns recovery prompt for fallback retry with existing session history", () => {
+  it("preserves original body for fallback retry with existing session history", () => {
     expect(
       resolveFallbackRetryPrompt({
         body: originalBody,
         isFallbackRetry: true,
         sessionHasHistory: true,
       }),
-    ).toBe("Continue where you left off. The previous model attempt failed or timed out.");
+    ).toBe(originalBody);
   });
 
   it("preserves original body for fallback retry when session has no history (subagent spawn)", () => {
@@ -71,6 +75,76 @@ describe("resolveFallbackRetryPrompt", () => {
         sessionHasHistory: false,
       }),
     ).toBe(originalBody);
+  });
+
+  it("uses the recovery prompt only when the fallback body is empty", () => {
+    expect(
+      resolveFallbackRetryPrompt({
+        body: "",
+        isFallbackRetry: true,
+        sessionHasHistory: true,
+      }),
+    ).toBe("Continue where you left off. The previous model attempt failed or timed out.");
+
+    expect(
+      resolveFallbackRetryPrompt({
+        body: "   ",
+        isFallbackRetry: true,
+        sessionHasHistory: false,
+      }),
+    ).toBe("Continue where you left off. The previous model attempt failed or timed out.");
+  });
+});
+
+describe("clearSessionScopedFieldsOnSessionIdRollover", () => {
+  it("clears session-scoped continuity fields when the session id changes", () => {
+    expect(
+      clearSessionScopedFieldsOnSessionIdRollover(
+        {
+          sessionId: "old-session",
+          updatedAt: 100,
+          sessionFile: "/tmp/old-session.jsonl",
+          cliSessionIds: { "github-copilot": "cli-old" },
+          systemPromptReport: { warnings: ["stale"] },
+          abortedLastRun: true,
+          thinkingLevel: "high",
+        },
+        {
+          sessionId: "new-session",
+          updatedAt: 200,
+        },
+      ),
+    ).toEqual({
+      sessionId: "old-session",
+      updatedAt: 100,
+      thinkingLevel: "high",
+    });
+  });
+
+  it("preserves session-scoped continuity fields when the session id is unchanged", () => {
+    expect(
+      clearSessionScopedFieldsOnSessionIdRollover(
+        {
+          sessionId: "same-session",
+          updatedAt: 100,
+          sessionFile: "/tmp/same-session.jsonl",
+          cliSessionIds: { "github-copilot": "cli-same" },
+          systemPromptReport: { warnings: ["keep"] },
+          abortedLastRun: true,
+        },
+        {
+          sessionId: "same-session",
+          updatedAt: 200,
+        },
+      ),
+    ).toEqual({
+      sessionId: "same-session",
+      updatedAt: 100,
+      sessionFile: "/tmp/same-session.jsonl",
+      cliSessionIds: { "github-copilot": "cli-same" },
+      systemPromptReport: { warnings: ["keep"] },
+      abortedLastRun: true,
+    });
   });
 });
 

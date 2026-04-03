@@ -32,6 +32,7 @@ const hoisted = vi.hoisted(() => {
   const createAgentSessionMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
   const resolveSandboxContextMock = vi.fn();
+  const disposeSandboxContextMock = vi.fn(async () => {});
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
   const releaseWsSessionMock = vi.fn(() => {});
@@ -77,6 +78,7 @@ const hoisted = vi.hoisted(() => {
     createAgentSessionMock,
     sessionManagerOpenMock,
     resolveSandboxContextMock,
+    disposeSandboxContextMock,
     subscribeEmbeddedPiSessionMock,
     acquireSessionWriteLockMock,
     installToolResultContextGuardMock,
@@ -119,6 +121,7 @@ vi.mock("../../subagent-spawn.js", () => ({
 
 vi.mock("../../sandbox.js", () => ({
   resolveSandboxContext: (...args: unknown[]) => hoisted.resolveSandboxContextMock(...args),
+  disposeSandboxContext: (...args: unknown[]) => hoisted.disposeSandboxContextMock(...args),
 }));
 
 vi.mock("../../session-tool-result-guard-wrapper.js", () => ({
@@ -338,6 +341,7 @@ vi.mock("../../provider-stream.js", () => ({
 }));
 
 vi.mock("../../owner-display.js", () => ({
+  ensureOwnerDisplaySecret: (config: unknown) => ({ config }),
   resolveOwnerDisplaySetting: () => ({
     ownerDisplay: undefined,
     ownerDisplaySecret: undefined,
@@ -534,6 +538,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.createAgentSessionMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
   hoisted.resolveSandboxContextMock.mockReset();
+  hoisted.disposeSandboxContextMock.mockReset().mockResolvedValue(undefined);
   hoisted.subscribeEmbeddedPiSessionMock
     .mockReset()
     .mockImplementation(() => createSubscriptionMock());

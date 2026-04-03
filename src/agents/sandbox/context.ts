@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../plugin-sdk/browser-config.js";
 import {
   ensureBrowserControlAuth,
@@ -11,6 +12,7 @@ import { resolveUserPath } from "../../utils.js";
 import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { requireSandboxBackendFactory } from "./backend.js";
+import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
@@ -194,6 +196,7 @@ export async function resolveSandboxContext(params: {
     enabled: true,
     backendId: backend.id,
     sessionKey: rawSessionKey,
+    scopeKey,
     workspaceDir,
     agentWorkspaceDir,
     workspaceAccess: resolvedCfg.workspaceAccess,
@@ -213,6 +216,21 @@ export async function resolveSandboxContext(params: {
     createSandboxFsBridge({ sandbox: sandboxContext });
 
   return sandboxContext;
+}
+
+export async function disposeSandboxContext(
+  context: Pick<SandboxContext, "scopeKey"> | null | undefined,
+): Promise<void> {
+  const scopeKey = typeof context?.scopeKey === "string" ? context.scopeKey.trim() : "";
+  if (!scopeKey) {
+    return;
+  }
+  const bridge = BROWSER_BRIDGES.get(scopeKey);
+  if (!bridge) {
+    return;
+  }
+  await stopBrowserBridgeServer(bridge.bridge.server).catch(() => undefined);
+  BROWSER_BRIDGES.delete(scopeKey);
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {

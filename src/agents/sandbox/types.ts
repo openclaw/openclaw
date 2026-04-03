@@ -90,6 +90,7 @@ export type SandboxContext = {
   enabled: boolean;
   backendId: SandboxBackendId;
   sessionKey: string;
+  scopeKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   workspaceAccess: SandboxWorkspaceAccess;

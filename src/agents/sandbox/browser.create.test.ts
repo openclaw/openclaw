@@ -5,6 +5,7 @@ import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 let BROWSER_BRIDGES: Map<string, unknown>;
 let ensureSandboxBrowser: typeof import("./browser.js").ensureSandboxBrowser;
+let disposeSandboxContext: typeof import("./sandbox/context.js").disposeSandboxContext;
 let resetNoVncObserverTokensForTests: typeof import("./novnc-auth.js").resetNoVncObserverTokensForTests;
 
 const dockerMocks = vi.hoisted(() => ({
@@ -51,6 +52,7 @@ async function loadFreshBrowserModulesForTest() {
   vi.resetModules();
   ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
   ({ ensureSandboxBrowser } = await import("./browser.js"));
+  ({ disposeSandboxContext } = await import("./context.js"));
   ({ resetNoVncObserverTokensForTests } = await import("./novnc-auth.js"));
 }
 
@@ -235,5 +237,29 @@ describe("ensureSandboxBrowser create args", () => {
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
     const labels = collectDockerFlagValues(createArgs ?? [], "--label");
     expect(labels).toContain(`openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`);
+  });
+
+  it("disposes the browser bridge for a matching sandbox scope", async () => {
+    BROWSER_BRIDGES.set("session:test", {
+      bridge: { server: {} },
+      containerName: "openclaw-sbx-browser-test",
+    });
+
+    await disposeSandboxContext({ scopeKey: "session:test" } as never);
+
+    expect(bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledWith({});
+    expect(BROWSER_BRIDGES.has("session:test")).toBe(false);
+  });
+
+  it("is a no-op when disposing a sandbox scope without a browser bridge", async () => {
+    BROWSER_BRIDGES.set("session:test", {
+      bridge: { server: {} },
+      containerName: "openclaw-sbx-browser-test",
+    });
+
+    await disposeSandboxContext({ scopeKey: "session:other" } as never);
+
+    expect(bridgeMocks.stopBrowserBridgeServer).not.toHaveBeenCalled();
+    expect(BROWSER_BRIDGES.has("session:test")).toBe(true);
   });
 });

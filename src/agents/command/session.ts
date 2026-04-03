@@ -182,28 +182,37 @@ export function resolveSession(opts: {
     ? evaluateSessionFreshness({ updatedAt: sessionEntry.updatedAt, now, policy: resetPolicy })
         .fresh
     : false;
+  const explicitSessionId = opts.sessionId?.trim() || undefined;
+  const reuseExistingSession = explicitSessionId
+    ? sessionEntry?.sessionId === explicitSessionId
+    : fresh;
   const sessionId =
-    opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
-  const isNewSession = !fresh && !opts.sessionId;
+    explicitSessionId ||
+    (reuseExistingSession ? sessionEntry?.sessionId : undefined) ||
+    crypto.randomUUID();
+  const isNewSession = !reuseExistingSession;
+  const persistedSessionEntry = reuseExistingSession ? sessionEntry : undefined;
+
+  if (isNewSession && sessionKey && sessionStore[sessionKey]) {
+    delete sessionStore[sessionKey];
+  }
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,
     previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
   });
 
-  const persistedThinking =
-    fresh && sessionEntry?.thinkingLevel
-      ? normalizeThinkLevel(sessionEntry.thinkingLevel)
-      : undefined;
-  const persistedVerbose =
-    fresh && sessionEntry?.verboseLevel
-      ? normalizeVerboseLevel(sessionEntry.verboseLevel)
-      : undefined;
+  const persistedThinking = persistedSessionEntry?.thinkingLevel
+    ? normalizeThinkLevel(persistedSessionEntry.thinkingLevel)
+    : undefined;
+  const persistedVerbose = persistedSessionEntry?.verboseLevel
+    ? normalizeVerboseLevel(persistedSessionEntry.verboseLevel)
+    : undefined;
 
   return {
     sessionId,
     sessionKey,
-    sessionEntry,
+    sessionEntry: persistedSessionEntry,
     sessionStore,
     storePath,
     isNewSession,

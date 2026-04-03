@@ -100,9 +100,33 @@ export type PersistSessionEntryParams = {
   clearedFields?: string[];
 };
 
+const SESSION_FIELDS_CLEARED_ON_SESSION_ID_ROLLOVER = [
+  "sessionFile",
+  "cliSessionIds",
+  "systemPromptReport",
+  "abortedLastRun",
+] as const;
+
+export function clearSessionScopedFieldsOnSessionIdRollover(
+  existing: SessionEntry | undefined,
+  patch: SessionEntry,
+): SessionEntry | undefined {
+  if (!existing?.sessionId || !patch.sessionId || existing.sessionId === patch.sessionId) {
+    return existing;
+  }
+  const next = { ...existing };
+  for (const field of SESSION_FIELDS_CLEARED_ON_SESSION_ID_ROLLOVER) {
+    Reflect.deleteProperty(next, field);
+  }
+  return next;
+}
+
 export async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
   const persisted = await updateSessionStore(params.storePath, (store) => {
-    const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
+    const merged = mergeSessionEntry(
+      clearSessionScopedFieldsOnSessionIdRollover(store[params.sessionKey], params.entry),
+      params.entry,
+    );
     for (const field of params.clearedFields ?? []) {
       if (!Object.hasOwn(params.entry, field)) {
         Reflect.deleteProperty(merged, field);
@@ -119,15 +143,7 @@ export function resolveFallbackRetryPrompt(params: {
   isFallbackRetry: boolean;
   sessionHasHistory?: boolean;
 }): string {
-  if (!params.isFallbackRetry) {
-    return params.body;
-  }
-  // When the session has no persisted history (e.g. a freshly-spawned subagent
-  // whose first attempt failed before the SessionManager flushed the user
-  // message to disk), the fallback model would receive only the generic
-  // recovery prompt and lose the original task entirely.  Preserve the
-  // original body in that case so the fallback model can execute the task.
-  if (!params.sessionHasHistory) {
+  if (!params.isFallbackRetry || params.body.trim()) {
     return params.body;
   }
   return "Continue where you left off. The previous model attempt failed or timed out.";
