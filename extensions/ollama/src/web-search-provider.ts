@@ -1,5 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeOptionalSecretInput } from "openclaw/plugin-sdk/provider-auth";
+import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   enablePluginInConfig,
   readNumberParam,
@@ -49,6 +51,14 @@ type OllamaWebSearchResponse = {
   results?: OllamaWebSearchResult[];
 };
 
+function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
+  const providerApiKey = normalizeOptionalSecretInput(config?.models?.providers?.ollama?.apiKey);
+  if (providerApiKey) {
+    return providerApiKey;
+  }
+  return resolveEnvApiKey("ollama")?.apiKey;
+}
+
 function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
   const configuredBaseUrl = config?.models?.providers?.ollama?.baseUrl;
   if (typeof configuredBaseUrl === "string" && configuredBaseUrl.trim()) {
@@ -82,13 +92,18 @@ export async function runOllamaWebSearch(params: {
   }
 
   const baseUrl = resolveOllamaWebSearchBaseUrl(params.config);
+  const apiKey = resolveOllamaWebSearchApiKey(params.config);
   const count = resolveSearchCount(params.count, DEFAULT_OLLAMA_WEB_SEARCH_COUNT);
   const startedAt = Date.now();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
   const { response, release } = await fetchWithSsrFGuard({
     url: `${baseUrl}${OLLAMA_WEB_SEARCH_PATH}`,
     init: {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ query, max_results: count }),
       signal: AbortSignal.timeout(DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS),
     },
@@ -215,6 +230,7 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
 
 export const __testing = {
   normalizeOllamaWebSearchResult,
+  resolveOllamaWebSearchApiKey,
   resolveOllamaWebSearchBaseUrl,
   warnOllamaWebSearchPrereqs,
 };
