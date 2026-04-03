@@ -1228,6 +1228,18 @@ async function executeMainSessionCronJob(
       return { status: "ok", summary: text };
     }
     if (heartbeatResult.status === "skipped") {
+      // runHeartbeatOnce was skipped for a non-busy reason (e.g. quiet-hours,
+      // alerts-disabled, no-target, or a channel-specific readiness failure such
+      // as a Telegram plugin regression).  The system event is already in the
+      // queue, so fall back to requestHeartbeatNow to ensure the session still
+      // receives the wake signal on the next available tick. Without this, the
+      // enqueued system event is never consumed and the agent stays asleep.
+      // See: https://github.com/openclaw/openclaw/issues/60262
+      state.deps.requestHeartbeatNow({
+        reason,
+        agentId: job.agentId,
+        sessionKey: targetMainSessionKey,
+      });
       return { status: "skipped", error: heartbeatResult.reason, summary: text };
     }
     return { status: "error", error: heartbeatResult.reason, summary: text };
