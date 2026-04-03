@@ -3,41 +3,6 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-
-import {
-  // Denial tracking
-  createDenialTrackingState,
-  recordDenial,
-  recordSuccess,
-  isDenialLimitExceeded,
-  shouldFallbackToPrompting,
-  DEFAULT_DENIAL_LIMITS,
-  recordAgentDenial,
-  recordAgentSuccess,
-  clearAgentDenialState,
-  clearAllDenialStates,
-  getAgentDenialState,
-} from "./denial-tracking.js";
-
-import {
-  // Sensitive paths
-  checkSensitivePath,
-  isSettingsPath,
-  isHomeSensitivePath,
-  validateWritePath,
-  DANGEROUS_FILES,
-  DANGEROUS_DIRECTORIES,
-} from "./sensitive-paths.js";
-
-import {
-  // Dangerous patterns
-  matchesDangerousPattern,
-  isDangerousAllowlistPattern,
-  stripDangerousAllowlistPatterns,
-  hasShellInjectionPattern,
-  analyzeCommandSecurity,
-} from "./dangerous-exec-patterns.js";
-
 import {
   // Classifier
   StubAllowClassifier,
@@ -48,6 +13,34 @@ import {
   buildExecClassifierContext,
   interpretClassifierResult,
 } from "./classifier-interface.js";
+import {
+  // Dangerous patterns
+  matchesDangerousPattern,
+  isDangerousAllowlistPattern,
+  stripDangerousAllowlistPatterns,
+  hasShellInjectionPattern,
+  analyzeCommandSecurity,
+} from "./dangerous-exec-patterns.js";
+import {
+  // Denial tracking
+  createDenialTrackingState,
+  recordDenial,
+  recordSuccess,
+  isDenialLimitExceeded,
+  DEFAULT_DENIAL_LIMITS,
+  recordAgentDenial,
+  clearAgentDenialState,
+  clearAllDenialStates,
+  getAgentDenialState,
+} from "./denial-tracking.js";
+import {
+  // Sensitive paths
+  checkSensitivePath,
+  isSettingsPath,
+  validateWritePath,
+  DANGEROUS_FILES,
+  DANGEROUS_DIRECTORIES,
+} from "./sensitive-paths.js";
 
 // ============================================================================
 // Denial Tracking Tests
