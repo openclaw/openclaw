@@ -86,10 +86,84 @@ function isFeishuWebhookSignatureValid(params: {
   return timingSafeEqualString(computedSignature, signature);
 }
 
+function isMatchingFeishuVerificationToken(params: {
+  payload: Record<string, unknown>;
+  verificationToken?: string;
+}): boolean {
+  const expectedToken = params.verificationToken?.trim();
+  if (!expectedToken) {
+    return false;
+  }
+  const actualToken = typeof params.payload.token === "string" ? params.payload.token.trim() : "";
+  return actualToken.length > 0 && timingSafeEqualString(actualToken, expectedToken);
+}
+
+function decryptFeishuWebhookPayload(params: {
+  payload: Record<string, unknown>;
+  encryptKey?: string;
+}): Record<string, unknown> | null {
+  const ciphertext =
+    typeof params.payload.encrypt === "string" ? params.payload.encrypt.trim() : "";
+  const encryptKey = params.encryptKey?.trim();
+  if (!ciphertext || !encryptKey) {
+    return null;
+  }
+
+  try {
+    const encrypted = Buffer.from(ciphertext, "base64");
+    if (encrypted.length <= 16) {
+      return null;
+    }
+    const iv = encrypted.subarray(0, 16);
+    const body = encrypted.subarray(16);
+    const key = crypto.createHash("sha256").update(encryptKey).digest();
+    const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
+    const plaintext = Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
+    return parseFeishuWebhookPayload(plaintext);
+  } catch {
+    return null;
+  }
+}
+
+function isAuthorizedFeishuChallenge(params: {
+  payload: Record<string, unknown>;
+  signatureValid: boolean;
+  verificationToken?: string;
+  encryptKey?: string;
+}): boolean {
+  if (params.signatureValid) {
+    return true;
+  }
+
+  if (
+    isMatchingFeishuVerificationToken({
+      payload: params.payload,
+      verificationToken: params.verificationToken,
+    })
+  ) {
+    return true;
+  }
+
+  const decryptedPayload = decryptFeishuWebhookPayload({
+    payload: params.payload,
+    encryptKey: params.encryptKey,
+  });
+  return isMatchingFeishuVerificationToken({
+    payload: decryptedPayload ?? {},
+    verificationToken: params.verificationToken,
+  });
+}
+
 function respondText(res: http.ServerResponse, statusCode: number, body: string): void {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.end(body);
+}
+
+function respondJson(res: http.ServerResponse, statusCode: number, body: unknown): void {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(body));
 }
 
 export async function monitorWebSocket({
@@ -204,31 +278,47 @@ export async function monitorWebhook({
           return;
         }
 
-        // Reject invalid signatures before any JSON parsing to keep the auth boundary strict.
-        if (
-          !isFeishuWebhookSignatureValid({
+        const payload = parseFeishuWebhookPayload(rawBody);
+        if (!payload) {
+          const signatureValid = isFeishuWebhookSignatureValid({
             headers: req.headers,
             rawBody,
             encryptKey: account.encryptKey,
-          })
-        ) {
-          respondText(res, 401, "Invalid signature");
-          return;
-        }
-
-        const payload = parseFeishuWebhookPayload(rawBody);
-        if (!payload) {
+          });
+          if (!signatureValid) {
+            respondText(res, 401, "Invalid signature");
+            return;
+          }
           respondText(res, 400, "Invalid JSON");
           return;
         }
 
+        const signatureValid = isFeishuWebhookSignatureValid({
+          headers: req.headers,
+          rawBody,
+          encryptKey: account.encryptKey,
+        });
         const { isChallenge, challenge } = Lark.generateChallenge(payload, {
           encryptKey: account.encryptKey ?? "",
         });
         if (isChallenge) {
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(JSON.stringify(challenge));
+          if (
+            !isAuthorizedFeishuChallenge({
+              payload,
+              signatureValid,
+              verificationToken: account.verificationToken,
+              encryptKey: account.encryptKey,
+            })
+          ) {
+            respondText(res, 401, "Invalid signature");
+            return;
+          }
+          respondJson(res, 200, challenge);
+          return;
+        }
+
+        if (!signatureValid) {
+          respondText(res, 401, "Invalid signature");
           return;
         }
 
@@ -236,9 +326,7 @@ export async function monitorWebhook({
           needCheck: false,
         });
         if (!res.headersSent) {
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(JSON.stringify(value));
+          respondJson(res, 200, value);
         }
       } catch (err) {
         if (isRequestBodyLimitError(err)) {
