@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
+import type { DeviceBootstrapProfile } from "../shared/device-bootstrap-profile.js";
 import { resolveMissingRequestedScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   createAsyncLock,
@@ -92,6 +93,7 @@ type DevicePairingStateFile = {
 };
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
+const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
 
 const withLock = createAsyncLock();
@@ -484,12 +486,14 @@ export async function approveDevicePairing(
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
-  options: { callerScopes?: readonly string[] },
+  options: { callerScopes?: readonly string[]; approvedScopesOverride?: readonly string[] },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
-  optionsOrBaseDir?: { callerScopes?: readonly string[] } | string,
+  optionsOrBaseDir?:
+    | { callerScopes?: readonly string[]; approvedScopesOverride?: readonly string[] }
+    | string,
   maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
   const options =
@@ -503,10 +507,14 @@ export async function approveDevicePairing(
     if (!pending) {
       return null;
     }
-    const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
-    const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
-      scope.startsWith(OPERATOR_SCOPE_PREFIX),
+    const approvedScopesOverride = normalizeDeviceAuthScopes(
+      options?.approvedScopesOverride ? [...options.approvedScopesOverride] : undefined,
     );
+    const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
+    const requestedOperatorScopes = normalizeDeviceAuthScopes([
+      ...(pending.scopes ?? []),
+      ...approvedScopesOverride,
+    ]).filter((scope) => scope.startsWith(OPERATOR_SCOPE_PREFIX));
     if (requestedOperatorScopes.length > 0) {
       if (!options?.callerScopes) {
         return {
@@ -514,11 +522,11 @@ export async function approveDevicePairing(
           missingScope: requestedOperatorScopes[0] ?? "callerScopes-required",
         };
       }
-      if (!requestedRoles.includes("operator")) {
+      if (!requestedRoles.includes(OPERATOR_ROLE)) {
         return { status: "forbidden", missingScope: requestedOperatorScopes[0] };
       }
       const missingScope = resolveMissingRequestedScope({
-        role: "operator",
+        role: OPERATOR_ROLE,
         requestedScopes: requestedOperatorScopes,
         allowedScopes: options.callerScopes,
       });
@@ -532,6 +540,7 @@ export async function approveDevicePairing(
     const approvedScopes = mergeScopes(
       existing?.approvedScopes ?? existing?.scopes,
       pending.scopes,
+      approvedScopesOverride,
     );
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     for (const roleForToken of requestedRoles) {
@@ -566,6 +575,90 @@ export async function approveDevicePairing(
       roles,
       scopes: approvedScopes,
       approvedScopes,
+      remoteIp: pending.remoteIp,
+      tokens,
+      createdAtMs: existing?.createdAtMs ?? now,
+      approvedAtMs: now,
+    };
+    delete state.pendingById[requestId];
+    state.pairedByDeviceId[device.deviceId] = device;
+    await persistState(state, baseDir);
+    return { status: "approved", requestId, device };
+  });
+}
+
+export async function approveBootstrapDevicePairing(
+  requestId: string,
+  bootstrapProfile: DeviceBootstrapProfile,
+  baseDir?: string,
+): Promise<ApproveDevicePairingResult> {
+  // QR bootstrap handoff is an explicit trust path: it can seed the bounded
+  // node/operator baseline from the verified bootstrap profile without routing
+  // operator scope approval through the generic interactive approval checker.
+  const approvedRoles = mergeRoles(bootstrapProfile.roles) ?? [];
+  const approvedScopes = normalizeDeviceAuthScopes([...bootstrapProfile.scopes]);
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const pending = state.pendingById[requestId];
+    if (!pending) {
+      return null;
+    }
+    const requestedRoles = resolveRequestedRoles(pending);
+    const missingRole = requestedRoles.find((role) => !approvedRoles.includes(role));
+    if (missingRole) {
+      return { status: "forbidden", missingScope: missingRole };
+    }
+    const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
+      scope.startsWith(OPERATOR_SCOPE_PREFIX),
+    );
+    const missingScope = resolveMissingRequestedScope({
+      role: OPERATOR_ROLE,
+      requestedScopes: requestedOperatorScopes,
+      allowedScopes: approvedScopes,
+    });
+    if (missingScope) {
+      return { status: "forbidden", missingScope };
+    }
+
+    const now = Date.now();
+    const existing = state.pairedByDeviceId[pending.deviceId];
+    const roles = mergeRoles(
+      existing?.roles,
+      existing?.role,
+      pending.roles,
+      pending.role,
+      approvedRoles,
+    );
+    const nextApprovedScopes = mergeScopes(
+      existing?.approvedScopes ?? existing?.scopes,
+      pending.scopes,
+      approvedScopes,
+    );
+    const tokens = existing?.tokens ? { ...existing.tokens } : {};
+    for (const roleForToken of approvedRoles) {
+      const existingToken = tokens[roleForToken];
+      const tokenScopes = roleForToken === OPERATOR_ROLE ? approvedScopes : [];
+      tokens[roleForToken] = buildDeviceAuthToken({
+        role: roleForToken,
+        scopes: tokenScopes,
+        existing: existingToken,
+        now,
+        ...(existingToken ? { rotatedAtMs: now } : {}),
+      });
+    }
+
+    const device: PairedDevice = {
+      deviceId: pending.deviceId,
+      publicKey: pending.publicKey,
+      displayName: pending.displayName,
+      platform: pending.platform,
+      deviceFamily: pending.deviceFamily,
+      clientId: pending.clientId,
+      clientMode: pending.clientMode,
+      role: pending.role,
+      roles,
+      scopes: nextApprovedScopes,
+      approvedScopes: nextApprovedScopes,
       remoteIp: pending.remoteIp,
       tokens,
       createdAtMs: existing?.createdAtMs ?? now,
