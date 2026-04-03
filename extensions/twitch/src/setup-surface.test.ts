@@ -201,5 +201,60 @@ describe("setup surface helpers", () => {
       expect(result?.cfg.channels?.twitch?.accounts?.default?.username).toBe("testbot");
       expect(result?.cfg.channels?.twitch?.accounts?.default?.clientId).toBe("test-client-id");
     });
+
+    it("writes env-token setup to the configured default account", async () => {
+      const { configureWithEnvToken } = await import("./setup-surface.js");
+
+      mockPromptConfirm.mockReset().mockResolvedValue(true as never);
+      mockPromptText
+        .mockReset()
+        .mockResolvedValueOnce("secondary-bot" as never)
+        .mockResolvedValueOnce("secondary-client" as never);
+
+      const result = await configureWithEnvToken(
+        {
+          channels: {
+            twitch: {
+              defaultAccount: "secondary",
+            },
+          },
+        } as Parameters<typeof configureWithEnvToken>[0],
+        mockPrompter,
+        null,
+        "oauth:fromenv",
+        false,
+        {} as Parameters<typeof configureWithEnvToken>[5],
+      );
+
+      expect(result?.cfg.channels?.twitch?.accounts?.secondary?.username).toBe("secondary-bot");
+      expect(result?.cfg.channels?.twitch?.accounts?.secondary?.clientId).toBe("secondary-client");
+      expect(result?.cfg.channels?.twitch?.accounts?.default).toBeUndefined();
+    });
+  });
+
+  describe("defaultAccount setup resolution", () => {
+    it("reports status for the configured default account", async () => {
+      const { twitchSetupWizard } = await import("./setup-surface.js");
+
+      const lines = twitchSetupWizard.status?.resolveStatusLines?.({
+        cfg: {
+          channels: {
+            twitch: {
+              defaultAccount: "secondary",
+              accounts: {
+                secondary: {
+                  username: "secondary-bot",
+                  accessToken: "oauth:secondary",
+                  clientId: "secondary-client",
+                  channel: "#secondary",
+                },
+              },
+            },
+          },
+        },
+      } as never);
+
+      expect(lines).toEqual(["Twitch (secondary): configured"]);
+    });
   });
 });

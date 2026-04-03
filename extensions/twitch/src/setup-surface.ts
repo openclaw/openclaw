@@ -10,17 +10,27 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
-import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  getAccountConfig,
+  resolveDefaultTwitchAccountId,
+} from "./config.js";
 import type { TwitchAccountConfig, TwitchRole } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
 const channel = "twitch" as const;
 
+function resolveSetupAccountId(cfg: OpenClawConfig): string {
+  const preferred = cfg.channels?.twitch?.defaultAccount?.trim();
+  return preferred || resolveDefaultTwitchAccountId(cfg);
+}
+
 export function setTwitchAccount(
   cfg: OpenClawConfig,
   account: Partial<TwitchAccountConfig>,
+  accountId: string = resolveSetupAccountId(cfg),
 ): OpenClawConfig {
-  const existing = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
+  const existing = getAccountConfig(cfg, accountId);
   const merged: TwitchAccountConfig = {
     username: account.username ?? existing?.username ?? "",
     accessToken: account.accessToken ?? existing?.accessToken ?? "",
@@ -49,7 +59,7 @@ export function setTwitchAccount(
           ...((
             (cfg.channels as Record<string, unknown>)?.twitch as Record<string, unknown> | undefined
           )?.accounts as Record<string, unknown> | undefined),
-          [DEFAULT_ACCOUNT_ID]: merged,
+          [accountId]: merged,
         },
       },
     },
@@ -217,7 +227,8 @@ function setTwitchAccessControl(
   allowedRoles: TwitchRole[],
   requireMention: boolean,
 ): OpenClawConfig {
-  const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
+  const accountId = resolveSetupAccountId(cfg);
+  const account = getAccountConfig(cfg, accountId);
   if (!account) {
     return cfg;
   }
@@ -226,11 +237,11 @@ function setTwitchAccessControl(
     ...account,
     allowedRoles,
     requireMention,
-  });
+  }, accountId);
 }
 
 function resolveTwitchGroupPolicy(cfg: OpenClawConfig): "open" | "allowlist" | "disabled" {
-  const account = getAccountConfig(cfg, DEFAULT_ACCOUNT_ID);
+  const account = getAccountConfig(cfg, resolveSetupAccountId(cfg));
   if (account?.allowedRoles?.includes("all")) {
     return "open";
   }
@@ -253,9 +264,9 @@ const twitchDmPolicy: ChannelSetupDmPolicy = {
   label: "Twitch",
   channel,
   policyKey: "channels.twitch.allowedRoles",
-  allowFromKey: "channels.twitch.accounts.default.allowFrom",
+  allowFromKey: "channels.twitch.accounts.<default>.allowFrom",
   getCurrent: (cfg) => {
-    const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
+    const account = getAccountConfig(cfg as OpenClawConfig, resolveSetupAccountId(cfg as OpenClawConfig));
     if (account?.allowedRoles?.includes("all")) {
       return "open";
     }
@@ -270,7 +281,8 @@ const twitchDmPolicy: ChannelSetupDmPolicy = {
     return setTwitchAccessControl(cfg as OpenClawConfig, allowedRoles, true);
   },
   promptAllowFrom: async ({ cfg, prompter }) => {
-    const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
+    const accountId = resolveSetupAccountId(cfg as OpenClawConfig);
+    const account = getAccountConfig(cfg as OpenClawConfig, accountId);
     const existingAllowFrom = account?.allowFrom ?? [];
 
     const entry = await prompter.text({
@@ -287,7 +299,7 @@ const twitchDmPolicy: ChannelSetupDmPolicy = {
     return setTwitchAccount(cfg as OpenClawConfig, {
       ...(account ?? undefined),
       allowFrom,
-    });
+    }, accountId);
   },
 };
 
@@ -297,11 +309,11 @@ const twitchGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
   skipAllowlistEntries: true,
   currentPolicy: ({ cfg }) => resolveTwitchGroupPolicy(cfg as OpenClawConfig),
   currentEntries: ({ cfg }) => {
-    const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
+    const account = getAccountConfig(cfg as OpenClawConfig, resolveSetupAccountId(cfg as OpenClawConfig));
     return account?.allowFrom ?? [];
   },
   updatePrompt: ({ cfg }) => {
-    const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
+    const account = getAccountConfig(cfg as OpenClawConfig, resolveSetupAccountId(cfg as OpenClawConfig));
     return Boolean(account?.allowedRoles?.length || account?.allowFrom?.length);
   },
   setPolicy: ({ cfg, policy }) => setTwitchGroupPolicy(cfg as OpenClawConfig, policy),
@@ -310,16 +322,16 @@ const twitchGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
 };
 
 export const twitchSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: () => DEFAULT_ACCOUNT_ID,
-  applyAccountConfig: ({ cfg }) =>
+  resolveAccountId: ({ cfg }) => resolveSetupAccountId(cfg as OpenClawConfig),
+  applyAccountConfig: ({ cfg, accountId }) =>
     setTwitchAccount(cfg, {
       enabled: true,
-    }),
+    }, accountId),
 };
 
 export const twitchSetupWizard: ChannelSetupWizard = {
   channel,
-  resolveAccountIdForConfigure: () => DEFAULT_ACCOUNT_ID,
+  resolveAccountIdForConfigure: ({ defaultAccountId }) => defaultAccountId,
   resolveShouldPromptAccountIds: () => false,
   status: {
     configuredLabel: "configured",
@@ -327,18 +339,22 @@ export const twitchSetupWizard: ChannelSetupWizard = {
     configuredHint: "configured",
     unconfiguredHint: "needs setup",
     resolveConfigured: ({ cfg }) => {
-      const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
+      const account = getAccountConfig(cfg as OpenClawConfig, resolveSetupAccountId(cfg as OpenClawConfig));
       return account ? isAccountConfigured(account) : false;
     },
     resolveStatusLines: ({ cfg }) => {
-      const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
+      const accountId = resolveSetupAccountId(cfg as OpenClawConfig);
+      const account = getAccountConfig(cfg as OpenClawConfig, accountId);
       const configured = account ? isAccountConfigured(account) : false;
-      return [`Twitch: ${configured ? "configured" : "needs username, token, and clientId"}`];
+      return [
+        `Twitch${accountId !== DEFAULT_ACCOUNT_ID ? ` (${accountId})` : ""}: ${configured ? "configured" : "needs username, token, and clientId"}`,
+      ];
     },
   },
   credentials: [],
   finalize: async ({ cfg, prompter, forceAllowFrom }) => {
-    const account = getAccountConfig(cfg as OpenClawConfig, DEFAULT_ACCOUNT_ID);
+    const accountId = resolveSetupAccountId(cfg as OpenClawConfig);
+    const account = getAccountConfig(cfg as OpenClawConfig, accountId);
 
     if (!account || !isAccountConfigured(account)) {
       await noteTwitchSetupHelp(prompter);
@@ -374,7 +390,7 @@ export const twitchSetupWizard: ChannelSetupWizard = {
       clientSecret,
       refreshToken,
       enabled: true,
-    });
+    }, accountId);
 
     const cfgWithAllowFrom =
       forceAllowFrom && twitchDmPolicy.promptAllowFrom
