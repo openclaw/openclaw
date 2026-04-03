@@ -54,6 +54,15 @@ function countMatrixExecApprovalEligibleAccounts(params: {
       cfg: params.cfg,
       accountId,
     });
+    const filters = config?.enabled
+      ? {
+          agentFilter: config.agentFilter,
+          sessionFilter: config.sessionFilter,
+        }
+      : {
+          agentFilter: undefined,
+          sessionFilter: undefined,
+        };
     return (
       isChannelExecApprovalClientEnabledFromConfig({
         enabled: config?.enabled,
@@ -63,6 +72,8 @@ function countMatrixExecApprovalEligibleAccounts(params: {
         request: params.request.request,
         agentFilter: config?.agentFilter,
         sessionFilter: config?.sessionFilter,
+        agentFilter: filters.agentFilter,
+        sessionFilter: filters.sessionFilter,
       })
     );
   }).length;

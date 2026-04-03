@@ -39,9 +39,9 @@ function getScopedFeishuConfig(
 ): FeishuConfig | FeishuAccountConfig {
   const feishuCfg = ((cfg.channels?.feishu as FeishuConfig | undefined) ?? {}) as FeishuConfig;
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    return feishuCfg ?? {};
+    return feishuCfg;
   }
-  return (feishuCfg?.accounts?.[accountId] as FeishuAccountConfig | undefined) ?? {};
+  return (feishuCfg.accounts?.[accountId] as FeishuAccountConfig | undefined) ?? {};
 }
 
 function patchFeishuConfig(
