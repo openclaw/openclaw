@@ -394,27 +394,19 @@ export function matchAllowlist(
   const effectivePlatform = Array.isArray(argvOrOptions)
     ? platform
     : (argvOrOptions?.platform ?? platform);
-  const allowlistCandidatePaths = Array.from(
-    new Set(
-      [resolution.resolvedPath, ...(resolution.virtualPathCandidates ?? [])].filter(
-        (candidate): candidate is string => Boolean(candidate),
-      ),
-    ),
-  );
-  if (allowlistCandidatePaths.length === 0) {
-    const rawExecutable = resolution.rawExecutable.trim();
-    if (!rawExecutable) {
-      return null;
-    }
-    const fallbackCandidate = resolveExecutablePathCandidate(rawExecutable, {
-      platform: effectivePlatform,
-      requirePathSeparator: true,
-    });
-    if (fallbackCandidate) {
-      allowlistCandidatePaths.push(fallbackCandidate);
-    }
-  }
-  if (allowlistCandidatePaths.length === 0) {
+  const allowlistCandidatePath =
+    resolution.resolvedPath ??
+    (() => {
+      const rawExecutable = resolution.rawExecutable.trim();
+      if (!rawExecutable) {
+        return undefined;
+      }
+      return resolveExecutablePathCandidate(rawExecutable, {
+        platform: effectivePlatform,
+        requirePathSeparator: true,
+      });
+    })();
+  if (!allowlistCandidatePath) {
     return null;
   }
   // argPattern matching is currently Windows-only.  On other platforms every
@@ -436,11 +428,7 @@ export function matchAllowlist(
     if (!hasPath) {
       continue;
     }
-    if (
-      !allowlistCandidatePaths.some((candidatePath) =>
-        matchesExecAllowlistPattern(pattern, candidatePath),
-      )
-    ) {
+    if (!matchesExecAllowlistPattern(pattern, allowlistCandidatePath)) {
       continue;
     }
     if (!useArgPattern) {
