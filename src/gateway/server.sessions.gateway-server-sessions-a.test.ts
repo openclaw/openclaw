@@ -11,7 +11,6 @@ import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-h
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { performGatewaySessionReset } from "./session-reset-service.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   connectOk,
@@ -2561,7 +2560,10 @@ describe("gateway server sessions", () => {
       key: "main",
     }).storePath;
 
-    let pendingReset: ReturnType<typeof performGatewaySessionReset> | undefined;
+    let pendingReset:
+      | ReturnType<(typeof import("./session-reset-service.js"))["performGatewaySessionReset"]>
+      | undefined;
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
     await withSessionStoreLockForTest(gatewayStorePath, async () => {
       pendingReset = performGatewaySessionReset({
         key: "main",

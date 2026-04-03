@@ -275,6 +275,11 @@ describe("plugin-sdk subpath exports", () => {
     ]) {
       expectSourceMentions(subpath, ["chunkTextForOutbound"]);
     }
+    expectSourceMentions("approval-auth-runtime", [
+      "createResolvedApproverActionAuthAdapter",
+      "resolveApprovalApprovers",
+    ]);
+    expectSourceMentions("reply-chunking", ["chunkText", "chunkTextWithMode"]);
     expectSourceMentions("reply-history", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",

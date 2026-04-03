@@ -1722,6 +1722,7 @@ export async function runEmbeddedAttempt(
           config: params.config,
           provider: params.provider,
           modelId: params.modelId,
+          modelApi: params.model.api,
           isCacheTtlEligibleProvider,
         });
 

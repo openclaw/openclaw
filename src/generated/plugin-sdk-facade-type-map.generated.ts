@@ -557,6 +557,32 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
+  "whatsapp-targets": {
+    module: typeof import("@openclaw/whatsapp/targets.js");
+    sourceModules: {
+      source1: {
+        module: typeof import("@openclaw/whatsapp/targets.js");
+      };
+    };
+    types: {};
+  };
+  "whatsapp-surface": {
+    module: typeof import("@openclaw/whatsapp/api.js");
+    sourceModules: {
+      source1: {
+        module: typeof import("@openclaw/whatsapp/api.js");
+      };
+      source2: {
+        module: typeof import("@openclaw/whatsapp/constants.js");
+      };
+    };
+    types: {
+      WebChannelStatus: import("@openclaw/whatsapp/api.js").WebChannelStatus;
+      WebInboundMessage: import("@openclaw/whatsapp/api.js").WebInboundMessage;
+      WebListenerCloseReason: import("@openclaw/whatsapp/api.js").WebListenerCloseReason;
+      WebMonitorTuning: import("@openclaw/whatsapp/api.js").WebMonitorTuning;
+    };
+  };
   "zalo-setup": {
     module: typeof import("@openclaw/zalo/api.js");
     sourceModules: {

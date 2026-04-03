@@ -1,10 +1,12 @@
-import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
+import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../../config/sessions.js";
-import { callGateway } from "../../gateway/call.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveMainSessionKey,
+} from "../../config/sessions/main-session.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
   deliverOutboundPayloads,
@@ -138,7 +140,14 @@ type CompletedDirectCronDelivery = {
   results: OutboundDeliveryResult[];
 };
 
+let gatewayCallRuntimePromise: Promise<typeof import("../../gateway/call.runtime.js")> | undefined;
+
 const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
+
+async function loadGatewayCallRuntime(): Promise<typeof import("../../gateway/call.runtime.js")> {
+  gatewayCallRuntimePromise ??= import("../../gateway/call.runtime.js");
+  return await gatewayCallRuntimePromise;
+}
 
 function cloneDeliveryResults(
   results: readonly OutboundDeliveryResult[],
@@ -515,6 +524,7 @@ export async function dispatchCronDelivery(
         return;
       }
       try {
+        const { callGateway } = await loadGatewayCallRuntime();
         await callGateway({
           method: "sessions.delete",
           params: {

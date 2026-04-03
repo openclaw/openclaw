@@ -4,9 +4,14 @@ const runCommandWithTimeout = vi.hoisted(() => vi.fn());
 const mkdir = vi.hoisted(() => vi.fn());
 const access = vi.hoisted(() => vi.fn());
 const rename = vi.hoisted(() => vi.fn());
+const tryLoadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout,
+}));
+
+vi.mock("./facade-runtime.js", () => ({
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 }));
 
 vi.mock("node:fs/promises", () => {
@@ -28,7 +33,15 @@ describe("browser maintenance", () => {
     mkdir.mockReset();
     access.mockReset();
     rename.mockReset();
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReset();
     vi.spyOn(Date, "now").mockReturnValue(123);
+  });
+
+  it("skips browser runtime lookup when no session keys are provided", async () => {
+    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
+
+    await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
+    expect(tryLoadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
   it("returns the target path when trash exits successfully", async () => {
