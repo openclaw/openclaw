@@ -622,6 +622,10 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects --thread-id with --no-deliver on cron edit", async () => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--no-deliver", "--thread-id", "48"]);
+  });
+
   it("resolves --thread-id existing target from page-2 cron.list lookup on edit", async () => {
     resetGatewayMock();
     mockCronEditPagedJobLookup({
@@ -651,6 +655,60 @@ describe("cron cli", () => {
         from: "user",
       }),
     ).rejects.toThrow("__exit__:1");
+  });
+
+  it("rejects --thread-id for existing webhook jobs unless --announce is set", async () => {
+    resetGatewayMock();
+    mockCronEditPagedJobLookup({
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      delivery: { mode: "webhook", channel: "telegram", to: "https://example.com/hook" },
+    });
+    const program = buildProgram();
+    await expect(
+      program.parseAsync(
+        [
+          "cron",
+          "edit",
+          "job-1",
+          "--channel",
+          "telegram",
+          "--to",
+          "-1001234567890",
+          "--thread-id",
+          "48",
+        ],
+        {
+          from: "user",
+        },
+      ),
+    ).rejects.toThrow("__exit__:1");
+  });
+
+  it("allows --thread-id for existing webhook jobs when --announce is set", async () => {
+    resetGatewayMock();
+    mockCronEditPagedJobLookup({
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      delivery: { mode: "webhook", channel: "telegram", to: "https://example.com/hook" },
+    });
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--announce",
+        "--channel",
+        "telegram",
+        "--to",
+        "-1001234567890",
+        "--thread-id",
+        "48",
+      ],
+      { from: "user" },
+    );
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.delivery?.mode).toBe("announce");
+    expect(patch?.patch?.delivery?.to).toBe("-1001234567890:topic:48");
   });
 
   it("supports --no-deliver on cron edit", async () => {

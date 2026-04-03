@@ -295,10 +295,23 @@ export function registerCronEditCommand(cron: Command) {
               if (threadId && !/^\d+$/.test(threadId)) {
                 throw new Error("--thread-id must be a numeric value");
               }
+              if (threadId && opts.deliver === false) {
+                throw new Error("--thread-id is not supported with --no-deliver");
+              }
               const explicitChannel =
                 typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
               if (threadId && explicitChannel && explicitChannel !== "telegram") {
                 throw new Error("--thread-id requires --channel telegram");
+              }
+              if (threadId && !opts.announce && typeof opts.deliver !== "boolean") {
+                const existing = await getExistingJob();
+                const existingMode =
+                  (existing?.delivery as Record<string, string> | undefined)?.mode ?? "";
+                if (existingMode === "webhook") {
+                  throw new Error(
+                    "--thread-id is not supported for webhook delivery jobs unless --announce is set",
+                  );
+                }
               }
               let toRaw = typeof opts.to === "string" ? opts.to.trim() : "";
               if (threadId && (!toRaw || typeof opts.channel !== "string")) {
