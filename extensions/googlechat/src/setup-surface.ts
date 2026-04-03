@@ -1,7 +1,7 @@
 import {
+  addWildcardAllowFrom,
   applySetupAccountConfigPatch,
   createNestedChannelParsedAllowFromPrompt,
-  createNestedChannelDmPolicy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -37,16 +37,49 @@ const promptAllowFrom = createNestedChannelParsedAllowFromPrompt({
   }),
 });
 
-const googlechatDmPolicy: ChannelSetupDmPolicy = createNestedChannelDmPolicy({
+const googlechatDmPolicy: ChannelSetupDmPolicy = {
   label: "Google Chat",
   channel,
-  section: "dm",
   policyKey: "channels.googlechat.dm.policy",
   allowFromKey: "channels.googlechat.dm.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.googlechat?.dm?.policy ?? "pairing",
+  resolveConfigKeys: (_cfg, accountId) =>
+    accountId && accountId !== DEFAULT_ACCOUNT_ID
+      ? {
+          policyKey: `channels.googlechat.accounts.${accountId}.dm.policy`,
+          allowFromKey: `channels.googlechat.accounts.${accountId}.dm.allowFrom`,
+        }
+      : {
+          policyKey: "channels.googlechat.dm.policy",
+          allowFromKey: "channels.googlechat.dm.allowFrom",
+        },
+  getCurrent: (cfg, accountId) =>
+    resolveGoogleChatAccount({
+      cfg,
+      accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+    }).config.dm?.policy ?? "pairing",
+  setPolicy: (cfg, policy, accountId) => {
+    const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+    const currentDm = resolveGoogleChatAccount({
+      cfg,
+      accountId: resolvedAccountId,
+    }).config.dm;
+    return applySetupAccountConfigPatch({
+      cfg,
+      channelKey: channel,
+      accountId: resolvedAccountId,
+      patch: {
+        dm: {
+          ...currentDm,
+          policy,
+          ...(policy === "open"
+            ? { allowFrom: addWildcardAllowFrom(currentDm?.allowFrom) }
+            : {}),
+        },
+      },
+    });
+  },
   promptAllowFrom,
-  enabled: true,
-});
+};
 
 export { googlechatSetupAdapter } from "./setup-core.js";
 
@@ -59,10 +92,14 @@ export const googlechatSetupWizard: ChannelSetupWizard = {
     configuredHint: "configured",
     unconfiguredHint: "needs auth",
     includeStatusLine: true,
-    resolveConfigured: ({ cfg }) =>
-      listGoogleChatAccountIds(cfg).some(
-        (accountId) => resolveGoogleChatAccount({ cfg, accountId }).credentialSource !== "none",
-      ),
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? resolveGoogleChatAccount({ cfg, accountId }).credentialSource !== "none"
+        : listGoogleChatAccountIds(cfg).some(
+            (resolvedAccountId) =>
+              resolveGoogleChatAccount({ cfg, accountId: resolvedAccountId }).credentialSource !==
+              "none",
+          ),
   }),
   introNote: {
     title: "Google Chat setup",

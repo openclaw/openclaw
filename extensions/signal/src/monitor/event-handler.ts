@@ -14,7 +14,7 @@ import {
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
+import { normalizeSignalMessagingTarget } from "openclaw/plugin-sdk/channel-targets";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import {
@@ -29,6 +29,7 @@ import {
   toInternalMessageReceivedContext,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -56,7 +57,6 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
-import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {

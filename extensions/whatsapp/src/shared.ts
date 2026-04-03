@@ -14,6 +14,7 @@ import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
+  hasAnyWhatsAppAuth,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
@@ -141,6 +142,7 @@ export function createWhatsAppPluginBase(params: {
       isEnabled: (account, cfg) => account.enabled && cfg.web?.enabled !== false,
       disabledReason: () => "disabled",
       isConfigured: params.isConfigured,
+      hasPersistedAuthState: ({ cfg }) => hasAnyWhatsAppAuth(cfg),
       unconfiguredReason: () => "not linked",
       describeAccount: (account) =>
         describeAccountSnapshot({

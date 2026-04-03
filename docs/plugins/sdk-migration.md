@@ -46,6 +46,14 @@ The old approach caused problems:
 The modern plugin SDK fixes this: each import path (`openclaw/plugin-sdk/\<subpath\>`)
 is a small, self-contained module with a clear purpose and documented contract.
 
+Legacy provider convenience seams for bundled channels are also gone. Imports
+such as `openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
+`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`, and
+`openclaw/plugin-sdk/telegram-core` were private mono-repo shortcuts, not
+stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
+bundled plugin workspace, keep provider-owned helpers in that plugin's own
+`api.ts` or `runtime-api.ts`.
+
 ## How to migrate
 
 <Steps>
@@ -147,7 +155,7 @@ is a small, self-contained module with a clear purpose and documented contract.
   | `plugin-sdk/channel-config-schema` | Config schema builders | Channel config schema types |
   | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
   | `plugin-sdk/channel-lifecycle` | Account status tracking | `createAccountStatusSink` |
-  | `plugin-sdk/channel-runtime` | Runtime wiring helpers | Channel runtime utilities |
+  | `plugin-sdk/channel-runtime` | Deprecated compatibility shim | Legacy channel runtime utilities only |
   | `plugin-sdk/channel-send-result` | Send result types | Reply result types |
   | `plugin-sdk/runtime-store` | Persistent plugin storage | `createPluginRuntimeStore` |
   | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers |

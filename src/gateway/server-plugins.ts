@@ -423,6 +423,7 @@ export function loadGatewayPlugins(params: {
     params.pluginIds ??
     resolveGatewayStartupPluginIds({
       config: resolvedConfig,
+      activationSourceConfig: params.activationSourceConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
     });

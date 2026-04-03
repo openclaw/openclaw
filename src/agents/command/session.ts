@@ -20,7 +20,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
-import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
+import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 
@@ -40,6 +40,56 @@ type SessionKeyResolution = {
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
 };
+
+type SessionIdMatchSet = {
+  matches: Array<[string, SessionEntry]>;
+  primaryStoreMatches: Array<[string, SessionEntry]>;
+  storeByKey: Map<string, SessionKeyResolution>;
+};
+
+function collectSessionIdMatchesForRequest(opts: {
+  cfg: OpenClawConfig;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  storeAgentId?: string;
+  sessionId: string;
+}): SessionIdMatchSet {
+  const matches: Array<[string, SessionEntry]> = [];
+  const primaryStoreMatches: Array<[string, SessionEntry]> = [];
+  const storeByKey = new Map<string, SessionKeyResolution>();
+
+  const addMatches = (
+    candidateStore: Record<string, SessionEntry>,
+    candidateStorePath: string,
+    options?: { primary?: boolean },
+  ): void => {
+    for (const [candidateKey, candidateEntry] of Object.entries(candidateStore)) {
+      if (candidateEntry?.sessionId !== opts.sessionId) {
+        continue;
+      }
+      matches.push([candidateKey, candidateEntry]);
+      if (options?.primary) {
+        primaryStoreMatches.push([candidateKey, candidateEntry]);
+      }
+      storeByKey.set(candidateKey, {
+        sessionKey: candidateKey,
+        sessionStore: candidateStore,
+        storePath: candidateStorePath,
+      });
+    }
+  };
+
+  addMatches(opts.sessionStore, opts.storePath, { primary: true });
+  for (const agentId of listAgentIds(opts.cfg)) {
+    if (agentId === opts.storeAgentId) {
+      continue;
+    }
+    const candidateStorePath = resolveStorePath(opts.cfg.session?.store, { agentId });
+    addMatches(loadSessionStore(candidateStorePath), candidateStorePath);
+  }
+
+  return { matches, primaryStoreMatches, storeByKey };
+}
 
 export function resolveSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;
@@ -75,43 +125,24 @@ export function resolveSessionKeyForRequest(opts: {
     !explicitSessionKey &&
     (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
   ) {
-    const matches: Array<[string, SessionEntry]> = [];
-    const storeByKey = new Map<string, SessionKeyResolution>();
-    const addMatches = (
-      candidateStore: Record<string, SessionEntry>,
-      candidateStorePath: string,
-    ): void => {
-      for (const [candidateKey, candidateEntry] of Object.entries(candidateStore)) {
-        if (candidateEntry?.sessionId !== opts.sessionId) {
-          continue;
-        }
-        matches.push([candidateKey, candidateEntry]);
-        storeByKey.set(candidateKey, {
-          sessionKey: candidateKey,
-          sessionStore: candidateStore,
-          storePath: candidateStorePath,
-        });
-      }
-    };
-
-    addMatches(sessionStore, storePath);
-    const allAgentIds = listAgentIds(opts.cfg);
-    for (const agentId of allAgentIds) {
-      if (agentId === storeAgentId) {
-        continue;
-      }
-      const altStorePath = resolveStorePath(sessionCfg?.store, { agentId });
-      const altStore = loadSessionStore(altStorePath);
-      addMatches(altStore, altStorePath);
-    }
-
-    const preferredKey = resolvePreferredSessionKeyForSessionIdMatches(matches, opts.sessionId);
-    if (preferredKey) {
-      const preferred = storeByKey.get(preferredKey);
+    const { matches, primaryStoreMatches, storeByKey } = collectSessionIdMatchesForRequest({
+      cfg: opts.cfg,
+      sessionStore,
+      storePath,
+      storeAgentId,
+      sessionId: opts.sessionId,
+    });
+    const preferredSelection = resolveSessionIdMatchSelection(matches, opts.sessionId);
+    const currentStoreSelection =
+      preferredSelection.kind === "selected"
+        ? preferredSelection
+        : resolveSessionIdMatchSelection(primaryStoreMatches, opts.sessionId);
+    if (currentStoreSelection.kind === "selected") {
+      const preferred = storeByKey.get(currentStoreSelection.sessionKey);
       if (preferred) {
         return preferred;
       }
-      sessionKey = preferredKey;
+      sessionKey = currentStoreSelection.sessionKey;
     }
   }
 

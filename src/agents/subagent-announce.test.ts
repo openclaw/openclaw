@@ -35,65 +35,60 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => mockConfig,
-    resolveGatewayPort: () => 18789,
-  };
-});
-
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
-  return {
-    ...actual,
-    loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-    resolveAgentIdFromSessionKey: (sessionKey: string) =>
-      resolveAgentIdFromSessionKeyMock(sessionKey),
-    resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
-    resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
-  };
-});
-
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (request: unknown) => callGatewayMock(request),
-}));
-
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({ hasHooks: () => false }),
 }));
-
-vi.mock("./pi-embedded.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./pi-embedded.js")>();
-  return {
-    ...actual,
-    isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-    queueEmbeddedPiMessage: (sessionId: string, text: string) =>
-      queueEmbeddedPiMessageMock(sessionId, text),
-    waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
-      waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
-  };
-});
+vi.mock("./subagent-announce.runtime.js", () => ({
+  callGateway: (request: unknown) => callGatewayMock(request),
+  isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+  loadConfig: () => mockConfig,
+  loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
+  queueEmbeddedPiMessage: (sessionId: string, text: string) =>
+    queueEmbeddedPiMessageMock(sessionId, text),
+  resolveAgentIdFromSessionKey: (sessionKey: string) =>
+    resolveAgentIdFromSessionKeyMock(sessionKey),
+  resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
+  resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
+  waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
+    waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
+}));
 
 vi.mock("./tools/agent-step.js", () => ({
   readLatestAssistantReply: (params?: unknown) => readLatestAssistantReplyMock(params),
 }));
 
-vi.mock("./subagent-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry.js")>();
-  return {
-    ...actual,
-    ...subagentRegistryRuntimeMock,
-  };
-});
-vi.mock("./subagent-registry-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry-runtime.js")>();
-  return {
-    ...actual,
-    ...subagentRegistryRuntimeMock,
-  };
-});
+vi.mock("./subagent-announce-delivery.runtime.js", () => ({
+  createBoundDeliveryRouter: () => ({
+    resolveDestination: () => ({ mode: "none" }),
+  }),
+  resolveConversationIdFromTargets: () => "",
+  resolveExternalBestEffortDeliveryTarget: (params: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string;
+  }) => ({
+    deliver: Boolean(params.channel && params.to),
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    threadId: params.threadId,
+  }),
+  resolveQueueSettings: (params: {
+    cfg?: {
+      messages?: {
+        queue?: {
+          byChannel?: Record<string, string>;
+        };
+      };
+    };
+    channel?: string;
+  }) => ({
+    mode: (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "none",
+  }),
+}));
+
+vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryRuntimeMock);
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 
 describe("subagent announce seam flow", () => {

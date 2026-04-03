@@ -18,75 +18,6 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
-  "discord-account": {
-    module: typeof import("@openclaw/discord/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/discord/api.js");
-      };
-    };
-    types: {
-      ResolvedDiscordAccount: import("@openclaw/discord/api.js").ResolvedDiscordAccount;
-    };
-  };
-  "discord-runtime-surface": {
-    module: typeof import("@openclaw/discord/runtime-api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/discord/runtime-api.js");
-      };
-    };
-    types: {};
-  };
-  "discord-session-key": {
-    module: typeof import("@openclaw/discord/session-key-api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/discord/session-key-api.js");
-      };
-    };
-    types: {};
-  };
-  "discord-surface": {
-    module: typeof import("@openclaw/discord/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/discord/api.js");
-      };
-    };
-    types: {
-      DiscordComponentMessageSpec: import("@openclaw/discord/api.js").DiscordComponentMessageSpec;
-      DiscordProbe: import("@openclaw/discord/api.js").DiscordProbe;
-      DiscordSendComponents: import("@openclaw/discord/api.js").DiscordSendComponents;
-      DiscordSendEmbeds: import("@openclaw/discord/api.js").DiscordSendEmbeds;
-      DiscordSendResult: import("@openclaw/discord/api.js").DiscordSendResult;
-      DiscordTokenResolution: import("@openclaw/discord/api.js").DiscordTokenResolution;
-      InspectedDiscordAccount: import("@openclaw/discord/api.js").InspectedDiscordAccount;
-      ResolvedDiscordAccount: import("@openclaw/discord/api.js").ResolvedDiscordAccount;
-    };
-  };
-  "discord-thread-bindings": {
-    module: typeof import("@openclaw/discord/runtime-api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/discord/runtime-api.js");
-      };
-    };
-    types: {
-      ThreadBindingManager: import("@openclaw/discord/runtime-api.js").ThreadBindingManager;
-      ThreadBindingRecord: import("@openclaw/discord/runtime-api.js").ThreadBindingRecord;
-      ThreadBindingTargetKind: import("@openclaw/discord/runtime-api.js").ThreadBindingTargetKind;
-    };
-  };
-  "discord-timeouts": {
-    module: typeof import("@openclaw/discord/timeouts.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/discord/timeouts.js");
-      };
-    };
-    types: {};
-  };
   "anthropic-cli": {
     module: typeof import("@openclaw/anthropic/api.js");
     sourceModules: {
@@ -510,30 +441,6 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
-  "signal-account": {
-    module: typeof import("@openclaw/signal/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/signal/api.js");
-      };
-    };
-    types: {
-      ResolvedSignalAccount: import("@openclaw/signal/api.js").ResolvedSignalAccount;
-    };
-  };
-  "signal-surface": {
-    module: typeof import("@openclaw/signal/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/signal/api.js");
-      };
-    };
-    types: {
-      ResolvedSignalAccount: import("@openclaw/signal/api.js").ResolvedSignalAccount;
-      SignalProbe: import("@openclaw/signal/api.js").SignalProbe;
-      SignalSender: import("@openclaw/signal/api.js").SignalSender;
-    };
-  };
   "provider-reasoning": {
     module: typeof import("@openclaw/ollama/api.js");
     sourceModules: {
@@ -578,50 +485,6 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
-  "slack-target-parser": {
-    module: typeof import("@openclaw/slack/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/slack/api.js");
-      };
-    };
-    types: {};
-  };
-  "slack-account": {
-    module: typeof import("@openclaw/slack/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/slack/api.js");
-      };
-    };
-    types: {
-      ResolvedSlackAccount: import("@openclaw/slack/api.js").ResolvedSlackAccount;
-    };
-  };
-  "slack-runtime-surface": {
-    module: typeof import("@openclaw/slack/runtime-api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/slack/runtime-api.js");
-      };
-    };
-    types: {
-      SlackActionContext: import("@openclaw/slack/runtime-api.js").SlackActionContext;
-    };
-  };
-  "slack-surface": {
-    module: typeof import("@openclaw/slack/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/slack/api.js");
-      };
-    };
-    types: {
-      InspectedSlackAccount: import("@openclaw/slack/api.js").InspectedSlackAccount;
-      ResolvedSlackAccount: import("@openclaw/slack/api.js").ResolvedSlackAccount;
-      SlackProbe: import("@openclaw/slack/api.js").SlackProbe;
-    };
-  };
   together: {
     module: typeof import("@openclaw/together/api.js");
     sourceModules: {
@@ -639,44 +502,6 @@ export interface PluginSdkFacadeTypeMap {
       };
     };
     types: {};
-  };
-  "telegram-account": {
-    module: typeof import("@openclaw/telegram/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/telegram/api.js");
-      };
-    };
-    types: {
-      ResolvedTelegramAccount: import("@openclaw/telegram/api.js").ResolvedTelegramAccount;
-    };
-  };
-  "telegram-allow-from": {
-    module: typeof import("@openclaw/telegram/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/telegram/api.js");
-      };
-    };
-    types: {};
-  };
-  "telegram-surface": {
-    module: typeof import("@openclaw/telegram/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/telegram/api.js");
-      };
-    };
-    types: {
-      InspectedTelegramAccount: import("@openclaw/telegram/api.js").InspectedTelegramAccount;
-      ProviderInfo: import("@openclaw/telegram/api.js").ProviderInfo;
-      ResolvedTelegramAccount: import("@openclaw/telegram/api.js").ResolvedTelegramAccount;
-      StickerMetadata: import("@openclaw/telegram/api.js").StickerMetadata;
-      TelegramButtonStyle: import("@openclaw/telegram/api.js").TelegramButtonStyle;
-      TelegramInlineButtons: import("@openclaw/telegram/api.js").TelegramInlineButtons;
-      TelegramProbe: import("@openclaw/telegram/api.js").TelegramProbe;
-      TelegramTokenResolution: import("@openclaw/telegram/api.js").TelegramTokenResolution;
-    };
   };
   "vercel-ai-gateway": {
     module: typeof import("@openclaw/vercel-ai-gateway/api.js");
@@ -733,10 +558,10 @@ export interface PluginSdkFacadeTypeMap {
     types: {};
   };
   "whatsapp-targets": {
-    module: typeof import("@openclaw/whatsapp/api.js");
+    module: typeof import("@openclaw/whatsapp/targets.js");
     sourceModules: {
       source1: {
-        module: typeof import("@openclaw/whatsapp/api.js");
+        module: typeof import("@openclaw/whatsapp/targets.js");
       };
     };
     types: {};

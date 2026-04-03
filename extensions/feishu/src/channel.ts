@@ -23,17 +23,6 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "../runtime-api.js";
-import {
-  buildChannelConfigSchema,
-  buildProbeChannelStatusSummary,
-  chunkTextForOutbound,
-  createActionGate,
-  createDefaultChannelRuntimeState,
-  DEFAULT_ACCOUNT_ID,
-  PAIRING_APPROVED_MESSAGE,
-} from "../runtime-api.js";
-import type { ChannelMessageActionName } from "../runtime-api.js";
 import {
   inspectFeishuCredentials,
   resolveFeishuAccount,
@@ -44,6 +33,21 @@ import {
 } from "./accounts.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
+import {
+  buildChannelConfigSchema,
+  buildProbeChannelStatusSummary,
+  chunkTextForOutbound,
+  createActionGate,
+  createDefaultChannelRuntimeState,
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
+} from "./channel-runtime-api.js";
+import type {
+  ChannelMessageActionName,
+  ChannelMeta,
+  ChannelPlugin,
+  ClawdbotConfig,
+} from "./channel-runtime-api.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
@@ -137,13 +141,19 @@ const collectFeishuSecurityWarnings = createAllowlistProviderGroupPolicyWarningC
 
 function describeFeishuMessageTool({
   cfg,
+  accountId,
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
+  const enabledAccounts = accountId
+    ? [resolveFeishuAccount({ cfg, accountId })].filter((account) => account.enabled && account.configured)
+    : listEnabledFeishuAccounts(cfg);
   const enabled =
-    cfg.channels?.feishu?.enabled !== false &&
-    Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined));
-  if (listEnabledFeishuAccounts(cfg).length === 0) {
+    enabledAccounts.length > 0 ||
+    (!accountId &&
+      cfg.channels?.feishu?.enabled !== false &&
+      Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined)));
+  if (enabledAccounts.length === 0) {
     return {
       actions: [],
       capabilities: enabled ? ["cards"] : [],
@@ -168,7 +178,11 @@ function describeFeishuMessageTool({
     "channel-info",
     "channel-list",
   ]);
-  if (areAnyFeishuReactionActionsEnabled(cfg)) {
+  if (
+    (accountId
+      ? enabledAccounts.some((account) => isFeishuReactionsActionEnabled({ cfg, account }))
+      : areAnyFeishuReactionActionsEnabled(cfg))
+  ) {
     actions.add("react");
     actions.add("reactions");
   }

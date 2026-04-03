@@ -30,10 +30,12 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "needs setup",
     configuredScore: 2,
     unconfiguredScore: 1,
-    resolveConfigured: ({ cfg }) =>
-      listMattermostAccountIds(cfg).some((accountId) =>
-        isMattermostConfigured(resolveMattermostAccountWithSecrets(cfg, accountId)),
-      ),
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? isMattermostConfigured(resolveMattermostAccountWithSecrets(cfg, accountId))
+        : listMattermostAccountIds(cfg).some((resolvedAccountId) =>
+            isMattermostConfigured(resolveMattermostAccountWithSecrets(cfg, resolvedAccountId)),
+          ),
   }),
   introNote: {
     title: "Mattermost bot token",

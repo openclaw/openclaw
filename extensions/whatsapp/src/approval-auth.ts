@@ -1,7 +1,7 @@
 import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-runtime";
+} from "openclaw/plugin-sdk/approval-auth-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { normalizeWhatsAppTarget } from "./runtime-api.js";
 

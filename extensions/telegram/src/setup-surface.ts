@@ -1,7 +1,8 @@
 import {
+  addWildcardAllowFrom,
   createAllowFromSection,
-  createTopLevelChannelDmPolicy,
   createStandardChannelSetupStatus,
+  type ChannelSetupDmPolicy,
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
   type OpenClawConfig,
@@ -76,14 +77,40 @@ function buildTelegramDmAccessWarningLines(accountId: string): string[] {
   ];
 }
 
-const dmPolicy = createTopLevelChannelDmPolicy({
+const dmPolicy: ChannelSetupDmPolicy = {
   label: "Telegram",
   channel,
   policyKey: "channels.telegram.dmPolicy",
   allowFromKey: "channels.telegram.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.telegram?.dmPolicy ?? "pairing",
+  resolveConfigKeys: (_cfg, accountId) =>
+    accountId && accountId !== DEFAULT_ACCOUNT_ID
+      ? {
+          policyKey: `channels.telegram.accounts.${accountId}.dmPolicy`,
+          allowFromKey: `channels.telegram.accounts.${accountId}.allowFrom`,
+        }
+      : {
+          policyKey: "channels.telegram.dmPolicy",
+          allowFromKey: "channels.telegram.allowFrom",
+        },
+  getCurrent: (cfg, accountId) =>
+    mergeTelegramAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID).dmPolicy ?? "pairing",
+  setPolicy: (cfg, policy, accountId) => {
+    const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+    const merged = mergeTelegramAccountConfig(cfg, resolvedAccountId);
+    return patchChannelConfigForAccount({
+      cfg,
+      channel,
+      accountId: resolvedAccountId,
+      patch: {
+        dmPolicy: policy,
+        ...(policy === "open"
+          ? { allowFrom: addWildcardAllowFrom(merged.allowFrom) }
+          : {}),
+      },
+    });
+  },
   promptAllowFrom: promptTelegramAllowFromForAccount,
-});
+};
 
 export const telegramSetupWizard: ChannelSetupWizard = {
   channel,
@@ -95,11 +122,11 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "recommended · newcomer-friendly",
     configuredScore: 1,
     unconfiguredScore: 10,
-    resolveConfigured: ({ cfg }) =>
-      listTelegramAccountIds(cfg).some((accountId) => {
-        const account = inspectTelegramAccount({ cfg, accountId });
-        return account.configured;
-      }),
+    resolveConfigured: ({ cfg, accountId }) =>
+      (accountId ? [accountId] : listTelegramAccountIds(cfg)).some((resolvedAccountId) => {
+        const account = inspectTelegramAccount({ cfg, accountId: resolvedAccountId });
+          return account.configured;
+        }),
   }),
   prepare: async ({ cfg, accountId, credentialValues }) => ({
     cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),

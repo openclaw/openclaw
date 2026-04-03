@@ -1,7 +1,43 @@
-import { imessageOutbound } from "../../test/channel-outbounds.js";
 import { normalizeIMessageHandle } from "../channels/plugins/normalize/imessage.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../channels/plugins/types.js";
+import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
 import { collectStatusIssuesFromLastError } from "../plugin-sdk/status-helpers.js";
+
+const defaultIMessageOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  sendText: async ({ to, text, accountId, replyToId, deps, cfg }) => {
+    const sendIMessage = resolveOutboundSendDep<
+      (
+        target: string,
+        content: string,
+        opts?: Record<string, unknown>,
+      ) => Promise<{ messageId: string }>
+    >(deps, "imessage");
+    const result = await sendIMessage?.(to, text, {
+      config: cfg,
+      accountId: accountId ?? undefined,
+      replyToId: replyToId ?? undefined,
+    });
+    return { channel: "imessage", messageId: result?.messageId ?? "imessage-test-stub" };
+  },
+  sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, deps, cfg, mediaLocalRoots }) => {
+    const sendIMessage = resolveOutboundSendDep<
+      (
+        target: string,
+        content: string,
+        opts?: Record<string, unknown>,
+      ) => Promise<{ messageId: string }>
+    >(deps, "imessage");
+    const result = await sendIMessage?.(to, text, {
+      config: cfg,
+      mediaUrl,
+      accountId: accountId ?? undefined,
+      replyToId: replyToId ?? undefined,
+      mediaLocalRoots,
+    });
+    return { channel: "imessage", messageId: result?.messageId ?? "imessage-test-stub" };
+  },
+};
 
 export const createIMessageTestPlugin = (params?: {
   outbound?: ChannelOutboundAdapter;
@@ -23,7 +59,7 @@ export const createIMessageTestPlugin = (params?: {
   status: {
     collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("imessage", accounts),
   },
-  outbound: params?.outbound ?? imessageOutbound,
+  outbound: params?.outbound ?? defaultIMessageOutbound,
   messaging: {
     targetResolver: {
       looksLikeId: (raw) => {

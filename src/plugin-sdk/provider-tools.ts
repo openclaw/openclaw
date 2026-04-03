@@ -1,4 +1,8 @@
 // Shared provider-tool helpers for plugin-owned schema compatibility rewrites.
+export {
+  cleanSchemaForGemini,
+  GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
+} from "../agents/schema/clean-for-gemini.js";
 
 export const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "minLength",
@@ -53,4 +57,46 @@ export function stripUnsupportedSchemaKeywords(
 
 export function stripXaiUnsupportedKeywords(schema: unknown): unknown {
   return stripUnsupportedSchemaKeywords(schema, XAI_UNSUPPORTED_SCHEMA_KEYWORDS);
+}
+
+export function findUnsupportedSchemaKeywords(
+  schema: unknown,
+  path: string,
+  unsupportedKeywords: ReadonlySet<string>,
+): string[] {
+  if (!schema || typeof schema !== "object") {
+    return [];
+  }
+  if (Array.isArray(schema)) {
+    return schema.flatMap((item, index) =>
+      findUnsupportedSchemaKeywords(item, `${path}[${index}]`, unsupportedKeywords),
+    );
+  }
+  const record = schema as Record<string, unknown>;
+  const violations: string[] = [];
+  const properties =
+    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
+      ? (record.properties as Record<string, unknown>)
+      : undefined;
+  if (properties) {
+    for (const [key, value] of Object.entries(properties)) {
+      violations.push(
+        ...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
+      );
+    }
+  }
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "properties") {
+      continue;
+    }
+    if (unsupportedKeywords.has(key)) {
+      violations.push(`${path}.${key}`);
+    }
+    if (value && typeof value === "object") {
+      violations.push(
+        ...findUnsupportedSchemaKeywords(value, `${path}.${key}`, unsupportedKeywords),
+      );
+    }
+  }
+  return violations;
 }

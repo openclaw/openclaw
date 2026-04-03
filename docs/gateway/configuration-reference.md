@@ -1748,7 +1748,10 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
-- `removeAckAfterReply`: removes ack after reply (Slack/Discord/Telegram/Google Chat only).
+- `removeAckAfterReply`: removes ack after reply on Slack, Discord, and Telegram.
+- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, and Telegram.
+  On Slack and Discord, unset keeps status reactions enabled when ack reactions are active.
+  On Telegram, set it explicitly to `true` to enable lifecycle status reactions.
 
 ### Inbound debounce
 
@@ -2118,6 +2121,7 @@ Notes:
   agents: {
     defaults: {
       subagents: {
+        allowAgents: ["research"],
         model: "minimax/MiniMax-M2.7",
         maxConcurrent: 8,
         runTimeoutSeconds: 900,
@@ -2129,6 +2133,7 @@ Notes:
 ```
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
+- `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any; default: same agent only).
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 
