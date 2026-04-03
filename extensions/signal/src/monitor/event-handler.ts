@@ -731,8 +731,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
       });
       if (
-        signalGroupPolicy.groupConfig?.ingest === true ||
-        signalGroupPolicy.defaultConfig?.ingest === true
+        (signalGroupPolicy.groupConfig?.ingest ?? signalGroupPolicy.defaultConfig?.ingest) === true
       ) {
         const canonicalGroupTarget =
           normalizeSignalMessagingTarget(`group:${groupId}`) ?? `group:${groupId}`;

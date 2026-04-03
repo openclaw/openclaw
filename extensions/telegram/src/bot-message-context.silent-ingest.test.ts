@@ -44,7 +44,7 @@ describe("telegram mention-skip silent ingest", () => {
       cfg: {
         agents: {
           defaults: {
-            model: "anthropic/claude-opus-4-5",
+            model: "anthropic/sonnet-4.6",
             workspace: "/tmp/openclaw",
           },
         },

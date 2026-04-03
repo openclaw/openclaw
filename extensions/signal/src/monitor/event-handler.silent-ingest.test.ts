@@ -75,4 +75,46 @@ describe("signal mention-skip silent ingest", () => {
     );
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
+
+  it("does not emit when group ingest is false and wildcard ingest is true", async () => {
+    internalHookMocks.createInternalHookEvent.mockClear();
+    internalHookMocks.triggerInternalHook.mockClear();
+
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            groupChat: { mentionPatterns: ["@bot"] },
+          },
+          channels: {
+            signal: {
+              groups: {
+                "group-123": {
+                  requireMention: true,
+                  ingest: false,
+                },
+                "*": {
+                  requireMention: true,
+                  ingest: true,
+                },
+              },
+            },
+          },
+        } as never,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hello without mention",
+          attachments: [],
+          groupInfo: { groupId: "group-123", groupName: "Ops" },
+        },
+      }),
+    );
+
+    expect(internalHookMocks.createInternalHookEvent).not.toHaveBeenCalled();
+    expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+  });
 });
