@@ -614,6 +614,7 @@ export function describeModelStudioProviderDiscoveryContract() {
           apiKey: "modelstudio-key",
           models: expect.arrayContaining([
             expect.objectContaining({ id: "qwen3.5-plus" }),
+            expect.objectContaining({ id: "qwen3.6-plus" }),
             expect.objectContaining({ id: "MiniMax-M2.5" }),
           ]),
         },
