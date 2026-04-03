@@ -1,7 +1,37 @@
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
-import { normalizeToolParameters } from "./pi-tools.schema.js";
+import { normalizeToolParameterSchema, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+
+describe("normalizeToolParameterSchema", () => {
+  it("normalizes truly empty schemas to type:object with properties:{}", () => {
+    expect(normalizeToolParameterSchema({})).toEqual({
+      type: "object",
+      properties: {},
+    });
+  });
+
+  it("leaves top-level allOf schemas unchanged", () => {
+    const schema = {
+      allOf: [{ type: "object", properties: { id: { type: "string" } } }],
+    };
+
+    expect(normalizeToolParameterSchema(schema)).toEqual(schema);
+  });
+
+  it("adds missing top-level type for raw object-ish schemas", () => {
+    expect(
+      normalizeToolParameterSchema({
+        properties: { q: { type: "string" } },
+        required: ["q"],
+      }),
+    ).toEqual({
+      type: "object",
+      properties: { q: { type: "string" } },
+      required: ["q"],
+    });
+  });
+});
 
 describe("normalizeToolParameters", () => {
   it("normalizes truly empty schemas to type:object with properties:{} (MCP parameter-free tools)", () => {
