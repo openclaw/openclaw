@@ -28,7 +28,7 @@ export {
   buildBaseChannelStatusSummary,
 } from "openclaw/plugin-sdk/channel-status";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createAccountStatusSink } from "openclaw/plugin-sdk/compat";
+export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 export {
   readStoreAllowFromForDmPolicy,
   resolveEffectiveAllowFromLists,
