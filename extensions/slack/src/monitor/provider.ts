@@ -31,6 +31,7 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
+import { isSlackExecApprovalClientEnabled } from "../exec-approvals.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist, type SlackChannelResolution } from "../resolve-channels.js";
@@ -406,11 +407,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     : undefined;
 
   const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
-  const execApprovalsHandler = slackCfg.execApprovals?.enabled
+  const execApprovalsHandler = isSlackExecApprovalClientEnabled({
+    cfg,
+    accountId: account.accountId,
+  })
     ? new SlackExecApprovalHandler({
         app,
         accountId: account.accountId,
-        config: slackCfg.execApprovals,
+        config: slackCfg.execApprovals ?? {},
         cfg,
       })
     : null;

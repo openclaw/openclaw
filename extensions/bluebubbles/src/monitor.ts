@@ -1,5 +1,5 @@
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
 import { logVerbose, processMessage, processReaction } from "./monitor-processing.js";
@@ -116,18 +116,13 @@ function normalizeAuthToken(raw: string): string {
   return value;
 }
 
-function safeEqualSecret(aRaw: string, bRaw: string): boolean {
+function safeEqualAuthToken(aRaw: string, bRaw: string): boolean {
   const a = normalizeAuthToken(aRaw);
   const b = normalizeAuthToken(bRaw);
   if (!a || !b) {
     return false;
   }
-  const bufA = Buffer.from(a, "utf8");
-  const bufB = Buffer.from(b, "utf8");
-  if (bufA.length !== bufB.length) {
-    return false;
-  }
-  return timingSafeEqual(bufA, bufB);
+  return safeEqualSecret(a, b);
 }
 
 function collectTrustedProxies(targets: readonly WebhookTarget[]): string[] {
@@ -198,7 +193,7 @@ export async function handleBlueBubblesWebhookRequest(
         res,
         isMatch: (target) => {
           const token = target.account.config.password?.trim() ?? "";
-          return safeEqualSecret(guid, token);
+          return safeEqualAuthToken(guid, token);
         },
       });
       if (!target) {

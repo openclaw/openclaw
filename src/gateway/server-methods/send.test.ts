@@ -171,7 +171,11 @@ describe("gateway send mirroring", () => {
     vi.clearAllMocks();
     registrySeq += 1;
     setActivePluginRegistry(createTestRegistry([]), `send-test-${registrySeq}`);
-    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({
+      config,
+      changes: [],
+      autoEnabledReasons: {},
+    }));
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
     mocks.resolveOutboundSessionRoute.mockImplementation(
       async ({ agentId, channel }: { agentId?: string; channel?: string }) => ({
@@ -319,7 +323,11 @@ describe("gateway send mirroring", () => {
 
   it("auto-picks the single configured channel from the auto-enabled config snapshot for send", async () => {
     const autoEnabledConfig = { channels: { slack: {} }, plugins: { allow: ["slack"] } };
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
     mockDeliverySuccess("m-single-send-auto");
 
     const { respond } = await runSend({

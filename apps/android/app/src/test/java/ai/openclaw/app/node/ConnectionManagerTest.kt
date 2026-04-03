@@ -10,6 +10,7 @@ import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -69,7 +70,7 @@ class ConnectionManagerTest {
 
   @Test
   fun resolveTlsParamsForEndpoint_manualRespectsManualTlsToggle() {
-    val endpoint = GatewayEndpoint.manual(host = "example.com", port = 443)
+    val endpoint = GatewayEndpoint.manual(host = "127.0.0.1", port = 443)
 
     val off =
       ConnectionManager.resolveTlsParamsForEndpoint(
@@ -87,6 +88,234 @@ class ConnectionManagerTest {
       )
     assertNull(on?.expectedFingerprint)
     assertEquals(false, on?.allowTOFU)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_manualNonLoopbackForcesTlsWhenToggleIsOff() {
+    val endpoint = GatewayEndpoint.manual(host = "example.com", port = 443)
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryNonLoopbackWithoutHintsStillRequiresTls() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "10.0.0.2",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryLoopbackWithoutHintsCanStayCleartext() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "127.0.0.1",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryLocalhostWithoutHintsCanStayCleartext() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "localhost",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryAndroidEmulatorWithoutHintsCanStayCleartext() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "10.0.2.2",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
+  }
+
+  @Test
+  fun isLoopbackGatewayHost_onlyTreatsEmulatorBridgeAsLocalWhenAllowed() {
+    assertTrue(isLoopbackGatewayHost("10.0.2.2", allowEmulatorBridgeAlias = true))
+    assertFalse(isLoopbackGatewayHost("10.0.2.2", allowEmulatorBridgeAlias = false))
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryIpv6LoopbackWithoutHintsCanStayCleartext() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "::1",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryMappedIpv4LoopbackWithoutHintsCanStayCleartext() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "::ffff:127.0.0.1",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryNonLoopbackIpv6WithoutHintsRequiresTls() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "2001:db8::1",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryUnspecifiedIpv4WithoutHintsRequiresTls() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "0.0.0.0",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryUnspecifiedIpv6WithoutHintsRequiresTls() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "::",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
   }
 
   @Test

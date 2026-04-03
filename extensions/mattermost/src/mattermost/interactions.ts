@@ -1,5 +1,6 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import { isTrustedProxyAddress, resolveClientIp, type OpenClawConfig } from "./runtime-api.js";
@@ -223,10 +224,7 @@ export function verifyInteractionToken(
   accountId?: string,
 ): boolean {
   const expected = generateInteractionToken(context, accountId);
-  if (expected.length !== token.length) {
-    return false;
-  }
-  return timingSafeEqual(Buffer.from(expected), Buffer.from(token));
+  return safeEqualSecret(expected, token);
 }
 
 // ── Button builder helpers ─────────────────────────────────────────────
