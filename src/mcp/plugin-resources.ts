@@ -14,6 +14,11 @@ export type McpResourceDefinition = {
   name: string;
   description: string;
   mimeType: string;
+  /**
+   * Returns the resource body as a string. Called on every read request.
+   * NOTE: The result reflects the config/tools snapshot captured at server
+   * construction time; live state changes after startup are not reflected.
+   */
   read: () => string;
 };
 
