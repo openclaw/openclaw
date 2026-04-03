@@ -99,27 +99,33 @@ import { describeUnknownError } from "./utils.js";
 type ApiKeyInfo = ResolvedProviderAuth;
 
 /**
- * Backfill sessionKey from sessionId when not explicitly provided.
- * This prevents null session_key propagation to hooks, LCM, and compaction.
+ * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
+ * When resolution succeeds the resolved key is returned; when it fails (corrupt store,
+ * sessionId not found, etc.) the original value is returned unchanged. This is a
+ * read-only lookup with no side effects.
  * See: https://github.com/openclaw/openclaw/issues/60552
  */
 function backfillSessionKey(params: {
   config: RunEmbeddedPiAgentParams["config"];
   sessionId: string;
   sessionKey?: string;
-  agentId?: string;
 }): string | undefined {
-  if (params.sessionKey?.trim()) return params.sessionKey;
-  if (!params.config || !params.sessionId) return params.sessionKey;
+  const trimmed = params.sessionKey?.trim() || undefined;
+  if (trimmed) return trimmed;
+  if (!params.config || !params.sessionId) return undefined;
   try {
+    // Intentionally omit agentId to avoid resolveExplicitAgentSessionKey() binding
+    // one-off callers (e.g. model probes) to the agent's main session.
     const resolved = resolveSessionKeyForRequest({
       cfg: params.config,
       sessionId: params.sessionId,
-      agentId: params.agentId,
     });
-    return resolved.sessionKey ?? params.sessionKey;
-  } catch {
-    return params.sessionKey;
+    return resolved.sessionKey?.trim() || undefined;
+  } catch (err) {
+    log.warn(
+      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${sanitizeForLog(params.sessionId)}: ${describeUnknownError(err)}`,
+    );
+    return undefined;
   }
 }
 
@@ -132,7 +138,6 @@ export async function runEmbeddedPiAgent(
     config: params.config,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    agentId: params.agentId,
   });
   if (effectiveSessionKey && effectiveSessionKey !== params.sessionKey) {
     params = { ...params, sessionKey: effectiveSessionKey };
