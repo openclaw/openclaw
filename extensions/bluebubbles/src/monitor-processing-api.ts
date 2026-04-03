@@ -1,4 +1,4 @@
-export { resolveAckReaction } from "openclaw/plugin-sdk/bluebubbles";
+export { resolveAckReaction } from "./runtime-api.js";
 export { logAckFailure, logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
