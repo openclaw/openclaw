@@ -70,6 +70,7 @@ export function createDiscordMonitorClient(params: {
   accountId: string;
   applicationId: string;
   token: string;
+  discordRestFetch: typeof fetch;
   commands: BaseCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
@@ -108,13 +109,14 @@ export function createDiscordMonitorClient(params: {
   });
   const client = params.createClient(
     {
-      baseUrl: "http://localhost",
+      baseUrl: "https://discord.com/api",
       deploySecret: "a",
       clientId: params.applicationId,
       publicKey: "a",
       token: params.token,
       autoDeploy: false,
       eventQueue: eventQueueOpts,
+      requestOptions: { fetch: params.discordRestFetch },
     },
     {
       commands: params.commands,

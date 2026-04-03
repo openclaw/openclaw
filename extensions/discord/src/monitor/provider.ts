@@ -903,6 +903,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       accountId: account.accountId,
       applicationId,
       token,
+      discordRestFetch,
       commands,
       components,
       modals,
