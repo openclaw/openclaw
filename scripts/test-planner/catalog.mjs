@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { channelTestPrefixes } from "../../vitest.channel-paths.mjs";
+import { channelTestPrefixes, isChannelSurfaceTestFile } from "../../vitest.channel-paths.mjs";
 import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
@@ -127,7 +127,7 @@ export function loadTestCatalog() {
       surface = "live";
     } else if (normalizedFile.endsWith(".e2e.test.ts")) {
       surface = "e2e";
-    } else if (channelTestPrefixes.some((prefix) => normalizedFile.startsWith(prefix))) {
+    } else if (isChannelSurfaceTestFile(normalizedFile)) {
       surface = "channels";
     } else if (normalizedFile.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
       surface = "extensions";
