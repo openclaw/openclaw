@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __resetDiscordDirectoryCacheForTest,
+  resolveDiscordDirectoryUserId,
+} from "./directory-cache.js";
 import * as directoryLive from "./directory-live.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -76,6 +80,7 @@ describe("resolveDiscordTarget", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    __resetDiscordDirectoryCacheForTest();
   });
 
   it("returns a resolved user for usernames", async () => {
@@ -101,6 +106,33 @@ describe("resolveDiscordTarget", () => {
       resolveDiscordTarget("user:123", { cfg, accountId: "default" }),
     ).resolves.toMatchObject({ kind: "user", id: "123" });
     expect(listPeers).not.toHaveBeenCalled();
+  });
+
+  it("caches username lookups under the configured default account when accountId is omitted", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              token: "discord-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([
+      { kind: "user", id: "user:999", name: "Jane" } as const,
+    ]);
+
+    await expect(resolveDiscordTarget("jane", { cfg })).resolves.toMatchObject({
+      kind: "user",
+      id: "999",
+      normalized: "user:999",
+    });
+    expect(resolveDiscordDirectoryUserId({ accountId: "work", handle: "jane" })).toBe("999");
+    expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "jane" })).toBeUndefined();
   });
 });
 
