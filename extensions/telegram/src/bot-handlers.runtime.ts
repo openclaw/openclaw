@@ -387,6 +387,7 @@ export const registerTelegramHandlers = ({
             opts.token,
             telegramTransport,
             telegramCfg.apiRoot,
+            telegramCfg.network?.dangerouslyAllowPrivateNetwork,
           );
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
@@ -495,6 +496,7 @@ export const registerTelegramHandlers = ({
         opts.token,
         telegramTransport,
         telegramCfg.apiRoot,
+        telegramCfg.network?.dangerouslyAllowPrivateNetwork,
       );
       if (!media) {
         return [];
@@ -1019,6 +1021,7 @@ export const registerTelegramHandlers = ({
         opts.token,
         telegramTransport,
         telegramCfg.apiRoot,
+        telegramCfg.network?.dangerouslyAllowPrivateNetwork,
       );
     } catch (mediaErr) {
       if (isMediaSizeLimitError(mediaErr)) {

@@ -47784,6 +47784,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.network.dangerouslyAllowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.network.dnsResultOrder",
       "kind": "channel",
       "type": "string",
@@ -49985,6 +49995,24 @@
       ],
       "label": "Telegram autoSelectFamily",
       "help": "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.network.dangerouslyAllowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "advanced",
+        "channels",
+        "network",
+        "security"
+      ],
+      "label": "Telegram Dangerously Allow Private Network",
+      "help": "Dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve api.telegram.org to private/internal/special-use addresses.",
       "hasChildren": false
     },
     {

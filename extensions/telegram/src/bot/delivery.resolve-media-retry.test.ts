@@ -546,19 +546,32 @@ describe("resolveMedia original filename preservation", () => {
     expect(result).not.toBeNull();
   });
 
+  it("opts into private-network Telegram media downloads only when explicitly configured", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const ctx = makeCtx("document", getFile);
+    const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN, undefined, undefined, true);
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: {
+          hostnameAllowlist: ["api.telegram.org"],
+          allowPrivateNetwork: true,
+          allowRfc2544BenchmarkRange: true,
+        },
+      }),
+    );
+    expect(result).not.toBeNull();
+  });
+
   it("constructs correct download URL with custom apiRoot for documents", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
     mockPdfFetchAndSave("file_42.pdf");
 
     const customApiRoot = "http://192.168.1.50:8081/custom-bot-api";
     const ctx = makeCtx("document", getFile);
-    const result = await resolveMedia(
-      ctx,
-      MAX_MEDIA_BYTES,
-      BOT_TOKEN,
-      undefined,
-      customApiRoot,
-    );
+    const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN, undefined, customApiRoot);
 
     // Verify the URL uses the custom apiRoot, not the default Telegram API
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
@@ -583,13 +596,7 @@ describe("resolveMedia original filename preservation", () => {
 
     const customApiRoot = "http://localhost:8081/bot";
     const ctx = makeCtx("sticker", getFile);
-    const result = await resolveMedia(
-      ctx,
-      MAX_MEDIA_BYTES,
-      BOT_TOKEN,
-      undefined,
-      customApiRoot,
-    );
+    const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN, undefined, customApiRoot);
 
     // Verify the URL uses the custom apiRoot for sticker downloads
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
