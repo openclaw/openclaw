@@ -17,11 +17,11 @@ import {
   sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { resolveSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
 import { compileSlackInteractiveReplies } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
-import { resolveSlackAccount } from "./accounts.js";
 import { sendMessageSlack, type SlackSendIdentity } from "./send.js";
 
 const SLACK_MAX_BLOCKS = 50;
@@ -51,7 +51,7 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
 }
 
 async function applySlackMessageSendingHooks(params: {
-  cfg: NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"];
+  cfg: NonNullable<NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"]>;
   to: string;
   text: string;
   threadTs?: string;
@@ -85,7 +85,7 @@ async function applySlackMessageSendingHooks(params: {
 }
 
 async function sendSlackOutboundMessage(params: {
-  cfg: NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"];
+  cfg: NonNullable<NonNullable<Parameters<typeof sendMessageSlack>[2]>["cfg"]>;
   to: string;
   text: string;
   mediaUrl?: string;
