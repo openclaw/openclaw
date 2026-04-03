@@ -39,6 +39,8 @@ export type TaskRegistryMaintenanceSummary = {
   pruned: number;
 };
 
+type TaskBackingEvidence = "present" | "missing" | "unknown";
+
 function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: string): unknown {
   const direct = store[sessionKey];
   if (direct) {
@@ -77,43 +79,44 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   return false;
 }
 
-function hasBackingSession(task: TaskRecord): boolean {
+function resolveMissingChildSessionEvidence(task: TaskRecord): TaskBackingEvidence {
   if (task.runtime === "cron") {
     const jobId = task.sourceId?.trim();
-    return jobId ? isCronJobActive(jobId) : false;
+    return jobId && isCronJobActive(jobId) ? "present" : "missing";
   }
-
-  if (task.runtime === "cli" && hasActiveCliRun(task)) {
-    return true;
+  if (task.runtime === "cli") {
+    return hasActiveCliRun(task) ? "present" : "missing";
   }
+  return "unknown";
+}
 
+function resolveBackingEvidence(task: TaskRecord): TaskBackingEvidence {
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
-    return true;
+    return resolveMissingChildSessionEvidence(task);
   }
   if (task.runtime === "acp") {
     const acpEntry = readAcpSessionEntry({
       sessionKey: childSessionKey,
     });
     if (!acpEntry || acpEntry.storeReadFailed) {
-      return true;
+      return "unknown";
     }
-    return Boolean(acpEntry.entry);
+    return acpEntry.entry ? "present" : "missing";
   }
-  if (task.runtime === "subagent" || task.runtime === "cli") {
+  if (task.runtime === "subagent" || task.runtime === "cli" || task.runtime === "cron") {
     if (task.runtime === "cli") {
       const chatType = deriveSessionChatType(childSessionKey);
       if (chatType === "channel" || chatType === "group" || chatType === "direct") {
-        return false;
+        return "present";
       }
     }
     const agentId = parseAgentSessionKey(childSessionKey)?.agentId;
     const storePath = resolveStorePath(undefined, { agentId });
     const store = loadSessionStore(storePath);
-    return Boolean(findSessionEntryByKey(store, childSessionKey));
+    return findSessionEntryByKey(store, childSessionKey) ? "present" : "missing";
   }
-
-  return true;
+  return "unknown";
 }
 
 function shouldMarkLost(task: TaskRecord, now: number): boolean {
@@ -123,7 +126,7 @@ function shouldMarkLost(task: TaskRecord, now: number): boolean {
   if (!hasLostGraceExpired(task, now)) {
     return false;
   }
-  return !hasBackingSession(task);
+  return resolveBackingEvidence(task) === "missing";
 }
 
 function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {

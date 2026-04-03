@@ -91,13 +91,14 @@ async function loadFreshTaskRegistryModulesForControlTest() {
 async function loadFreshTaskRegistryMaintenanceModuleForTest(params: {
   currentTasks: Map<string, ReturnType<typeof createTaskRecord>>;
   snapshotTasks: ReturnType<typeof createTaskRecord>[];
+  sessionStore?: Record<string, unknown>;
 }) {
   vi.resetModules();
   vi.doMock("../acp/runtime/session-meta.js", () => ({
     readAcpSessionEntry: () => ({ entry: undefined, storeReadFailed: false }),
   }));
   vi.doMock("../config/sessions.js", () => ({
-    loadSessionStore: () => ({}),
+    loadSessionStore: () => params.sessionStore ?? {},
     resolveStorePath: () => "",
   }));
   vi.doMock("../routing/session-key.js", () => ({
@@ -1286,6 +1287,111 @@ describe("task-registry", () => {
         error: "backing session missing",
       });
       expect(getTaskById(task.taskId)?.cleanupAfter).toBeGreaterThan(now);
+    });
+  });
+
+  it("marks stale cron tasks without child-session linkage as lost after grace expires", async () => {
+    const now = Date.now();
+    const snapshotTask = createTaskRecord({
+      runtime: "cron",
+      ownerKey: "",
+      scopeKind: "system",
+      runId: "run-cron-missing-child",
+      task: "Missing cron child session",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    const staleTask = {
+      ...snapshotTask,
+      lastEventAt: now - 10 * 60_000,
+    };
+    const currentTasks = new Map([[snapshotTask.taskId, staleTask]]);
+    const { runTaskRegistryMaintenance } = await loadFreshTaskRegistryMaintenanceModuleForTest({
+      currentTasks,
+      snapshotTasks: [staleTask],
+    });
+
+    expect(await runTaskRegistryMaintenance()).toEqual({
+      reconciled: 1,
+      cleanupStamped: 0,
+      pruned: 0,
+    });
+    expect(currentTasks.get(snapshotTask.taskId)).toMatchObject({
+      status: "lost",
+      error: "backing session missing",
+    });
+    expect(currentTasks.get(snapshotTask.taskId)?.endedAt).toBeGreaterThanOrEqual(now);
+  });
+
+  it("keeps cron tasks active when their linked child session still exists", async () => {
+    const now = Date.now();
+    const snapshotTask = createTaskRecord({
+      runtime: "cron",
+      ownerKey: "",
+      scopeKind: "system",
+      childSessionKey: "agent:main:cron:nightly",
+      runId: "run-cron-active-child",
+      task: "Cron child session still exists",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    const staleTask = {
+      ...snapshotTask,
+      lastEventAt: now - 10 * 60_000,
+    };
+    const currentTasks = new Map([[snapshotTask.taskId, staleTask]]);
+    const { runTaskRegistryMaintenance } = await loadFreshTaskRegistryMaintenanceModuleForTest({
+      currentTasks,
+      snapshotTasks: [staleTask],
+      sessionStore: {
+        "agent:main:cron:nightly": { id: "session-present" },
+      },
+    });
+
+    expect(await runTaskRegistryMaintenance()).toEqual({
+      reconciled: 0,
+      cleanupStamped: 0,
+      pruned: 0,
+    });
+    expect(currentTasks.get(snapshotTask.taskId)).toMatchObject({
+      status: "running",
+      childSessionKey: "agent:main:cron:nightly",
+      lastEventAt: staleTask.lastEventAt,
+    });
+  });
+
+  it("keeps fresh cron tasks without child-session linkage inside the grace period", async () => {
+    const now = Date.now();
+    const snapshotTask = createTaskRecord({
+      runtime: "cron",
+      ownerKey: "",
+      scopeKind: "system",
+      runId: "run-cron-fresh-missing-child",
+      task: "Fresh cron task without child session",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    const freshTask = {
+      ...snapshotTask,
+      lastEventAt: now - 60_000,
+    };
+    const currentTasks = new Map([[snapshotTask.taskId, freshTask]]);
+    const { runTaskRegistryMaintenance } = await loadFreshTaskRegistryMaintenanceModuleForTest({
+      currentTasks,
+      snapshotTasks: [freshTask],
+    });
+
+    expect(await runTaskRegistryMaintenance()).toEqual({
+      reconciled: 0,
+      cleanupStamped: 0,
+      pruned: 0,
+    });
+    expect(currentTasks.get(snapshotTask.taskId)).toMatchObject({
+      status: "running",
+      lastEventAt: freshTask.lastEventAt,
     });
   });
 
