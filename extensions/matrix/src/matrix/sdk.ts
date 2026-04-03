@@ -15,7 +15,10 @@ import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
 import { createMatrixJsSdkClientLogger } from "./client/logging.js";
 import { isMatrixNotFoundError } from "./errors.js";
-import type { MatrixCryptoBootstrapResult } from "./sdk/crypto-bootstrap.js";
+import type {
+  MatrixCryptoBootstrapOptions,
+  MatrixCryptoBootstrapResult,
+} from "./sdk/crypto-bootstrap.js";
 import type { MatrixCryptoFacade } from "./sdk/crypto-facade.js";
 import type { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
 import { matrixEventToRaw, parseMxc } from "./sdk/event-helpers.js";
@@ -118,6 +121,26 @@ export type MatrixVerificationBootstrapResult = {
   pendingVerifications: number;
   cryptoBootstrap: MatrixCryptoBootstrapResult | null;
 };
+
+const MATRIX_INITIAL_CRYPTO_BOOTSTRAP_OPTIONS = {
+  allowAutomaticCrossSigningReset: false,
+} satisfies MatrixCryptoBootstrapOptions;
+
+const MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS = {
+  forceResetCrossSigning: true,
+  allowSecretStorageRecreateWithoutRecoveryKey: true,
+  strict: true,
+} satisfies MatrixCryptoBootstrapOptions;
+
+function createMatrixExplicitBootstrapOptions(params?: {
+  forceResetCrossSigning?: boolean;
+}): MatrixCryptoBootstrapOptions {
+  return {
+    forceResetCrossSigning: params?.forceResetCrossSigning === true,
+    allowSecretStorageRecreateWithoutRecoveryKey: true,
+    strict: true,
+  };
+}
 
 export type MatrixOwnDeviceInfo = {
   deviceId: string;
@@ -453,9 +476,10 @@ export class MatrixClient {
     if (!cryptoBootstrapper) {
       return;
     }
-    const initial = await cryptoBootstrapper.bootstrap(crypto, {
-      allowAutomaticCrossSigningReset: false,
-    });
+    const initial = await cryptoBootstrapper.bootstrap(
+      crypto,
+      MATRIX_INITIAL_CRYPTO_BOOTSTRAP_OPTIONS,
+    );
     if (!initial.crossSigningPublished || initial.ownDeviceVerified === false) {
       const status = await this.getOwnDeviceVerificationStatus();
       if (status.signedByOwner) {
@@ -465,10 +489,14 @@ export class MatrixClient {
         );
       } else if (this.password?.trim()) {
         try {
-          const repaired = await cryptoBootstrapper.bootstrap(crypto, {
-            forceResetCrossSigning: true,
-            strict: true,
-          });
+          // The repair path already force-resets cross-signing; allow secret storage
+          // recreation so the new keys can be persisted. Without this, a device that
+          // lost its recovery key enters a permanent failure loop because the new
+          // cross-signing keys have nowhere to be stored.
+          const repaired = await cryptoBootstrapper.bootstrap(
+            crypto,
+            MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS,
+          );
           if (repaired.crossSigningPublished && repaired.ownDeviceVerified !== false) {
             LogService.info(
               "MatrixClientLite",
@@ -1261,11 +1289,10 @@ export class MatrixClient {
       if (!cryptoBootstrapper) {
         throw new Error("Matrix crypto bootstrapper is not available");
       }
-      bootstrapSummary = await cryptoBootstrapper.bootstrap(crypto, {
-        forceResetCrossSigning: params?.forceResetCrossSigning === true,
-        allowSecretStorageRecreateWithoutRecoveryKey: true,
-        strict: true,
-      });
+      bootstrapSummary = await cryptoBootstrapper.bootstrap(
+        crypto,
+        createMatrixExplicitBootstrapOptions(params),
+      );
       await this.ensureRoomKeyBackupEnabled(crypto);
     } catch (err) {
       this.recoveryKeyStore.discardStagedRecoveryKey();
