@@ -59,6 +59,7 @@ openclaw gateway --port 18789
 
 ```json5
 {
+  gateway: { mode: "local" },
   channels: { whatsapp: { allowFrom: ["+15555550123"] } },
 }
 ```
@@ -192,10 +193,13 @@ MEDIA:https://example.com/screenshot.png
 
 OpenClaw extracts these and sends them as media alongside the text.
 
-For local paths, the default allowlist is intentionally narrow: the OpenClaw temp
-root, the media cache, agent workspace paths, and sandbox-generated files. If you
-need broader local-file attachment roots, configure an explicit channel/plugin
-allowlist instead of relying on arbitrary host paths.
+Local-path behavior follows the same file-read trust model as the agent:
+
+- If `tools.fs.workspaceOnly` is `true`, outbound `MEDIA:` local paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and sandbox-generated files.
+- If `tools.fs.workspaceOnly` is `false`, outbound `MEDIA:` can use host-local files the agent is already allowed to read.
+- Host-local sends still only allow media and safe document types (images, audio, video, PDF, and Office documents). Plain text and secret-like files are not treated as sendable media.
+
+That means generated images/files outside the workspace can now send when your fs policy already allows those reads, without reopening arbitrary host-text attachment exfiltration.
 
 ## Operations checklist
 

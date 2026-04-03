@@ -1,9 +1,4 @@
-import { resolveMentionGating } from "openclaw/plugin-sdk/channel-inbound";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { recordPendingHistoryEntryIfEnabled } from "openclaw/plugin-sdk/reply-history";
-import { parseActivationCommand } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import {
   getPrimaryIdentityId,
   getReplyContext,
@@ -16,6 +11,13 @@ import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.
 import type { WebInboundMsg } from "../types.js";
 import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
+import {
+  hasControlCommand,
+  normalizeE164,
+  parseActivationCommand,
+  recordPendingHistoryEntryIfEnabled,
+  resolveMentionGating,
+} from "./group-gating.runtime.js";
 import { noteGroupMember } from "./group-members.js";
 
 export type GroupHistoryEntry = {
@@ -38,6 +40,7 @@ type ApplyGroupGatingParams = {
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryLimit: number;
   groupMemberNames: Map<string, Map<string, string>>;
+  selfChatMode?: boolean;
   logVerbose: (msg: string) => void;
   replyLogger: { debug: (obj: unknown, msg: string) => void };
 };
@@ -141,10 +144,15 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   });
   const requireMention = activation !== "always";
   const replyContext = getReplyContext(params.msg, params.authDir);
+  const sharedNumberSelfChat = params.selfChatMode === true;
   // Detect reply-to-bot: compare JIDs, LIDs, and E.164 numbers.
   // WhatsApp may report the quoted message sender as either a phone JID
   // (xxxxx@s.whatsapp.net) or a LID (xxxxx@lid), so we compare both.
-  const implicitMention = identitiesOverlap(self, replyContext?.sender);
+  // But in shared-number/selfChatMode setups, replies from the same self number
+  // should not count as implicit bot mentions unless the message explicitly
+  // mentioned the bot in text.
+  const implicitReplyToSelf = sharedNumberSelfChat && identitiesOverlap(self, sender);
+  const implicitMention = !implicitReplyToSelf && identitiesOverlap(self, replyContext?.sender);
   const mentionGate = resolveMentionGating({
     requireMention,
     canDetectMention: true,

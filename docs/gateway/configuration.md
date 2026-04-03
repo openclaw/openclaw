@@ -175,6 +175,33 @@ When validation fails:
 
   </Accordion>
 
+  <Accordion title="Restrict skills per agent">
+    Use `agents.defaults.skills` for a shared baseline, then override specific
+    agents with `agents.list[].skills`:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          skills: ["github", "weather"],
+        },
+        list: [
+          { id: "writer" }, // inherits github, weather
+          { id: "docs", skills: ["docs-search"] }, // replaces defaults
+          { id: "locked-down", skills: [] }, // no skills
+        ],
+      },
+    }
+    ```
+
+    - Omit `agents.defaults.skills` for unrestricted skills by default.
+    - Omit `agents.list[].skills` to inherit the defaults.
+    - Set `agents.list[].skills: []` for no skills.
+    - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
+      the [Configuration Reference](/gateway/configuration-reference#agentsdefaultsskills).
+
+  </Accordion>
+
   <Accordion title="Tune gateway channel health monitoring">
     Control how aggressively the gateway restarts channels that look stale:
 
@@ -327,7 +354,7 @@ When validation fails:
     ```
 
     - `every`: duration string (`30m`, `2h`). Set `0m` to disable.
-    - `target`: `last` | `whatsapp` | `telegram` | `discord` | `none`
+    - `target`: `last` | `none` | `<channel-id>` (for example `discord`, `matrix`, `telegram`, or `whatsapp`)
     - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
 

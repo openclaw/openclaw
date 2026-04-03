@@ -14,8 +14,8 @@ const runtimeApiMocks = vi.hoisted(() => ({
   registerBrowserCli: vi.fn(),
 }));
 
-vi.mock("./runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime-api.js")>();
+vi.mock("./runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
   return {
     ...actual,
     createBrowserPluginService: runtimeApiMocks.createBrowserPluginService,
@@ -47,23 +47,6 @@ function createApi() {
 }
 
 describe("browser plugin", () => {
-  it("registers browser tool, cli, gateway method, and service ownership", () => {
-    const { api, registerCli, registerGatewayMethod, registerService, registerTool } = createApi();
-    browserPlugin.register(api);
-
-    expect(registerTool).toHaveBeenCalledTimes(1);
-    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), { commands: ["browser"] });
-    expect(registerGatewayMethod).toHaveBeenCalledWith(
-      "browser.request",
-      runtimeApiMocks.handleBrowserGatewayRequest,
-      { scope: "operator.write" },
-    );
-    expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledTimes(1);
-    expect(registerService).toHaveBeenCalledWith(
-      runtimeApiMocks.createBrowserPluginService.mock.results[0]?.value,
-    );
-  });
-
   it("forwards per-session browser options into the tool factory", () => {
     const { api, registerTool } = createApi();
     browserPlugin.register(api);

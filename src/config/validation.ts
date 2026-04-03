@@ -1,15 +1,17 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
+import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
 import {
   normalizePluginsConfig,
-  resolveEffectiveEnableState,
+  resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import { hasKind } from "../plugins/slots.js";
+import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -23,13 +25,10 @@ import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-di
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
-import {
-  listLegacyWebSearchConfigPaths,
-  normalizeLegacyWebSearchConfig,
-} from "./legacy-web-search.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
+import { coerceSecretRef } from "./types.secrets.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
@@ -44,6 +43,7 @@ type AllowedValuesCollection = {
 type JsonSchemaLike = Record<string, unknown>;
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
+const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
 const bundledChannelSchemaById = new Map<string, unknown>(
   GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
     (entry) => [entry.channelId, entry.schema] as const,
@@ -255,6 +255,94 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
   return collection.values;
 }
 
+function isObjectSecretRefCandidate(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return coerceSecretRef(value) !== null;
+}
+
+function formatUnsupportedMutableSecretRefMessage(path: string): string {
+  return [
+    `SecretRef objects are not supported at ${path}.`,
+    "This credential is runtime-mutable or runtime-managed and must stay a plain string value.",
+    'Use a plain string (env template strings like "${MY_VAR}" are allowed).',
+    `See ${SECRETREF_POLICY_DOC_URL}.`,
+  ].join(" ");
+}
+
+function pushUnsupportedMutableSecretRefIssue(
+  issues: ConfigValidationIssue[],
+  path: string,
+  value: unknown,
+): void {
+  if (!isObjectSecretRefCandidate(value)) {
+    return;
+  }
+  issues.push({
+    path,
+    message: formatUnsupportedMutableSecretRefMessage(path),
+  });
+}
+
+function collectUnsupportedMutableSecretRefIssues(raw: unknown): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  for (const candidate of collectUnsupportedSecretRefConfigCandidates(raw)) {
+    pushUnsupportedMutableSecretRefIssue(issues, candidate.path, candidate.value);
+  }
+
+  return issues;
+}
+
+function isUnsupportedMutableSecretRefSchemaIssue(params: {
+  issue: ConfigValidationIssue;
+  policyIssue: ConfigValidationIssue;
+}): boolean {
+  const { issue, policyIssue } = params;
+  if (issue.path === policyIssue.path) {
+    return /expected string, received object/i.test(issue.message);
+  }
+
+  if (!issue.path || !policyIssue.path || !policyIssue.path.startsWith(`${issue.path}.`)) {
+    return false;
+  }
+
+  const remainder = policyIssue.path.slice(issue.path.length + 1);
+  const childKey = remainder.split(".")[0];
+  if (!childKey) {
+    return false;
+  }
+
+  if (!/Unrecognized key/i.test(issue.message)) {
+    return false;
+  }
+  const unrecognizedKeys = [...issue.message.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  if (unrecognizedKeys.length === 0) {
+    return false;
+  }
+  return unrecognizedKeys.length === 1 && unrecognizedKeys[0] === childKey;
+}
+
+function mergeUnsupportedMutableSecretRefIssues(
+  policyIssues: ConfigValidationIssue[],
+  schemaIssues: ConfigValidationIssue[],
+): ConfigValidationIssue[] {
+  if (policyIssues.length === 0) {
+    return schemaIssues;
+  }
+  const filteredSchemaIssues = schemaIssues.filter(
+    (issue) =>
+      !policyIssues.some((policyIssue) =>
+        isUnsupportedMutableSecretRefSchemaIssue({ issue, policyIssue }),
+      ),
+  );
+  return [...policyIssues, ...filteredSchemaIssues];
+}
+
+export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigValidationIssue[] {
+  return collectUnsupportedMutableSecretRefIssues(raw);
+}
+
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = formatConfigPath(toConfigPathSegments(record?.path));
@@ -363,8 +451,8 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const normalizedRaw = normalizeLegacyWebSearchConfig(raw);
-  const legacyIssues = findLegacyConfigIssues(normalizedRaw);
+  const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
+  const legacyIssues = findLegacyConfigIssues(raw);
   if (legacyIssues.length > 0) {
     return {
       ok: false,
@@ -374,12 +462,16 @@ export function validateConfigObjectRaw(
       })),
     };
   }
-  const validated = OpenClawSchema.safeParse(normalizedRaw);
+  const validated = OpenClawSchema.safeParse(raw);
   if (!validated.success) {
+    const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));
     return {
       ok: false,
-      issues: validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue)),
+      issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
     };
+  }
+  if (policyIssues.length > 0) {
+    return { ok: false, issues: policyIssues };
   }
   const validatedConfig = validated.data as OpenClawConfig;
   const duplicates = findDuplicateAgentDirs(validatedConfig);
@@ -458,12 +550,7 @@ function validateConfigObjectWithPluginsBase(
 
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = listLegacyWebSearchConfigPaths(raw).map((path) => ({
-    path,
-    message:
-      `${path} is deprecated for web search provider config. ` +
-      "Move it under plugins.entries.<plugin>.config.webSearch.*; OpenClaw mapped it automatically for compatibility.",
-  }));
+  const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
@@ -745,6 +832,7 @@ function validateConfigObjectWithPluginsBase(
   const { registry } = ensureRegistry();
   const knownIds = ensureKnownIds();
   const normalizedPlugins = ensureNormalizedPlugins();
+  const effectiveConfig = ensureCompatConfig();
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
@@ -827,14 +915,14 @@ function validateConfigObjectWithPluginsBase(
     const entry = normalizedPlugins.entries[pluginId];
     const entryHasConfig = Boolean(entry?.config);
 
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: pluginId,
       origin: record.origin,
       config: normalizedPlugins,
-      rootConfig: config,
+      rootConfig: effectiveConfig,
     });
-    let enabled = enableState.enabled;
-    let reason = enableState.reason;
+    let enabled = activationState.activated;
+    let reason = activationState.reason;
 
     if (enabled) {
       const memoryDecision = resolveMemorySlotDecision({
@@ -847,7 +935,7 @@ function validateConfigObjectWithPluginsBase(
         enabled = false;
         reason = memoryDecision.reason;
       }
-      if (memoryDecision.selected && record.kind === "memory") {
+      if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         selectedMemoryPluginId = pluginId;
       }
     }

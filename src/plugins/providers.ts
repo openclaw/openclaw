@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { withBundledPluginVitestCompat } from "./bundled-compat.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
@@ -16,7 +16,7 @@ export function resolveBundledProviderCompatPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  onlyPluginIds?: string[];
+  onlyPluginIds?: readonly string[];
 }): string[] {
   const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
   const registry = loadPluginManifestRegistry({
@@ -39,7 +39,7 @@ export function resolveEnabledProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  onlyPluginIds?: string[];
+  onlyPluginIds?: readonly string[];
 }): string[] {
   const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
   const registry = loadPluginManifestRegistry({
@@ -53,12 +53,12 @@ export function resolveEnabledProviderPluginIds(params: {
       (plugin) =>
         plugin.providers.length > 0 &&
         (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
-        resolveEffectiveEnableState({
+        resolveEffectivePluginActivationState({
           id: plugin.id,
           origin: plugin.origin,
           config: normalizedConfig,
           rootConfig: params.config,
-        }).enabled,
+        }).activated,
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
@@ -111,12 +111,12 @@ export function resolveNonBundledProviderPluginIds(params: {
       (plugin) =>
         plugin.origin !== "bundled" &&
         plugin.providers.length > 0 &&
-        resolveEffectiveEnableState({
+        resolveEffectivePluginActivationState({
           id: plugin.id,
           origin: plugin.origin,
           config: normalizedConfig,
           rootConfig: params.config,
-        }).enabled,
+        }).activated,
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
@@ -137,12 +137,12 @@ export function resolveCatalogHookProviderPluginIds(params: {
     .filter(
       (plugin) =>
         plugin.providers.length > 0 &&
-        resolveEffectiveEnableState({
+        resolveEffectivePluginActivationState({
           id: plugin.id,
           origin: plugin.origin,
           config: normalizedConfig,
           rootConfig: params.config,
-        }).enabled,
+        }).activated,
     )
     .map((plugin) => plugin.id);
   const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds(params);

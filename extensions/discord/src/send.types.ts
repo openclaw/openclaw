@@ -28,13 +28,22 @@ export type DiscordSendResult = {
   channelId: string;
 };
 
+export type DiscordRuntimeAccountContext = {
+  cfg: OpenClawConfig;
+  accountId: string;
+};
+
 export type DiscordReactOpts = {
   cfg?: OpenClawConfig;
-  token?: string;
   accountId?: string;
+  token?: string;
   rest?: RequestClient;
   verbose?: boolean;
   retry?: RetryConfig;
+};
+
+export type DiscordReactionRuntimeContext = DiscordRuntimeAccountContext & {
+  rest: RequestClient;
 };
 
 export type DiscordReactionUser = {

@@ -11,6 +11,7 @@ import {
 } from "../acp/runtime/session-identifiers.js";
 import type { AcpRuntimeSessionMode } from "../acp/runtime/types.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -87,6 +88,8 @@ export type SpawnAcpContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
+  agentGroupId?: string;
   sandboxed?: boolean;
 };
 
@@ -360,7 +363,21 @@ function resolveConversationIdForThreadBinding(params: {
   channel?: string;
   to?: string;
   threadId?: string | number;
+  groupId?: string;
 }): string | undefined {
+  const channel = params.channel?.trim().toLowerCase();
+  const normalizedChannelId = channel ? normalizeChannelId(channel) : null;
+  const pluginResolvedConversationId = normalizedChannelId
+    ? getChannelPlugin(normalizedChannelId)?.messaging?.resolveInboundConversation?.({
+        to: params.groupId ?? params.to,
+        conversationId: params.groupId ?? params.to,
+        threadId: params.threadId,
+        isGroup: true,
+      })?.conversationId
+    : null;
+  if (pluginResolvedConversationId?.trim()) {
+    return pluginResolvedConversationId.trim();
+  }
   const genericConversationId = resolveConversationIdFromTargets({
     threadId: params.threadId,
     targets: [params.to],
@@ -368,20 +385,27 @@ function resolveConversationIdForThreadBinding(params: {
   if (genericConversationId) {
     return genericConversationId;
   }
-
-  const channel = params.channel?.trim().toLowerCase();
-  const target = params.to?.trim() || "";
-  if (channel === "line") {
-    const prefixed = target.match(/^line:(?:(?:user|group|room):)?([UCR][a-f0-9]{32})$/i)?.[1];
-    if (prefixed) {
-      return prefixed;
-    }
-    if (/^[UCR][a-f0-9]{32}$/i.test(target)) {
-      return target;
-    }
-  }
-
   return undefined;
+}
+
+function resolveAcpSpawnChannelAccountId(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  accountId?: string;
+}): string | undefined {
+  const channel = params.channel?.trim().toLowerCase();
+  const explicitAccountId = params.accountId?.trim();
+  if (explicitAccountId) {
+    return explicitAccountId;
+  }
+  if (!channel) {
+    return undefined;
+  }
+  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
+  const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
+  return typeof configuredDefaultAccountId === "string" && configuredDefaultAccountId.trim()
+    ? configuredDefaultAccountId.trim()
+    : "default";
 }
 
 function prepareAcpThreadBinding(params: {
@@ -390,6 +414,7 @@ function prepareAcpThreadBinding(params: {
   accountId?: string;
   to?: string;
   threadId?: string | number;
+  groupId?: string;
 }): { ok: true; binding: PreparedAcpThreadBinding } | { ok: false; error: string } {
   const channel = params.channel?.trim().toLowerCase();
   if (!channel) {
@@ -399,7 +424,11 @@ function prepareAcpThreadBinding(params: {
     };
   }
 
-  const accountId = params.accountId?.trim() || "default";
+  const accountId = resolveAcpSpawnChannelAccountId({
+    cfg: params.cfg,
+    channel,
+    accountId: params.accountId,
+  });
   const policy = resolveThreadBindingSpawnPolicy({
     cfg: params.cfg,
     channel,
@@ -444,12 +473,13 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
     };
   }
-  const conversationId = resolveConversationIdForThreadBinding({
+  const conversationIdRaw = resolveConversationIdForThreadBinding({
     channel: policy.channel,
     to: params.to,
     threadId: params.threadId,
+    groupId: params.groupId,
   });
-  if (!conversationId) {
+  if (!conversationIdRaw) {
     return {
       ok: false,
       error: `Could not resolve a ${policy.channel} conversation for ACP thread spawn.`,
@@ -462,7 +492,7 @@ function prepareAcpThreadBinding(params: {
       channel: policy.channel,
       accountId: policy.accountId,
       placement,
-      conversationId,
+      conversationId: conversationIdRaw,
     },
   };
 }
@@ -668,6 +698,7 @@ async function bindPreparedAcpThread(params: {
 }
 
 function resolveAcpSpawnBootstrapDeliveryPlan(params: {
+  cfg: OpenClawConfig;
   spawnMode: SpawnAcpMode;
   requestThreadBinding: boolean;
   effectiveStreamToParent: boolean;
@@ -687,10 +718,15 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     threadId: fallbackThreadId,
     to: params.requester.origin?.to,
   });
+  const requesterAccountId = resolveAcpSpawnChannelAccountId({
+    cfg: params.cfg,
+    channel: params.requester.origin?.channel,
+    accountId: params.requester.origin?.accountId,
+  });
   const bindingMatchesRequesterConversation = Boolean(
     params.requester.origin?.channel &&
     params.binding?.conversation.channel === params.requester.origin.channel &&
-    params.binding?.conversation.accountId === (params.requester.origin.accountId ?? "default") &&
+    params.binding?.conversation.accountId === requesterAccountId &&
     requesterConversationId &&
     params.binding?.conversation.conversationId === requesterConversationId,
   );
@@ -722,7 +758,7 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   return {
     useInlineDelivery,
     channel: useInlineDelivery ? params.requester.origin?.channel : undefined,
-    accountId: useInlineDelivery ? (params.requester.origin?.accountId ?? undefined) : undefined,
+    accountId: useInlineDelivery ? requesterAccountId : undefined,
     to: useInlineDelivery ? inferredDeliveryTo : undefined,
     threadId: useInlineDelivery ? resolvedDeliveryThreadId : undefined,
   };
@@ -752,7 +788,7 @@ export async function spawnAcpDirect(
     };
   }
 
-  const requestThreadBinding = params.thread === true;
+  let requestThreadBinding = params.thread === true;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -819,6 +855,7 @@ export async function spawnAcpDirect(
       accountId: ctx.agentAccountId,
       to: ctx.agentTo,
       threadId: ctx.agentThreadId,
+      groupId: ctx.agentGroupId,
     });
     if (!prepared.ok) {
       return {
@@ -878,6 +915,7 @@ export async function spawnAcpDirect(
   }
 
   const deliveryPlan = resolveAcpSpawnBootstrapDeliveryPlan({
+    cfg,
     spawnMode,
     requestThreadBinding,
     effectiveStreamToParent,
@@ -956,7 +994,8 @@ export async function spawnAcpDirect(
       createRunningTaskRun({
         runtime: "acp",
         sourceId: childRunId,
-        requesterSessionKey: requesterInternalKey,
+        ownerKey: requesterInternalKey,
+        scopeKind: "session",
         requesterOrigin: requesterState.origin,
         childSessionKey: sessionKey,
         runId: childRunId,
@@ -987,7 +1026,8 @@ export async function spawnAcpDirect(
     createRunningTaskRun({
       runtime: "acp",
       sourceId: childRunId,
-      requesterSessionKey: requesterInternalKey,
+      ownerKey: requesterInternalKey,
+      scopeKind: "session",
       requesterOrigin: requesterState.origin,
       childSessionKey: sessionKey,
       runId: childRunId,

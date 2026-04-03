@@ -15,6 +15,28 @@ export const unitTestIncludePatterns = [
   "ui/src/ui/controllers/chat.test.ts",
 ];
 
+export const boundaryTestFiles = [
+  "src/infra/boundary-path.test.ts",
+  "src/infra/git-root.test.ts",
+  "src/infra/home-dir.test.ts",
+  "src/infra/openclaw-exec-env.test.ts",
+  "src/infra/openclaw-root.test.ts",
+  "src/infra/package-json.test.ts",
+  "src/infra/path-env.test.ts",
+  "src/infra/stable-node-path.test.ts",
+  "test/extension-plugin-sdk-boundary.test.ts",
+  "test/extension-test-boundary.test.ts",
+  "test/plugin-extension-import-boundary.test.ts",
+  "test/web-fetch-provider-boundary.test.ts",
+  "test/web-search-provider-boundary.test.ts",
+];
+
+export const bundledPluginDependentUnitTestFiles = [
+  "src/infra/matrix-plugin-helper.test.ts",
+  "src/plugin-sdk/facade-runtime.test.ts",
+  "src/plugins/loader.test.ts",
+];
+
 export const unitTestAdditionalExcludePatterns = [
   "src/gateway/**",
   `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
@@ -25,6 +47,19 @@ export const unitTestAdditionalExcludePatterns = [
   "src/commands/**",
   "src/channels/plugins/contracts/**",
   "src/plugins/contracts/**",
+  "src/infra/boundary-path.test.ts",
+  "src/infra/git-root.test.ts",
+  "src/infra/home-dir.test.ts",
+  "src/infra/openclaw-exec-env.test.ts",
+  "src/infra/openclaw-root.test.ts",
+  "src/infra/package-json.test.ts",
+  "src/infra/path-env.test.ts",
+  "src/infra/stable-node-path.test.ts",
+  ...bundledPluginDependentUnitTestFiles,
+  "src/config/doc-baseline.integration.test.ts",
+  "src/config/schema.base.generated.test.ts",
+  "src/config/schema.help.quality.test.ts",
+  "test/**",
 ];
 
 const sharedBaseExcludePatterns = [
@@ -49,4 +84,12 @@ export function isUnitConfigTestFile(file) {
     !matchesAny(normalizedFile, sharedBaseExcludePatterns) &&
     !matchesAny(normalizedFile, unitTestAdditionalExcludePatterns)
   );
+}
+
+export function isBundledPluginDependentUnitTestFile(file) {
+  return bundledPluginDependentUnitTestFiles.includes(normalizeRepoPath(file));
+}
+
+export function isBoundaryTestFile(file) {
+  return boundaryTestFiles.includes(normalizeRepoPath(file));
 }

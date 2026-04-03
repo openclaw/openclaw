@@ -1,10 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+
+let validateConfigObjectWithPlugins: typeof import("./validation.js").validateConfigObjectWithPlugins;
+let validateConfigObjectRawWithPlugins: typeof import("./validation.js").validateConfigObjectRawWithPlugins;
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
 }));
+
+beforeAll(async () => {
+  ({ validateConfigObjectWithPlugins, validateConfigObjectRawWithPlugins } =
+    await import("./validation.js"));
+});
 
 function setupTelegramSchemaWithDefault() {
   mockLoadPluginManifestRegistry.mockReturnValue({
@@ -30,7 +38,11 @@ function setupTelegramSchemaWithDefault() {
                   default: "pairing",
                 },
               },
-              additionalProperties: false,
+              // validateConfigObjectWithPlugins starts from the core validated
+              // config, which can already include bundled runtime defaults for
+              // the channel. Keep this mock schema focused on the plugin-owned
+              // default under test instead of rejecting unrelated core fields.
+              additionalProperties: true,
             },
             uiHints: {},
           },
@@ -44,7 +56,6 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
   it("applies bundled channel defaults from plugin-owned schema metadata", async () => {
     setupTelegramSchemaWithDefault();
 
-    const { validateConfigObjectWithPlugins } = await import("./validation.js");
     const result = validateConfigObjectWithPlugins({
       channels: {
         telegram: {},
@@ -71,7 +82,6 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     // merge-patched value) instead of validated.config.
     setupTelegramSchemaWithDefault();
 
-    const { validateConfigObjectRawWithPlugins } = await import("./validation.js");
     const result = validateConfigObjectRawWithPlugins({
       channels: {
         telegram: {},

@@ -99,6 +99,11 @@ describe("DiscordMessageListener", () => {
     };
   }
 
+  async function flushAsyncWork() {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
   it("returns immediately while handler continues in background", async () => {
     let handlerResolved = false;
     const deferred = createDeferred();
@@ -115,9 +120,8 @@ describe("DiscordMessageListener", () => {
 
     // handle() returns immediately while the background queue starts on the next tick.
     await expect(handlePromise).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(handler).toHaveBeenCalledOnce();
-    });
+    await flushAsyncWork();
+    expect(handler).toHaveBeenCalledOnce();
     expect(handlerResolved).toBe(false);
 
     // Release and let background handler finish.
@@ -154,9 +158,8 @@ describe("DiscordMessageListener", () => {
     ).resolves.toBeUndefined();
 
     // Both handlers are dispatched concurrently (fire-and-forget).
-    await vi.waitFor(() => {
-      expect(handler).toHaveBeenCalledTimes(2);
-    });
+    await flushAsyncWork();
+    expect(handler).toHaveBeenCalledTimes(2);
 
     first.resolve();
     second.resolve();
@@ -179,9 +182,8 @@ describe("DiscordMessageListener", () => {
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
       {} as unknown as import("@buape/carbon").Client,
     );
-    await vi.waitFor(() => {
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
-    });
+    await flushAsyncWork();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
   });
 
   it("does not apply its own slow-listener logging (owned by inbound worker)", async () => {
@@ -202,9 +204,8 @@ describe("DiscordMessageListener", () => {
     await expect(handlePromise).resolves.toBeUndefined();
 
     deferred.resolve();
-    await vi.waitFor(() => {
-      expect(handler).toHaveBeenCalledOnce();
-    });
+    await flushAsyncWork();
+    expect(handler).toHaveBeenCalledOnce();
     // The listener no longer wraps handlers with slow-listener logging;
     // that responsibility moved to the inbound worker.
     expect(logger.warn).not.toHaveBeenCalled();
@@ -905,7 +906,7 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
   })),
 }));
 
-const channelRuntimeModule = await import("openclaw/plugin-sdk/channel-runtime");
+const channelRuntimeModule = await import("openclaw/plugin-sdk/infra-runtime");
 vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
 
 const routingModule = await import("openclaw/plugin-sdk/routing");

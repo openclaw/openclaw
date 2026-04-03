@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   compareReleaseVersions,
   collectControlUiPackErrors,
+  collectForbiddenPackedPathErrors,
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
   parseNpmPackJsonOutput,
   parseReleaseTagVersion,
   parseReleaseVersion,
+  resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   resolveNpmCommandInvocation,
+  shouldSkipPackedTarballValidation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
 
@@ -83,36 +86,102 @@ describe("resolveNpmPublishPlan", () => {
     });
   });
 
-  it("publishes stable releases to latest and mirrors beta", () => {
+  it("publishes stable releases to beta first", () => {
     expect(resolveNpmPublishPlan("2026.3.29")).toEqual({
       channel: "stable",
-      publishTag: "latest",
-      mirrorDistTags: ["beta"],
+      publishTag: "beta",
+      mirrorDistTags: [],
     });
   });
 
-  it("mirrors beta for stable correction releases too", () => {
+  it("publishes stable correction releases to beta first too", () => {
     expect(resolveNpmPublishPlan("2026.3.29-2")).toEqual({
       channel: "stable",
-      publishTag: "latest",
-      mirrorDistTags: ["beta"],
+      publishTag: "beta",
+      mirrorDistTags: [],
     });
   });
 
-  it("does not mirror beta when beta already points at a newer prerelease", () => {
-    expect(resolveNpmPublishPlan("2026.3.29", "2026.3.30-beta.1")).toEqual({
+  it("can publish stable releases directly to latest when requested", () => {
+    expect(resolveNpmPublishPlan("2026.3.29", undefined, "latest")).toEqual({
       channel: "stable",
       publishTag: "latest",
       mirrorDistTags: [],
     });
   });
 
-  it("still mirrors beta when beta points at the same release line", () => {
-    expect(resolveNpmPublishPlan("2026.3.29", "2026.3.29-beta.2")).toEqual({
+  it("ignores current beta dist-tag state for stable publishes", () => {
+    expect(resolveNpmPublishPlan("2026.3.29", "2026.4.1-beta.1")).toEqual({
       channel: "stable",
-      publishTag: "latest",
-      mirrorDistTags: ["beta"],
+      publishTag: "beta",
+      mirrorDistTags: [],
     });
+  });
+
+  it("rejects publishing beta prereleases to latest", () => {
+    expect(() => resolveNpmPublishPlan("2026.3.29-beta.2", undefined, "latest")).toThrow(
+      "Beta prereleases must publish to the beta dist-tag.",
+    );
+  });
+});
+
+describe("resolveNpmDistTagMirrorAuth", () => {
+  it("prefers NODE_AUTH_TOKEN when both auth env vars exist", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "node-token",
+        npmToken: "npm-token",
+      }),
+    ).toEqual({
+      hasAuth: true,
+      source: "node-auth-token",
+    });
+  });
+
+  it("falls back to NPM_TOKEN when NODE_AUTH_TOKEN is missing", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "  ",
+        npmToken: "npm-token",
+      }),
+    ).toEqual({
+      hasAuth: true,
+      source: "npm-token",
+    });
+  });
+
+  it("reports missing auth when neither token exists", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "",
+        npmToken: undefined,
+      }),
+    ).toEqual({
+      hasAuth: false,
+      source: "none",
+    });
+  });
+});
+
+describe("shouldSkipPackedTarballValidation", () => {
+  it("defaults to full pack validation", () => {
+    expect(shouldSkipPackedTarballValidation({})).toBe(false);
+  });
+
+  it("accepts truthy values for metadata-only validation", () => {
+    expect(
+      shouldSkipPackedTarballValidation({
+        OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1",
+      }),
+    ).toBe(true);
+  });
+
+  it("treats false-like values as disabled", () => {
+    expect(
+      shouldSkipPackedTarballValidation({
+        OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "false",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -122,7 +191,7 @@ describe("compareReleaseVersions", () => {
   });
 
   it("treats a newer beta day as newer than an older stable day", () => {
-    expect(compareReleaseVersions("2026.3.30-beta.1", "2026.3.29")).toBe(1);
+    expect(compareReleaseVersions("2026.4.1-beta.1", "2026.3.29")).toBe(1);
   });
 
   it("orders stable correction releases after the base stable release", () => {
@@ -223,6 +292,21 @@ describe("collectControlUiPackErrors", () => {
         "dist/control-ui/assets/index-BK0yXA_h.css",
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("collectForbiddenPackedPathErrors", () => {
+  it("rejects generated docs artifacts in npm pack output", () => {
+    expect(
+      collectForbiddenPackedPathErrors([
+        "dist/index.js",
+        "docs/.generated/config-baseline.json",
+        "docs/.generated/config-baseline.plugin.json",
+      ]),
+    ).toEqual([
+      'npm package must not include generated docs artifact "docs/.generated/config-baseline.json".',
+      'npm package must not include generated docs artifact "docs/.generated/config-baseline.plugin.json".',
+    ]);
   });
 });
 

@@ -48,6 +48,9 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
     - **MiniMax**: config is auto-written; hosted default is `MiniMax-M2.7`.
     - More detail: [MiniMax](/providers/minimax)
+    - **StepFun**: config is auto-written for StepFun standard or Step Plan on China or global endpoints.
+    - Standard currently includes `step-3.5-flash`, and Step Plan also includes `step-3.5-flash-2603`.
+    - More detail: [StepFun](/providers/stepfun)
     - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
     - More detail: [Synthetic](/providers/synthetic)
     - **Moonshot (Kimi K2)**: config is auto-written.
@@ -97,8 +100,8 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
   </Step>
   <Step title="Web search">
-    - Pick a provider: Perplexity, Brave, Gemini, Grok, or Kimi (or skip).
-    - Paste your API key (QuickStart auto-detects keys from env vars or existing config).
+    - Pick a supported provider such as Brave, Firecrawl, Gemini, Grok, Kimi, Ollama Web Search, Perplexity, or Tavily (or skip).
+    - API-backed providers can use env vars or existing config for quick setup; key-free providers use their provider-specific prerequisites instead.
     - Skip with `--skip-search`.
     - Configure later: `openclaw configure --section web`.
   </Step>

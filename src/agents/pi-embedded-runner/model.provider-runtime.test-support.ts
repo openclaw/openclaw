@@ -171,7 +171,7 @@ function buildDynamicModel(
         id: modelId,
         name: modelId,
         provider: "github-copilot",
-        api: "openai-responses",
+        api: lower.includes("claude") ? "anthropic-messages" : "openai-responses",
         reasoning: /^o[13](\b|$)/.test(lower),
         input: ["text", "image"],
         cost: OPENROUTER_FALLBACK_COST,
@@ -204,7 +204,8 @@ function buildDynamicModel(
             provider: "openai-codex",
             api: "openai-codex-responses",
             baseUrl: OPENAI_CODEX_BASE_URL,
-            contextWindow: 1_050_000,
+            cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+            contextWindow: 272_000,
             maxTokens: 128_000,
           },
           fallback,
@@ -245,23 +246,49 @@ function buildDynamicModel(
       }
       const template = findTemplate(params, "openai", templateIds);
       const patch =
-        lower === "gpt-5.4" || lower === "gpt-5.4-pro"
+        lower === "gpt-5.4"
           ? {
               provider: "openai",
               api: "openai-responses",
               baseUrl: OPENAI_BASE_URL,
               reasoning: true,
               input: ["text", "image"],
-              contextWindow: 1_050_000,
+              cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+              contextWindow: 272_000,
               maxTokens: 128_000,
             }
-          : {
-              provider: "openai",
-              api: "openai-responses",
-              baseUrl: OPENAI_BASE_URL,
-              reasoning: true,
-              input: ["text", "image"],
-            };
+          : lower === "gpt-5.4-pro"
+            ? {
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: OPENAI_BASE_URL,
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              }
+            : lower === "gpt-5.4-mini"
+              ? {
+                  provider: "openai",
+                  api: "openai-responses",
+                  baseUrl: OPENAI_BASE_URL,
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+                  contextWindow: 400_000,
+                  maxTokens: 128_000,
+                }
+              : {
+                  provider: "openai",
+                  api: "openai-responses",
+                  baseUrl: OPENAI_BASE_URL,
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
+                  contextWindow: 400_000,
+                  maxTokens: 128_000,
+                };
       return cloneTemplate(template, modelId, patch, {
         provider: "openai",
         api: "openai-responses",

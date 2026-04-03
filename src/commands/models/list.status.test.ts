@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
     store,
     resolveOpenClawAgentDir: vi.fn().mockReturnValue("/tmp/openclaw-agent"),
     resolveAgentDir: vi.fn().mockReturnValue("/tmp/openclaw-agent"),
+    resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/openclaw-agent/workspace"),
     resolveAgentExplicitModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentEffectiveModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
@@ -46,6 +47,7 @@ const mocks = vi.hoisted(() => {
     resolveAuthStorePathForDisplay: vi
       .fn()
       .mockReturnValue("/tmp/openclaw-agent/auth-profiles.json"),
+    resolveProfileUnusableUntilForDisplay: vi.fn().mockReturnValue(undefined),
     resolveEnvApiKey: vi.fn((provider: string) => {
       if (provider === "openai") {
         return {
@@ -92,21 +94,19 @@ async function loadFreshModelsStatusCommandModuleForTest() {
   }));
   vi.doMock("../../agents/agent-scope.js", () => ({
     resolveAgentDir: mocks.resolveAgentDir,
+    resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
     resolveAgentExplicitModelPrimary: mocks.resolveAgentExplicitModelPrimary,
     resolveAgentEffectiveModelPrimary: mocks.resolveAgentEffectiveModelPrimary,
     resolveAgentModelFallbacksOverride: mocks.resolveAgentModelFallbacksOverride,
     listAgentIds: mocks.listAgentIds,
   }));
-  vi.doMock("../../agents/auth-profiles.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
-    return {
-      ...actual,
-      ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-      listProfilesForProvider: mocks.listProfilesForProvider,
-      resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
-      resolveAuthStorePathForDisplay: mocks.resolveAuthStorePathForDisplay,
-    };
-  });
+  vi.doMock("../../agents/auth-profiles.js", () => ({
+    ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+    listProfilesForProvider: mocks.listProfilesForProvider,
+    resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
+    resolveAuthStorePathForDisplay: mocks.resolveAuthStorePathForDisplay,
+    resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,
+  }));
   vi.doMock("../../agents/model-auth.js", () => ({
     resolveEnvApiKey: mocks.resolveEnvApiKey,
     hasUsableCustomProviderApiKey: mocks.hasUsableCustomProviderApiKey,
@@ -117,21 +117,23 @@ async function loadFreshModelsStatusCommandModuleForTest() {
     getShellEnvAppliedKeys: mocks.getShellEnvAppliedKeys,
     shouldEnableShellEnvFallback: mocks.shouldEnableShellEnvFallback,
   }));
-  vi.doMock("../../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../config/config.js")>();
+  vi.doMock("../../config/config.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
     return {
       ...actual,
       createConfigIO: mocks.createConfigIO,
       loadConfig: mocks.loadConfig,
     };
   });
-  vi.doMock("../../infra/provider-usage.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../infra/provider-usage.js")>();
-    return {
-      ...actual,
-      loadProviderUsageSummary: mocks.loadProviderUsageSummary,
-    };
-  });
+  vi.doMock("./load-config.js", () => ({
+    loadModelsConfig: vi.fn(async () => mocks.loadConfig()),
+  }));
+  vi.doMock("../../infra/provider-usage.js", () => ({
+    formatUsageWindowSummary: vi.fn().mockReturnValue("-"),
+    loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+    resolveUsageProviderId: vi.fn((providerId: string) => providerId),
+  }));
   ({ modelsStatusCommand } = await import("./list.status-command.js"));
 }
 

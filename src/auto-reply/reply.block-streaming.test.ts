@@ -10,8 +10,10 @@ const mocks = vi.hoisted(() => ({
   runPreparedReply: vi.fn(),
 }));
 
-vi.mock("../agents/agent-scope.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/agent-scope.js")>();
+vi.mock("../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/agent-scope.js")>(
+    "../agents/agent-scope.js",
+  );
   return {
     ...actual,
     resolveAgentDir: vi.fn(() => "/tmp/agent"),
@@ -20,8 +22,10 @@ vi.mock("../agents/agent-scope.js", async (importOriginal) => {
     resolveAgentSkillsFilter: vi.fn(() => undefined),
   };
 });
-vi.mock("../agents/model-selection.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/model-selection.js")>();
+vi.mock("../agents/model-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/model-selection.js")>(
+    "../agents/model-selection.js",
+  );
   return {
     ...actual,
     resolveModelRefFromString: vi.fn(() => null),
@@ -106,7 +110,7 @@ function createReplyConfig(streamMode?: "block"): OpenClawConfig {
         workspace: "/tmp/workspace",
       },
     },
-    channels: { telegram: { allowFrom: ["*"], streamMode } },
+    channels: { telegram: { allowFrom: ["*"], ...(streamMode ? { streaming: streamMode } : {}) } },
     session: { store: "/tmp/sessions.json" },
   };
 }

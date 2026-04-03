@@ -1,4 +1,5 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -28,6 +29,28 @@ function normalizeDeliveryChannel(value: string | undefined): string | undefined
   return normalized || undefined;
 }
 
+function resolveDeliveryAccountId(params: {
+  cfg: OpenClawConfig;
+  channel: string | undefined;
+  accountId: string | undefined;
+}): string | undefined {
+  const explicit = params.accountId?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const channelId = normalizeDeliveryChannel(params.channel);
+  if (!channelId) {
+    return undefined;
+  }
+  const channelCfg = (params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>)[
+    channelId
+  ];
+  const configuredDefault = channelCfg?.defaultAccount;
+  return typeof configuredDefault === "string" && configuredDefault.trim()
+    ? configuredDefault.trim()
+    : undefined;
+}
+
 function shouldTreatDeliveredTextAsVisible(params: {
   channel: string | undefined;
   kind: ReplyDispatchKind;
@@ -39,7 +62,16 @@ function shouldTreatDeliveredTextAsVisible(params: {
   if (params.kind === "final") {
     return true;
   }
-  return normalizeDeliveryChannel(params.channel) === "telegram";
+  const channelId = normalizeDeliveryChannel(params.channel);
+  if (!channelId) {
+    return false;
+  }
+  return (
+    getChannelPlugin(channelId)?.outbound?.shouldTreatRoutedTextAsVisible?.({
+      kind: params.kind,
+      text: params.text,
+    }) === true
+  );
 }
 
 type AcpDispatchDeliveryState = {
@@ -103,6 +135,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   };
   const directChannel = normalizeDeliveryChannel(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeDeliveryChannel(params.originatingChannel);
+  const resolvedAccountId = resolveDeliveryAccountId({
+    cfg: params.cfg,
+    channel: routedChannel ?? directChannel,
+    accountId: params.ctx.AccountId,
+  });
 
   const settleDirectVisibleText = async () => {
     if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
@@ -219,7 +256,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         channel: params.originatingChannel,
         to: params.originatingTo,
         sessionKey: params.ctx.SessionKey,
-        accountId: params.ctx.AccountId,
+        accountId: resolvedAccountId,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
       });
@@ -235,7 +272,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {
           channel: params.originatingChannel,
-          accountId: params.ctx.AccountId,
+          accountId: resolvedAccountId,
           to: params.originatingTo,
           ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
           messageId: result.messageId,

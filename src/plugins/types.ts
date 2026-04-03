@@ -11,15 +11,11 @@ import type {
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
+import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type {
-  ChannelId,
-  ChannelPlugin,
-  ChannelStructuredComponents,
-} from "../channels/plugins/types.js";
+import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   CliBackendConfig,
@@ -35,7 +31,10 @@ import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
+import type {
+  RuntimeWebFetchMetadata,
+  RuntimeWebSearchMetadata,
+} from "../secrets/runtime-web-tools.types.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -121,7 +120,7 @@ export type OpenClawPluginToolContext = {
   agentDir?: string;
   agentId?: string;
   sessionKey?: string;
-  /** Ephemeral session UUID — regenerated on /new and /reset. Use for per-conversation isolation. */
+  /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
   browser?: {
     sandboxBridgeUrl?: string;
@@ -442,6 +441,7 @@ export type ProviderPrepareRuntimeAuthContext = {
 export type ProviderPreparedRuntimeAuth = {
   apiKey: string;
   baseUrl?: string;
+  request?: ProviderRequestTransportOverrides;
   expiresAt?: number;
 };
 
@@ -535,6 +535,122 @@ export type ProviderPrepareExtraParamsContext = {
   thinkingLevel?: ThinkLevel;
 };
 
+export type ProviderReplaySanitizeMode = "full" | "images-only";
+
+export type ProviderReplayToolCallIdMode = "strict" | "strict9";
+
+export type ProviderReasoningOutputMode = "native" | "tagged";
+
+/**
+ * @deprecated Legacy static provider capability bag.
+ *
+ * Core replay/runtime ownership now lives on explicit provider hooks such as
+ * `buildReplayPolicy`, `normalizeToolSchemas`, and `wrapStreamFn`. OpenClaw no
+ * longer reads this bag at runtime, but the field remains typed so existing
+ * third-party plugins do not fail to compile immediately.
+ */
+export type ProviderCapabilities = Record<string, unknown>;
+
+/**
+ * Provider-owned replay/compaction transcript policy.
+ *
+ * These values are consumed by shared history replay and compaction logic.
+ * Return only the fields the provider wants to override; core fills the rest
+ * with its default policy.
+ */
+export type ProviderReplayPolicy = {
+  sanitizeMode?: ProviderReplaySanitizeMode;
+  sanitizeToolCallIds?: boolean;
+  toolCallIdMode?: ProviderReplayToolCallIdMode;
+  preserveSignatures?: boolean;
+  sanitizeThoughtSignatures?: {
+    allowBase64Only?: boolean;
+    includeCamelCase?: boolean;
+  };
+  dropThinkingBlocks?: boolean;
+  repairToolUseResultPairing?: boolean;
+  applyAssistantFirstOrderingFix?: boolean;
+  validateGeminiTurns?: boolean;
+  validateAnthropicTurns?: boolean;
+  allowSyntheticToolResults?: boolean;
+};
+
+/**
+ * Provider-owned replay/compaction policy input.
+ *
+ * Use this when transcript replay rules depend on provider/model transport
+ * behavior and should stay with the provider plugin instead of core tables.
+ */
+export type ProviderReplayPolicyContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  provider: string;
+  modelId?: string;
+  modelApi?: string | null;
+  model?: ProviderRuntimeModel;
+};
+
+export type ProviderReplaySessionEntry = {
+  customType: string;
+  data?: unknown;
+};
+
+export type ProviderReplaySessionState = {
+  getCustomEntries(): ProviderReplaySessionEntry[];
+  appendCustomEntry(customType: string, data: unknown): void;
+};
+
+/**
+ * Provider-owned replay-history sanitization input.
+ *
+ * Runs after core applies generic transcript cleanup so plugins can make
+ * provider-specific replay rewrites without owning the whole compaction flow.
+ */
+export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext & {
+  sessionId: string;
+  messages: AgentMessage[];
+  allowedToolNames?: Iterable<string>;
+  sessionState?: ProviderReplaySessionState;
+};
+
+/**
+ * Provider-owned final replay-turn validation input.
+ *
+ * Use this for providers that require strict turn ordering or additional
+ * replay-time transcript validation beyond generic sanitation.
+ */
+export type ProviderValidateReplayTurnsContext = ProviderReplayPolicyContext & {
+  sessionId?: string;
+  messages: AgentMessage[];
+  sessionState?: ProviderReplaySessionState;
+};
+
+/**
+ * Provider-owned tool-schema normalization input.
+ *
+ * Runs before tool registration for replay/compaction/inference so providers
+ * can rewrite schema keywords that their transport family does not support.
+ */
+export type ProviderNormalizeToolSchemasContext = ProviderReplayPolicyContext & {
+  tools: AnyAgentTool[];
+};
+
+export type ProviderToolSchemaDiagnostic = {
+  toolName: string;
+  toolIndex?: number;
+  violations: string[];
+};
+
+/**
+ * Provider-owned reasoning output mode input.
+ *
+ * Use this when a provider requires a specific reasoning-output contract, such
+ * as text tags instead of native structured reasoning fields.
+ */
+export type ProviderReasoningOutputModeContext = ProviderReplayPolicyContext;
+
 /**
  * Provider-owned transport creation.
  *
@@ -610,6 +726,7 @@ export type ProviderCreateEmbeddingProviderContext = {
 export type ProviderCacheTtlEligibilityContext = {
   provider: string;
   modelId: string;
+  modelApi?: string;
 };
 
 /**
@@ -821,6 +938,13 @@ export type ProviderSyntheticAuthResult = {
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
 };
 
+export type ProviderDeferSyntheticProfileAuthContext = {
+  config?: OpenClawConfig;
+  provider: string;
+  providerConfig?: ModelProviderConfig;
+  resolvedApiKey?: string;
+};
+
 /** Text-inference provider capability registered by a plugin. */
 export type ProviderPlugin = {
   id: string;
@@ -938,13 +1062,66 @@ export type ProviderPlugin = {
    */
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
   /**
-   * Static provider capability overrides consumed by shared transcript/tooling
-   * logic.
+   * @deprecated Legacy static capability bag kept only for compatibility.
    *
-   * Use this when the provider behaves like OpenAI/Anthropic, needs transcript
-   * sanitization quirks, or requires provider-family hints.
+   * New provider behavior should use explicit hooks instead. Core replay and
+   * stream/runtime logic no longer consumes this field.
    */
-  capabilities?: Partial<ProviderCapabilities>;
+  capabilities?: ProviderCapabilities;
+  /**
+   * Provider-owned replay/compaction policy override.
+   *
+   * Use this when transcript replay or compaction should follow provider-owned
+   * rules that are more expressive than the static `capabilities` bag.
+   */
+  buildReplayPolicy?: (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined;
+  /**
+   * Provider-owned replay-history sanitization.
+   *
+   * Runs after OpenClaw performs generic transcript cleanup. Use this for
+   * provider-specific replay rewrites that should stay with the provider
+   * plugin rather than in shared core compaction helpers.
+   */
+  sanitizeReplayHistory?: (
+    ctx: ProviderSanitizeReplayHistoryContext,
+  ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;
+  /**
+   * Provider-owned final replay-turn validation.
+   *
+   * Use this when provider transports need stricter replay-time validation or
+   * turn reshaping after generic sanitation. Returning a non-null value
+   * replaces the built-in replay validators rather than composing with them.
+   */
+  validateReplayTurns?: (
+    ctx: ProviderValidateReplayTurnsContext,
+  ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;
+  /**
+   * Provider-owned tool-schema normalization.
+   *
+   * Use this for transport-family schema cleanup before OpenClaw registers
+   * tools with the embedded runner.
+   */
+  normalizeToolSchemas?: (
+    ctx: ProviderNormalizeToolSchemasContext,
+  ) => AnyAgentTool[] | null | undefined;
+  /**
+   * Provider-owned tool-schema diagnostics after normalization.
+   *
+   * Use this when a provider wants to surface transport-specific schema
+   * warnings without teaching core about provider-specific keyword rules.
+   */
+  inspectToolSchemas?: (
+    ctx: ProviderNormalizeToolSchemasContext,
+  ) => ProviderToolSchemaDiagnostic[] | null | undefined;
+  /**
+   * Provider-owned reasoning output mode.
+   *
+   * Use this when a provider requires tagged reasoning/final output instead of
+   * native structured reasoning fields.
+   */
+  resolveReasoningOutputMode?: (
+    ctx: ProviderReasoningOutputModeContext,
+  ) => ProviderReasoningOutputMode | null | undefined;
   /**
    * Provider-owned extra-param normalization before generic stream option
    * wrapping.
@@ -1174,12 +1351,29 @@ export type ProviderPlugin = {
   resolveSyntheticAuth?: (
     ctx: ProviderResolveSyntheticAuthContext,
   ) => ProviderSyntheticAuthResult | null | undefined;
+  /**
+   * Provider-owned precedence rule for stored synthetic auth profiles.
+   *
+   * Return true when a stored profile API key is only a provider-owned
+   * synthetic placeholder and should yield to env/config-backed auth before
+   * OpenClaw falls back to that stored profile.
+   */
+  shouldDeferSyntheticProfileAuth?: (
+    ctx: ProviderDeferSyntheticProfileAuthContext,
+  ) => boolean | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
 export type WebSearchProviderId = string;
+export type WebFetchProviderId = string;
 
 export type WebSearchProviderToolDefinition = {
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+};
+
+export type WebFetchProviderToolDefinition = {
   description: string;
   parameters: Record<string, unknown>;
   execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -1189,6 +1383,12 @@ export type WebSearchProviderContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebSearchMetadata;
+};
+
+export type WebFetchProviderContext = {
+  config?: OpenClawConfig;
+  fetchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebFetchMetadata;
 };
 
 export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
@@ -1210,6 +1410,19 @@ export type WebSearchProviderSetupContext = {
   prompter: WizardPrompter;
   quickstartDefaults?: boolean;
   secretInputMode?: SecretInputMode;
+};
+
+export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebFetchRuntimeMetadataContext = {
+  config?: OpenClawConfig;
+  fetchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebFetchMetadata;
+  resolvedCredential?: {
+    value?: string;
+    source: WebFetchCredentialResolutionSource;
+    fallbackEnvVar?: string;
+  };
 };
 
 export type WebSearchProviderPlugin = {
@@ -1247,6 +1460,41 @@ export type WebSearchProviderPlugin = {
 };
 
 export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
+  pluginId: string;
+};
+
+export type WebFetchProviderPlugin = {
+  id: WebFetchProviderId;
+  label: string;
+  hint: string;
+  requiresCredential?: boolean;
+  credentialLabel?: string;
+  envVars: string[];
+  placeholder: string;
+  signupUrl: string;
+  docsUrl?: string;
+  autoDetectOrder?: number;
+  /** Canonical plugin-owned config path for this provider's primary fetch credential. */
+  credentialPath: string;
+  /**
+   * Legacy or inactive credential paths that should warn but not activate this provider.
+   * Include credentialPath here when overriding the list, because runtime classification
+   * treats inactiveSecretPaths as the full inactive surface for this provider.
+   */
+  inactiveSecretPaths?: string[];
+  getCredentialValue: (fetchConfig?: Record<string, unknown>) => unknown;
+  setCredentialValue: (fetchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  /** Apply the minimal config needed to select this provider without scattering plugin config writes in core. */
+  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  resolveRuntimeMetadata?: (
+    ctx: WebFetchRuntimeMetadataContext,
+  ) => Partial<RuntimeWebFetchMetadata> | Promise<Partial<RuntimeWebFetchMetadata>>;
+  createTool: (ctx: WebFetchProviderContext) => WebFetchProviderToolDefinition | null;
+};
+
+export type PluginWebFetchProviderEntry = WebFetchProviderPlugin & {
   pluginId: string;
 };
 
@@ -1302,6 +1550,10 @@ export type PluginCommandContext = {
   isAuthorizedSender: boolean;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
+  /** Stable host session key for the active conversation when available. */
+  sessionKey?: string;
+  /** Ephemeral host session id for the active conversation when available. */
+  sessionId?: string;
   /** Raw command arguments after the command name */
   args?: string;
   /** The full normalized command body */
@@ -1404,6 +1656,12 @@ export type OpenClawPluginCommandDefinition = {
    * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
    */
   nativeNames?: Partial<Record<string, string>> & { default?: string };
+  /**
+   * Optional native progress placeholder text for native command surfaces.
+   * `default` applies to all native providers unless a provider-specific
+   * override exists.
+   */
+  nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */
@@ -1414,169 +1672,25 @@ export type OpenClawPluginCommandDefinition = {
   handler: PluginCommandHandler;
 };
 
-export type PluginInteractiveChannel = "telegram" | "discord" | "slack";
-
-export type PluginInteractiveButtons = Array<
-  Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
->;
-
-export type PluginInteractiveTelegramHandlerResult = {
+export type PluginInteractiveHandlerResult = {
   handled?: boolean;
 } | void;
 
-export type PluginInteractiveTelegramHandlerContext = {
-  channel: "telegram";
-  accountId: string;
-  callbackId: string;
-  conversationId: string;
-  parentConversationId?: string;
-  senderId?: string;
-  senderUsername?: string;
-  threadId?: number;
-  isGroup: boolean;
-  isForum: boolean;
-  auth: {
-    isAuthorizedSender: boolean;
-  };
-  callback: {
-    data: string;
-    namespace: string;
-    payload: string;
-    messageId: number;
-    chatId: string;
-    messageText?: string;
-  };
-  respond: {
-    reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
-    editMessage: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
-    editButtons: (params: { buttons: PluginInteractiveButtons }) => Promise<void>;
-    clearButtons: () => Promise<void>;
-    deleteMessage: () => Promise<void>;
-  };
-  requestConversationBinding: (
-    params?: PluginConversationBindingRequestParams,
-  ) => Promise<PluginConversationBindingRequestResult>;
-  detachConversationBinding: () => Promise<{ removed: boolean }>;
-  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
-};
+type BivariantInteractiveHandler<TContext, TResult> = {
+  bivarianceHack: (ctx: TContext) => Promise<TResult> | TResult;
+}["bivarianceHack"];
 
-export type PluginInteractiveDiscordHandlerResult = {
-  handled?: boolean;
-} | void;
-
-export type PluginInteractiveDiscordHandlerContext = {
-  channel: "discord";
-  accountId: string;
-  interactionId: string;
-  conversationId: string;
-  parentConversationId?: string;
-  guildId?: string;
-  senderId?: string;
-  senderUsername?: string;
-  auth: {
-    isAuthorizedSender: boolean;
-  };
-  interaction: {
-    kind: "button" | "select" | "modal";
-    data: string;
-    namespace: string;
-    payload: string;
-    messageId?: string;
-    values?: string[];
-    fields?: Array<{ id: string; name: string; values: string[] }>;
-  };
-  respond: {
-    acknowledge: () => Promise<void>;
-    reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
-    followUp: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
-    editMessage: (params: {
-      text?: string;
-      components?: ChannelStructuredComponents;
-    }) => Promise<void>;
-    clearComponents: (params?: { text?: string }) => Promise<void>;
-  };
-  requestConversationBinding: (
-    params?: PluginConversationBindingRequestParams,
-  ) => Promise<PluginConversationBindingRequestResult>;
-  detachConversationBinding: () => Promise<{ removed: boolean }>;
-  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
-};
-
-export type PluginInteractiveSlackHandlerResult = {
-  handled?: boolean;
-} | void;
-
-export type PluginInteractiveSlackHandlerContext = {
-  channel: "slack";
-  accountId: string;
-  interactionId: string;
-  conversationId: string;
-  parentConversationId?: string;
-  senderId?: string;
-  senderUsername?: string;
-  threadId?: string;
-  auth: {
-    isAuthorizedSender: boolean;
-  };
-  interaction: {
-    kind: "button" | "select";
-    data: string;
-    namespace: string;
-    payload: string;
-    actionId: string;
-    blockId?: string;
-    messageTs?: string;
-    threadTs?: string;
-    value?: string;
-    selectedValues?: string[];
-    selectedLabels?: string[];
-    triggerId?: string;
-    responseUrl?: string;
-  };
-  respond: {
-    acknowledge: () => Promise<void>;
-    reply: (params: { text: string; responseType?: "ephemeral" | "in_channel" }) => Promise<void>;
-    followUp: (params: {
-      text: string;
-      responseType?: "ephemeral" | "in_channel";
-    }) => Promise<void>;
-    editMessage: (params: { text?: string; blocks?: unknown[] }) => Promise<void>;
-  };
-  requestConversationBinding: (
-    params?: PluginConversationBindingRequestParams,
-  ) => Promise<PluginConversationBindingRequestResult>;
-  detachConversationBinding: () => Promise<{ removed: boolean }>;
-  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
-};
-
-export type PluginInteractiveTelegramHandlerRegistration = {
-  channel: "telegram";
+export type PluginInteractiveRegistration<
+  TContext = unknown,
+  TChannel extends string = string,
+  TResult = PluginInteractiveHandlerResult,
+> = {
+  channel: TChannel;
   namespace: string;
-  handler: (
-    ctx: PluginInteractiveTelegramHandlerContext,
-  ) => Promise<PluginInteractiveTelegramHandlerResult> | PluginInteractiveTelegramHandlerResult;
+  handler: BivariantInteractiveHandler<TContext, TResult>;
 };
 
-export type PluginInteractiveDiscordHandlerRegistration = {
-  channel: "discord";
-  namespace: string;
-  handler: (
-    ctx: PluginInteractiveDiscordHandlerContext,
-  ) => Promise<PluginInteractiveDiscordHandlerResult> | PluginInteractiveDiscordHandlerResult;
-};
-
-export type PluginInteractiveSlackHandlerRegistration = {
-  channel: "slack";
-  namespace: string;
-  handler: (
-    ctx: PluginInteractiveSlackHandlerContext,
-  ) => Promise<PluginInteractiveSlackHandlerResult> | PluginInteractiveSlackHandlerResult;
-};
-
-export type PluginInteractiveHandlerRegistration =
-  | PluginInteractiveTelegramHandlerRegistration
-  | PluginInteractiveDiscordHandlerRegistration
-  | PluginInteractiveSlackHandlerRegistration;
+export type PluginInteractiveHandlerRegistration = PluginInteractiveRegistration;
 
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";
@@ -1664,7 +1778,7 @@ export type OpenClawPluginDefinition = {
   name?: string;
   description?: string;
   version?: string;
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
   register?: (api: OpenClawPluginApi) => void | Promise<void>;
   activate?: (api: OpenClawPluginApi) => void | Promise<void>;
@@ -1738,6 +1852,8 @@ export type OpenClawPluginApi = {
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
+  /** Register a web fetch provider (web fetch capability). */
+  registerWebFetchProvider: (provider: WebFetchProviderPlugin) => void;
   /** Register a web search provider (web search capability). */
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
@@ -1750,7 +1866,7 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
-  /** Register a context engine implementation (exclusive slot — only one active at a time). */
+  /** Register a context engine implementation (exclusive slot - only one active at a time). */
   registerContextEngine: (
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
@@ -1797,6 +1913,7 @@ export type PluginHookName =
   | "before_model_resolve"
   | "before_prompt_build"
   | "before_agent_start"
+  | "before_agent_reply"
   | "llm_input"
   | "llm_output"
   | "agent_end"
@@ -1826,6 +1943,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
   "before_prompt_build",
   "before_agent_start",
+  "before_agent_reply",
   "llm_input",
   "llm_output",
   "agent_end",
@@ -1970,6 +2088,21 @@ export const stripPromptMutationFieldsFromLegacyHookResult = (
     : undefined;
 };
 
+// before_agent_reply hook
+export type PluginHookBeforeAgentReplyEvent = {
+  /** The final user message text heading to the LLM (after commands/directives). */
+  cleanedBody: string;
+};
+
+export type PluginHookBeforeAgentReplyResult = {
+  /** Whether the plugin is claiming this message (short-circuits the LLM agent). */
+  handled: boolean;
+  /** Synthetic reply that short-circuits the LLM agent. */
+  reply?: ReplyPayload;
+  /** Reason for interception (for logging/debugging). */
+  reason?: string;
+};
+
 // llm_input hook
 export type PluginHookLlmInputEvent = {
   runId: string;
@@ -2021,7 +2154,7 @@ export type PluginHookBeforeCompactionEvent = {
   sessionFile?: string;
 };
 
-// before_reset hook — fired when /new or /reset clears a session
+// before_reset hook - fired when /new or /reset clears a session
 export type PluginHookBeforeResetEvent = {
   sessionFile?: string;
   messages?: unknown[];
@@ -2141,7 +2274,7 @@ export type PluginHookMessageSentEvent = {
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
-  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  /** Ephemeral session UUID - regenerated on /new and /reset. */
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
@@ -2181,7 +2314,7 @@ export type PluginHookBeforeToolCallResult = {
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
-    /** Set automatically by the hook runner — plugins should not set this. */
+    /** Set automatically by the hook runner - plugins should not set this. */
     pluginId?: string;
     /**
      * Best-effort callback invoked with the final outcome after approval resolves, times out, or is cancelled.
@@ -2255,11 +2388,25 @@ export type PluginHookSessionStartEvent = {
 };
 
 // session_end hook
+export type PluginHookSessionEndReason =
+  | "new"
+  | "reset"
+  | "idle"
+  | "daily"
+  | "compaction"
+  | "deleted"
+  | "unknown";
+
 export type PluginHookSessionEndEvent = {
   sessionId: string;
   sessionKey?: string;
   messageCount: number;
   durationMs?: number;
+  reason?: PluginHookSessionEndReason;
+  sessionFile?: string;
+  transcriptArchived?: boolean;
+  nextSessionId?: string;
+  nextSessionKey?: string;
 };
 
 // Subagent context
@@ -2483,6 +2630,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
+  before_agent_reply: (
+    event: PluginHookBeforeAgentReplyEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeAgentReplyResult | void> | PluginHookBeforeAgentReplyResult | void;
   llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,

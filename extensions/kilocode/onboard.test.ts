@@ -14,8 +14,8 @@ import {
   resolveEnvApiKey,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
+import { captureEnv } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { captureEnv } from "../../test/helpers/plugins/env.js";
 import {
   applyKilocodeProviderConfig,
   applyKilocodeConfig,
@@ -140,10 +140,6 @@ describe("Kilo Gateway provider config", () => {
       expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe(
         KILOCODE_DEFAULT_MODEL_REF,
       );
-    });
-
-    it("also registers the provider", () => {
-      const result = applyKilocodeConfig(emptyCfg);
       const provider = result.models?.providers?.kilocode;
       expect(provider).toBeDefined();
       expect(provider?.baseUrl).toBe(KILOCODE_BASE_URL);

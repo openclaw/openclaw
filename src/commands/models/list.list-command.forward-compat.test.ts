@@ -42,8 +42,8 @@ const mocks = vi.hoisted(() => {
   return {
     sourceConfig,
     resolvedConfig,
-    loadConfig: vi.fn(),
     loadModelsConfigWithSource: vi.fn(),
+    ensureOpenClawModelsJson: vi.fn(),
     ensureAuthProfileStore: vi.fn(),
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
@@ -55,15 +55,12 @@ const mocks = vi.hoisted(() => {
 });
 
 function resetMocks() {
-  mocks.loadConfig.mockReturnValue({
-    agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
-    models: { providers: {} },
-  });
   mocks.loadModelsConfigWithSource.mockResolvedValue({
     sourceConfig: mocks.sourceConfig,
     resolvedConfig: mocks.resolvedConfig,
     diagnostics: [],
   });
+  mocks.ensureOpenClawModelsJson.mockResolvedValue({ wrote: false });
   mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {}, order: {} });
   mocks.loadModelRegistry.mockResolvedValue({
     models: [],
@@ -114,46 +111,9 @@ async function runAllOpenAiCodexCommand() {
 }
 
 let modelsListCommand: typeof import("./list.list-command.js").modelsListCommand;
+let listRegistryModule: typeof import("./list.registry.js");
 
 function installModelsListCommandForwardCompatMocks() {
-  vi.doMock("../../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../config/config.js")>();
-    return {
-      ...actual,
-      loadConfig: mocks.loadConfig,
-      getRuntimeConfigSnapshot: vi.fn().mockReturnValue(null),
-      getRuntimeConfigSourceSnapshot: vi.fn().mockReturnValue(null),
-    };
-  });
-
-  vi.doMock("../../agents/auth-profiles.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
-    return {
-      ...actual,
-      ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-      listProfilesForProvider: mocks.listProfilesForProvider,
-    };
-  });
-  vi.doMock("../../agents/auth-profiles.runtime.js", () => ({
-    ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-  }));
-
-  vi.doMock("../../agents/models-config.js", () => ({
-    ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
-  }));
-
-  vi.doMock("../../agents/model-catalog.js", () => ({
-    loadModelCatalog: mocks.loadModelCatalog,
-  }));
-
-  vi.doMock("./list.registry.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./list.registry.js")>();
-    return {
-      ...actual,
-      loadModelRegistry: mocks.loadModelRegistry,
-    };
-  });
-
   vi.doMock("./load-config.js", () => ({
     loadModelsConfigWithSource: mocks.loadModelsConfigWithSource,
   }));
@@ -166,19 +126,22 @@ function installModelsListCommandForwardCompatMocks() {
     printModelTable: mocks.printModelTable,
   }));
 
-  vi.doMock("../../agents/pi-embedded-runner/model.js", async (importOriginal) => {
-    const actual =
-      await importOriginal<typeof import("../../agents/pi-embedded-runner/model.js")>();
-    return {
-      ...actual,
-      resolveModelWithRegistry: mocks.resolveModelWithRegistry,
-    };
-  });
+  vi.doMock("./list.runtime.js", () => ({
+    ensureOpenClawModelsJson: mocks.ensureOpenClawModelsJson,
+    ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+    listProfilesForProvider: mocks.listProfilesForProvider,
+    loadModelCatalog: mocks.loadModelCatalog,
+    resolveModelWithRegistry: mocks.resolveModelWithRegistry,
+    resolveEnvApiKey: vi.fn().mockReturnValue(undefined),
+    resolveAwsSdkEnvVarName: vi.fn().mockReturnValue(undefined),
+    hasUsableCustomProviderApiKey: vi.fn().mockReturnValue(false),
+  }));
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   installModelsListCommandForwardCompatMocks();
+  listRegistryModule = await import("./list.registry.js");
+  vi.spyOn(listRegistryModule, "loadModelRegistry").mockImplementation(mocks.loadModelRegistry);
   ({ modelsListCommand } = await import("./list.list-command.js"));
 });
 

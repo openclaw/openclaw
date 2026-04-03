@@ -2,18 +2,23 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
 const MOCK_USERNAME = "MockUser";
+const userInfoMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    username: MOCK_USERNAME,
+    uid: -1,
+    gid: -1,
+    shell: "C:\\Windows\\System32\\cmd.exe",
+    homedir: "C:\\Users\\MockUser",
+  })),
+);
 
-vi.mock("node:os", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:os")>();
-  const base = ("default" in actual ? actual.default : actual) as Record<string, unknown>;
-  return {
-    ...actual,
-    default: {
-      ...base,
-      userInfo: () => ({ username: MOCK_USERNAME }),
-    },
-    userInfo: () => ({ username: MOCK_USERNAME }),
-  };
+vi.mock("node:os", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:os")>("node:os"),
+    { userInfo: userInfoMock as unknown as typeof import("node:os").userInfo },
+    { mirrorToDefault: true },
+  );
 });
 
 let createIcaclsResetCommand: typeof import("./windows-acl.js").createIcaclsResetCommand;
@@ -25,7 +30,6 @@ let resolveWindowsUserPrincipal: typeof import("./windows-acl.js").resolveWindow
 let summarizeWindowsAcl: typeof import("./windows-acl.js").summarizeWindowsAcl;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({
     createIcaclsResetCommand,
     formatIcaclsResetCommand,

@@ -17,8 +17,8 @@ import {
   normalizePollInput,
   type PollInput,
 } from "openclaw/plugin-sdk/media-runtime";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
-import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -419,6 +419,7 @@ async function sendDiscordMedia(
   mediaUrl: string,
   filename: string | undefined,
   mediaLocalRoots: readonly string[] | undefined,
+  mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined,
   maxBytes: number | undefined,
   replyTo: string | undefined,
   request: DiscordRequest,
@@ -430,7 +431,7 @@ async function sendDiscordMedia(
 ) {
   const media = await loadWebMedia(
     mediaUrl,
-    buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots }),
+    buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots, mediaReadFile }),
   );
   const requestedFileName = filename?.trim();
   const resolvedFileName =

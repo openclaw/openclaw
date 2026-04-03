@@ -72,8 +72,8 @@ function createSingleSettlement<T>(params: {
   };
 }
 
-vi.mock("grammy", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("grammy")>();
+vi.mock("grammy", async () => {
+  const actual = await vi.importActual<typeof import("grammy")>("grammy");
   return {
     ...actual,
     API_CONSTANTS: actual.API_CONSTANTS ?? {
@@ -121,7 +121,6 @@ function resetTelegramWebhookMocks(): void {
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ startTelegramWebhook } = await import("./webhook.js"));
 });
 
@@ -915,7 +914,7 @@ describe("startTelegramWebhook", () => {
     });
 
     abort.abort();
-    await vi.waitFor(() => expect(deleteWebhookSpy).toHaveBeenCalledTimes(1));
+    expect(deleteWebhookSpy).toHaveBeenCalledTimes(1);
     expect(deleteWebhookSpy).toHaveBeenCalledWith({ drop_pending_updates: false });
   });
 });

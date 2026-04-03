@@ -1,35 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   isOllamaCompatProvider,
-  resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "../../../plugin-sdk/ollama.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
-import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
-  buildSessionsYieldContextMessage,
   composeSystemPromptWithHookContext,
-  persistSessionsYieldContextMessage,
+  decodeHtmlEntitiesInObject,
   prependSystemPromptAddition,
-  queueSessionsYieldInterruptMessage,
   resolveAttemptFsWorkspaceOnly,
+  resolveEmbeddedAgentStreamFn,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
-  stripSessionsYieldArtifacts,
-  shouldInjectHeartbeatPrompt,
-  decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
-  resolveEmbeddedAgentStreamFn,
 } from "./attempt.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
+import { shouldInjectHeartbeatPrompt } from "./attempt.prompt-helpers.js";
 
 type FakeWrappedStream = {
   result: () => Promise<unknown>;
@@ -153,98 +146,6 @@ describe("resolvePromptBuildHookResult", () => {
   });
 });
 
-describe("sessions_yield helpers", () => {
-  it("builds a hidden follow-up context note", () => {
-    expect(buildSessionsYieldContextMessage("Waiting for subagent")).toContain(
-      "Waiting for subagent",
-    );
-    expect(buildSessionsYieldContextMessage("Waiting for subagent")).toContain(
-      "ended intentionally via sessions_yield",
-    );
-  });
-
-  it("queues a hidden interrupt steering message", () => {
-    const steer = vi.fn();
-    queueSessionsYieldInterruptMessage({ agent: { steer } });
-    expect(steer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        role: "custom",
-        customType: "openclaw.sessions_yield_interrupt",
-        display: false,
-        details: { source: "sessions_yield" },
-      }),
-    );
-  });
-
-  it("persists a hidden yield context message without triggering a turn", async () => {
-    const sendCustomMessage = vi.fn(async () => {});
-    await persistSessionsYieldContextMessage(
-      {
-        sendCustomMessage,
-      },
-      "Waiting for subagent",
-    );
-    expect(sendCustomMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        customType: "openclaw.sessions_yield",
-        display: false,
-        details: { source: "sessions_yield", message: "Waiting for subagent" },
-        content: expect.stringContaining("Waiting for subagent"),
-      }),
-      { triggerTurn: false },
-    );
-  });
-
-  it("strips trailing yield interrupt artifacts from memory and transcript state", () => {
-    const replaceMessages = vi.fn();
-    const rewriteFile = vi.fn();
-    const activeSession = {
-      messages: [
-        { role: "user", content: [{ type: "text", text: "hi" }] },
-        { role: "custom", customType: "openclaw.sessions_yield_interrupt" },
-        { role: "assistant", stopReason: "aborted" },
-      ],
-      agent: { replaceMessages },
-      sessionManager: {
-        fileEntries: [
-          { type: "session", id: "session-root" },
-          {
-            type: "custom_message",
-            id: "interrupt",
-            parentId: "session-root",
-            customType: "openclaw.sessions_yield_interrupt",
-          },
-          {
-            type: "message",
-            id: "aborted",
-            parentId: "interrupt",
-            message: { role: "assistant", stopReason: "aborted" },
-          },
-        ],
-        byId: new Map([
-          ["interrupt", { id: "interrupt" }],
-          ["aborted", { id: "aborted" }],
-        ]),
-        leafId: "aborted",
-        _rewriteFile: rewriteFile,
-      },
-    };
-
-    stripSessionsYieldArtifacts(activeSession as never);
-
-    expect(replaceMessages).toHaveBeenCalledWith([
-      { role: "user", content: [{ type: "text", text: "hi" }] },
-    ]);
-    expect(activeSession.sessionManager.fileEntries).toEqual([
-      { type: "session", id: "session-root" },
-    ]);
-    expect(activeSession.sessionManager.byId.has("interrupt")).toBe(false);
-    expect(activeSession.sessionManager.byId.has("aborted")).toBe(false);
-    expect(activeSession.sessionManager.leafId).toBe("session-root");
-    expect(rewriteFile).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe("composeSystemPromptWithHookContext", () => {
   it("returns undefined when no hook system context is provided", () => {
     expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
@@ -323,74 +224,30 @@ describe("resolvePromptModeForSession", () => {
   });
 });
 
-describe("shouldInjectHeartbeatPrompt", () => {
-  it("uses trigger policy defaults for non-cron/non-heartbeat triggers", () => {
-    expect(shouldInjectHeartbeatPromptForTrigger("user")).toBe(true);
-    expect(shouldInjectHeartbeatPromptForTrigger("memory")).toBe(true);
-    expect(shouldInjectHeartbeatPromptForTrigger(undefined)).toBe(true);
-  });
-
-  it("suppresses the heartbeat prompt for heartbeat-triggered runs (FORK)", () => {
-    expect(shouldInjectHeartbeatPromptForTrigger("heartbeat")).toBe(false);
-  });
-
-  it("uses trigger policy overrides for cron", () => {
-    expect(shouldInjectHeartbeatPromptForTrigger("cron")).toBe(false);
-  });
-
-  it("injects the heartbeat prompt for default-agent non-cron/non-heartbeat runs", () => {
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "user" })).toBe(true);
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "memory" })).toBe(true);
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: undefined })).toBe(true);
-  });
-
-  it("suppresses the heartbeat prompt for heartbeat-triggered default-agent runs (FORK)", () => {
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "heartbeat" })).toBe(false);
-  });
-
-  it("suppresses the heartbeat prompt for cron-triggered runs", () => {
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "cron" })).toBe(false);
-  });
-
-  it("suppresses the heartbeat prompt for non-default agents", () => {
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: false, trigger: "user" })).toBe(false);
-  });
-
-  it("omits heartbeat prompt content for cron-triggered full-mode runs on non-cron session keys", () => {
-    const sessionKey = "agent:main:kos:thread:abc";
-    expect(resolvePromptModeForSession(sessionKey)).toBe("full");
-
-    const heartbeatPrompt = shouldInjectHeartbeatPrompt({
-      isDefaultAgent: true,
-      trigger: "cron",
-    })
-      ? resolveHeartbeatPrompt(undefined)
-      : undefined;
-
-    const prompt = buildEmbeddedSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      defaultThinkLevel: "off",
-      reasoningLevel: "off",
-      reasoningTagHint: false,
-      heartbeatPrompt,
-      promptMode: resolvePromptModeForSession(sessionKey),
-      runtimeInfo: {
-        host: "host",
-        os: "Darwin",
-        arch: "arm64",
-        node: "v22.0.0",
-        model: "openai/gpt-5.4",
+describe("resolveEmbeddedAgentStreamFn", () => {
+  it("injects authStorage api keys into provider-owned stream functions", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "demo-provider",
+        id: "demo-model",
+      } as never,
+      authStorage: {
+        getApiKey: vi.fn(async () => "demo-runtime-key"),
       },
-      tools: [],
-      modelAliasLines: [],
-      userTimezone: "UTC",
-      userTime: "00:00",
-      userTimeFormat: "24",
     });
 
-    expect(prompt).not.toContain("## Heartbeats");
-    expect(prompt).not.toContain("HEARTBEAT_OK");
-    expect(prompt).not.toContain("Read HEARTBEAT.md");
+    await expect(
+      streamFn({ provider: "demo-provider", id: "demo-model" } as never, {} as never, {}),
+    ).resolves.toMatchObject({
+      apiKey: "demo-runtime-key",
+    });
+    expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1883,29 +1740,6 @@ describe("isOllamaCompatProvider", () => {
   });
 });
 
-describe("resolveOllamaBaseUrlForRun", () => {
-  it("prefers provider baseUrl over model baseUrl", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-        providerBaseUrl: "http://provider-host:11434",
-      }),
-    ).toBe("http://provider-host:11434");
-  });
-
-  it("falls back to model baseUrl when provider baseUrl is missing", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-      }),
-    ).toBe("http://model-host:11434");
-  });
-
-  it("falls back to native default when neither baseUrl is configured", () => {
-    expect(resolveOllamaBaseUrlForRun({})).toBe("http://127.0.0.1:11434");
-  });
-});
-
 describe("wrapOllamaCompatNumCtx", () => {
   it("injects num_ctx and preserves downstream onPayload hooks", () => {
     let payloadSeen: Record<string, unknown> | undefined;
@@ -1923,6 +1757,151 @@ describe("wrapOllamaCompatNumCtx", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
     expect(downstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("deserializes assistant tool_call arguments for Ollama OpenAI-compatible payloads", () => {
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: {
+                  name: "read",
+                  arguments: '{"path":"/tmp/test.txt"}',
+                },
+              },
+            ],
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = wrapOllamaCompatNumCtx(baseFn as never, 8192);
+    void wrapped({} as never, {} as never, undefined as never);
+
+    const messageRecord = (
+      payloadSeen?.messages as Array<Record<string, unknown>> | undefined
+    )?.[0];
+    const toolCall = (messageRecord?.tool_calls as Array<Record<string, unknown>> | undefined)?.[0];
+
+    expect(toolCall?.function).toEqual({
+      name: "read",
+      arguments: { path: "/tmp/test.txt" },
+    });
+  });
+
+  it("deserializes assistant function_call arguments for Ollama OpenAI-compatible payloads", () => {
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            function_call: {
+              name: "exec",
+              arguments: '{"command":"pwd"}',
+            },
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = wrapOllamaCompatNumCtx(baseFn as never, 8192);
+    void wrapped({} as never, {} as never, undefined as never);
+
+    const messageRecord = (
+      payloadSeen?.messages as Array<Record<string, unknown>> | undefined
+    )?.[0];
+
+    expect(messageRecord?.function_call).toEqual({
+      name: "exec",
+      arguments: { command: "pwd" },
+    });
+  });
+
+  it("preserves unsafe integers when deserializing assistant tool_call arguments", () => {
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: {
+                  name: "read",
+                  arguments: '{"path":9223372036854775807,"nested":{"thread":1234567890123456789}}',
+                },
+              },
+            ],
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = wrapOllamaCompatNumCtx(baseFn as never, 8192);
+    void wrapped({} as never, {} as never, undefined as never);
+
+    const messageRecord = (
+      payloadSeen?.messages as Array<Record<string, unknown>> | undefined
+    )?.[0];
+    const toolCall = (messageRecord?.tool_calls as Array<Record<string, unknown>> | undefined)?.[0];
+
+    expect(toolCall?.function).toEqual({
+      name: "read",
+      arguments: {
+        path: "9223372036854775807",
+        nested: { thread: "1234567890123456789" },
+      },
+    });
+  });
+
+  it("preserves unsafe integers when deserializing assistant function_call arguments", () => {
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            function_call: {
+              name: "exec",
+              arguments: '{"thread":9223372036854775807}',
+            },
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = wrapOllamaCompatNumCtx(baseFn as never, 8192);
+    void wrapped({} as never, {} as never, undefined as never);
+
+    const messageRecord = (
+      payloadSeen?.messages as Array<Record<string, unknown>> | undefined
+    )?.[0];
+
+    expect(messageRecord?.function_call).toEqual({
+      name: "exec",
+      arguments: { thread: "9223372036854775807" },
+    });
   });
 });
 
@@ -1975,50 +1954,6 @@ describe("shouldInjectOllamaCompatNumCtx", () => {
         providerId: "ollama",
       }),
     ).toBe(false);
-  });
-});
-
-describe("resolveEmbeddedAgentStreamFn", () => {
-  it("keeps the session-managed HTTP stream when no override applies", () => {
-    const currentStreamFn = vi.fn();
-
-    const resolved = resolveEmbeddedAgentStreamFn({
-      currentStreamFn: currentStreamFn as never,
-      shouldUseWebSocketTransport: false,
-      sessionId: "session-1",
-      model: { provider: "xai" } as never,
-    });
-
-    expect(resolved).toBe(currentStreamFn);
-  });
-
-  it("keeps the session-managed HTTP stream when websocket auth is unavailable", () => {
-    const currentStreamFn = vi.fn();
-
-    const resolved = resolveEmbeddedAgentStreamFn({
-      currentStreamFn: currentStreamFn as never,
-      shouldUseWebSocketTransport: true,
-      wsApiKey: undefined,
-      sessionId: "session-1",
-      model: { provider: "xai" } as never,
-    });
-
-    expect(resolved).toBe(currentStreamFn);
-  });
-
-  it("prefers a provider-owned stream override when present", () => {
-    const currentStreamFn = vi.fn();
-    const providerStreamFn = vi.fn();
-
-    const resolved = resolveEmbeddedAgentStreamFn({
-      currentStreamFn: currentStreamFn as never,
-      providerStreamFn: providerStreamFn as never,
-      shouldUseWebSocketTransport: false,
-      sessionId: "session-1",
-      model: { provider: "xai" } as never,
-    });
-
-    expect(resolved).toBe(providerStreamFn);
   });
 });
 
@@ -2108,7 +2043,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
   });
 
-  it("passes primary model through even when compaction.model is set (override resolved in compactDirect)", () => {
+  it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -2138,11 +2073,14 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    // buildAfterTurnLegacyCompactionParams no longer resolves the override;
-    // compactEmbeddedPiSessionDirect does it centrally for both auto + manual paths.
+    // buildEmbeddedCompactionRuntimeContext now resolves the override eagerly
+    // so that context engines (including third-party ones) receive the correct
+    // compaction model in the runtime context.
     expect(legacy).toMatchObject({
-      provider: "openai-codex",
-      model: "gpt-5.4",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4-5",
+      // Auth profile dropped because provider changed from openai-codex to openrouter
+      authProfileId: undefined,
     });
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
@@ -2208,5 +2146,40 @@ describe("buildAfterTurnRuntimeContext", () => {
       currentThreadTs: "thread-9",
       currentMessageId: "msg-42",
     });
+  });
+});
+
+// FORK: heartbeat prompt injection tests
+describe("shouldInjectHeartbeatPrompt", () => {
+  it("uses trigger policy defaults for non-cron/non-heartbeat triggers", () => {
+    expect(shouldInjectHeartbeatPromptForTrigger("user")).toBe(true);
+    expect(shouldInjectHeartbeatPromptForTrigger("memory")).toBe(true);
+    expect(shouldInjectHeartbeatPromptForTrigger(undefined)).toBe(true);
+  });
+
+  it("suppresses the heartbeat prompt for heartbeat-triggered runs (FORK)", () => {
+    expect(shouldInjectHeartbeatPromptForTrigger("heartbeat")).toBe(false);
+  });
+
+  it("uses trigger policy overrides for cron", () => {
+    expect(shouldInjectHeartbeatPromptForTrigger("cron")).toBe(false);
+  });
+
+  it("injects the heartbeat prompt for default-agent non-cron/non-heartbeat runs", () => {
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "user" })).toBe(true);
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "memory" })).toBe(true);
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: undefined })).toBe(true);
+  });
+
+  it("suppresses the heartbeat prompt for heartbeat-triggered default-agent runs (FORK)", () => {
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "heartbeat" })).toBe(false);
+  });
+
+  it("suppresses the heartbeat prompt for cron-triggered runs", () => {
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "cron" })).toBe(false);
+  });
+
+  it("suppresses the heartbeat prompt for non-default agents", () => {
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: false, trigger: "user" })).toBe(false);
   });
 });

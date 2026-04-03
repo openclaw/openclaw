@@ -7,16 +7,16 @@ import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
-  authorizeGatewayBearerRequestOrReply,
-  resolveGatewayRequestedOperatorScopes,
-} from "./http-auth-helpers.js";
-import {
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
   setSseHeaders,
 } from "./http-common.js";
-import { getHeader } from "./http-utils.js";
+import {
+  authorizeGatewayHttpRequestOrReply,
+  getHeader,
+  resolveTrustedHttpOperatorScopes,
+} from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -158,7 +158,7 @@ export async function handleSessionHistoryHttpRequest(
   }
 
   const cfg = loadConfig();
-  const ok = await authorizeGatewayBearerRequestOrReply({
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -166,13 +166,13 @@ export async function handleSessionHistoryHttpRequest(
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!ok) {
+  if (!requestAuth) {
     return true;
   }
 
   // HTTP callers must declare the same least-privilege operator scopes they
   // intend to use over WS so both transport surfaces enforce the same gate.
-  const requestedScopes = resolveGatewayRequestedOperatorScopes(req);
+  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
   if (!scopeAuth.allowed) {
     sendJson(res, 403, {

@@ -4,6 +4,7 @@ import {
   assertGatewayAuthConfigured,
   authorizeGatewayConnect,
   authorizeHttpGatewayConnect,
+  resolveEffectiveSharedGatewayAuth,
   authorizeWsControlUiGatewayConnect,
   resolveGatewayAuth,
 } from "./auth.js";
@@ -102,6 +103,56 @@ describe("gateway auth", () => {
       token: "env-token",
       password: "env-password",
     });
+  });
+
+  it("resolves the active shared token auth only", () => {
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: {
+          mode: "token",
+          token: "config-token",
+          password: "config-password",
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toEqual({
+      mode: "token",
+      secret: "config-token",
+    });
+  });
+
+  it("resolves the active shared password auth only", () => {
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: {
+          mode: "password",
+          token: "config-token",
+          password: "config-password",
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toEqual({
+      mode: "password",
+      secret: "config-password",
+    });
+  });
+
+  it("returns null for non-shared gateway auth modes", () => {
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: { mode: "none" },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toBeNull();
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-user" },
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toBeNull();
   });
 
   it("keeps gateway auth config values ahead of env overrides", () => {
@@ -491,6 +542,99 @@ describe("trusted-proxy auth", () => {
     expect(res.user).toBe("nick@example.com");
   });
 
+  it("rejects trusted-proxy HTTP requests from origins outside the allowlist", async () => {
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+        },
+        connectAuth: null,
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "10.0.0.1" },
+          headers: {
+            host: "gateway.example.com",
+            origin: "https://evil.example",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+        browserOriginPolicy: {
+          requestHost: "gateway.example.com",
+          origin: "https://evil.example",
+          allowedOrigins: ["https://control.example.com"],
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "trusted_proxy_origin_not_allowed",
+    });
+  });
+
+  it("accepts trusted-proxy HTTP requests from allowed origins", async () => {
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+        },
+        connectAuth: null,
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "10.0.0.1" },
+          headers: {
+            host: "gateway.example.com",
+            origin: "https://control.example.com",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+        browserOriginPolicy: {
+          requestHost: "gateway.example.com",
+          origin: "https://control.example.com",
+          allowedOrigins: ["https://control.example.com"],
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      method: "trusted-proxy",
+      user: "nick@example.com",
+    });
+  });
+
+  it("keeps origin-less trusted-proxy HTTP requests working", async () => {
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: trustedProxyConfig,
+        },
+        connectAuth: null,
+        trustedProxies: ["10.0.0.1"],
+        req: {
+          socket: { remoteAddress: "10.0.0.1" },
+          headers: {
+            host: "gateway.example.com",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+        browserOriginPolicy: {
+          requestHost: "gateway.example.com",
+          allowedOrigins: ["https://control.example.com"],
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      method: "trusted-proxy",
+      user: "nick@example.com",
+    });
+  });
+
   it("rejects request from untrusted source", async () => {
     const res = await authorizeTrustedProxy({
       remoteAddress: "192.168.1.100",
@@ -592,6 +736,58 @@ describe("trusted-proxy auth", () => {
     expect(res.reason).toBe("trusted_proxy_config_missing");
   });
 
+  it.each([
+    {
+      name: "config token",
+      authConfig: {
+        mode: "trusted-proxy" as const,
+        token: "shared-secret",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+        },
+      },
+      env: undefined,
+    },
+    {
+      name: "environment token",
+      authConfig: {
+        mode: "trusted-proxy" as const,
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+        },
+      },
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "shared-secret",
+      } as NodeJS.ProcessEnv,
+    },
+  ])("rejects trusted-proxy mode when shared token comes from $name", ({ authConfig, env }) => {
+    const auth = resolveGatewayAuth({
+      authConfig,
+      env,
+    });
+
+    expect(auth.mode).toBe("trusted-proxy");
+    expect(auth.token).toBe("shared-secret");
+
+    expect(() => assertGatewayAuthConfigured(auth, authConfig)).toThrow(/mutually exclusive/);
+  });
+
+  it("still requires trustedProxy config before reporting a token conflict", () => {
+    const auth = resolveGatewayAuth({
+      authConfig: {
+        mode: "trusted-proxy",
+        token: "shared-secret",
+      },
+    });
+
+    expect(() =>
+      assertGatewayAuthConfigured(auth, {
+        mode: "trusted-proxy",
+        token: "shared-secret",
+      }),
+    ).toThrow(/no trustedProxy config was provided/);
+  });
+
   it("supports Pomerium-style headers", async () => {
     const res = await authorizeTrustedProxy({
       auth: {
@@ -633,7 +829,7 @@ describe("trusted-proxy auth", () => {
     expect(res.user).toBe("nick@example.com");
   });
 
-  describe("local-direct token fallback", () => {
+  describe("local-direct trusted-proxy requests", () => {
     function authorizeLocalDirect(options?: {
       token?: string;
       connectToken?: string;
@@ -658,38 +854,37 @@ describe("trusted-proxy auth", () => {
       });
     }
 
-    it("allows local-direct request with a valid token", async () => {
-      const res = await authorizeLocalDirect({
-        token: "secret",
-        connectToken: "secret",
-      });
-      expect(res.ok).toBe(true);
-      expect(res.method).toBe("token");
-    });
-
-    it("rejects local-direct request without credentials", async () => {
-      const res = await authorizeLocalDirect({
-        token: "secret",
-      });
+    it.each([
+      {
+        name: "without credentials",
+        options: {
+          token: "secret",
+        },
+      },
+      {
+        name: "with a valid token",
+        options: {
+          token: "secret",
+          connectToken: "secret",
+        },
+      },
+      {
+        name: "with a wrong token",
+        options: {
+          token: "secret",
+          connectToken: "wrong",
+        },
+      },
+      {
+        name: "when no local token is configured",
+        options: {
+          connectToken: "secret",
+        },
+      },
+    ])("rejects local-direct request $name", async ({ options }) => {
+      const res = await authorizeLocalDirect(options);
       expect(res.ok).toBe(false);
-      expect(res.reason).toBe("token_missing");
-    });
-
-    it("rejects local-direct request with a wrong token", async () => {
-      const res = await authorizeLocalDirect({
-        token: "secret",
-        connectToken: "wrong",
-      });
-      expect(res.ok).toBe(false);
-      expect(res.reason).toBe("token_mismatch");
-    });
-
-    it("rejects local-direct request when no local token is configured", async () => {
-      const res = await authorizeLocalDirect({
-        connectToken: "secret",
-      });
-      expect(res.ok).toBe(false);
-      expect(res.reason).toBe("token_missing_config");
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
     it("rejects trusted-proxy identity headers from loopback sources", async () => {
@@ -738,7 +933,7 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
-    it("uses token fallback for direct loopback even when Host is not localish", async () => {
+    it("rejects direct loopback even when Host is not localish", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",
@@ -756,8 +951,8 @@ describe("trusted-proxy auth", () => {
         } as never,
       });
 
-      expect(res.ok).toBe(true);
-      expect(res.method).toBe("token");
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
     it("rejects same-host proxy request with missing required header", async () => {

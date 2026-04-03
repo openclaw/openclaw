@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import JSON5 from "json5";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
@@ -24,7 +25,7 @@ export type PluginManifest = {
   legacyPluginIds?: string[];
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
   autoEnableWhenConfiguredProviders?: string[];
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   channels?: string[];
   providers?: string[];
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
@@ -53,6 +54,7 @@ export type PluginManifestContracts = {
   speechProviders?: string[];
   mediaUnderstandingProviders?: string[];
   imageGenerationProviders?: string[];
+  webFetchProviders?: string[];
   webSearchProviders?: string[];
   tools?: string[];
 };
@@ -125,12 +127,14 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const speechProviders = normalizeStringList(value.speechProviders);
   const mediaUnderstandingProviders = normalizeStringList(value.mediaUnderstandingProviders);
   const imageGenerationProviders = normalizeStringList(value.imageGenerationProviders);
+  const webFetchProviders = normalizeStringList(value.webFetchProviders);
   const webSearchProviders = normalizeStringList(value.webSearchProviders);
   const tools = normalizeStringList(value.tools);
   const contracts = {
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
+    ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
     ...(tools.length > 0 ? { tools } : {}),
   } satisfies PluginManifestContracts;
@@ -233,6 +237,16 @@ export function resolvePluginManifestPath(rootDir: string): string {
   return path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
 }
 
+function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
+  if (typeof raw === "string") {
+    return raw as PluginKind;
+  }
+  if (Array.isArray(raw) && raw.length > 0 && raw.every((k) => typeof k === "string")) {
+    return raw.length === 1 ? (raw[0] as PluginKind) : (raw as PluginKind[]);
+  }
+  return undefined;
+}
+
 export function loadPluginManifest(
   rootDir: string,
   rejectHardlinks = true,
@@ -260,7 +274,7 @@ export function loadPluginManifest(
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
+    raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
   } catch (err) {
     return {
       ok: false,
@@ -282,7 +296,7 @@ export function loadPluginManifest(
     return { ok: false, error: "plugin manifest requires configSchema", manifestPath };
   }
 
-  const kind = typeof raw.kind === "string" ? (raw.kind as PluginKind) : undefined;
+  const kind = parsePluginKind(raw.kind);
   const enabledByDefault = raw.enabledByDefault === true;
   const legacyPluginIds = normalizeStringList(raw.legacyPluginIds);
   const autoEnableWhenConfiguredProviders = normalizeStringList(
@@ -361,6 +375,7 @@ export type PluginPackageInstall = {
   localPath?: string;
   defaultChoice?: "npm" | "local";
   minHostVersion?: string;
+  allowInvalidConfigRecovery?: boolean;
 };
 
 export type OpenClawPackageStartup = {

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../command-format.js";
+import { printDaemonStatus } from "./status.print.js";
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn<(line: string) => void>(),
@@ -10,8 +11,9 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
-vi.mock("../../terminal/theme.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../terminal/theme.js")>();
+vi.mock("../../terminal/theme.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../terminal/theme.js")>("../../terminal/theme.js");
   return {
     ...actual,
     colorize: (_rich: boolean, _theme: unknown, text: string) => text,
@@ -68,8 +70,6 @@ vi.mock("./status.gather.js", () => ({
   renderPortDiagnosticsForCli: () => [],
   resolvePortListeningAddresses: () => ["127.0.0.1:18789"],
 }));
-
-const { printDaemonStatus } = await import("./status.print.js");
 
 describe("printDaemonStatus", () => {
   beforeEach(() => {

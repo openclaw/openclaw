@@ -87,16 +87,20 @@ vi.mock("./sdk-runtime.js", () => ({
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+vi.mock("openclaw/plugin-sdk/routing", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/routing")>(
+    "openclaw/plugin-sdk/routing",
+  );
   return {
     ...actual,
     resolveAgentRoute: resolveAgentRouteMock,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
+    "openclaw/plugin-sdk/agent-runtime",
+  );
   return {
     ...actual,
     agentCommandFromIngress: agentCommandMock,
@@ -114,7 +118,12 @@ function createClient() {
     fetchChannel: vi.fn(async (channelId: string) => ({
       id: channelId,
       guildId: "g1",
+      guild: { id: "g1", name: "Guild One" },
       type: ChannelType.GuildVoice,
+    })),
+    fetchGuild: vi.fn(async (guildId: string) => ({
+      id: guildId,
+      name: "Guild One",
     })),
     getPlugin: vi.fn(() => ({
       getGatewayAdapterCreator: vi.fn(() => vi.fn()),
@@ -155,10 +164,11 @@ describe("DiscordVoiceManager", () => {
       typeof managerModule.DiscordVoiceManager
     >[0]["discordConfig"] = {},
     clientOverride?: ReturnType<typeof createClient>,
+    cfgOverride: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"] = {},
   ) =>
     new managerModule.DiscordVoiceManager({
       client: (clientOverride ?? createClient()) as never,
-      cfg: {},
+      cfg: cfgOverride,
       discordConfig,
       accountId: "default",
       runtime: createRuntime(),
@@ -205,8 +215,8 @@ describe("DiscordVoiceManager", () => {
     await (manager as unknown as ProcessSegmentInvoker).processSegment({
       entry: {
         guildId: "g1",
-        channelId: "c1",
-        route: { sessionKey: "discord:g1:c1", agentId: "agent-1" },
+        channelId: "1001",
+        route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
       },
       wavPath: "/tmp/test.wav",
       userId,
@@ -286,6 +296,27 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("keeps the shorter timeout for initial voice connection readiness", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 15_000);
+  });
+
+  it("stores guild metadata on joined voice sessions", async () => {
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
+      | { guildName?: string }
+      | undefined;
+    expect(entry?.guildName).toBe("Guild One");
+  });
+
   it("attempts rejoin after repeated decrypt failures", async () => {
     const manager = createManager();
 
@@ -311,7 +342,7 @@ describe("DiscordVoiceManager", () => {
         discriminator: "1234",
       },
     });
-    const manager = createManager({ allowFrom: ["discord:u-owner"] }, client);
+    const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client);
     await processVoiceSegment(manager, "u-owner");
 
     const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
@@ -331,7 +362,9 @@ describe("DiscordVoiceManager", () => {
         discriminator: "4321",
       },
     });
-    const manager = createManager({ allowFrom: ["discord:u-owner"] }, client);
+    const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client, {
+      commands: { useAccessGroups: false },
+    });
     await processVoiceSegment(manager, "u-guest");
 
     const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
@@ -357,6 +390,172 @@ describe("DiscordVoiceManager", () => {
     await runSegment();
     await runSegment();
 
-    expect(client.fetchMember).toHaveBeenCalledTimes(1);
+    expect(client.fetchMember).toHaveBeenCalledTimes(3);
+  });
+
+  it("persists full speaker context in cache writes", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Role Speaker",
+      roles: ["role-voice"],
+      user: {
+        id: "u-role",
+        username: "role",
+        globalName: "Role",
+        discriminator: "2222",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "allowlist",
+        guilds: {
+          g1: {
+            channels: {
+              "1001": {
+                roles: ["role:role-voice"],
+              },
+            },
+          },
+        },
+      },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-role");
+
+    const cache = (
+      manager as unknown as {
+        speakerContextCache: Map<
+          string,
+          {
+            id?: string;
+            label: string;
+            name?: string;
+            tag?: string;
+            senderIsOwner: boolean;
+            expiresAt: number;
+          }
+        >;
+      }
+    ).speakerContextCache;
+    const cached = cache.get("g1:u-role");
+
+    expect(cached).toEqual(
+      expect.objectContaining({
+        id: "u-role",
+        label: "Role Speaker",
+      }),
+    );
+  });
+
+  it("re-fetches member roles for repeated voice auth checks", async () => {
+    const client = createClient();
+    client.fetchMember
+      .mockResolvedValueOnce({
+        nickname: "Role Speaker",
+        roles: ["role-voice"],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      })
+      .mockResolvedValueOnce({
+        nickname: "Role Speaker",
+        roles: ["role-voice"],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      })
+      .mockResolvedValueOnce({
+        nickname: "Role Speaker",
+        roles: [],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      })
+      .mockResolvedValue({
+        nickname: "Role Speaker",
+        roles: [],
+        user: {
+          id: "u-role",
+          username: "role",
+          globalName: "Role",
+          discriminator: "2222",
+        },
+      });
+    const manager = createManager(
+      {
+        groupPolicy: "allowlist",
+        guilds: {
+          g1: {
+            channels: {
+              "1001": {
+                roles: ["role:role-voice"],
+              },
+            },
+          },
+        },
+      },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-role");
+    await processVoiceSegment(manager, "u-role");
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expect(client.fetchMember).toHaveBeenCalledTimes(3);
+  });
+
+  it("fetches guild metadata before allowlist checks when the session lacks a guild name", async () => {
+    const client = createClient();
+    client.fetchGuild.mockResolvedValue({ id: "g1", name: "Guild One" });
+    client.fetchMember.mockResolvedValue({
+      nickname: "Owner Nick",
+      user: {
+        id: "u-owner",
+        username: "owner",
+        globalName: "Owner",
+        discriminator: "1234",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "allowlist",
+        guilds: {
+          "guild-one": {
+            channels: {
+              "*": {
+                users: ["discord:u-owner"],
+              },
+            },
+          },
+        },
+      },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-owner");
+
+    expect(client.fetchGuild).toHaveBeenCalledWith("g1");
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("DiscordVoiceReadyListener: propagates autoJoin errors fire-and-forget without throwing", async () => {
+    const manager = createManager();
+    vi.spyOn(manager, "autoJoin").mockRejectedValue(new Error("autoJoin rejected"));
+
+    const { DiscordVoiceReadyListener } = managerModule;
+    const listener = new DiscordVoiceReadyListener(manager);
+
+    await expect(listener.handle(undefined, undefined as never)).resolves.not.toThrow();
+    expect(manager.autoJoin).toHaveBeenCalledTimes(1);
   });
 });

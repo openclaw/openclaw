@@ -8,7 +8,7 @@ title: "Heartbeat"
 
 # Heartbeat (Gateway)
 
-> **Heartbeat vs Cron?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for guidance on when to use each.
+> **Heartbeat vs Cron?** See [Automation & Tasks](/automation) for guidance on when to use each.
 
 Heartbeat runs **periodic agent turns** in the main session so the model can
 surface anything that needs attention without spamming you.
@@ -16,7 +16,7 @@ surface anything that needs attention without spamming you.
 Heartbeat is a scheduled main-session turn — it does **not** create [background task](/automation/tasks) records.
 Task records are for detached work (ACP runs, subagents, isolated cron jobs).
 
-Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
+Troubleshooting: [Scheduled Tasks](/automation/cron-jobs#troubleshooting)
 
 ## Quick start (beginner)
 
@@ -227,7 +227,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   - Session key formats: see [Sessions](/concepts/session) and [Groups](/channels/groups).
 - `target`:
   - `last`: deliver to the last used external channel.
-  - explicit channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
+  - explicit channel: any configured channel or plugin id, for example `discord`, `matrix`, `telegram`, or `whatsapp`.
   - `none` (default): run the heartbeat but **do not deliver** externally.
 - `directPolicy`: controls direct/DM delivery behavior:
   - `allow` (default): allow direct/DM heartbeat delivery.
@@ -400,8 +400,7 @@ Heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce c
 
 ## Related
 
-- [Automation Overview](/automation) — all automation mechanisms at a glance
-- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — when to use each
+- [Automation & Tasks](/automation) — all automation mechanisms at a glance
 - [Background Tasks](/automation/tasks) — how detached work is tracked
 - [Timezone](/concepts/timezone) — how timezone affects heartbeat scheduling
-- [Troubleshooting](/automation/troubleshooting) — debugging automation issues
+- [Troubleshooting](/automation/cron-jobs#troubleshooting) — debugging automation issues

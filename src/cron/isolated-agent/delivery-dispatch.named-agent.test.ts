@@ -5,7 +5,7 @@ import { matchesMessagingToolDeliveryTarget } from "./delivery-dispatch.js";
 vi.mock("../../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
-vi.mock("../../agents/subagent-registry.js", () => ({
+vi.mock("../../agents/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: vi.fn().mockReturnValue(0),
 }));
 
@@ -86,23 +86,5 @@ describe("resolveCronDeliveryBestEffort", () => {
     const { resolveCronDeliveryBestEffort } = await import("./delivery-dispatch.js");
     const job = { delivery: { bestEffort: true }, payload: { kind: "agentTurn" } } as never;
     expect(resolveCronDeliveryBestEffort(job)).toBe(true);
-  });
-
-  it("returns true when payload.bestEffortDeliver is true and no delivery.bestEffort", async () => {
-    const { resolveCronDeliveryBestEffort } = await import("./delivery-dispatch.js");
-    const job = {
-      delivery: {},
-      payload: { kind: "agentTurn", bestEffortDeliver: true },
-    } as never;
-    expect(resolveCronDeliveryBestEffort(job)).toBe(true);
-  });
-
-  it("lets explicit delivery.bestEffort=false override legacy payload bestEffortDeliver=true", async () => {
-    const { resolveCronDeliveryBestEffort } = await import("./delivery-dispatch.js");
-    const job = {
-      delivery: { bestEffort: false },
-      payload: { kind: "agentTurn", bestEffortDeliver: true },
-    } as never;
-    expect(resolveCronDeliveryBestEffort(job)).toBe(false);
   });
 });

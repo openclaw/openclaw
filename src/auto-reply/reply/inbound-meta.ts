@@ -1,4 +1,5 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
@@ -33,6 +34,22 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
   return channelValue;
 }
 
+function resolveInboundFormattingHints(ctx: TemplateContext):
+  | {
+      text_markup: string;
+      rules: string[];
+    }
+  | undefined {
+  const channelValue = resolveInboundChannel(ctx);
+  if (!channelValue) {
+    return undefined;
+  }
+  const normalizedChannel = normalizeChannelId(channelValue) ?? channelValue;
+  return getChannelPlugin(normalizedChannel)?.agentPrompt?.inboundFormattingHints?.({
+    accountId: safeTrim(ctx.AccountId) ?? undefined,
+  });
+}
+
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -56,6 +73,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
+    response_format: resolveInboundFormattingHints(ctx),
   };
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.

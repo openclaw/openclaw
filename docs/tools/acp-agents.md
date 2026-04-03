@@ -714,6 +714,8 @@ additional opt-in convenience, not a replacement for generic MCP server config.
 
 ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:
 
+These ACPX harness permissions are separate from OpenClaw exec approvals and separate from CLI-backend vendor bypass flags such as Claude CLI `--permission-mode bypassPermissions`. ACPX `approve-all` is the harness-level break-glass switch for ACP sessions.
+
 ### `permissionMode`
 
 Controls which operations the harness agent can perform without prompting.

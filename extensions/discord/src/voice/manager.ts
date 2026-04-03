@@ -9,7 +9,6 @@ import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
 import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -21,8 +20,9 @@ import { textToSpeech } from "openclaw/plugin-sdk/speech-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { formatMention } from "../mentions.js";
-import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
+import { normalizeDiscordSlug, resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
+import { authorizeDiscordVoiceIngress } from "./access.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 
 const require = createRequire(import.meta.url);
@@ -32,7 +32,8 @@ const CHANNELS = 2;
 const BIT_DEPTH = 16;
 const MIN_SEGMENT_SECONDS = 0.35;
 const SILENCE_DURATION_MS = 1_000;
-const PLAYBACK_READY_TIMEOUT_MS = 15_000;
+const VOICE_CONNECT_READY_TIMEOUT_MS = 15_000;
+const PLAYBACK_READY_TIMEOUT_MS = 60_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
 const DECRYPT_FAILURE_WINDOW_MS = 30_000;
 const DECRYPT_FAILURE_RECONNECT_THRESHOLD = 3;
@@ -54,7 +55,9 @@ type VoiceOperationResult = {
 
 type VoiceSessionEntry = {
   guildId: string;
+  guildName?: string;
   channelId: string;
+  channelName?: string;
   sessionChannelId: string;
   route: ReturnType<typeof resolveAgentRoute>;
   connection: import("@discordjs/voice").VoiceConnection;
@@ -238,11 +241,13 @@ export class DiscordVoiceManager {
   private readonly voiceEnabled: boolean;
   private autoJoinTask: Promise<void> | null = null;
   private readonly ownerAllowFrom: string[];
-  private readonly allowDangerousNameMatching: boolean;
   private readonly speakerContextCache = new Map<
     string,
     {
+      id: string;
       label: string;
+      name?: string;
+      tag?: string;
       senderIsOwner: boolean;
       expiresAt: number;
     }
@@ -262,7 +267,6 @@ export class DiscordVoiceManager {
     this.voiceEnabled = params.discordConfig.voice?.enabled !== false;
     this.ownerAllowFrom =
       params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [];
-    this.allowDangerousNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
   }
 
   setBotUserId(id?: string) {
@@ -385,7 +389,7 @@ export class DiscordVoiceManager {
       await voiceSdk.entersState(
         connection,
         voiceSdk.VoiceConnectionStatus.Ready,
-        PLAYBACK_READY_TIMEOUT_MS,
+        VOICE_CONNECT_READY_TIMEOUT_MS,
       );
       logVoiceVerbose(`join: connected to guild ${guildId} channel ${channelId}`);
       // --- FORK: pre-warm Kyutai TTS model on VC join + play greeting ---
@@ -473,7 +477,18 @@ export class DiscordVoiceManager {
 
     const entry: VoiceSessionEntry = {
       guildId,
+      guildName:
+        channelInfo &&
+        "guild" in channelInfo &&
+        channelInfo.guild &&
+        typeof channelInfo.guild.name === "string"
+          ? channelInfo.guild.name
+          : undefined,
       channelId,
+      channelName:
+        channelInfo && "name" in channelInfo && typeof channelInfo.name === "string"
+          ? channelInfo.name
+          : undefined,
       sessionChannelId,
       route,
       connection,
@@ -649,6 +664,36 @@ export class DiscordVoiceManager {
     logVoiceVerbose(
       `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
     );
+    if (!entry.guildName) {
+      const guild = await this.params.client.fetchGuild(entry.guildId).catch(() => null);
+      if (guild && typeof guild.name === "string" && guild.name.trim()) {
+        entry.guildName = guild.name;
+      }
+    }
+    const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
+    const speakerIdentity = await this.resolveSpeakerIdentity(entry.guildId, userId);
+    const access = await authorizeDiscordVoiceIngress({
+      cfg: this.params.cfg,
+      discordConfig: this.params.discordConfig,
+      guildName: entry.guildName,
+      guildId: entry.guildId,
+      channelId: entry.channelId,
+      channelName: entry.channelName,
+      channelSlug: entry.channelName ? normalizeDiscordSlug(entry.channelName) : "",
+      channelLabel: formatMention({ channelId: entry.channelId }),
+      memberRoleIds: speakerIdentity.memberRoleIds,
+      sender: {
+        id: speakerIdentity.id,
+        name: speakerIdentity.name,
+        tag: speakerIdentity.tag,
+      },
+    });
+    if (!access.ok) {
+      logVoiceVerbose(
+        `segment unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${access.message}`,
+      );
+      return;
+    }
     const transcript = await transcribeAudio({
       cfg: this.params.cfg,
       agentId: entry.route.agentId,
@@ -664,7 +709,6 @@ export class DiscordVoiceManager {
       `transcription ok (${transcript.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
     );
 
-    const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
     const prompt = speaker.label ? `${speaker.label}: ${transcript}` : transcript;
 
     const result = await agentCommandFromIngress(
@@ -906,7 +950,7 @@ export class DiscordVoiceManager {
         name: params.name,
         tag: params.tag,
       },
-      allowNameMatching: this.allowDangerousNameMatching,
+      allowNameMatching: false,
     }).ownerAllowed;
   }
 
@@ -919,7 +963,10 @@ export class DiscordVoiceManager {
     userId: string,
   ):
     | {
+        id: string;
         label: string;
+        name?: string;
+        tag?: string;
         senderIsOwner: boolean;
       }
     | undefined {
@@ -933,7 +980,10 @@ export class DiscordVoiceManager {
       return undefined;
     }
     return {
+      id: cached.id,
       label: cached.label,
+      name: cached.name,
+      tag: cached.tag,
       senderIsOwner: cached.senderIsOwner,
     };
   }
@@ -941,11 +991,20 @@ export class DiscordVoiceManager {
   private setCachedSpeakerContext(
     guildId: string,
     userId: string,
-    context: { label: string; senderIsOwner: boolean },
+    context: {
+      id: string;
+      label: string;
+      name?: string;
+      tag?: string;
+      senderIsOwner: boolean;
+    },
   ): void {
     const key = this.resolveSpeakerContextCacheKey(guildId, userId);
     this.speakerContextCache.set(key, {
+      id: context.id,
       label: context.label,
+      name: context.name,
+      tag: context.tag,
       senderIsOwner: context.senderIsOwner,
       expiresAt: Date.now() + SPEAKER_CONTEXT_CACHE_TTL_MS,
     });
@@ -955,7 +1014,10 @@ export class DiscordVoiceManager {
     guildId: string,
     userId: string,
   ): Promise<{
+    id: string;
     label: string;
+    name?: string;
+    tag?: string;
     senderIsOwner: boolean;
   }> {
     const cached = this.getCachedSpeakerContext(guildId, userId);
@@ -964,7 +1026,10 @@ export class DiscordVoiceManager {
     }
     const identity = await this.resolveSpeakerIdentity(guildId, userId);
     const context = {
+      id: identity.id,
       label: identity.label,
+      name: identity.name,
+      tag: identity.tag,
       senderIsOwner: this.resolveSpeakerIsOwner({
         id: identity.id,
         name: identity.name,
@@ -983,6 +1048,7 @@ export class DiscordVoiceManager {
     label: string;
     name?: string;
     tag?: string;
+    memberRoleIds: string[];
   }> {
     try {
       const member = await this.params.client.fetchMember(guildId, userId);
@@ -992,6 +1058,13 @@ export class DiscordVoiceManager {
         label: member.nickname ?? member.user?.globalName ?? username ?? userId,
         name: username,
         tag: member.user ? formatDiscordUserTag(member.user) : undefined,
+        memberRoleIds: Array.isArray(member.roles)
+          ? member.roles
+              .map((role) =>
+                typeof role === "string" ? role : typeof role?.id === "string" ? role.id : "",
+              )
+              .filter(Boolean)
+          : [],
       };
     } catch {
       try {
@@ -1002,9 +1075,10 @@ export class DiscordVoiceManager {
           label: user.globalName ?? username ?? userId,
           name: username,
           tag: formatDiscordUserTag(user),
+          memberRoleIds: [],
         };
       } catch {
-        return { id: userId, label: userId };
+        return { id: userId, label: userId, memberRoleIds: [] };
       }
     }
   }
@@ -1015,8 +1089,10 @@ export class DiscordVoiceReadyListener extends ReadyListener {
     super();
   }
 
-  async handle() {
-    await this.manager.autoJoin();
+  async handle(_data: unknown, _client: Client): Promise<void> {
+    void this.manager
+      .autoJoin()
+      .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
   }
 }
 

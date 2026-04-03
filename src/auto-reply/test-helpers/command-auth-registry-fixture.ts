@@ -1,5 +1,5 @@
 import { afterEach, beforeEach } from "vitest";
-import { normalizeWhatsAppAllowFromEntries } from "../../channels/plugins/normalize/whatsapp.js";
+import { normalizeWhatsAppAllowFromEntries } from "../../../extensions/whatsapp/api.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 

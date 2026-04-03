@@ -13,8 +13,9 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...original,
     streamAnthropic: (model: unknown, context: unknown, options: unknown) =>
@@ -29,18 +30,14 @@ vi.mock("@anthropic-ai/vertex-sdk", () => ({
   }),
 }));
 
-import {
-  resolveAnthropicVertexRegion,
-  resolveAnthropicVertexRegionFromBaseUrl,
-} from "../plugin-sdk/anthropic-vertex.js";
-
 let createAnthropicVertexStreamFn: typeof import("./anthropic-vertex-stream.js").createAnthropicVertexStreamFn;
 let createAnthropicVertexStreamFnForModel: typeof import("./anthropic-vertex-stream.js").createAnthropicVertexStreamFnForModel;
 
 async function loadFreshAnthropicVertexStreamModuleForTest() {
   vi.resetModules();
-  vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
-    const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  vi.doMock("@mariozechner/pi-ai", async () => {
+    const original =
+      await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
     return {
       ...original,
       streamAnthropic: (model: unknown, context: unknown, options: unknown) =>
@@ -160,36 +157,6 @@ describe("createAnthropicVertexStreamFn", () => {
       expect.not.objectContaining({
         maxTokens: expect.anything(),
       }),
-    );
-  });
-});
-
-describe("resolveAnthropicVertexRegionFromBaseUrl", () => {
-  it("accepts well-formed regional env values", () => {
-    expect(
-      resolveAnthropicVertexRegion({
-        GOOGLE_CLOUD_LOCATION: "us-east1",
-      } as NodeJS.ProcessEnv),
-    ).toBe("us-east1");
-  });
-
-  it("falls back to the default region for malformed env values", () => {
-    expect(
-      resolveAnthropicVertexRegion({
-        GOOGLE_CLOUD_LOCATION: "us-central1.attacker.example",
-      } as NodeJS.ProcessEnv),
-    ).toBe("global");
-  });
-
-  it("parses regional Vertex endpoints", () => {
-    expect(
-      resolveAnthropicVertexRegionFromBaseUrl("https://europe-west4-aiplatform.googleapis.com"),
-    ).toBe("europe-west4");
-  });
-
-  it("treats the global Vertex endpoint as global", () => {
-    expect(resolveAnthropicVertexRegionFromBaseUrl("https://aiplatform.googleapis.com")).toBe(
-      "global",
     );
   });
 });

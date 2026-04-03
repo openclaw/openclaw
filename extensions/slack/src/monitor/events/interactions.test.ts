@@ -166,8 +166,7 @@ function createContext(overrides?: {
 
 describe("registerSlackInteractionEvents", () => {
   beforeAll(async () => {
-    vi.resetModules();
-    const channelRuntime = await import("openclaw/plugin-sdk/channel-runtime");
+    const channelRuntime = await import("openclaw/plugin-sdk/infra-runtime");
     const pluginRuntime = await import("openclaw/plugin-sdk/plugin-runtime");
     const conversationBinding = await import("../../../../../src/plugins/conversation-binding.js");
     enqueueSystemEventSpy = vi
@@ -355,20 +354,42 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
+    const dispatchCalls = dispatchPluginInteractiveHandlerMock.mock.calls as unknown[][];
+    const dispatchCall = dispatchCalls[0]?.[0] as
+      | {
+          channel?: string;
+          data?: string;
+          dedupeId?: string;
+          invoke?: (params: {
+            registration: { handler: (ctx: unknown) => unknown };
+            namespace: string;
+            payload: string;
+          }) => Promise<unknown>;
+        }
+      | undefined;
+    expect(dispatchCall).toMatchObject({
+      channel: "slack",
+      data: "codex:approve:thread-1",
+      dedupeId: "U123:C1:100.200:123.trigger:codex:approve:thread-1",
+    });
+    const registrationHandler = vi.fn();
+    await dispatchCall?.invoke?.({
+      registration: { handler: registrationHandler },
+      namespace: "codex",
+      payload: "approve:thread-1",
+    });
+    expect(registrationHandler).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "slack",
-        data: "codex:approve:thread-1",
+        accountId: ctx.accountId,
+        conversationId: "C1",
         interactionId: "U123:C1:100.200:123.trigger:codex:approve:thread-1",
-        ctx: expect.objectContaining({
-          accountId: ctx.accountId,
-          conversationId: "C1",
-          interactionId: "U123:C1:100.200:123.trigger:codex:approve:thread-1",
-          threadId: "100.100",
-          interaction: expect.objectContaining({
-            actionId: "codex",
-            value: "approve:thread-1",
-          }),
+        threadId: "100.100",
+        interaction: expect.objectContaining({
+          actionId: "codex",
+          value: "approve:thread-1",
+          data: "codex:approve:thread-1",
+          namespace: "codex",
+          payload: "approve:thread-1",
         }),
       }),
     );
@@ -492,17 +513,17 @@ describe("registerSlackInteractionEvents", () => {
     const calls = dispatchPluginInteractiveHandlerMock.mock.calls as unknown[][];
     const firstCall = calls[0]?.[0] as
       | {
-          interactionId?: string;
+          dedupeId?: string;
         }
       | undefined;
     const secondCall = calls[1]?.[0] as
       | {
-          interactionId?: string;
+          dedupeId?: string;
         }
       | undefined;
-    expect(firstCall?.interactionId).toContain(":trigger-1:");
-    expect(secondCall?.interactionId).toContain(":trigger-2:");
-    expect(firstCall?.interactionId).not.toBe(secondCall?.interactionId);
+    expect(firstCall?.dedupeId).toContain(":trigger-1:");
+    expect(secondCall?.dedupeId).toContain(":trigger-2:");
+    expect(firstCall?.dedupeId).not.toBe(secondCall?.dedupeId);
   });
 
   it("resolves plugin binding approvals from shared interactive Slack actions", async () => {

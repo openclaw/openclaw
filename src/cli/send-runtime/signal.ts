@@ -1,9 +1,6 @@
-import { sendMessageSignal as sendMessageSignalImpl } from "../../plugin-sdk/signal.js";
+import { createChannelOutboundRuntimeSend } from "./channel-outbound-send.js";
 
-type RuntimeSend = {
-  sendMessage: typeof import("../../plugin-sdk/signal.js").sendMessageSignal;
-};
-
-export const runtimeSend = {
-  sendMessage: sendMessageSignalImpl,
-} satisfies RuntimeSend;
+export const runtimeSend = createChannelOutboundRuntimeSend({
+  channelId: "signal",
+  unavailableMessage: "Signal outbound adapter is unavailable.",
+});

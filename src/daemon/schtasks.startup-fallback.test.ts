@@ -12,14 +12,39 @@ import {
   withWindowsEnv,
   writeGatewayScript,
 } from "./test-helpers/schtasks-fixtures.js";
+const timeState = vi.hoisted(() => ({ now: 0 }));
+const sleepMock = vi.hoisted(() =>
+  vi.fn(async (ms: number) => {
+    timeState.now += ms;
+  }),
+);
 const childUnref = vi.hoisted(() => vi.fn());
 const spawn = vi.hoisted(() => vi.fn(() => ({ unref: childUnref })));
+const spawnSync = vi.hoisted(() =>
+  vi.fn(() => ({
+    pid: 0,
+    output: [null, "", ""],
+    stdout: "",
+    stderr: "",
+    status: 0,
+    signal: null,
+  })),
+);
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
+  return {
+    ...actual,
+    sleep: (ms: number) => sleepMock(ms),
+  };
+});
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn,
+    spawnSync,
   };
 });
 
@@ -79,7 +104,14 @@ function addStartupFallbackMissingResponses(
 beforeEach(() => {
   resetSchtasksBaseMocks();
   spawn.mockClear();
+  spawnSync.mockClear();
   childUnref.mockClear();
+  timeState.now = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
+  sleepMock.mockReset();
+  sleepMock.mockImplementation(async (ms: number) => {
+    timeState.now += ms;
+  });
 });
 
 afterEach(() => {

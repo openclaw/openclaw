@@ -165,7 +165,7 @@ flowchart TD
 
     Common log signatures:
 
-    - `Gateway start blocked: set gateway.mode=local` → gateway mode is unset/remote.
+    - `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → gateway mode is remote, or the config file is missing the local-mode stamp and should be repaired.
     - `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
     - `another gateway instance is already listening` or `EADDRINUSE` → port already taken.
 
@@ -231,7 +231,7 @@ flowchart TD
     Deep pages:
 
     - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
-    - [/automation/troubleshooting](/automation/troubleshooting)
+    - [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
     - [/gateway/heartbeat](/gateway/heartbeat)
 
   </Accordion>
@@ -278,11 +278,12 @@ flowchart TD
 
     - If `tools.exec.host` is unset, the default is `auto`.
     - `host=auto` resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.
-    - On `gateway` and `node`, unset `tools.exec.security` defaults to `allowlist`.
-    - Unset `tools.exec.ask` defaults to `on-miss`.
-    - Result: ordinary host commands can now pause with `Approval required` instead of running immediately.
+    - `host=auto` is routing only; the no-prompt "YOLO" behavior comes from `security=full` plus `ask=off` on gateway/node.
+    - On `gateway` and `node`, unset `tools.exec.security` defaults to `full`.
+    - Unset `tools.exec.ask` defaults to `off`.
+    - Result: if you are seeing approvals, some host-local or per-session policy tightened exec away from the current defaults.
 
-    Restore the old gateway no-approval behavior:
+    Restore current default no-approval behavior:
 
     ```bash
     openclaw config set tools.exec.host gateway
@@ -293,8 +294,8 @@ flowchart TD
 
     Safer alternatives:
 
-    - Set only `tools.exec.host=gateway` if you just want stable host routing and still want approvals.
-    - Keep `security=allowlist` with `ask=on-miss` if you want host exec but still want review on allowlist misses.
+    - Set only `tools.exec.host=gateway` if you just want stable host routing.
+    - Use `security=allowlist` with `ask=on-miss` if you want host exec but still want review on allowlist misses.
     - Enable sandbox mode if you want `host=auto` to resolve back to `sandbox`.
 
     Common log signatures:
@@ -342,3 +343,11 @@ flowchart TD
 
   </Accordion>
 </AccordionGroup>
+
+## Related
+
+- [FAQ](/help/faq) — frequently asked questions
+- [Gateway Troubleshooting](/gateway/troubleshooting) — gateway-specific issues
+- [Doctor](/gateway/doctor) — automated health checks and repairs
+- [Channel Troubleshooting](/channels/troubleshooting) — channel connectivity issues
+- [Automation Troubleshooting](/automation/cron-jobs#troubleshooting) — cron and heartbeat issues

@@ -132,7 +132,10 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   const plugin = getActivePluginChannelRegistry()?.channels.find((entry) =>
     matchesPluginId(entry.plugin),
   )?.plugin;
-  return plugin?.conversationBindings?.supportsCurrentConversationBinding === true;
+  if (plugin?.conversationBindings?.supportsCurrentConversationBinding === true) {
+    return true;
+  }
+  return false;
 }
 
 export function getGenericCurrentConversationBindingCapabilities(params: {

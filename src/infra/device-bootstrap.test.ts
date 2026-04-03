@@ -5,7 +5,10 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearDeviceBootstrapTokens,
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
+  getDeviceBootstrapTokenProfile,
   issueDeviceBootstrapToken,
+  redeemDeviceBootstrapTokenProfile,
+  restoreDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "./device-bootstrap.js";
@@ -70,23 +73,76 @@ describe("device bootstrap tokens", () => {
     });
   });
 
-  it("verifies valid bootstrap tokens without consuming them before expiry", async () => {
+  it("verifies valid bootstrap tokens and binds them to the first device identity", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
 
     await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+
+    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
+    const parsed = JSON.parse(raw) as Record<
+      string,
+      {
+        token: string;
+        deviceId?: string;
+        publicKey?: string;
+      }
+    >;
+    expect(parsed[issued.token]).toMatchObject({
+      token: issued.token,
+      deviceId: "device-123",
+      publicKey: "public-key-123",
+    });
+  });
+
+  it("loads the issued bootstrap profile for a valid token", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
+      {
+        roles: ["node", "operator"],
+        scopes: ["operator.read", "operator.talk.secrets", "operator.write"],
+      },
+    );
+    await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
+  });
+
+  it("persists bootstrap redemption state across verification reloads", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    await expect(
+      redeemDeviceBootstrapTokenProfile({
+        baseDir,
+        token: issued.token,
+        role: "node",
+        scopes: [],
+      }),
+    ).resolves.toEqual({
+      recorded: true,
+      fullyRedeemed: false,
+    });
+
     await expect(
       verifyBootstrapToken(baseDir, issued.token, {
         role: "operator",
         scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
       }),
     ).resolves.toEqual({ ok: true });
-    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({
-      ok: true,
+    await expect(
+      redeemDeviceBootstrapTokenProfile({
+        baseDir,
+        token: issued.token,
+        role: "operator",
+        scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
+      }),
+    ).resolves.toEqual({
+      recorded: true,
+      fullyRedeemed: true,
     });
-
-    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
-    expect(raw).toContain(issued.token);
   });
 
   it("clears outstanding bootstrap tokens on demand", async () => {
@@ -108,12 +164,30 @@ describe("device bootstrap tokens", () => {
     });
   });
 
+  it("restores a revoked bootstrap token record after send failure recovery", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    const revoked = await revokeDeviceBootstrapToken({ baseDir, token: issued.token });
+    expect(revoked.removed).toBe(true);
+    expect(revoked.record?.token).toBe(issued.token);
+
+    if (!revoked.record) {
+      throw new Error("expected revoked bootstrap token record");
+    }
+    await restoreDeviceBootstrapToken({ baseDir, record: revoked.record });
+    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+  });
+
   it("revokes a specific bootstrap token", async () => {
     const baseDir = await createTempDir();
     const first = await issueDeviceBootstrapToken({ baseDir });
     const second = await issueDeviceBootstrapToken({ baseDir });
 
-    await expect(revokeDeviceBootstrapToken({ baseDir, token: first.token })).resolves.toEqual({
+    await expect(
+      revokeDeviceBootstrapToken({ baseDir, token: first.token }),
+    ).resolves.toMatchObject({
       removed: true,
     });
 
@@ -125,7 +199,7 @@ describe("device bootstrap tokens", () => {
     await expect(verifyBootstrapToken(baseDir, second.token)).resolves.toEqual({ ok: true });
   });
 
-  it("verifies bootstrap tokens by the persisted map key without deleting them", async () => {
+  it("verifies bootstrap tokens by the persisted map key and binds them", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
     const issuedAtMs = Date.now();
@@ -153,7 +227,15 @@ describe("device bootstrap tokens", () => {
     await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
 
     const raw = await fs.readFile(bootstrapPath, "utf8");
-    expect(raw).toContain(issued.token);
+    const parsed = JSON.parse(raw) as Record<
+      string,
+      { token: string; deviceId?: string; publicKey?: string }
+    >;
+    expect(parsed["legacy-key"]).toMatchObject({
+      token: issued.token,
+      deviceId: "device-123",
+      publicKey: "public-key-123",
+    });
   });
 
   it("keeps the token when required verification fields are blank", async () => {
@@ -225,7 +307,7 @@ describe("device bootstrap tokens", () => {
     ).resolves.toEqual({ ok: true });
   });
 
-  it("accepts trimmed bootstrap tokens without consuming them", async () => {
+  it("accepts trimmed bootstrap tokens and binds them", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
 
@@ -234,7 +316,8 @@ describe("device bootstrap tokens", () => {
     });
 
     const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
-    expect(raw).toContain(issued.token);
+    const parsed = JSON.parse(raw) as Record<string, { deviceId?: string }>;
+    expect(parsed[issued.token]?.deviceId).toBe("device-123");
   });
 
   it("rejects blank or unknown tokens", async () => {
@@ -273,6 +356,19 @@ describe("device bootstrap tokens", () => {
 
     expect(Object.keys(parsed)).toEqual([issued.token]);
     expect(parsed[issued.token]?.token).toBe(issued.token);
+  });
+
+  it("rejects a second device identity after the first verification binds the token", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        deviceId: "device-456",
+        publicKey: "public-key-456",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
   });
 
   it("fails closed for unbound legacy records and prunes expired tokens", async () => {

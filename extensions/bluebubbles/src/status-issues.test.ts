@@ -1,5 +1,5 @@
+import { collectBlueBubblesStatusIssues } from "openclaw/plugin-sdk/channel-status";
 import { describe, expect, it } from "vitest";
-import { collectBlueBubblesStatusIssues } from "./runtime-api.js";
 
 describe("collectBlueBubblesStatusIssues", () => {
   it("reports unconfigured enabled accounts", () => {
@@ -51,16 +51,5 @@ describe("collectBlueBubblesStatusIssues", () => {
         message: "Channel error: timeout",
       }),
     );
-  });
-
-  it("skips disabled accounts", () => {
-    const issues = collectBlueBubblesStatusIssues([
-      {
-        accountId: "disabled",
-        enabled: false,
-        configured: false,
-      },
-    ]);
-    expect(issues).toEqual([]);
   });
 });

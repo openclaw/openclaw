@@ -173,6 +173,27 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
+  <Accordion title="Why are there two exec approval configs for chat approvals?">
+    They control different layers:
+
+    - `approvals.exec`: forwards approval prompts to chat destinations
+    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client
+
+    The host exec policy is still the real approval gate. Chat config only controls where approval
+    prompts appear and how people can answer them.
+
+    In most setups you do **not** need both:
+
+    - If the chat already supports commands and replies, same-chat `/approve` works through the shared path.
+    - If a supported native channel can infer approvers safely, OpenClaw now auto-enables DM-first native approvals when `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
+    - Use `approvals.exec` only when prompts must also be forwarded to other chats or explicit ops rooms.
+    - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you explicitly want approval prompts posted back into the originating room/topic.
+
+    Short version: forwarding is for routing, native client config is for richer channel-specific UX.
+    See [Exec Approvals](/tools/exec-approvals).
+
+  </Accordion>
+
   <Accordion title="What runtime do I need?">
     Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
   </Accordion>
@@ -280,9 +301,10 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     - `latest` = stable
     - `beta` = early build for testing
 
-    We ship builds to **beta**, test them, and once a build is solid we **promote
-    that same version to `latest`**. That's why beta and stable can point at the
-    **same version**.
+    Usually, a stable release lands on **beta** first, then an explicit
+    promotion step moves that same version to `latest`. Maintainers can also
+    publish straight to `latest` when needed. That's why beta and stable can
+    point at the **same version** after promotion.
 
     See what changed:
     [https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
@@ -292,7 +314,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="How do I install the beta version and what is the difference between beta and dev?">
-    **Beta** is the npm dist-tag `beta` (may match `latest`).
+    **Beta** is the npm dist-tag `beta` (may match `latest` after promotion).
     **Dev** is the moving head of `main` (git); when published, it uses the npm dist-tag `dev`.
 
     One-liners (macOS/Linux):
@@ -924,11 +946,11 @@ for usage/billing and raise limits as needed.
 
 <AccordionGroup>
   <Accordion title="How do I customize skills without keeping the repo dirty?">
-    Use managed overrides instead of editing the repo copy. Put your changes in `~/.openclaw/skills/<name>/SKILL.md` (or add a folder via `skills.load.extraDirs` in `~/.openclaw/openclaw.json`). Precedence is `<workspace>/skills` > `~/.openclaw/skills` > bundled, so managed overrides win without touching git. Only upstream-worthy edits should live in the repo and go out as PRs.
+    Use managed overrides instead of editing the repo copy. Put your changes in `~/.openclaw/skills/<name>/SKILL.md` (or add a folder via `skills.load.extraDirs` in `~/.openclaw/openclaw.json`). Precedence is `<workspace>/skills` → `<workspace>/.agents/skills` → `~/.agents/skills` → `~/.openclaw/skills` → bundled → `skills.load.extraDirs`, so managed overrides still win over bundled skills without touching git. If you need the skill installed globally but only visible to some agents, keep the shared copy in `~/.openclaw/skills` and control visibility with `agents.defaults.skills` and `agents.list[].skills`. Only upstream-worthy edits should live in the repo and go out as PRs.
   </Accordion>
 
   <Accordion title="Can I load skills from a custom folder?">
-    Yes. Add extra directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence). Default precedence remains: `<workspace>/skills` → `~/.openclaw/skills` → bundled → `skills.load.extraDirs`. `clawhub` installs into `./skills` by default, which OpenClaw treats as `<workspace>/skills` on the next session.
+    Yes. Add extra directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence). Default precedence is `<workspace>/skills` → `<workspace>/.agents/skills` → `~/.agents/skills` → `~/.openclaw/skills` → bundled → `skills.load.extraDirs`. `clawhub` installs into `./skills` by default, which OpenClaw treats as `<workspace>/skills` on the next session. If the skill should only be visible to certain agents, pair that with `agents.defaults.skills` or `agents.list[].skills`.
   </Accordion>
 
   <Accordion title="How can I use different models for different tasks?">
@@ -994,7 +1016,7 @@ for usage/billing and raise limits as needed.
     openclaw cron runs --id <jobId> --limit 50
     ```
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat).
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation).
 
   </Accordion>
 
@@ -1008,7 +1030,7 @@ for usage/billing and raise limits as needed.
     openclaw skills update --all
     ```
 
-    Install the separate `clawhub` CLI only if you want to publish or sync your own skills.
+    Install the separate `clawhub` CLI only if you want to publish or sync your own skills. For shared installs across agents, put the skill under `~/.openclaw/skills` and use `agents.defaults.skills` or `agents.list[].skills` if you want to narrow which agents can see it.
 
   </Accordion>
 
@@ -1019,7 +1041,7 @@ for usage/billing and raise limits as needed.
     - **Heartbeat** for "main session" periodic checks.
     - **Isolated jobs** for autonomous agents that post summaries or deliver to chats.
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat),
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation),
     [Heartbeat](/gateway/heartbeat).
 
   </Accordion>
@@ -1084,7 +1106,7 @@ for usage/billing and raise limits as needed.
     openclaw skills update --all
     ```
 
-    Native installs land in the active workspace `skills/` directory. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawHub](/tools/clawhub).
+    Native installs land in the active workspace `skills/` directory. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. If only some agents should see a shared install, configure `agents.defaults.skills` or `agents.list[].skills`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills), [Skills config](/tools/skills-config), and [ClawHub](/tools/clawhub).
 
   </Accordion>
 
@@ -1388,16 +1410,24 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="How do I enable web search (and web fetch)?">
-    `web_fetch` works without an API key. `web_search` requires a key for your
-    selected provider (Brave, Gemini, Grok, Kimi, or Perplexity).
+    `web_fetch` works without an API key. `web_search` depends on your selected
+    provider:
+
+    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Grok, Kimi, Perplexity, and Tavily require their normal API key setup.
+    - Ollama Web Search is key-free, but it uses your configured Ollama host and requires `ollama signin`.
+    - DuckDuckGo is key-free, but it is an unofficial HTML-based integration.
+
     **Recommended:** run `openclaw configure --section web` and choose a provider.
     Environment alternatives:
 
     - Brave: `BRAVE_API_KEY`
+    - Exa: `EXA_API_KEY`
+    - Firecrawl: `FIRECRAWL_API_KEY`
     - Gemini: `GEMINI_API_KEY`
     - Grok: `XAI_API_KEY`
     - Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
     - Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+    - Tavily: `TAVILY_API_KEY`
 
     ```json5
     {
@@ -2058,13 +2088,13 @@ for usage/billing and raise limits as needed.
 
     1. Install Ollama from `https://ollama.com/download`
     2. Pull a local model such as `ollama pull glm-4.7-flash`
-    3. If you want Ollama Cloud too, run `ollama signin`
+    3. If you want cloud models too, run `ollama signin`
     4. Run `openclaw onboard` and choose `Ollama`
     5. Pick `Local` or `Cloud + Local`
 
     Notes:
 
-    - `Cloud + Local` gives you Ollama Cloud models plus your local Ollama models
+    - `Cloud + Local` gives you cloud models plus your local Ollama models
     - cloud models such as `kimi-k2.5:cloud` do not need a local pull
     - for manual switching, use `openclaw models list` and `openclaw models set ollama/<model>`
 
@@ -2784,6 +2814,8 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     - The target channel supports outbound media and isn't blocked by allowlists.
     - The file is within the provider's size limits (images are resized to max 2048px).
+    - `tools.fs.workspaceOnly=true` keeps local-path sends limited to workspace, temp/media-store, and sandbox-validated files.
+    - `tools.fs.workspaceOnly=false` lets `MEDIA:` send host-local files the agent can already read, but only for media plus safe document types (images, audio, video, PDF, and Office docs). Plain text and secret-like files are still blocked.
 
     See [Images](/nodes/images).
 

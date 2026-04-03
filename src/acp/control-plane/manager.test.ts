@@ -3,7 +3,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
-import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
 
@@ -26,8 +25,9 @@ vi.mock("../runtime/session-meta.js", () => ({
   upsertAcpSessionMeta: (params: unknown) => hoisted.upsertAcpSessionMetaMock(params),
 }));
 
-vi.mock("../runtime/registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime/registry.js")>();
+vi.mock("../runtime/registry.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../runtime/registry.js")>("../runtime/registry.js");
   return {
     ...actual,
     requireAcpRuntimeBackend: (backendId?: string) =>
@@ -38,6 +38,10 @@ vi.mock("../runtime/registry.js", async (importOriginal) => {
 let AcpSessionManager: typeof import("./manager.js").AcpSessionManager;
 let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;
 let resetAcpSessionManagerForTests: typeof import("./manager.js").__testing.resetAcpSessionManagerForTests;
+let findTaskByRunId: typeof import("../../tasks/task-registry.js").findTaskByRunId;
+let resetTaskRegistryForTests: typeof import("../../tasks/task-registry.js").resetTaskRegistryForTests;
+let resetTaskFlowRegistryForTests: typeof import("../../tasks/task-flow-registry.js").resetTaskFlowRegistryForTests;
+let installInMemoryTaskRegistryRuntime: typeof import("../../test-utils/task-registry-runtime.js").installInMemoryTaskRegistryRuntime;
 
 const baseCfg = {
   acp: {
@@ -51,13 +55,22 @@ const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 async function withAcpManagerTaskStateDir(run: (root: string) => Promise<void>): Promise<void> {
   await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    installInMemoryTaskRegistryRuntime();
     try {
       await run(root);
     } finally {
-      resetTaskRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
+}
+
+async function flushMicrotasks(rounds = 3): Promise<void> {
+  for (let index = 0; index < rounds; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 function createRuntime(): {
@@ -166,12 +179,15 @@ function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | un
 
 describe("AcpSessionManager", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({
       AcpSessionManager,
       __testing: { resetAcpSessionManagerForTests },
     } = await import("./manager.js"));
     ({ AcpRuntimeError } = await import("../runtime/errors.js"));
+    ({ findTaskByRunId, resetTaskRegistryForTests } = await import("../../tasks/task-registry.js"));
+    ({ resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js"));
+    ({ installInMemoryTaskRegistryRuntime } =
+      await import("../../test-utils/task-registry-runtime.js"));
   });
 
   beforeEach(() => {
@@ -189,7 +205,8 @@ describe("AcpSessionManager", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("marks ACP-shaped sessions without metadata as stale", () => {
@@ -312,9 +329,12 @@ describe("AcpSessionManager", () => {
         requestId: "direct-parented-run",
       });
 
+      await flushMicrotasks();
+
       expect(findTaskByRunId("direct-parented-run")).toMatchObject({
         runtime: "acp",
-        requesterSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
         childSessionKey: "agent:codex:acp:child-1",
         label: "Quant patch",
         task: "Implement the feature and report back",

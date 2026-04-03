@@ -2893,6 +2893,78 @@ public struct SkillsBinsResult: Codable, Sendable {
     }
 }
 
+public struct SkillsSearchParams: Codable, Sendable {
+    public let query: String?
+    public let limit: Int?
+
+    public init(
+        query: String?,
+        limit: Int?)
+    {
+        self.query = query
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case query
+        case limit
+    }
+}
+
+public struct SkillsSearchResult: Codable, Sendable {
+    public let results: [[String: AnyCodable]]
+
+    public init(
+        results: [[String: AnyCodable]])
+    {
+        self.results = results
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case results
+    }
+}
+
+public struct SkillsDetailParams: Codable, Sendable {
+    public let slug: String
+
+    public init(
+        slug: String)
+    {
+        self.slug = slug
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case slug
+    }
+}
+
+public struct SkillsDetailResult: Codable, Sendable {
+    public let skill: AnyCodable
+    public let latestversion: AnyCodable?
+    public let metadata: AnyCodable?
+    public let owner: AnyCodable?
+
+    public init(
+        skill: AnyCodable,
+        latestversion: AnyCodable?,
+        metadata: AnyCodable?,
+        owner: AnyCodable?)
+    {
+        self.skill = skill
+        self.latestversion = latestversion
+        self.metadata = metadata
+        self.owner = owner
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skill
+        case latestversion = "latestVersion"
+        case metadata
+        case owner
+    }
+}
+
 public struct CronJob: Codable, Sendable {
     public let id: String
     public let agentid: String?
@@ -3710,18 +3782,22 @@ public struct DevicePairResolvedEvent: Codable, Sendable {
 public struct ChatHistoryParams: Codable, Sendable {
     public let sessionkey: String
     public let limit: Int?
+    public let maxchars: Int?
 
     public init(
         sessionkey: String,
-        limit: Int?)
+        limit: Int?,
+        maxchars: Int?)
     {
         self.sessionkey = sessionkey
         self.limit = limit
+        self.maxchars = maxchars
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case limit
+        case maxchars = "maxChars"
     }
 }
 

@@ -6,8 +6,8 @@ import { resolveOpenClawUserDataDir } from "./chrome.js";
 import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: vi.fn(),
@@ -58,7 +58,6 @@ async function createWorkProfileWithConfig(params: {
 
 describe("BrowserProfilesService", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ resolveBrowserConfig } = await import("./config.js"));
     ({ createBrowserProfilesService } = await import("./profiles-service.js"));
   });

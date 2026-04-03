@@ -165,7 +165,7 @@ export function createOpenClawTools(
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
-    runtimeFirecrawl: runtimeWebTools?.fetch.firecrawl,
+    runtimeWebFetch: runtimeWebTools?.fetch,
   });
   const messageTool = options?.disableMessageTool
     ? null

@@ -9,8 +9,8 @@ async function loadHarness(options?: {
   resolvedModelCompat?: Record<string, unknown>;
 }) {
   vi.resetModules();
-  vi.doMock("./agent-scope.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./agent-scope.js")>();
+  vi.doMock("./agent-scope.js", async () => {
+    const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
     return {
       ...actual,
       resolveSessionAgentId: () => "main",

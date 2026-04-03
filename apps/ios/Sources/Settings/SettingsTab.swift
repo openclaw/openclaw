@@ -1008,6 +1008,11 @@ struct SettingsTab: View {
 
         // Reset onboarding state + clear saved gateway connection (the two things RootCanvas checks).
         GatewaySettingsStore.clearLastGatewayConnection()
+        GatewaySettingsStore.clearPreferredGatewayStableID()
+        GatewaySettingsStore.clearLastDiscoveredGatewayStableID()
+        // Resetting onboarding should also forget trusted gateway TLS fingerprints.
+        // Otherwise a restarted dev gateway can stay stuck in a local TLS cancel loop.
+        GatewayTLSStore.clearAllFingerprints()
         OnboardingStateStore.reset()
 
         // RootCanvas also short-circuits onboarding when these are true.

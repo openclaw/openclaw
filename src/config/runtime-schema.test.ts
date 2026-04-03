@@ -1,12 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
 const mockReadConfigFileSnapshot = vi.hoisted(() => vi.fn<() => Promise<ConfigFileSnapshot>>());
 const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 
-vi.mock("./config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./config.js")>();
+let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").readBestEffortRuntimeConfigSchema;
+let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
+
+vi.mock("./config.js", async () => {
+  const actual = await vi.importActual<typeof import("./config.js")>("./config.js");
   return {
     ...actual,
     loadConfig: () => mockLoadConfig(),
@@ -127,7 +130,6 @@ function makeManifestRegistry() {
 }
 
 async function readSchemaNodes() {
-  const { readBestEffortRuntimeConfigSchema } = await import("./runtime-schema.js");
   const result = await readBestEffortRuntimeConfigSchema();
   const schema = result.schema as { properties?: Record<string, unknown> };
   const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
@@ -138,6 +140,11 @@ async function readSchemaNodes() {
   const entryProps = entriesNode?.properties as Record<string, unknown> | undefined;
   return { channelProps, entryProps };
 }
+
+beforeAll(async () => {
+  ({ readBestEffortRuntimeConfigSchema, loadGatewayRuntimeConfigSchema } =
+    await import("./runtime-schema.js"));
+});
 
 describe("readBestEffortRuntimeConfigSchema", () => {
   beforeEach(() => {
@@ -192,7 +199,6 @@ describe("loadGatewayRuntimeConfigSchema", () => {
   });
 
   it("uses manifest metadata instead of booting plugin runtime", async () => {
-    const { loadGatewayRuntimeConfigSchema } = await import("./runtime-schema.js");
     const result = loadGatewayRuntimeConfigSchema();
     const schema = result.schema as { properties?: Record<string, unknown> };
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;

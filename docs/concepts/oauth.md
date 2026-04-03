@@ -185,3 +185,9 @@ Related docs:
 
 - [/concepts/model-failover](/concepts/model-failover) (rotation + cooldown rules)
 - [/tools/slash-commands](/tools/slash-commands) (command surface)
+
+## Related
+
+- [Authentication](/gateway/authentication) — model provider auth overview
+- [Secrets](/gateway/secrets) — credential storage and SecretRef
+- [Configuration Reference](/gateway/configuration-reference#auth-storage) — auth config keys

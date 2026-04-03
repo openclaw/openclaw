@@ -157,6 +157,19 @@ describe("normalizeModelCompat", () => {
     });
   });
 
+  it("keeps supportsUsageInStreaming on for native ModelStudio endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "modelstudio",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
   it("leaves native api.openai.com model untouched", () => {
     const model = {
       ...baseModel(),
@@ -392,18 +405,19 @@ describe("isModernModelRef", () => {
 describe("isHighSignalLiveModelRef", () => {
   it("keeps modern higher-signal Claude families", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
-      provider === "anthropic" && ["claude-sonnet-4-5", "claude-opus-4-5"].includes(context.modelId)
+      provider === "anthropic" && ["claude-sonnet-4-6", "claude-opus-4-6"].includes(context.modelId)
         ? true
         : undefined,
     );
 
-    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-sonnet-4-5" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-opus-4-5" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-sonnet-4-6" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-opus-4-6" })).toBe(true);
   });
 
   it("drops low-signal or old Claude variants even when provider marks them modern", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
+    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-opus-4-5" })).toBe(false);
     expect(
       isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-haiku-4-5-20251001" }),
     ).toBe(false);

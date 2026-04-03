@@ -16,12 +16,8 @@ import {
 import type { DiscordComponentMessageSpec } from "./components.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
-import {
-  sendDiscordComponentMessage,
-  sendMessageDiscord,
-  sendPollDiscord,
-  sendWebhookMessageDiscord,
-} from "./send.js";
+import { sendDiscordComponentMessage } from "./send.components.js";
+import { sendMessageDiscord, sendPollDiscord, sendWebhookMessageDiscord } from "./send.js";
 import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
@@ -172,7 +168,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
         if (isFirst) {
           return await sendDiscordComponentMessage(target, componentSpec, {
             mediaUrl,
+            mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
             replyTo: ctx.replyToId ?? undefined,
             accountId: ctx.accountId ?? undefined,
             silent: ctx.silent ?? undefined,
@@ -182,7 +180,9 @@ export const discordOutbound: ChannelOutboundAdapter = {
         return await send(target, text, {
           verbose: false,
           mediaUrl,
+          mediaAccess: ctx.mediaAccess,
           mediaLocalRoots: ctx.mediaLocalRoots,
+          mediaReadFile: ctx.mediaReadFile,
           replyTo: ctx.replyToId ?? undefined,
           accountId: ctx.accountId ?? undefined,
           silent: ctx.silent ?? undefined,
@@ -224,6 +224,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       text,
       mediaUrl,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       deps,
       replyToId,
@@ -236,6 +237,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         verbose: false,
         mediaUrl,
         mediaLocalRoots,
+        mediaReadFile,
         replyTo: replyToId ?? undefined,
         accountId: accountId ?? undefined,
         silent: silent ?? undefined,
