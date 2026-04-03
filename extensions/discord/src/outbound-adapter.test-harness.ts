@@ -45,9 +45,9 @@ export const DEFAULT_DISCORD_SEND_RESULT = {
 
 export async function createDiscordSendModuleMock(
   hoisted: DiscordOutboundHoisted,
-  importOriginal: () => Promise<DiscordSendModule>,
+  loadActual: () => Promise<DiscordSendModule>,
 ): Promise<DiscordSendModule> {
-  const actual = await importOriginal();
+  const actual = await loadActual();
   return {
     ...actual,
     sendMessageDiscord: (...args: Parameters<DiscordSendModule["sendMessageDiscord"]>) =>
@@ -72,9 +72,9 @@ export async function createDiscordSendModuleMock(
 
 export async function createDiscordSendComponentsModuleMock(
   hoisted: DiscordOutboundHoisted,
-  importOriginal: () => Promise<DiscordSendComponentsModule>,
+  loadActual: () => Promise<DiscordSendComponentsModule>,
 ): Promise<DiscordSendComponentsModule> {
-  const actual = await importOriginal();
+  const actual = await loadActual();
   return {
     ...actual,
     sendDiscordComponentMessage: (
@@ -89,9 +89,9 @@ export async function createDiscordSendComponentsModuleMock(
 
 export async function createDiscordThreadBindingsModuleMock(
   hoisted: DiscordOutboundHoisted,
-  importOriginal: () => Promise<DiscordThreadBindingsModule>,
+  loadActual: () => Promise<DiscordThreadBindingsModule>,
 ): Promise<DiscordThreadBindingsModule> {
-  const actual = await importOriginal();
+  const actual = await loadActual();
   return {
     ...actual,
     getThreadBindingManager: (

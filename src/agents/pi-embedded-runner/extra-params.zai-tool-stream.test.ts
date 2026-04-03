@@ -4,8 +4,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createPiAiStreamSimpleMock } from "./extra-params.pi-ai-mock.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) =>
-  createPiAiStreamSimpleMock(() => importOriginal<typeof import("@mariozechner/pi-ai")>()),
+vi.mock("@mariozechner/pi-ai", async () =>
+  createPiAiStreamSimpleMock(() =>
+    vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai"),
+  ),
 );
 
 type ToolStreamCase = {
