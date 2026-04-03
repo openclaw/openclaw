@@ -146,6 +146,18 @@ export type GatewayTrustedProxyConfig = {
    */
   allowUsers?: string[];
   /**
+   * Optional header name that must match authValue exactly.
+   * Use this to prove requests came from your reverse proxy and are not forged
+   * by another local process (especially when unsafeAllowLoopbackProxies is enabled).
+   * Example: "x-gateway-proxy-auth"
+   */
+  authHeader?: string;
+  /**
+   * Optional shared secret value expected in authHeader.
+   * If either authHeader or authValue is set, both must be set.
+   */
+  authValue?: string;
+  /**
    * ⚠️ SECURITY WARNING: Allow requests from loopback addresses (127.0.0.1, ::1).
    * ONLY enable this if running a same-host reverse proxy (nginx, Caddy on localhost).
    * 
@@ -154,6 +166,7 @@ export type GatewayTrustedProxyConfig = {
    * Only enable if you fully control who runs processes on this host.
    * 
    * Safer alternatives:
+   * - Require trustedProxy.authHeader + trustedProxy.authValue
    * - Have the proxy listen on a non-loopback address (192.168.x.x, etc.)
    * - Use token or password auth instead of trusted-proxy
    * - Use Tailscale proxy when available

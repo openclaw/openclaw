@@ -85,6 +85,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
+  "gateway.auth.trustedProxy.authHeader":
+    "Optional reverse-proxy authenticity header name that must match gateway.auth.trustedProxy.authValue exactly. Set this when allowing loopback proxies so direct localhost processes cannot spoof identity headers.",
+  "gateway.auth.trustedProxy.authValue":
+    "Shared secret value expected in gateway.auth.trustedProxy.authHeader for trusted-proxy requests. Store securely and rotate periodically; use alongside tight trustedProxies CIDRs.",
   "gateway.trustedProxies":
     "CIDR/IP allowlist of upstream proxies permitted to provide forwarded client identity headers. Keep this list narrow so untrusted hops cannot impersonate users.",
   "gateway.allowRealIpFallback":

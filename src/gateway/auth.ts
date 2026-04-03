@@ -322,6 +322,15 @@ export function assertGatewayAuthConfigured(
         "gateway auth mode is trusted-proxy, but trustedProxy.userHeader is empty (set gateway.auth.trustedProxy.userHeader)",
       );
     }
+    const trustedProxyAuthHeader = auth.trustedProxy.authHeader?.trim();
+    const trustedProxyAuthValue = auth.trustedProxy.authValue?.trim();
+    const hasTrustedProxyAuthHeader = Boolean(trustedProxyAuthHeader);
+    const hasTrustedProxyAuthValue = Boolean(trustedProxyAuthValue);
+    if (hasTrustedProxyAuthHeader !== hasTrustedProxyAuthValue) {
+      throw new Error(
+        "gateway auth mode is trusted-proxy, but trustedProxy.authHeader and trustedProxy.authValue must be set together",
+      );
+    }
     if (auth.token) {
       throw new Error(
         "gateway auth mode is trusted-proxy, but a shared token is also configured; remove gateway.auth.token / OPENCLAW_GATEWAY_TOKEN because trusted-proxy and token auth are mutually exclusive",
@@ -354,23 +363,24 @@ function authorizeTrustedProxy(params: {
       return { reason: "trusted_proxy_loopback_source" };
     }
     // unsafeAllowLoopbackProxies is enabled for same-host reverse proxies.
-    // However, enforce that loopback requests must have a forwarded client chain
-    // (x-forwarded-for) to prove they came through a proxy, not from a direct
-    // localhost process. This prevents local privilege escalation attacks where
-    // untrusted processes on the host could spoof identity headers.
-    const forwardedFor = headerValue(req.headers?.["x-forwarded-for"]);
-    if (!forwardedFor || forwardedFor.trim() === "") {
-      return { reason: "trusted_proxy_loopback_missing_forwarded_for" };
+    // Keep this fail-closed: require a resolved, non-loopback forwarded client IP
+    // so direct localhost processes cannot spoof identity headers.
+    const forwardedClientIp = resolveClientIp({
+      remoteAddr,
+      forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
+      trustedProxies,
+    });
+    if (!forwardedClientIp || isLoopbackAddress(forwardedClientIp)) {
+      return { reason: "trusted_proxy_loopback_client_invalid" };
     }
-    // Validate that the forwarded chain is non-empty and contains at least one
-    // entry. A direct localhost request spoofing headers will not have a proper
-    // forwarded-for chain from an actual reverse proxy.
-    const forwardedChain = forwardedFor
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
-    if (forwardedChain.length === 0) {
-      return { reason: "trusted_proxy_loopback_invalid_forwarded_chain" };
+  }
+
+  const trustedProxyAuthHeader = trustedProxyConfig.authHeader?.trim();
+  const trustedProxyAuthValue = trustedProxyConfig.authValue?.trim();
+  if (trustedProxyAuthHeader && trustedProxyAuthValue) {
+    const suppliedProxyAuthValue = headerValue(req.headers[trustedProxyAuthHeader.toLowerCase()]);
+    if (!suppliedProxyAuthValue || !safeEqualSecret(suppliedProxyAuthValue.trim(), trustedProxyAuthValue)) {
+      return { reason: "trusted_proxy_auth_header_mismatch" };
     }
   }
 
