@@ -163,7 +163,7 @@ describe("createChannelApiRetryRunner", () => {
   it("honors nested retry_after hints before retrying", async () => {
     vi.useFakeTimers();
 
-    const runner = createTelegramRetryRunner({
+    const runner = createChannelApiRetryRunner({
       retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1_000, jitter: 0 },
     });
     const fn = vi
