@@ -294,10 +294,13 @@ describe("command queue", () => {
     const blocker2 = new Promise<void>((r) => {
       resolve2 = r;
     });
+    const firstStarted = createDeferred();
 
     const first = enqueueCommandInLane(lane, async () => {
+      firstStarted.resolve();
       await blocker1;
     });
+    await firstStarted.promise;
     const drainPromise = waitForActiveTasks(2000);
 
     // Starts after waitForActiveTasks snapshot and should not block drain completion.

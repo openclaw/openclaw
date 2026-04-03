@@ -16,7 +16,8 @@ function createMockSpawnChild() {
   return { child, stdout };
 }
 
-vi.mock("node:child_process", () => {
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
   const spawn = vi.fn(() => {
     const { child, stdout } = createMockSpawnChild();
     process.nextTick(() => {
@@ -35,7 +36,10 @@ vi.mock("node:child_process", () => {
     });
     return child;
   });
-  return { spawn };
+  return {
+    ...actual,
+    spawn,
+  };
 });
 
 const spawnMock = vi.mocked(spawn);

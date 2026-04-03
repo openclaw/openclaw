@@ -1,15 +1,24 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("node:child_process", () => ({
-  execFileSync: vi.fn(),
-}));
-vi.mock("node:fs", () => {
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: vi.fn(),
+  };
+});
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
   const module = { existsSync, readFileSync };
   return {
+    ...actual,
     ...module,
-    default: module,
+    default: {
+      ...actual,
+      ...module,
+    },
   };
 });
 vi.mock("node:os", () => {

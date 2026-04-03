@@ -7,9 +7,13 @@ import { captureFullEnv } from "../test-utils/env.js";
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn(() => os.tmpdir()));
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnMock(...args),
+  };
+});
 vi.mock("./tmp-openclaw-dir.js", () => ({
   resolvePreferredOpenClawTmpDir: () => resolvePreferredOpenClawTmpDirMock(),
 }));

@@ -3,9 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { configHandlers, resolveConfigOpenCommand } from "./config.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-vi.mock("node:child_process", () => ({
-  execFile: vi.fn(),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: vi.fn(),
+  };
+});
 
 function invokeExecFileCallback(args: unknown[], error: Error | null) {
   const callback = args.at(-1);

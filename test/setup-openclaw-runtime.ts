@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll } from "vitest";
+import { createTopLevelChannelReplyToModeResolver } from "../src/channels/plugins/threading-helpers.js";
 import type {
   ChannelId,
   ChannelOutboundAdapter,
@@ -8,25 +9,24 @@ import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
+import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
 const testEnv = installSharedTestSetup();
 
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
-const WORKER_RUNTIME_DEPS = Symbol.for("openclaw.testSetupRuntimeDeps");
+const WORKER_CLEANUP_DEPS = Symbol.for("openclaw.testSetupCleanupDeps");
 
 type WorkerRuntimeState = {
   defaultPluginRegistry: PluginRegistry | null;
   materializedDefaultPluginRegistry: PluginRegistry | null;
 };
 
-type WorkerRuntimeDeps = {
+type WorkerCleanupDeps = {
   resetContextWindowCacheForTest: typeof import("../src/agents/context.js").resetContextWindowCacheForTest;
   resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config.js").resetModelsJsonReadyCacheForTest;
   drainSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").drainSessionWriteLockStateForTest;
   resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").resetSessionWriteLockStateForTest;
-  createTopLevelChannelReplyToModeResolver: typeof import("../src/channels/plugins/threading-helpers.js").createTopLevelChannelReplyToModeResolver;
-  createTestRegistry: typeof import("../src/test-utils/channel-plugins.js").createTestRegistry;
   cleanupSessionStateForTest: typeof import("../src/test-utils/session-state-cleanup.js").cleanupSessionStateForTest;
 };
 
@@ -43,20 +43,16 @@ const workerRuntimeState = (() => {
   return globalState[WORKER_RUNTIME_STATE];
 })();
 
-async function loadWorkerRuntimeDeps(): Promise<WorkerRuntimeDeps> {
+async function loadWorkerCleanupDeps(): Promise<WorkerCleanupDeps> {
   const [
     { resetContextWindowCacheForTest },
     { resetModelsJsonReadyCacheForTest },
     { drainSessionWriteLockStateForTest, resetSessionWriteLockStateForTest },
-    { createTopLevelChannelReplyToModeResolver },
-    { createTestRegistry },
     { cleanupSessionStateForTest },
   ] = await Promise.all([
     import("../src/agents/context.js"),
     import("../src/agents/models-config.js"),
     import("../src/agents/session-write-lock.js"),
-    import("../src/channels/plugins/threading-helpers.js"),
-    import("../src/test-utils/channel-plugins.js"),
     import("../src/test-utils/session-state-cleanup.js"),
   ]);
 
@@ -65,29 +61,22 @@ async function loadWorkerRuntimeDeps(): Promise<WorkerRuntimeDeps> {
     resetModelsJsonReadyCacheForTest,
     drainSessionWriteLockStateForTest,
     resetSessionWriteLockStateForTest,
-    createTopLevelChannelReplyToModeResolver,
-    createTestRegistry,
     cleanupSessionStateForTest,
   };
 }
 
-const workerRuntimeDeps = await (() => {
+function getWorkerCleanupDeps(): Promise<WorkerCleanupDeps> {
   const globalState = globalThis as typeof globalThis & {
-    [WORKER_RUNTIME_DEPS]?: Promise<WorkerRuntimeDeps>;
+    [WORKER_CLEANUP_DEPS]?: Promise<WorkerCleanupDeps>;
   };
-  globalState[WORKER_RUNTIME_DEPS] ??= loadWorkerRuntimeDeps();
-  return globalState[WORKER_RUNTIME_DEPS];
-})();
+  globalState[WORKER_CLEANUP_DEPS] ??= loadWorkerCleanupDeps();
+  return globalState[WORKER_CLEANUP_DEPS];
+}
 
-const {
-  resetContextWindowCacheForTest,
-  resetModelsJsonReadyCacheForTest,
-  drainSessionWriteLockStateForTest,
-  resetSessionWriteLockStateForTest,
-  createTopLevelChannelReplyToModeResolver,
-  createTestRegistry,
-  cleanupSessionStateForTest,
-} = workerRuntimeDeps;
+// Preload cleanup/runtime helpers before per-file vi.mock hoists run in
+// non-isolated workers, otherwise test-scoped module mocks can leak into the
+// shared cleanup dependency graph.
+void getWorkerCleanupDeps();
 
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
@@ -321,6 +310,12 @@ beforeAll(() => {
 });
 
 afterEach(async () => {
+  const {
+    cleanupSessionStateForTest,
+    resetContextWindowCacheForTest,
+    resetModelsJsonReadyCacheForTest,
+    resetSessionWriteLockStateForTest,
+  } = await getWorkerCleanupDeps();
   await cleanupSessionStateForTest();
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
@@ -329,6 +324,8 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
+  const { cleanupSessionStateForTest, drainSessionWriteLockStateForTest } =
+    await getWorkerCleanupDeps();
   await cleanupSessionStateForTest();
   await drainSessionWriteLockStateForTest();
   testEnv.cleanup();

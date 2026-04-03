@@ -3,9 +3,13 @@ import fs from "node:fs/promises";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
-vi.mock("node:child_process", () => ({
-  spawn: vi.fn(),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: vi.fn(),
+  };
+});
 
 describe("restart-helper", () => {
   const originalPlatform = process.platform;
