@@ -157,6 +157,19 @@ describe("normalizeModelCompat", () => {
     });
   });
 
+  it("keeps supportsUsageInStreaming on for native ModelStudio endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "modelstudio",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
   it("leaves native api.openai.com model untouched", () => {
     const model = {
       ...baseModel(),
