@@ -7,6 +7,7 @@ import {
 } from "../infra/net/ssrf.js";
 
 export { isPrivateIpAddress };
+export type { SsrFPolicy };
 
 export function ssrfPolicyFromAllowPrivateNetwork(
   allowPrivateNetwork: boolean | null | undefined,
