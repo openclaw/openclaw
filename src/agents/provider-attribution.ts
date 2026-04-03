@@ -96,6 +96,7 @@ export type ProviderRequestCompatibilityFamily = "moonshot";
 export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   isKnownNativeEndpoint: boolean;
   allowsOpenAIServiceTier: boolean;
+  supportsOpenAIReasoningCompatPayload: boolean;
   allowsAnthropicServiceTier: boolean;
   supportsResponsesStoreField: boolean;
   allowsResponsesStore: boolean;
@@ -574,6 +575,18 @@ export function resolveProviderRequestCapabilities(
       (provider === "openai-codex" &&
         (api === "openai-codex-responses" || api === "openai-responses") &&
         endpointClass === "openai-codex"),
+    supportsOpenAIReasoningCompatPayload:
+      provider !== undefined &&
+      api !== undefined &&
+      !policy.usesExplicitProxyLikeEndpoint &&
+      (provider === "openai" ||
+        provider === "openai-codex" ||
+        provider === "azure-openai" ||
+        provider === "azure-openai-responses") &&
+      (api === "openai-completions" ||
+        api === "openai-responses" ||
+        api === "openai-codex-responses" ||
+        api === "azure-openai-responses"),
     allowsAnthropicServiceTier:
       provider === "anthropic" &&
       api === "anthropic-messages" &&
