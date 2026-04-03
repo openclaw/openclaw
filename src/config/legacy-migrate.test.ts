@@ -482,6 +482,32 @@ describe("legacy migrate sandbox scope aliases", () => {
   });
 });
 
+describe("legacy migrate channel streaming aliases", () => {
+  it("migrates telegram and discord streaming aliases", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          streamMode: "block",
+        },
+        discord: {
+          streaming: false,
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.telegram.streamMode → channels.telegram.streaming (block).",
+    );
+    expect(res.changes).toContain("Normalized channels.discord.streaming boolean → enum (off).");
+    expect(res.config?.channels?.telegram).toMatchObject({
+      streaming: "block",
+    });
+    expect(res.config?.channels?.discord).toMatchObject({
+      streaming: "off",
+    });
+  });
+});
+
 describe("legacy migrate x_search auth", () => {
   it("moves only legacy x_search auth into plugin-owned xai config", () => {
     const res = migrateLegacyConfig({

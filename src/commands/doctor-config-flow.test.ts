@@ -652,6 +652,62 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("warns clearly about legacy channel streaming aliases and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          channels: {
+            telegram: {
+              streamMode: "block",
+            },
+            discord: {
+              streaming: false,
+            },
+            slack: {
+              streaming: true,
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            String(message).includes("channels.telegram:") &&
+            String(message).includes("channels.telegram.streamMode is legacy"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            String(message).includes("channels.discord:") &&
+            String(message).includes("boolean channels.discord.streaming are legacy"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            String(message).includes("channels.slack:") &&
+            String(message).includes("boolean channels.slack.streaming are legacy"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("sanitizes config-derived doctor warnings and changes before logging", async () => {
     const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     try {
