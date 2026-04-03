@@ -649,3 +649,146 @@ describe("task-executor", () => {
     });
   });
 });
+
+// ========== Open Source Contribution: Owner Guardrail + Sticky Cancel Test Matrix ==========
+
+describe("owner guardrail access control", () => {
+  it("T1.1: allows access when owner matches caller", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        controllerId: "tests/owner-guardrail",
+        ownerKey: "agent:main:webchat",
+        goal: "Test owner match",
+      });
+      const result = await cancelFlowByIdForOwner({
+        cfg: {} as never,
+        flowId: flow.flowId,
+        callerOwnerKey: "agent:main:webchat",
+      });
+      expect(result.found).toBe(true);
+      expect(result.cancelled).toBe(true);
+    });
+  });
+
+  it("T1.2: denies access when owner differs from caller", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        controllerId: "tests/owner-guardrail",
+        ownerKey: "agent:main:webchat",
+        goal: "Test owner mismatch",
+      });
+      const result = await cancelFlowByIdForOwner({
+        cfg: {} as never,
+        flowId: flow.flowId,
+        callerOwnerKey: "agent:ada:main",
+      });
+      expect(result.found).toBe(false);
+      expect(result.cancelled).toBe(false);
+    });
+  });
+
+  it("T1.3: denies access when caller has empty suffix", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        controllerId: "tests/owner-guardrail",
+        ownerKey: "agent:main:webchat",
+        goal: "Test empty suffix",
+      });
+      const result = await cancelFlowByIdForOwner({
+        cfg: {} as never,
+        flowId: flow.flowId,
+        callerOwnerKey: "agent:main:",
+      });
+      expect(result.found).toBe(false);
+    });
+  });
+
+  it("T1.4: allows access with whitespace in caller key", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        controllerId: "tests/owner-guardrail",
+        ownerKey: "agent:main:webchat",
+        goal: "Test whitespace trim",
+      });
+      const result = await cancelFlowByIdForOwner({
+        cfg: {} as never,
+        flowId: flow.flowId,
+        callerOwnerKey: "  agent:main:webchat  ",
+      });
+      expect(result.found).toBe(true);
+      expect(result.cancelled).toBe(true);
+    });
+  });
+});
+
+describe("sticky cancel boundary conditions", () => {
+  it("T2.1: waits for child task to settle before cancelling flow", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        controllerId: "tests/owner-guardrail",
+        ownerKey: "agent:test:main",
+        goal: "Test sticky cancel wait",
+      });
+      createRunningTaskRun({
+        runtime: "subagent",
+        parentFlowId: flow.flowId,
+        ownerKey: "agent:test:main",
+        scopeKind: "session",
+        childSessionKey: "agent:test:subagent:child",
+        runId: "run-sticky-wait",
+        task: "Running child task",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelFlowById({
+        cfg: {} as never,
+        flowId: flow.flowId,
+      });
+
+      expect(result.found).toBe(true);
+      expect(result.cancelled).toBe(false);
+      expect(result.reason).toBe("One or more child tasks are still active.");
+      expect(getTaskFlowById(flow.flowId)?.cancelRequestedAt).toBeDefined();
+    });
+  });
+
+  it("T2.2: cancels flow immediately when no active child tasks", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        controllerId: "tests/owner-guardrail",
+        ownerKey: "agent:test:main",
+        goal: "Test immediate cancel",
+      });
+
+      const result = await cancelFlowById({
+        cfg: {} as never,
+        flowId: flow.flowId,
+      });
+
+      expect(result.found).toBe(true);
+      expect(result.cancelled).toBe(true);
+      expect(getTaskFlowById(flow.flowId)?.status).toBe("cancelled");
+    });
+  });
+
+  it("T2.3: rejects cancel on already cancelled flow", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        controllerId: "tests/owner-guardrail",
+        ownerKey: "agent:test:main",
+        goal: "Test double cancel",
+      });
+
+      await cancelFlowById({ cfg: {} as never, flowId: flow.flowId });
+
+      const result = await cancelFlowById({
+        cfg: {} as never,
+        flowId: flow.flowId,
+      });
+
+      expect(result.found).toBe(true);
+      expect(result.cancelled).toBe(false);
+      expect(result.reason).toContain("already");
+    });
+  });
+});
