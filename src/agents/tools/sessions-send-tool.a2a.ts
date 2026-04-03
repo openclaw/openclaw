@@ -123,18 +123,32 @@ export async function runSessionsSendA2AFlow(params: {
       message: "Agent-to-agent announce step.",
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.announceTimeoutMs,
-      lane: AGENT_LANE_NESTED,
+      lane: "announce",
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
+
+    // Fallback deterministico se runAgentStep ritorna undefined (timeout/deadlock)
+    let finalAnnounceMessage = announceReply;
+    if (!finalAnnounceMessage && announceTarget) {
+      const summary = (latestReply ?? "").slice(-200);
+      const timestamp = new Date().toISOString();
+      finalAnnounceMessage = `[Task completed] Agent: ${params.displayKey} | Channel: ${targetChannel} | Summary: ${summary} | Completed: ${timestamp}`;
+    }
+
+    if (
+      announceTarget &&
+      finalAnnounceMessage &&
+      finalAnnounceMessage.trim() &&
+      !isAnnounceSkip(finalAnnounceMessage)
+    ) {
       try {
         await sessionsSendA2ADeps.callGateway({
           method: "send",
           params: {
             to: announceTarget.to,
-            message: announceReply.trim(),
+            message: finalAnnounceMessage.trim(),
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
             idempotencyKey: crypto.randomUUID(),
