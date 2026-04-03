@@ -163,6 +163,22 @@ function resolveApprovalRequestStoredSessionTarget(params: {
   });
 }
 
+function resolveApprovalRequestSessionAccountBinding(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  useStoredSessionTarget?: boolean;
+}): ApprovalRequestSessionBinding | null {
+  const sessionTarget = params.useStoredSessionTarget
+    ? resolveApprovalRequestStoredSessionTarget(params)
+    : resolveApprovalRequestSessionTarget(params);
+  const sessionBinding = resolveApprovalRequestSessionBinding(params);
+  const channel = normalizeOptionalChannel(sessionTarget?.channel ?? sessionBinding?.channel);
+  const accountId = normalizeOptionalAccountId(
+    sessionTarget?.accountId ?? sessionBinding?.accountId,
+  );
+  return channel || accountId ? { channel, accountId } : null;
+}
+
 export function resolveApprovalRequestAccountId(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -181,19 +197,40 @@ export function resolveApprovalRequestAccountId(params: {
     return turnSourceAccountId;
   }
 
-  const sessionTarget = resolveApprovalRequestSessionTarget(params);
-  const sessionBinding = resolveApprovalRequestSessionBinding(params);
-  const sessionChannel = normalizeOptionalChannel(
-    sessionTarget?.channel ?? sessionBinding?.channel,
-  );
+  const sessionBinding = resolveApprovalRequestSessionAccountBinding(params);
+  const sessionChannel = sessionBinding?.channel;
   if (expectedChannel && sessionChannel && sessionChannel !== expectedChannel) {
     return null;
   }
 
-  const sessionAccountId = normalizeOptionalAccountId(
-    sessionTarget?.accountId ?? sessionBinding?.accountId,
-  );
-  return sessionAccountId ?? null;
+  return sessionBinding?.accountId ?? null;
+}
+
+export function resolveApprovalRequestChannelAccountId(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  channel: string;
+}): string | null {
+  const expectedChannel = normalizeOptionalChannel(params.channel);
+  if (!expectedChannel) {
+    return null;
+  }
+
+  const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
+  if (!turnSourceChannel || turnSourceChannel === expectedChannel) {
+    return resolveApprovalRequestAccountId(params);
+  }
+
+  const sessionBinding = resolveApprovalRequestSessionAccountBinding({
+    ...params,
+    useStoredSessionTarget: true,
+  });
+  const sessionChannel = sessionBinding?.channel;
+  if (sessionChannel && sessionChannel !== expectedChannel) {
+    return null;
+  }
+
+  return sessionBinding?.accountId ?? null;
 }
 
 export function doesApprovalRequestMatchChannelAccount(params: {
@@ -220,19 +257,13 @@ export function doesApprovalRequestMatchChannelAccount(params: {
     return !expectedAccountId || expectedAccountId === turnSourceAccountId;
   }
 
-  const sessionTarget = resolveApprovalRequestSessionTarget(params);
-  const sessionBinding = resolveApprovalRequestSessionBinding(params);
-  const sessionChannel = normalizeOptionalChannel(
-    sessionTarget?.channel ?? sessionBinding?.channel,
-  );
+  const sessionBinding = resolveApprovalRequestSessionAccountBinding(params);
+  const sessionChannel = sessionBinding?.channel;
   if (sessionChannel && sessionChannel !== expectedChannel) {
     return false;
   }
 
-  const sessionAccountId = normalizeOptionalAccountId(
-    sessionTarget?.accountId ?? sessionBinding?.accountId,
-  );
-  const boundAccountId = sessionAccountId;
+  const boundAccountId = sessionBinding?.accountId;
   return !expectedAccountId || !boundAccountId || expectedAccountId === boundAccountId;
 }
 

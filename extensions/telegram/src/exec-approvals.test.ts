@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   getTelegramExecApprovalApprovers,
   isTelegramExecApprovalAuthorizedSender,
@@ -11,6 +14,20 @@ import {
   shouldEnableTelegramExecApprovalButtons,
   shouldInjectTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function createTempDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-exec-approvals-"));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function buildConfig(
   execApprovals?: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>["execApprovals"],
@@ -100,6 +117,124 @@ describe("telegram exec approvals", () => {
         },
       }),
     ).toBe(true);
+  });
+
+  it("scopes non-telegram turn sources to the stored telegram account", () => {
+    const tmpDir = createTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:ops:telegram:direct:123": {
+          sessionId: "main",
+          updatedAt: 1,
+          lastChannel: "telegram",
+          lastTo: "123",
+          lastAccountId: "ops",
+        },
+      }),
+      "utf-8",
+    );
+    const cfg = {
+      session: { store: storePath },
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "tok-default",
+              execApprovals: {
+                enabled: true,
+                approvers: ["123"],
+              },
+            },
+            ops: {
+              botToken: "tok-ops",
+              execApprovals: {
+                enabled: true,
+                approvers: ["123"],
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-2",
+      request: {
+        command: "echo hi",
+        sessionKey: "agent:ops:telegram:direct:123",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects unbound foreign-channel approvals in multi-account telegram configs", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "tok-default",
+              execApprovals: {
+                enabled: true,
+                approvers: ["123"],
+              },
+            },
+            ops: {
+              botToken: "tok-ops",
+              execApprovals: {
+                enabled: true,
+                approvers: ["123"],
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-3",
+      request: {
+        command: "echo hi",
+        sessionKey: "agent:ops:missing",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
   });
 
   it("only injects approval buttons on eligible telegram targets", () => {

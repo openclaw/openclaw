@@ -2,14 +2,14 @@ import {
   createChannelExecApprovalProfile,
   getExecApprovalReplyMetadata,
   isChannelExecApprovalTargetRecipient,
-  resolveApprovalRequestAccountId,
+  resolveApprovalRequestChannelAccountId,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { resolveMatrixAccount } from "./matrix/accounts.js";
+import { listMatrixAccountIds, resolveMatrixAccount } from "./matrix/accounts.js";
 import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
@@ -36,6 +36,27 @@ function resolveMatrixExecApprovalConfig(params: {
     ...config,
     enabled: config.enabled === true,
   };
+}
+
+function matchesMatrixRequestAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  request: ApprovalRequest;
+}): boolean {
+  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const boundAccountId = resolveApprovalRequestChannelAccountId({
+    cfg: params.cfg,
+    request: params.request,
+    channel: "matrix",
+  });
+  if (turnSourceChannel && turnSourceChannel !== "matrix" && !boundAccountId) {
+    return listMatrixAccountIds(params.cfg).length <= 1;
+  }
+  return (
+    !boundAccountId ||
+    !params.accountId ||
+    normalizeAccountId(boundAccountId) === normalizeAccountId(params.accountId)
+  );
 }
 
 export function getMatrixExecApprovalApprovers(params: {
@@ -69,19 +90,7 @@ const matrixExecApprovalProfile = createChannelExecApprovalProfile({
   resolveApprovers: getMatrixExecApprovalApprovers,
   normalizeSenderId: normalizeMatrixApproverId,
   isTargetRecipient: isMatrixExecApprovalTargetRecipient,
-  matchesRequestAccount: (params) => {
-    const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
-    const boundAccountId = resolveApprovalRequestAccountId({
-      cfg: params.cfg,
-      request: params.request,
-      channel: turnSourceChannel === "matrix" ? null : "matrix",
-    });
-    return (
-      !boundAccountId ||
-      !params.accountId ||
-      normalizeAccountId(boundAccountId) === normalizeAccountId(params.accountId)
-    );
-  },
+  matchesRequestAccount: matchesMatrixRequestAccount,
 });
 
 export const isMatrixExecApprovalClientEnabled = matrixExecApprovalProfile.isClientEnabled;
