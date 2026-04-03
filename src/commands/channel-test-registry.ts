@@ -13,6 +13,15 @@ let nostrPluginCache: ChannelPlugin | undefined;
 let tlonPluginCache: ChannelPlugin | undefined;
 let whatsappPluginCache: ChannelPlugin | undefined;
 
+const testPluginOverrides = new Map<string, () => ChannelPlugin>([
+  ["googlechat", getGooglechatPlugin],
+  ["matrix", getMatrixPlugin],
+  ["msteams", getMSTeamsPlugin],
+  ["nostr", getNostrPlugin],
+  ["tlon", getTlonPlugin],
+  ["whatsapp", getWhatsAppPlugin],
+]);
+
 function getGooglechatPlugin(): ChannelPlugin {
   if (!googlechatPluginCache) {
     ({ googlechatPlugin: googlechatPluginCache } = loadBundledPluginTestApiSync<{
@@ -76,24 +85,44 @@ function getWhatsAppPlugin(): ChannelPlugin {
   return whatsappPluginCache;
 }
 
-export function setDefaultChannelPluginRegistryForTests(): void {
-  getSetMatrixRuntime()({
-    state: {
-      resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
-    },
-  } as Parameters<ReturnType<typeof getSetMatrixRuntime>>[0]);
-  const channels = [
-    ...listBundledChannelPlugins(),
-    getMatrixPlugin(),
-    getMSTeamsPlugin(),
-    getNostrPlugin(),
-    getTlonPlugin(),
-    getGooglechatPlugin(),
-    getWhatsAppPlugin(),
-  ].map((plugin) => ({
+function resolveChannelPluginsForTests(onlyPluginIds?: readonly string[]): ChannelPlugin[] {
+  const scopedIds = onlyPluginIds ? new Set(onlyPluginIds) : null;
+  const selectedPlugins = new Map<string, ChannelPlugin>();
+
+  for (const plugin of listBundledChannelPlugins()) {
+    if (scopedIds && !scopedIds.has(plugin.id)) {
+      continue;
+    }
+    selectedPlugins.set(plugin.id, plugin);
+  }
+
+  for (const [pluginId, loadPlugin] of testPluginOverrides) {
+    if (scopedIds && !scopedIds.has(pluginId)) {
+      continue;
+    }
+    selectedPlugins.set(pluginId, loadPlugin());
+  }
+
+  return [...selectedPlugins.values()];
+}
+
+export function setChannelPluginRegistryForTests(onlyPluginIds?: readonly string[]): void {
+  if (!onlyPluginIds || onlyPluginIds.includes("matrix")) {
+    getSetMatrixRuntime()({
+      state: {
+        resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
+      },
+    } as Parameters<ReturnType<typeof getSetMatrixRuntime>>[0]);
+  }
+
+  const channels = resolveChannelPluginsForTests(onlyPluginIds).map((plugin) => ({
     pluginId: plugin.id,
     plugin,
     source: "test" as const,
   })) as unknown as Parameters<typeof createTestRegistry>[0];
   setActivePluginRegistry(createTestRegistry(channels));
+}
+
+export function setDefaultChannelPluginRegistryForTests(): void {
+  setChannelPluginRegistryForTests();
 }

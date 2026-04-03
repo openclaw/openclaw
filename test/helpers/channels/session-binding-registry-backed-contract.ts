@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe } from "vitest";
+import { sessionBindingContractChannelIds } from "../../../src/channels/plugins/contracts/manifest.js";
 import { sessionBindingContractRegistry } from "../../../src/channels/plugins/contracts/registry-session-binding.js";
 import { installSessionBindingContractSuite } from "../../../src/channels/plugins/contracts/suites.js";
-import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-registry.js";
+import { setChannelPluginRegistryForTests } from "../../../src/commands/channel-test-registry.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -82,7 +83,8 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
         // Opt those specific plugins in so the activation boundary behaves like real runtime usage.
         setRuntimeConfigSnapshot(runtimeConfig);
       }
-      setDefaultChannelPluginRegistryForTests();
+      // These suites only exercise the session-binding channels, so keep the seeded registry narrow.
+      setChannelPluginRegistryForTests(sessionBindingContractChannelIds);
       sessionBindingTesting.resetSessionBindingAdaptersForTests();
       getDiscordThreadBindingTesting().resetThreadBindingsForTests();
       (await getFeishuThreadBindingTesting()).resetFeishuThreadBindingsForTests();
