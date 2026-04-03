@@ -57,6 +57,16 @@ const tasksWithPendingDelivery = new Set<string>();
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 let restoreAttempted = false;
+type TaskRegistryDeliveryRuntime = Pick<
+  typeof import("./task-registry-delivery-runtime.js"),
+  "sendMessage"
+>;
+const TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY = Symbol.for(
+  "openclaw.taskRegistry.deliveryRuntimeOverride",
+);
+type TaskRegistryGlobalWithDeliveryOverride = typeof globalThis & {
+  [TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY]?: TaskRegistryDeliveryRuntime | null;
+};
 let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runtime.js")> | null =
   null;
 let controlRuntimePromise: Promise<typeof import("./task-registry-control.runtime.js")> | null =
@@ -361,6 +371,12 @@ function appendTaskEvent(event: {
 }
 
 function loadTaskRegistryDeliveryRuntime() {
+  const deliveryRuntimeOverride = (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
+  ];
+  if (deliveryRuntimeOverride) {
+    return Promise.resolve(deliveryRuntimeOverride);
+  }
   deliveryRuntimePromise ??= import("./task-registry-delivery-runtime.js");
   return deliveryRuntimePromise;
 }
@@ -1934,6 +1950,8 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
     listenerStop = null;
   }
   listenerStarted = false;
+  deliveryRuntimePromise = null;
+  controlRuntimePromise = null;
   if (opts?.persist !== false) {
     persistTaskRegistry();
   }
@@ -1943,5 +1961,15 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
 }
 
 export function resetTaskRegistryDeliveryRuntimeForTests() {
+  (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
+  ] = null;
+  deliveryRuntimePromise = null;
+}
+
+export function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
+  (globalThis as TaskRegistryGlobalWithDeliveryOverride)[
+    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
+  ] = runtime;
   deliveryRuntimePromise = null;
 }
