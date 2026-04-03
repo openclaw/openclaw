@@ -255,12 +255,12 @@ async function ensureDir(target: ResolvedPatchTarget, options: ApplyPatchOptions
     return;
   }
   const boundaryRoot = target.boundaryRoot ?? options.cwd;
-  await assertSandboxPath({
-    filePath: parent,
-    cwd: boundaryRoot,
-    root: boundaryRoot,
+  const relative = toRelativeSandboxPath(boundaryRoot, parent, { allowRoot: true });
+  await mkdirPathWithinRoot({
+    rootDir: boundaryRoot,
+    relativePath: relative,
+    allowRoot: true,
   });
-  await fs.mkdir(parent, { recursive: true });
 }
 
 async function readResolvedPatchFile(
@@ -329,13 +329,12 @@ async function removeResolvedPatchFile(target: ResolvedPatchTarget, options: App
   }
   if (options.workspaceOnly !== false) {
     const boundaryRoot = target.boundaryRoot ?? options.cwd;
-    await assertSandboxPath({
-      filePath: target.resolved,
-      cwd: boundaryRoot,
-      root: boundaryRoot,
-      allowFinalSymlinkForUnlink: true,
-      allowFinalHardlinkForUnlink: true,
+    const relative = toRelativeSandboxPath(boundaryRoot, target.resolved);
+    await removePathWithinRoot({
+      rootDir: boundaryRoot,
+      relativePath: relative,
     });
+    return;
   }
   await fs.rm(target.resolved);
 }

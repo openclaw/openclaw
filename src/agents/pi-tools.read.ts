@@ -6,6 +6,7 @@ import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/p
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
   appendFileWithinRoot,
+  mkdirPathWithinRoot,
   SafeOpenError,
   openFileWithinRoot,
   readFileWithinRoot,
@@ -15,11 +16,7 @@ import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
-import {
-  normalizeBoundaryRoots,
-  resolvePathWithinRoots,
-  toRelativeWorkspacePath,
-} from "./path-policy.js";
+import { normalizeBoundaryRoots, resolvePathWithinRoots } from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
   REQUIRED_PARAM_GROUPS,
@@ -677,20 +674,26 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }
 
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceWriteTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; allowedRoots?: readonly string[] },
+) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceEditTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; allowedRoots?: readonly string[] },
+) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
   const withRecovery = wrapEditToolWithRecovery(base, {
     root,
-    readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
+    readFile: (absolutePath: string) => readHostEditRecoveryFile(root, absolutePath, options),
   });
   return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }
@@ -773,7 +776,49 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
-function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+async function readHostEditRecoveryFile(
+  root: string,
+  absolutePath: string,
+  options?: { workspaceOnly?: boolean; allowedRoots?: readonly string[] },
+): Promise<string> {
+  if (options?.workspaceOnly !== true) {
+    return await fs.readFile(path.resolve(absolutePath), "utf-8");
+  }
+  const target = resolveHostBoundaryTarget({
+    root,
+    candidate: absolutePath,
+    allowedRoots: options?.allowedRoots,
+  });
+  const safeRead = await readFileWithinRoot({
+    rootDir: target.rootDir,
+    relativePath: target.relativePath,
+  });
+  return safeRead.buffer.toString("utf-8");
+}
+
+function resolveHostBoundaryTarget(params: {
+  root: string;
+  candidate: string;
+  allowedRoots?: readonly string[];
+  allowRoot?: boolean;
+}): { rootDir: string; relativePath: string } {
+  const boundaryRoots = normalizeBoundaryRoots([params.root, ...(params.allowedRoots ?? [])]);
+  const boundaryLabel = boundaryRoots.length > 1 ? "allowed work roots" : "workspace root";
+  const match = resolvePathWithinRoots(boundaryRoots, params.candidate, {
+    cwd: params.root,
+    allowRoot: params.allowRoot,
+    boundaryLabel,
+  });
+  return {
+    rootDir: match.root,
+    relativePath: match.relative,
+  };
+}
+
+function createHostWriteOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; allowedRoots?: readonly string[] },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
@@ -790,16 +835,27 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   // When workspaceOnly is true, enforce workspace boundary
   return {
     mkdir: async (dir: string) => {
-      const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
-      const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
-      await assertSandboxPath({ filePath: resolved, cwd: root, root });
-      await fs.mkdir(resolved, { recursive: true });
+      const target = resolveHostBoundaryTarget({
+        root,
+        candidate: dir,
+        allowedRoots: options?.allowedRoots,
+        allowRoot: true,
+      });
+      await mkdirPathWithinRoot({
+        rootDir: target.rootDir,
+        relativePath: target.relativePath,
+        allowRoot: true,
+      });
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const target = resolveHostBoundaryTarget({
+        root,
+        candidate: absolutePath,
+        allowedRoots: options?.allowedRoots,
+      });
       await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
+        rootDir: target.rootDir,
+        relativePath: target.relativePath,
         data: content,
         mkdir: true,
       });
@@ -807,7 +863,10 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   } as const;
 }
 
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostEditOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; allowedRoots?: readonly string[] },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
@@ -828,26 +887,38 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   // When workspaceOnly is true, enforce workspace boundary
   return {
     readFile: async (absolutePath: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const target = resolveHostBoundaryTarget({
+        root,
+        candidate: absolutePath,
+        allowedRoots: options?.allowedRoots,
+      });
       const safeRead = await readFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
+        rootDir: target.rootDir,
+        relativePath: target.relativePath,
       });
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const target = resolveHostBoundaryTarget({
+        root,
+        candidate: absolutePath,
+        allowedRoots: options?.allowedRoots,
+      });
       await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
+        rootDir: target.rootDir,
+        relativePath: target.relativePath,
         data: content,
         mkdir: true,
       });
     },
     access: async (absolutePath: string) => {
-      let relative: string;
+      let target: { rootDir: string; relativePath: string };
       try {
-        relative = toRelativeWorkspacePath(root, absolutePath);
+        target = resolveHostBoundaryTarget({
+          root,
+          candidate: absolutePath,
+          allowedRoots: options?.allowedRoots,
+        });
       } catch {
         // Path escapes workspace root.  Don't throw here – the upstream
         // library replaces any `access` error with a misleading "File not
@@ -858,8 +929,8 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       }
       try {
         const opened = await openFileWithinRoot({
-          rootDir: root,
-          relativePath: relative,
+          rootDir: target.rootDir,
+          relativePath: target.relativePath,
         });
         await opened.handle.close().catch(() => {});
       } catch (error) {

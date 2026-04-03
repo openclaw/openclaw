@@ -188,7 +188,7 @@ export function resolveAgentIncludedWorkDirs(cfg: OpenClawConfig, agentId: strin
     if (!trimmed) {
       continue;
     }
-    const resolved = stripNullBytes(resolveUserPath(trimmed));
+    const resolved = path.resolve(stripNullBytes(resolveUserPath(trimmed)));
     const key = normalizePathForComparison(resolved);
     if (seen.has(key)) {
       continue;
