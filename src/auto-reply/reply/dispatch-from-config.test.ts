@@ -109,7 +109,9 @@ const ttsMocks = vi.hoisted(() => {
     normalizeTtsAutoMode: vi.fn((value: unknown) =>
       typeof value === "string" ? value : undefined,
     ),
-    resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+    resolveTtsConfig: vi.fn((_cfg: OpenClawConfig, _params?: { sessionKey?: string }) => ({
+      mode: "final",
+    })),
   };
 });
 
@@ -227,7 +229,12 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 }));
 vi.mock("../../tts/tts-config.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
-  resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
+  resolveConfiguredTtsMode: (
+    cfg: OpenClawConfig,
+    params?: {
+      sessionKey?: string;
+    },
+  ) => ttsMocks.resolveTtsConfig(cfg, params).mode,
 }));
 
 const noAbortResult = { handled: false, aborted: false } as const;
@@ -1579,6 +1586,55 @@ describe("dispatchReplyFromConfig", () => {
     expect(runtime.runTurn).toHaveBeenCalledTimes(1);
     expect(runtime.runTurn.mock.calls[0]?.[0]).toMatchObject({
       text: "continue with deployment",
+    });
+  });
+
+  it("uses the native command target session for TTS helpers", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandSource: "native",
+      SessionKey: "discord:slash:owner",
+      CommandTargetSessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "continue with deployment",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "streamed block" });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(ttsMocks.resolveTtsConfig).toHaveBeenCalledWith(
+      emptyConfig,
+      expect.objectContaining({ sessionKey: "agent:codex-acp:session-1" }),
+    );
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "block",
+        sessionKey: "agent:codex-acp:session-1",
+      }),
+    );
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        sessionKey: "agent:codex-acp:session-1",
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
     });
   });
 
