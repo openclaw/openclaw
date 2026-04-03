@@ -18,8 +18,6 @@ export type BlueBubblesAccountConfig = {
   capabilities?: string[];
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
-  /** Per-action tool gating (default: true for all). */
-  actions?: BlueBubblesActionConfig;
   /** If false, do not start this BlueBubbles account. Default: true. */
   enabled?: boolean;
   /** Base URL for the BlueBubbles API. */
