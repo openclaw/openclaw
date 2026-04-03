@@ -4,8 +4,8 @@ import { buildTelegramMessageContextForTest } from "./bot-message-context.test-h
 const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("./bot-message-context.session.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bot-message-context.session.runtime.js")>();
   return {
     ...actual,
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
