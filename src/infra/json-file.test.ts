@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { loadJsonFile, saveJsonFile } from "./json-file.js";
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 async function withJsonPath<T>(
   run: (params: { root: string; pathname: string }) => Promise<T> | T,
@@ -13,6 +17,10 @@ async function withJsonPath<T>(
 }
 
 describe("json-file helpers", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it.each([
     {
       name: "missing files",
@@ -84,11 +92,48 @@ describe("json-file helpers", () => {
       saveJsonFile(pathname, { enabled: true, count: 2 });
 
       const renameCall = renameSpy.mock.calls.find(([, target]) => target === pathname);
-      expect(renameCall?.[0]).toMatch(
-        new RegExp(`^${pathname.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\..+\\.tmp$`),
-      );
+      expect(renameCall?.[0]).toMatch(new RegExp(`^${escapeRegExp(pathname)}\\..+\\.tmp$`));
       expect(renameSpy).toHaveBeenCalledWith(renameCall?.[0], pathname);
       expect(loadJsonFile(pathname)).toEqual({ enabled: true, count: 2 });
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves symlink destinations when replacing existing JSON files",
+    async () => {
+      await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+        const targetDir = path.join(root, "target");
+        const targetPath = path.join(targetDir, "config.json");
+        const linkPath = path.join(root, "config-link.json");
+        fs.mkdirSync(targetDir, { recursive: true });
+        fs.writeFileSync(targetPath, '{"enabled":false}\n', "utf8");
+        fs.symlinkSync(targetPath, linkPath);
+
+        saveJsonFile(linkPath, { enabled: true, count: 2 });
+
+        expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+        expect(loadJsonFile(targetPath)).toEqual({ enabled: true, count: 2 });
+        expect(loadJsonFile(linkPath)).toEqual({ enabled: true, count: 2 });
+      });
+    },
+  );
+
+  it("falls back to copy when rename-based overwrite fails", async () => {
+    await withJsonPath(({ root, pathname }) => {
+      fs.writeFileSync(pathname, '{"enabled":false}\n', "utf8");
+      const copySpy = vi.spyOn(fs, "copyFileSync");
+      const renameSpy = vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
+        const err = new Error("EPERM") as NodeJS.ErrnoException;
+        err.code = "EPERM";
+        throw err;
+      });
+
+      saveJsonFile(pathname, { enabled: true, count: 2 });
+
+      expect(renameSpy).toHaveBeenCalledOnce();
+      expect(copySpy).toHaveBeenCalledOnce();
+      expect(loadJsonFile(pathname)).toEqual({ enabled: true, count: 2 });
+      expect(fs.readdirSync(root)).toEqual(["config.json"]);
     });
   });
 });
