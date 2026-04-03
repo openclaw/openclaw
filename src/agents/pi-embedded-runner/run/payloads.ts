@@ -106,6 +106,10 @@ export function buildEmbeddedRunPayloads(params: {
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
+  pendingToolMediaReply?: {
+    mediaUrls?: string[];
+    audioAsVoice?: boolean;
+  } | null;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
   sessionKey: string;
@@ -297,6 +301,26 @@ export function buildEmbeddedRunPayloads(params: {
     hasUserFacingAssistantReply = true;
   }
 
+  const pendingToolMediaUrls = params.pendingToolMediaReply?.mediaUrls?.filter(Boolean) ?? [];
+  if (pendingToolMediaUrls.length > 0 || params.pendingToolMediaReply?.audioAsVoice) {
+    const mergeTarget = [...replyItems]
+      .toReversed()
+      .find((item) => !item.isReasoning && !item.isError);
+    if (mergeTarget) {
+      mergeTarget.media = Array.from(
+        new Set([...(mergeTarget.media ?? []), ...pendingToolMediaUrls]),
+      );
+      mergeTarget.audioAsVoice =
+        mergeTarget.audioAsVoice || params.pendingToolMediaReply?.audioAsVoice;
+    } else {
+      replyItems.push({
+        text: "",
+        media: pendingToolMediaUrls.length ? pendingToolMediaUrls : undefined,
+        audioAsVoice: params.pendingToolMediaReply?.audioAsVoice,
+      });
+    }
+  }
+
   if (params.lastToolError) {
     const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
@@ -342,16 +366,26 @@ export function buildEmbeddedRunPayloads(params: {
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
-    .map((item) => ({
-      text: item.text?.trim() ? item.text.trim() : undefined,
-      mediaUrls: item.media?.length ? item.media : undefined,
-      mediaUrl: item.media?.[0],
-      isError: item.isError,
-      replyToId: item.replyToId,
-      replyToTag: item.replyToTag,
-      replyToCurrent: item.replyToCurrent,
-      audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
-    }))
+    .map((item) => {
+      const trimmedText = item.text?.trim() ? item.text.trim() : undefined;
+      const mediaUrls = item.media?.length ? item.media : undefined;
+      const normalizedText =
+        trimmedText &&
+        mediaUrls?.length &&
+        isSilentReplyPayloadText(trimmedText, SILENT_REPLY_TOKEN)
+          ? undefined
+          : trimmedText;
+      return {
+        text: normalizedText,
+        mediaUrls,
+        mediaUrl: mediaUrls?.[0],
+        isError: item.isError,
+        replyToId: item.replyToId,
+        replyToTag: item.replyToTag,
+        replyToCurrent: item.replyToCurrent,
+        audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && mediaUrls?.length),
+      };
+    })
     .filter((p) => {
       if (!hasOutboundReplyContent(p)) {
         return false;

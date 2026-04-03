@@ -141,4 +141,22 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       assistantTexts: ['{"action":"NO_REPLY"}'],
     });
   });
+
+  it("preserves pending tool media when the assistant ends with NO_REPLY", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["NO_REPLY"],
+      pendingToolMediaReply: {
+        mediaUrls: ["/tmp/reply.opus"],
+        audioAsVoice: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      mediaUrl: "/tmp/reply.opus",
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(payloads[0]?.text).toBeUndefined();
+  });
 });

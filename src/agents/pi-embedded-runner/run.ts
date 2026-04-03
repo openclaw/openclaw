@@ -1310,6 +1310,7 @@ export async function runEmbeddedPiAgent(
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             lastToolError: attempt.lastToolError,
+            pendingToolMediaReply: attempt.pendingToolMediaReply,
             config: params.config,
             isCronTrigger: params.trigger === "cron",
             sessionKey: params.sessionKey ?? params.sessionId,

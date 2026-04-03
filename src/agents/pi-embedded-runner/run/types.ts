@@ -53,6 +53,10 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  pendingToolMediaReply?: {
+    mediaUrls?: string[];
+    audioAsVoice?: boolean;
+  } | null;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
