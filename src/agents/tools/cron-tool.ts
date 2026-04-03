@@ -528,26 +528,6 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               params.job !== null &&
               Object.keys(params.job as Record<string, unknown>).length === 0)
           ) {
-            const JOB_KEYS: ReadonlySet<string> = new Set([
-              "name",
-              "schedule",
-              "sessionTarget",
-              "wakeMode",
-              "payload",
-              "delivery",
-              "enabled",
-              "description",
-              "deleteAfterRun",
-              "agentId",
-              "sessionKey",
-              "message",
-              "text",
-              "model",
-              "thinking",
-              "timeoutSeconds",
-              "allowUnsafeExternalContent",
-              "preHook",
-            ]);
             const synthetic: Record<string, unknown> = {};
             let found = false;
             for (const key of Object.keys(params)) {
@@ -677,22 +657,6 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               params.patch !== null &&
               Object.keys(params.patch as Record<string, unknown>).length === 0)
           ) {
-            const PATCH_KEYS: ReadonlySet<string> = new Set([
-              "name",
-              "schedule",
-              "payload",
-              "delivery",
-              "enabled",
-              "description",
-              "deleteAfterRun",
-              "agentId",
-              "sessionKey",
-              "sessionTarget",
-              "wakeMode",
-              "failureAlert",
-              "allowUnsafeExternalContent",
-              "preHook",
-            ]);
             const synthetic: Record<string, unknown> = {};
             let found = false;
             for (const key of Object.keys(params)) {
