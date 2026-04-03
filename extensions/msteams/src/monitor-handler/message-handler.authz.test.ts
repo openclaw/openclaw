@@ -235,7 +235,7 @@ describe("msteams monitor handler authz", () => {
   });
 
   it("keeps the DM pairing path wired through shared access resolution", async () => {
-    const { deps, upsertPairingRequest } = createDeps({
+    const { conversationStore, deps, upsertPairingRequest, recordInboundSession } = createDeps({
       channels: {
         msteams: {
           dmPolicy: "pairing",
@@ -262,8 +262,18 @@ describe("msteams monitor handler authz", () => {
         conversation: {
           id: "a:personal-chat",
           conversationType: "personal",
+          tenantId: "tenant-1",
         },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        locale: "en-US",
         channelData: {},
+        entities: [
+          {
+            type: "clientInfo",
+            timezone: "America/New_York",
+          },
+        ],
         attachments: [],
       },
       sendActivity: vi.fn(async () => undefined),
@@ -275,6 +285,33 @@ describe("msteams monitor handler authz", () => {
       id: "new-user-aad",
       meta: { name: "New User" },
     });
+    expect(conversationStore.upsert).toHaveBeenCalledWith("a:personal-chat", {
+      activityId: "msg-pairing",
+      user: {
+        id: "new-user-id",
+        aadObjectId: "new-user-aad",
+        name: "New User",
+      },
+      agent: {
+        id: "bot-id",
+        name: "Bot",
+      },
+      bot: {
+        id: "bot-id",
+        name: "Bot",
+      },
+      conversation: {
+        id: "a:personal-chat",
+        conversationType: "personal",
+        tenantId: "tenant-1",
+      },
+      channelId: "msteams",
+      serviceUrl: "https://smba.trafficmanager.net/amer/",
+      locale: "en-US",
+      timezone: "America/New_York",
+    });
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
   });
 
   it("logs an info drop reason when dmPolicy allowlist rejects a sender", async () => {
