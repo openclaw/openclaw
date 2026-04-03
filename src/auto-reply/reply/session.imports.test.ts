@@ -4,9 +4,11 @@ import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 describe("reply session module imports", () => {
   it("does not load archive runtime on module import", async () => {
     const archiveRuntimeLoads = vi.fn();
-    vi.doMock("../../gateway/session-archive.runtime.js", async (importOriginal) => {
+    vi.doMock("../../gateway/session-archive.runtime.js", async () => {
       archiveRuntimeLoads();
-      return await importOriginal<typeof import("../../gateway/session-archive.runtime.js")>();
+      return await vi.importActual<typeof import("../../gateway/session-archive.runtime.js")>(
+        "../../gateway/session-archive.runtime.js",
+      );
     });
 
     await importFreshModule<typeof import("./session.js")>(
