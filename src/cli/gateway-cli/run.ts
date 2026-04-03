@@ -457,16 +457,17 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         }
       : undefined;
 
-  gatewayLog.info("starting gateway…");
+  gatewayLog.info("starting...");
   const startLoop = async () =>
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
-      start: async () =>
+      start: async ({ startupStartedAt } = {}) =>
         await startGatewayServer(port, {
           bind,
           auth: authOverride,
           tailscale: tailscaleOverride,
+          startupStartedAt,
         }),
     });
 
