@@ -993,7 +993,7 @@ describe("createFollowupRunner CLI backend dispatch", () => {
           agents: {
             defaults: {
               cliBackends: {
-                "claude-cli": {},
+                "claude-cli": { command: "claude" },
               },
             },
           },
@@ -1060,7 +1060,7 @@ describe("createFollowupRunner CLI backend dispatch", () => {
           agents: {
             defaults: {
               cliBackends: {
-                "claude-cli": {},
+                "claude-cli": { command: "claude" },
               },
             },
           },
