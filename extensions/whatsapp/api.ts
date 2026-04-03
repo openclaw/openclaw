@@ -1,5 +1,6 @@
 export * from "./src/accounts.js";
 export * from "./src/auto-reply/constants.js";
+export { whatsappCommandPolicy } from "./src/command-policy.js";
 export * from "./src/group-policy.js";
 export type * from "./src/auto-reply/types.js";
 export type * from "./src/inbound/types.js";
@@ -10,6 +11,7 @@ export {
 export { resolveWhatsAppOutboundTarget } from "./src/resolve-outbound-target.js";
 export {
   isWhatsAppGroupJid,
+  normalizeWhatsAppAllowFromEntries,
   isWhatsAppUserTarget,
   normalizeWhatsAppTarget,
 } from "./src/normalize-target.js";

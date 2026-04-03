@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildTelegramModelsProviderChannelData } from "../../../extensions/telegram/api.js";
+import { whatsappCommandPolicy } from "../../../extensions/whatsapp/api.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
@@ -162,10 +164,7 @@ const whatsappCommandTestPlugin: ChannelPlugin = {
       nativeCommands: true,
     },
   }),
-  commands: {
-    enforceOwnerForCommands: true,
-    preferSenderE164ForCommands: true,
-  },
+  commands: whatsappCommandPolicy,
   allowlist: buildDmGroupAccountAllowlistAdapter({
     channelId: "whatsapp",
     resolveAccount: ({ cfg }) => cfg.channels?.whatsapp ?? {},
@@ -519,6 +518,9 @@ const telegramCommandTestPlugin: ChannelPlugin = {
   },
   pairing: {
     idLabel: "telegramUserId",
+  },
+  commands: {
+    buildModelsProviderChannelData: buildTelegramModelsProviderChannelData,
   },
   allowlist: buildDmGroupAccountAllowlistAdapter({
     channelId: "telegram",

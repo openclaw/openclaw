@@ -20,6 +20,7 @@ import {
 } from "./channel-actions.js";
 import { whatsappChannelOutbound } from "./channel-outbound.js";
 import { handleWhatsAppReactAction } from "./channel-react-action.js";
+import { whatsappCommandPolicy } from "./command-policy.js";
 import {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
@@ -87,11 +88,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       mentions: {
         stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
       },
-      commands: {
-        enforceOwnerForCommands: true,
-        preferSenderE164ForCommands: true,
-        skipWhenConfigEmpty: true,
-      },
+      commands: whatsappCommandPolicy,
       agentPrompt: {
         reactionGuidance: ({ cfg, accountId }) => {
           const level = resolveWhatsAppAgentReactionGuidance({
