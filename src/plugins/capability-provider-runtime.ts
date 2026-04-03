@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
@@ -48,12 +47,8 @@ function resolveCapabilityProviderConfig(params: {
   cfg?: OpenClawConfig;
 }) {
   const pluginIds = resolveBundledCapabilityCompatPluginIds(params);
-  const allowlistCompat = withBundledPluginAllowlistCompat({
-    config: params.cfg,
-    pluginIds,
-  });
   const enablementCompat = withBundledPluginEnablementCompat({
-    config: allowlistCompat,
+    config: params.cfg,
     pluginIds,
   });
   return withBundledPluginVitestCompat({

@@ -90,6 +90,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/websocket auth: refresh auth on new websocket connects after secrets reload so rotated gateway tokens take effect immediately without requiring a restart. (#60323) Thanks @mappel-nv.
 - Agents/workspace: respect `agents.defaults.workspace` for non-default agents by resolving them under the configured base path instead of falling back to `workspace-<id>`. (#59858) Thanks @joelnishanth.
 - Config/All Settings: keep the raw config view intact when sensitive fields are blank instead of corrupting or dropping the snapshot during redaction. (#28214) thanks @solodmd.
+- Plugins/runtime: honor explicit capability allowlists during fallback speech, media-understanding, and image-generation provider loading so bundled capability plugins do not bypass restrictive `plugins.allow` config. (#52262) Thanks @PerfectPan.
 
 ## 2026.4.2
 
