@@ -3,4 +3,4 @@ export {
   BLUEBUBBLES_ACTIONS,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
-} from "openclaw/plugin-sdk/bluebubbles";
+} from "./runtime-api.js";

@@ -358,7 +358,6 @@ jobs:
         env:
           TASK: ${{ matrix.task }}
         run: |
-          echo "NODE_OPTIONS=--max-old-space-size=6144" >> "$GITHUB_ENV"
           echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
           if [ "$TASK" = "channels" ]; then
             echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
@@ -383,6 +382,7 @@ jobs:
         if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
         env:
           TASK: ${{ matrix.task }}
+          NODE_OPTIONS: --max-old-space-size=6144
         shell: bash
         run: |
           set -euo pipefail
