@@ -730,6 +730,7 @@ export type ProviderCreateEmbeddingProviderContext = {
 export type ProviderCacheTtlEligibilityContext = {
   provider: string;
   modelId: string;
+  modelApi?: string;
 };
 
 /**
