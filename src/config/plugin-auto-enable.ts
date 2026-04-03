@@ -26,6 +26,8 @@ type PluginEnableChange = {
   reason: string;
 };
 
+export type PluginAutoEnableCandidate = PluginEnableChange;
+
 export type PluginAutoEnableResult = {
   config: OpenClawConfig;
   changes: string[];
@@ -457,8 +459,8 @@ function resolveConfiguredPlugins(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   registry: PluginManifestRegistry,
-): PluginEnableChange[] {
-  const changes: PluginEnableChange[] = [];
+): PluginAutoEnableCandidate[] {
+  const changes: PluginAutoEnableCandidate[] = [];
   // Build reverse map: channel ID → plugin ID from installed plugin manifests.
   const channelToPluginId = buildChannelToPluginIdMap(registry);
   for (const channelId of collectCandidateChannelIds(cfg, env)) {
@@ -644,38 +646,45 @@ function formatAutoEnableChange(entry: PluginEnableChange): string {
   return `${reason}, enabled automatically.`;
 }
 
-export function applyPluginAutoEnable(params: {
+export function detectPluginAutoEnableCandidates(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  /** Pre-loaded manifest registry. When omitted, the registry is loaded from
-   *  the installed plugins on disk. Pass an explicit registry in tests to
-   *  avoid filesystem access and control what plugins are "installed". */
   manifestRegistry?: PluginManifestRegistry;
-}): PluginAutoEnableResult {
+}): PluginAutoEnableCandidate[] {
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
   if (!configMayNeedPluginAutoEnable(config, env)) {
-    return { config, changes: [], autoEnabledReasons: {} };
+    return [];
   }
   const registry =
     params.manifestRegistry ??
     (configMayNeedPluginManifestRegistry(config)
       ? loadPluginManifestRegistry({ config, env })
       : EMPTY_PLUGIN_MANIFEST_REGISTRY);
-  const configured = resolveConfiguredPlugins(config, env, registry);
-  if (configured.length === 0) {
-    return { config, changes: [], autoEnabledReasons: {} };
-  }
+  return resolveConfiguredPlugins(config, env, registry);
+}
 
-  let next = config;
+export function materializePluginAutoEnableCandidates(params: {
+  config?: OpenClawConfig;
+  candidates: readonly PluginAutoEnableCandidate[];
+  env?: NodeJS.ProcessEnv;
+  manifestRegistry?: PluginManifestRegistry;
+}): PluginAutoEnableResult {
+  const env = params.env ?? process.env;
+  let next = params.config ?? {};
   const changes: string[] = [];
   const autoEnabledReasons = new Map<string, string[]>();
+  const registry =
+    params.manifestRegistry ??
+    (configMayNeedPluginManifestRegistry(next)
+      ? loadPluginManifestRegistry({ config: next, env })
+      : EMPTY_PLUGIN_MANIFEST_REGISTRY);
 
   if (next.plugins?.enabled === false) {
     return { config: next, changes, autoEnabledReasons: {} };
   }
 
-  for (const entry of configured) {
+  for (const entry of params.candidates) {
     const builtInChannelId = normalizeChatChannelId(entry.pluginId);
     if (isPluginDenied(next, entry.pluginId)) {
       continue;
@@ -683,7 +692,7 @@ export function applyPluginAutoEnable(params: {
     if (isPluginExplicitlyDisabled(next, entry.pluginId)) {
       continue;
     }
-    if (shouldSkipPreferredPluginAutoEnable(next, entry, configured, env, registry)) {
+    if (shouldSkipPreferredPluginAutoEnable(next, entry, [...params.candidates], env, registry)) {
       continue;
     }
     const allow = next.plugins?.allow;
@@ -727,4 +736,21 @@ export function applyPluginAutoEnable(params: {
   }
 
   return { config: next, changes, autoEnabledReasons: autoEnabledReasonRecord };
+}
+
+export function applyPluginAutoEnable(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  /** Pre-loaded manifest registry. When omitted, the registry is loaded from
+   *  the installed plugins on disk. Pass an explicit registry in tests to
+   *  avoid filesystem access and control what plugins are "installed". */
+  manifestRegistry?: PluginManifestRegistry;
+}): PluginAutoEnableResult {
+  const candidates = detectPluginAutoEnableCandidates(params);
+  return materializePluginAutoEnableCandidates({
+    config: params.config,
+    candidates,
+    env: params.env,
+    manifestRegistry: params.manifestRegistry,
+  });
 }
