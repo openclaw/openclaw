@@ -1,48 +1,48 @@
-import { describePluginRegistrationContract } from "../../../test/helpers/plugins/plugin-registration-contract.js";
+import { describePluginRegistrationContract } from "./plugin-registration-contract.js";
 
 type PluginRegistrationContractParams = Parameters<typeof describePluginRegistrationContract>[0];
 
-const pluginRegistrationContractTests: PluginRegistrationContractParams[] = [
-  {
+export const pluginRegistrationContractCases = {
+  anthropic: {
     pluginId: "anthropic",
     providerIds: ["anthropic"],
     mediaUnderstandingProviderIds: ["anthropic"],
     cliBackendIds: ["claude-cli"],
     requireDescribeImages: true,
   },
-  {
+  brave: {
     pluginId: "brave",
     webSearchProviderIds: ["brave"],
   },
-  {
+  deepgram: {
     pluginId: "deepgram",
     mediaUnderstandingProviderIds: ["deepgram"],
   },
-  {
+  duckduckgo: {
     pluginId: "duckduckgo",
     webSearchProviderIds: ["duckduckgo"],
   },
-  {
+  elevenlabs: {
     pluginId: "elevenlabs",
     speechProviderIds: ["elevenlabs"],
     requireSpeechVoices: true,
   },
-  {
+  exa: {
     pluginId: "exa",
     webSearchProviderIds: ["exa"],
   },
-  {
+  fal: {
     pluginId: "fal",
     providerIds: ["fal"],
     imageGenerationProviderIds: ["fal"],
   },
-  {
+  firecrawl: {
     pluginId: "firecrawl",
     webFetchProviderIds: ["firecrawl"],
     webSearchProviderIds: ["firecrawl"],
     toolNames: ["firecrawl_search", "firecrawl_scrape"],
   },
-  {
+  google: {
     pluginId: "google",
     providerIds: ["google", "google-gemini-cli"],
     webSearchProviderIds: ["gemini"],
@@ -52,16 +52,16 @@ const pluginRegistrationContractTests: PluginRegistrationContractParams[] = [
     requireDescribeImages: true,
     requireGenerateImage: true,
   },
-  {
+  groq: {
     pluginId: "groq",
     mediaUnderstandingProviderIds: ["groq"],
   },
-  {
+  microsoft: {
     pluginId: "microsoft",
     speechProviderIds: ["microsoft"],
     requireSpeechVoices: true,
   },
-  {
+  minimax: {
     pluginId: "minimax",
     providerIds: ["minimax", "minimax-portal"],
     mediaUnderstandingProviderIds: ["minimax", "minimax-portal"],
@@ -69,11 +69,11 @@ const pluginRegistrationContractTests: PluginRegistrationContractParams[] = [
     requireDescribeImages: true,
     requireGenerateImage: true,
   },
-  {
+  mistral: {
     pluginId: "mistral",
     mediaUnderstandingProviderIds: ["mistral"],
   },
-  {
+  moonshot: {
     pluginId: "moonshot",
     providerIds: ["moonshot"],
     webSearchProviderIds: ["kimi"],
@@ -88,7 +88,7 @@ const pluginRegistrationContractTests: PluginRegistrationContractParams[] = [
       groupHint: "Kimi K2.5",
     },
   },
-  {
+  openai: {
     pluginId: "openai",
     providerIds: ["openai", "openai-codex"],
     speechProviderIds: ["openai"],
@@ -99,33 +99,29 @@ const pluginRegistrationContractTests: PluginRegistrationContractParams[] = [
     requireDescribeImages: true,
     requireGenerateImage: true,
   },
-  {
+  openrouter: {
     pluginId: "openrouter",
     providerIds: ["openrouter"],
     mediaUnderstandingProviderIds: ["openrouter"],
     requireDescribeImages: true,
   },
-  {
+  perplexity: {
     pluginId: "perplexity",
     webSearchProviderIds: ["perplexity"],
   },
-  {
+  tavily: {
     pluginId: "tavily",
     webSearchProviderIds: ["tavily"],
     toolNames: ["tavily_search", "tavily_extract"],
   },
-  {
+  xai: {
     pluginId: "xai",
     providerIds: ["xai"],
     webSearchProviderIds: ["grok"],
   },
-  {
+  zai: {
     pluginId: "zai",
     mediaUnderstandingProviderIds: ["zai"],
     requireDescribeImages: true,
   },
-];
-
-for (const params of pluginRegistrationContractTests) {
-  describePluginRegistrationContract(params);
-}
+} satisfies Record<string, PluginRegistrationContractParams>;
