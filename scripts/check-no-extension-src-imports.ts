@@ -14,7 +14,12 @@ function isProductionExtensionFile(filePath: string): boolean {
     filePath.includes(".snap") ||
     filePath.includes("test-harness") ||
     filePath.includes("test-support") ||
+    filePath.includes("test-helpers") ||
+    filePath.includes("test-fixtures") ||
     filePath.includes("/__tests__/") ||
+    filePath.includes("/fixtures/") ||
+    filePath.includes("/test/") ||
+    filePath.includes("/tests/") ||
     filePath.includes("/coverage/") ||
     filePath.includes("/dist/") ||
     filePath.includes("/node_modules/")
