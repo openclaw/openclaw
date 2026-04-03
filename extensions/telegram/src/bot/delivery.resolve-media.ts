@@ -1,16 +1,17 @@
 import path from "node:path";
 import { GrammyError } from "grammy";
-import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
-import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { retryAsync } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  resolveTelegramApiBase,
-  shouldRetryTelegramTransportFallback,
-  type TelegramTransport,
-} from "../fetch.js";
+import type { TelegramTransport } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
+import {
+  fetchRemoteMedia,
+  formatErrorMessage,
+  logVerbose,
+  resolveTelegramApiBase,
+  retryAsync,
+  saveMediaBuffer,
+  shouldRetryTelegramTransportFallback,
+  warn,
+} from "./delivery.resolve-media.runtime.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 

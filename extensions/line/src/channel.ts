@@ -3,11 +3,12 @@ import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channe
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { type ChannelPlugin, type ResolvedLineAccount } from "../api.js";
+import { resolveLineAccount } from "./accounts.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
-import { getLineRuntime } from "./runtime.js";
+import { pushMessageLine } from "./send.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 import { lineStatusAdapter } from "./status.js";
@@ -157,12 +158,11 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       message: "OpenClaw: your access has been approved.",
       normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
       notify: async ({ cfg, id, message }) => {
-        const line = getLineRuntime().channel.line;
-        const account = line.resolveLineAccount({ cfg });
+        const account = resolveLineAccount({ cfg });
         if (!account.channelAccessToken) {
           throw new Error("LINE channel access token not configured");
         }
-        await line.pushMessageLine(id, message, {
+        await pushMessageLine(id, message, {
           accountId: account.accountId,
           channelAccessToken: account.channelAccessToken,
         });

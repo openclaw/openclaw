@@ -9,6 +9,7 @@ const acquireSessionWriteLockMock = vi.hoisted(() =>
 
 vi.mock("../session-write-lock.js", () => ({
   acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
+  resolveSessionLockMaxHoldFromTimeout: () => 1,
 }));
 
 let rewriteTranscriptEntriesInSessionFile: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionFile;
@@ -20,6 +21,7 @@ async function loadFreshTranscriptRewriteModuleForTest() {
   vi.resetModules();
   vi.doMock("../session-write-lock.js", () => ({
     acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
+    resolveSessionLockMaxHoldFromTimeout: () => 1,
   }));
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
