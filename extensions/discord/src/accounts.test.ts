@@ -1,7 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { resolveDiscordAccount, resolveDiscordMaxLinesPerMessage } from "./accounts.js";
+import {
+  createDiscordActionGate,
+  resolveDiscordAccount,
+  resolveDiscordMaxLinesPerMessage,
+} from "./accounts.js";
 
 describe("resolveDiscordAccount allowFrom precedence", () => {
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            defaultAccount: "work",
+            accounts: {
+              work: { token: "token-work", name: "Work" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.name).toBe("Work");
+    expect(resolved.token).toBe("token-work");
+  });
+
   it("prefers accounts.default.allowFrom over top-level for default account", () => {
     const resolved = resolveDiscordAccount({
       cfg: {
@@ -54,6 +77,29 @@ describe("resolveDiscordAccount allowFrom precedence", () => {
     });
 
     expect(resolved.config.allowFrom).toBeUndefined();
+  });
+});
+
+describe("createDiscordActionGate", () => {
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const gate = createDiscordActionGate({
+      cfg: {
+        channels: {
+          discord: {
+            actions: { reactions: false },
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                token: "token-work",
+                actions: { reactions: true },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(gate("reactions")).toBe(true);
   });
 });
 
