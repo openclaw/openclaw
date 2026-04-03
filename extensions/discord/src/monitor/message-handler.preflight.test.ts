@@ -529,7 +529,7 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
   });
 
-  it("allows guild messages that mention @everyone", async () => {
+  it("treats @everyone as a mention when requireMention is true", async () => {
     const channelId = "channel-everyone-mention";
     const guildId = "guild-everyone-mention";
     const message = createDiscordMessage({
@@ -548,10 +548,24 @@ describe("preflightDiscordMessage", () => {
       channelId,
       guildId,
       message,
-      discordConfig: {} as DiscordConfig,
+      discordConfig: {
+        botId: "openclaw-bot",
+      } as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              allow: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
     });
 
     expect(result).not.toBeNull();
+    expect(result?.shouldRequireMention).toBe(true);
+    expect(result?.wasMentioned).toBe(true);
   });
 
   it("accepts allowlisted guild messages when guild object is missing", async () => {
