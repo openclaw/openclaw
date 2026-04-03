@@ -4,11 +4,18 @@ import { formatLogTimestamp, registerLogsCli } from "./logs-cli.js";
 
 const callGatewayFromCli = vi.fn();
 const readConfiguredLogTail = vi.fn();
-const buildGatewayConnectionDetails = vi.fn(() => ({
-  url: "ws://127.0.0.1:18789",
-  urlSource: "local loopback",
-  message: "",
-}));
+const buildGatewayConnectionDetails = vi.fn(
+  (_options?: {
+    configPath?: string;
+    config?: unknown;
+    url?: string;
+    urlSource?: "cli" | "env";
+  }) => ({
+    url: "ws://127.0.0.1:18789",
+    urlSource: "local loopback",
+    message: "",
+  }),
+);
 
 vi.mock("../gateway/call.js", () => ({
   buildGatewayConnectionDetails: (
