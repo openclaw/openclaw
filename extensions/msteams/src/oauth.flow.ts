@@ -53,12 +53,12 @@ export function parseCallbackInput(
   try {
     const url = new URL(trimmed);
     const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state") ?? expectedState;
+    const state = url.searchParams.get("state");
     if (!code) {
       return { error: "Missing 'code' parameter in URL" };
     }
     if (!state) {
-      return { error: "Missing 'state' parameter. Paste the full URL." };
+      return { error: "Missing 'state' parameter in URL. Paste the full redirect URL." };
     }
     return { code, state };
   } catch {

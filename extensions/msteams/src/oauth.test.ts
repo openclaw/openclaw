@@ -85,6 +85,12 @@ describe("parseCallbackInput", () => {
     expect(result).toEqual({ error: "No input provided" });
   });
 
+  it("returns error when state is missing from a valid URL (CSRF protection)", () => {
+    const input = `${MSTEAMS_OAUTH_REDIRECT_URI}?code=abc123`;
+    const result = parseCallbackInput(input, expectedState);
+    expect(result).toEqual({ error: "Missing 'state' parameter in URL. Paste the full redirect URL." });
+  });
+
   it("returns error when input is not a URL and expectedState is empty", () => {
     const result = parseCallbackInput("bare-code", "");
     expect(result).toEqual({ error: "Paste the full redirect URL, not just the code." });
