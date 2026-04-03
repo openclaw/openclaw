@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Android/assistant: auto-send Google Assistant App Actions prompts once chat is healthy and idle, while keeping bare assistant launches as open-only. (#59721) Thanks @obviyus.
 - Matrix/exec approvals: add Matrix-native exec approval prompts with account-scoped approvers, channel-or-DM delivery, and room-thread aware resolution handling. (#58635) Thanks @gumadeiras.
+- Channels/context visibility: add configurable `contextVisibility` per channel (`all`, `allowlist`, `allowlist_quote`) so supplemental room context such as quoted replies, thread roots, and fetched history can be filtered by sender allowlists instead of always passing through as received.
 
 ### Fixes
 
@@ -36,6 +37,10 @@ Docs: https://docs.openclaw.ai
 - Telegram/media: keep inbound image attachments readable on upgraded installs where legacy state roots still differ from the managed config-dir media cache. (#59971) Thanks @neeravmakwana.
 - Telegram/local Bot API: thread `channels.telegram.apiRoot` through buffered reply-media and album downloads so self-hosted Bot API file paths stop falling back to `api.telegram.org` and 404ing. (#59544) Thanks @SARAMALI15792.
 - Telegram/replies: preserve explicit topic targets when `replyTo` is present while still inheriting the current topic for same-chat replies without an explicit topic. (#59634) Thanks @dashhuang.
+- MS Teams/DM images: download inline images in 1:1 DM chats via the Graph API by using the correct conversation ID format, extracting media URLs, and detecting content types properly. (#52212) Thanks @Ted-developer.
+- MS Teams/threading: preserve channel reply threading when proactive fallback reconstructs the conversation ID, so thread replies land in the originating thread instead of the channel root. (#55198) Thanks @hyojin.
+- Gateway/lock: detect PID recycling in gateway lock files on Windows and macOS so stale locks from crashed processes no longer block new gateway invocations. (#59843) Thanks @TonyDerek-dot.
+- Plugins/Ollama: prefer real cloud auth credentials over the local-only marker so Ollama instances behind authenticated proxies use the configured API key instead of skipping auth.
 
 ## 2026.4.2
 

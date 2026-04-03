@@ -176,21 +176,18 @@ OpenClaw separates two concepts:
 - **Trigger authorization**: who can trigger the agent (`dmPolicy`, `groupPolicy`, allowlists, mention gates).
 - **Context visibility**: what supplemental context is injected into model input (reply body, quoted text, thread history, forwarded metadata).
 
-In the current product, allowlists primarily gate triggers and command authorization. They are not a guaranteed universal redaction boundary for every supplemental context field on every channel.
+Allowlists gate triggers and command authorization. The `contextVisibility` setting controls how supplemental context (quoted replies, thread roots, fetched history) is filtered:
 
-Current behavior is channel-specific:
+- `contextVisibility: "all"` (default) keeps supplemental context as received.
+- `contextVisibility: "allowlist"` filters supplemental context to senders allowed by the active allowlist checks.
+- `contextVisibility: "allowlist_quote"` behaves like `allowlist`, but still keeps one explicit quoted reply.
 
-- Some channels already filter parts of supplemental context by sender allowlists.
-- Other channels still pass supplemental context through as received.
+Set `contextVisibility` per channel or per room/conversation. See [Group Chats](/channels/groups#context-visibility) for setup details.
 
 Advisory triage guidance:
 
-- Claims that only show "model can see quoted or historical text from non-allowlisted senders" are usually hardening and consistency findings, not auth or sandbox boundary bypasses by themselves.
+- Claims that only show "model can see quoted or historical text from non-allowlisted senders" are hardening findings addressable with `contextVisibility`, not auth or sandbox boundary bypasses by themselves.
 - To be security-impacting, reports still need a demonstrated trust-boundary bypass (auth, policy, sandbox, approval, or another documented boundary).
-
-Hardening direction:
-
-- OpenClaw maintainers may introduce explicit context visibility modes such as `all`, `allowlist`, and `allowlist_quote` to make this behavior intentional and configurable across channels.
 
 ## What the audit checks (high level)
 
