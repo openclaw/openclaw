@@ -38,7 +38,6 @@ import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   listImportedRuntimePluginIds,
-  resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
 let cachedBundledTelegramDir = "";
