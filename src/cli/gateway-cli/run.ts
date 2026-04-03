@@ -348,12 +348,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
   const effectiveCfg = snapshot?.valid ? snapshot.config : cfg;
-  // Default to "local" when gateway.mode is unset. Prior to v2026.3.24 the
-  // gateway started without an explicit mode; the guard added in 3.24
-  // regressed startup on Windows (and other platforms) when the config file
-  // exists but doesn't contain gateway.mode — e.g. after `openclaw onboard`
-  // writes a minimal config. (#54801)
-  const mode = effectiveCfg.gateway?.mode ?? "local";
+  const mode = effectiveCfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
       defaultRuntime.error(
