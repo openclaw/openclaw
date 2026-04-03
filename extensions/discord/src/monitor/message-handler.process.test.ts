@@ -410,6 +410,30 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).toContain("🏁");
   });
 
+  it("falls back to plain ack when status reactions are disabled", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          statusReactions: {
+            enabled: false,
+            timing: { debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getReactionEmojis()).toEqual(["👀"]);
+  });
+
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -464,6 +488,26 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
+    expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith("c1", "m1", "👀", { rest: {} });
+  });
+
+  it("removes the plain ack reaction when status reactions are disabled and removeAckAfterReply is enabled", async () => {
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          removeAckAfterReply: true,
+          statusReactions: {
+            enabled: false,
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getReactionEmojis()).toEqual(["👀"]);
     expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith("c1", "m1", "👀", { rest: {} });
   });
 });
