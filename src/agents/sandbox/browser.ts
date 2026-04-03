@@ -3,7 +3,6 @@ import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js"
 import {
   startBrowserBridgeServer,
   stopBrowserBridgeServer,
-  type BrowserBridge,
 } from "../../plugin-sdk/browser-bridge.js";
 import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
