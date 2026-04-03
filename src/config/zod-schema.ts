@@ -715,7 +715,7 @@ export const OpenClawSchema = z
                 requiredHeaders: z.array(z.string()).optional(),
                 allowUsers: z.array(z.string()).optional(),
                 authHeader: z.string().optional(),
-                authValue: z.string().optional(),
+                authValue: z.string().optional().register(sensitive),
                 unsafeAllowLoopbackProxies: z.boolean().optional(),
               })
               .strict()

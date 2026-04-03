@@ -11765,7 +11765,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "gateway.auth.trustedProxy.authValue": {
       label: "Gateway Trusted Proxy Auth Value",
       help: "Shared secret value expected in gateway.auth.trustedProxy.authHeader for trusted-proxy requests. Store securely and rotate periodically; use alongside tight trustedProxies CIDRs.",
-      tags: ["network"],
+      tags: ["security", "network"],
+      sensitive: true,
     },
     "gateway.trustedProxies": {
       label: "Gateway Trusted Proxy CIDRs",
