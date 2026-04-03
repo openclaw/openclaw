@@ -193,8 +193,14 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             cliPath: snapshot.cliPath ?? null,
             dbPath: snapshot.dbPath ?? null,
           }),
-        probeAccount: async ({ timeoutMs }) =>
-          await (await loadIMessageChannelRuntime()).probeIMessageAccount(timeoutMs),
+        probeAccount: async ({ account, timeoutMs }) =>
+          await (
+            await loadIMessageChannelRuntime()
+          ).probeIMessageAccount({
+            timeoutMs,
+            cliPath: account.config.cliPath,
+            dbPath: account.config.dbPath,
+          }),
         resolveAccountSnapshot: ({ account, runtime }) => ({
           accountId: account.accountId,
           name: account.name,

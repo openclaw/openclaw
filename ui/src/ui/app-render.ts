@@ -87,6 +87,7 @@ import {
   loadSkills,
   saveSkillApiKey,
   searchClawHub,
+  setClawHubSearchQuery,
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
@@ -1340,8 +1341,7 @@ export function renderApp(state: AppViewState) {
                 onDetailOpen: (key) => (state.skillsDetailKey = key),
                 onDetailClose: () => (state.skillsDetailKey = null),
                 onClawHubQueryChange: (query) => {
-                  state.clawhubSearchQuery = query;
-                  state.clawhubInstallMessage = null;
+                  setClawHubSearchQuery(state, query);
                   if (clawhubSearchTimer) {
                     clearTimeout(clawhubSearchTimer);
                   }

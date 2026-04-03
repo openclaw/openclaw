@@ -109,6 +109,77 @@ describe("slackPlugin actions", () => {
     });
   });
 
+  it("honors the selected Slack account during message tool discovery", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          botToken: "xoxb-root",
+          appToken: "xapp-root",
+          actions: {
+            reactions: false,
+            messages: false,
+            pins: false,
+            memberInfo: false,
+            emojiList: false,
+          },
+          capabilities: {
+            interactiveReplies: false,
+          },
+          accounts: {
+            default: {
+              botToken: "xoxb-default",
+              appToken: "xapp-default",
+              actions: {
+                reactions: false,
+                messages: false,
+                pins: false,
+                memberInfo: false,
+                emojiList: false,
+              },
+              capabilities: {
+                interactiveReplies: false,
+              },
+            },
+            work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+              actions: {
+                reactions: true,
+                messages: true,
+                pins: false,
+                memberInfo: false,
+                emojiList: false,
+              },
+              capabilities: {
+                interactiveReplies: true,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "default" })).toMatchObject(
+      {
+        actions: ["send"],
+        capabilities: ["blocks"],
+      },
+    );
+    expect(slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "work" })).toMatchObject({
+      actions: [
+        "send",
+        "react",
+        "reactions",
+        "read",
+        "edit",
+        "delete",
+        "download-file",
+        "upload-file",
+      ],
+      capabilities: expect.arrayContaining(["blocks", "interactive"]),
+    });
+  });
+
   it("keeps blocks optional in the message tool schema", () => {
     const discovery = slackPlugin.actions?.describeMessageTool({
       cfg: {

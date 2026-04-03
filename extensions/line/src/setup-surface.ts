@@ -1,7 +1,7 @@
 import {
   createAllowFromSection,
   createStandardChannelSetupStatus,
-  createTopLevelChannelDmPolicy,
+  mergeAllowFromEntries,
 } from "openclaw/plugin-sdk/setup";
 import {
   isLineConfigured,
@@ -39,13 +39,43 @@ const LINE_ALLOW_FROM_HELP_LINES = [
   `Docs: ${formatDocsLink("/channels/line", "channels/line")}`,
 ];
 
-const lineDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
+const lineDmPolicy: ChannelSetupDmPolicy = {
   label: "LINE",
   channel,
   policyKey: "channels.line.dmPolicy",
   allowFromKey: "channels.line.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.line?.dmPolicy ?? "pairing",
-});
+  resolveConfigKeys: (_cfg, accountId) =>
+    accountId && accountId !== DEFAULT_ACCOUNT_ID
+      ? {
+          policyKey: `channels.line.accounts.${accountId}.dmPolicy`,
+          allowFromKey: `channels.line.accounts.${accountId}.allowFrom`,
+        }
+      : {
+          policyKey: "channels.line.dmPolicy",
+          allowFromKey: "channels.line.allowFrom",
+        },
+  getCurrent: (cfg, accountId) =>
+    resolveLineAccount({ cfg, accountId: accountId ?? DEFAULT_ACCOUNT_ID }).config.dmPolicy ??
+    "pairing",
+  setPolicy: (cfg, policy, accountId) =>
+    patchLineAccountConfig({
+      cfg,
+      accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+      enabled: true,
+      patch:
+        policy === "open"
+          ? {
+              dmPolicy: "open",
+              allowFrom: mergeAllowFromEntries(
+                resolveLineAccount({ cfg, accountId: accountId ?? DEFAULT_ACCOUNT_ID }).config
+                  .allowFrom,
+                ["*"],
+              ),
+            }
+          : { dmPolicy: policy },
+      clearFields: policy === "pairing" || policy === "disabled" ? ["allowFrom"] : undefined,
+    }),
+};
 
 export { lineSetupAdapter } from "./setup-core.js";
 
@@ -60,8 +90,12 @@ export const lineSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 0,
     includeStatusLine: true,
-    resolveConfigured: ({ cfg }) =>
-      listLineAccountIds(cfg).some((accountId) => isLineConfigured(cfg, accountId)),
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? isLineConfigured(cfg, accountId)
+        : listLineAccountIds(cfg).some((resolvedAccountId) =>
+            isLineConfigured(cfg, resolvedAccountId),
+          ),
     resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listLineAccountIds(cfg).length || 0}`],
   }),
   introNote: {

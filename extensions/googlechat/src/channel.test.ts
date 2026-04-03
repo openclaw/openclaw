@@ -321,6 +321,31 @@ describe("googlechatPlugin outbound sendMedia", () => {
   });
 });
 
+describe("googlechatPlugin threading", () => {
+  it("honors per-account replyToMode overrides", () => {
+    const resolveReplyToMode = googlechatPlugin.threading?.resolveReplyToMode;
+    if (!resolveReplyToMode) {
+      throw new Error("Expected googlechatPlugin.threading.resolveReplyToMode to be defined");
+    }
+
+    const cfg = {
+      channels: {
+        googlechat: {
+          replyToMode: "all",
+          accounts: {
+            work: {
+              replyToMode: "first",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveReplyToMode({ cfg, accountId: "work" })).toBe("first");
+    expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
+  });
+});
+
 const resolveTarget = googlechatPlugin.outbound?.resolveTarget;
 
 describe("googlechatPlugin outbound resolveTarget", () => {

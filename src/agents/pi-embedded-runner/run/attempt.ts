@@ -101,15 +101,10 @@ import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
-import {
-  logToolSchemasForGoogle,
-  sanitizeSessionHistory,
-  sanitizeToolsForGoogle,
-  validateReplayTurns,
-} from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
+import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -125,13 +120,13 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import {
-  dropThinkingBlocks,
-  sanitizeThinkingForRecovery,
-  wrapAnthropicStreamWithRecovery,
-} from "../thinking.js";
+import { dropThinkingBlocks } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
+import {
+  logProviderToolSchemaDiagnostics,
+  normalizeProviderToolSchemas,
+} from "../tool-schema-runtime.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
@@ -220,10 +215,6 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
-function shouldEnableAnthropicThinkingRecovery(api: string | null | undefined): boolean {
-  return api === "anthropic-messages" || api === "bedrock-converse-stream";
-}
-
 export function resolveEmbeddedAgentStreamFn(params: {
   currentStreamFn: StreamFn | undefined;
   providerStreamFn?: StreamFn;
@@ -236,10 +227,9 @@ export function resolveEmbeddedAgentStreamFn(params: {
 }): StreamFn {
   if (params.providerStreamFn) {
     const inner = params.providerStreamFn;
-    // The default pi-coding-agent streamFn injects apiKey from authStorage
-    // into options via modelRegistry.getApiKeyAndHeaders(). Provider-supplied
-    // stream functions bypass that default, so we replicate the injection here
-    // so the resolved credential reaches the provider's HTTP layer.
+    // Provider-owned transports bypass pi-coding-agent's default auth lookup,
+    // so keep injecting the resolved runtime apiKey for streamSimple-compatible
+    // transports that still read credentials from options.apiKey.
     if (params.authStorage) {
       const { authStorage, model } = params;
       return async (m, context, options) => {
@@ -505,7 +495,7 @@ export async function runEmbeddedAttempt(
           return allTools;
         })();
     const toolsEnabled = supportsModelTools(params.model);
-    const tools = sanitizeToolsForGoogle({
+    const tools = normalizeProviderToolSchemas({
       tools: toolsEnabled ? toolsRaw : [],
       provider: params.provider,
       config: params.config,
@@ -553,7 +543,7 @@ export async function runEmbeddedAttempt(
       tools: effectiveTools,
       clientTools,
     });
-    logToolSchemasForGoogle({
+    logProviderToolSchemaDiagnostics({
       tools: effectiveTools,
       provider: params.provider,
       config: params.config,
@@ -1114,13 +1104,6 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      if (shouldEnableAnthropicThinkingRecovery(params.model.api)) {
-        activeSession.agent.streamFn = wrapAnthropicStreamWithRecovery(
-          activeSession.agent.streamFn,
-          { id: activeSession.sessionId },
-        );
-      }
-
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
@@ -1146,28 +1129,6 @@ export async function runEmbeddedAttempt(
       }
 
       try {
-        if (shouldEnableAnthropicThinkingRecovery(params.model.api)) {
-          const originalMessageCount = activeSession.messages.length;
-          const { messages, prefill } = sanitizeThinkingForRecovery(activeSession.messages);
-          if (messages !== activeSession.messages) {
-            activeSession.agent.replaceMessages(messages);
-          }
-          if (messages.length !== originalMessageCount) {
-            log.warn(
-              `[session-recovery] dropped latest assistant message with incomplete thinking: sessionId=${params.sessionId}`,
-            );
-          }
-          if (prefill) {
-            // Keeping the signed-thinking turn intact is a forward-compatibility
-            // signal for future prefill-style recovery; the current fallback
-            // still comes from the one-shot stream wrapper if Anthropic rejects
-            // the replayed payload.
-            log.warn(
-              `[session-recovery] keeping latest assistant message with signed thinking and incomplete text: sessionId=${params.sessionId}`,
-            );
-          }
-        }
-
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
           modelApi: params.model.api,
@@ -1761,6 +1722,7 @@ export async function runEmbeddedAttempt(
           config: params.config,
           provider: params.provider,
           modelId: params.modelId,
+          modelApi: params.model.api,
           isCacheTtlEligibleProvider,
         });
 
