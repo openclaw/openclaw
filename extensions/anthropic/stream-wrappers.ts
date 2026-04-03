@@ -1,7 +1,10 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
-import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream";
+import {
+  applyAnthropicPayloadPolicyToParams,
+  resolveAnthropicPayloadPolicy,
+  streamWithPayloadPatch,
+} from "openclaw/plugin-sdk/provider-stream";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
 const log = createSubsystemLogger("anthropic-stream");
@@ -50,20 +53,6 @@ function mergeAnthropicBetaHeader(
 
 function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
-}
-
-function allowsAnthropicServiceTier(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-}): boolean {
-  return resolveProviderRequestCapabilities({
-    provider: typeof model.provider === "string" ? model.provider : undefined,
-    api: typeof model.api === "string" ? model.api : undefined,
-    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-    capability: "llm",
-    transport: "stream",
-  }).allowsAnthropicServiceTier;
 }
 
 function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier {
@@ -161,15 +150,19 @@ export function createAnthropicFastModeWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   const serviceTier = resolveAnthropicFastServiceTier(enabled);
   return (model, context, options) => {
-    if (!allowsAnthropicServiceTier(model)) {
+    const payloadPolicy = resolveAnthropicPayloadPolicy({
+      provider: typeof model.provider === "string" ? model.provider : undefined,
+      api: typeof model.api === "string" ? model.api : undefined,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      serviceTier,
+    });
+    if (!payloadPolicy.allowsServiceTier) {
       return underlying(model, context, options);
     }
 
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      if (payloadObj.service_tier === undefined) {
-        payloadObj.service_tier = serviceTier;
-      }
-    });
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) =>
+      applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy),
+    );
   };
 }
 
@@ -179,15 +172,19 @@ export function createAnthropicServiceTierWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!allowsAnthropicServiceTier(model)) {
+    const payloadPolicy = resolveAnthropicPayloadPolicy({
+      provider: typeof model.provider === "string" ? model.provider : undefined,
+      api: typeof model.api === "string" ? model.api : undefined,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      serviceTier,
+    });
+    if (!payloadPolicy.allowsServiceTier) {
       return underlying(model, context, options);
     }
 
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      if (payloadObj.service_tier === undefined) {
-        payloadObj.service_tier = serviceTier;
-      }
-    });
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) =>
+      applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy),
+    );
   };
 }
 

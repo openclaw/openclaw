@@ -16,6 +16,13 @@ type PluginRuntimeRecord = {
   source: string;
 };
 
+type CachedPluginBoundaryLoaderParams = {
+  pluginId: string;
+  entryBaseName: string;
+  required?: boolean;
+  missingLabel?: string;
+};
+
 export function readPluginBoundaryConfigSafely() {
   try {
     return loadConfig();
@@ -39,6 +46,46 @@ export function resolvePluginRuntimeRecord(
     }
     return null;
   }
+  return {
+    ...(record.origin ? { origin: record.origin } : {}),
+    rootDir: record.rootDir,
+    source: record.source,
+  };
+}
+
+export function resolvePluginRuntimeRecordByEntryBaseNames(
+  entryBaseNames: string[],
+  onMissing?: () => never,
+): PluginRuntimeRecord | null {
+  const manifestRegistry = loadPluginManifestRegistry({
+    config: readPluginBoundaryConfigSafely(),
+    cache: true,
+  });
+  const matches = manifestRegistry.plugins.filter((plugin) => {
+    if (!plugin?.source) {
+      return false;
+    }
+    const record = {
+      rootDir: plugin.rootDir,
+      source: plugin.source,
+    };
+    return entryBaseNames.every(
+      (entryBaseName) => resolvePluginRuntimeModulePath(record, entryBaseName) !== null,
+    );
+  });
+  if (matches.length === 0) {
+    if (onMissing) {
+      onMissing();
+    }
+    return null;
+  }
+  if (matches.length > 1) {
+    const pluginIds = matches.map((plugin) => plugin.id).join(", ");
+    throw new Error(
+      `plugin runtime boundary is ambiguous for entries [${entryBaseNames.join(", ")}]: ${pluginIds}`,
+    );
+  }
+  const record = matches[0];
   return {
     ...(record.origin ? { origin: record.origin } : {}),
     rootDir: record.rootDir,
@@ -103,4 +150,48 @@ export function loadPluginBoundaryModuleWithJiti<TModule>(
   loaders: Map<boolean, ReturnType<typeof createJiti>>,
 ): TModule {
   return getPluginBoundaryJiti(modulePath, loaders)(modulePath) as TModule;
+}
+
+export function createCachedPluginBoundaryModuleLoader<TModule>(
+  params: CachedPluginBoundaryLoaderParams,
+): () => TModule | null {
+  let cachedModulePath: string | null = null;
+  let cachedModule: TModule | null = null;
+  const loaders = new Map<boolean, ReturnType<typeof createJiti>>();
+
+  return () => {
+    const missingLabel = params.missingLabel ?? `${params.pluginId} plugin runtime`;
+    const record = resolvePluginRuntimeRecord(
+      params.pluginId,
+      params.required
+        ? () => {
+            throw new Error(`${missingLabel} is unavailable: missing plugin '${params.pluginId}'`);
+          }
+        : undefined,
+    );
+    if (!record) {
+      return null;
+    }
+    const modulePath = resolvePluginRuntimeModulePath(
+      record,
+      params.entryBaseName,
+      params.required
+        ? () => {
+            throw new Error(
+              `${missingLabel} is unavailable: missing ${params.entryBaseName} for plugin '${params.pluginId}'`,
+            );
+          }
+        : undefined,
+    );
+    if (!modulePath) {
+      return null;
+    }
+    if (cachedModule && cachedModulePath === modulePath) {
+      return cachedModule;
+    }
+    const loaded = loadPluginBoundaryModuleWithJiti<TModule>(modulePath, loaders);
+    cachedModulePath = modulePath;
+    cachedModule = loaded;
+    return loaded;
+  };
 }

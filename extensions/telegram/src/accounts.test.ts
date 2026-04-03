@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
+import { withEnv } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../../../test/helpers/plugins/env.js";
 import {
+  createTelegramActionGate,
   listTelegramAccountIds,
   resolveTelegramMediaRuntimeOptions,
   resetMissingDefaultWarnFlag,
@@ -332,6 +333,28 @@ describe("resolveTelegramPollActionGateState", () => {
       pollEnabled: true,
       enabled: true,
     });
+  });
+
+  it("uses configured defaultAccount when telegram action gate accountId is omitted", () => {
+    const gate = createTelegramActionGate({
+      cfg: {
+        channels: {
+          telegram: {
+            actions: { sendMessage: false, poll: false },
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                botToken: "123:work",
+                actions: { sendMessage: true, poll: true },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(gate("sendMessage")).toBe(true);
+    expect(gate("poll")).toBe(true);
   });
 });
 

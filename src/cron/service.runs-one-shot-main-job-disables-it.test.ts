@@ -59,8 +59,8 @@ async function makeStorePath() {
   return { storePath, cleanup: async () => {} };
 }
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const pathMod = await import("node:path");
   const absInMock = (p: string) => pathMod.resolve(p);
   const isFixtureInMock = (p: string) => {
@@ -155,8 +155,8 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...wrapped, default: wrapped };
 });
 
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   const wrapped = {
     ...actual,
     mkdir: async (p: string, _opts?: unknown) => {

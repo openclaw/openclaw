@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { cleanStaleMatrixPluginConfig } from "../commands/doctor/providers/matrix.js";
+import { collectChannelDoctorStaleConfigMutations } from "../commands/doctor/shared/channel-doctor.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, readConfigFileSnapshot } from "../config/config.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
@@ -174,9 +174,17 @@ async function tryInstallHookPackFromNpmSpec(params: {
   return { ok: true };
 }
 
-function isAllowedMatrixRecoveryIssue(issue: { path?: string; message?: string }): boolean {
+function isAllowedBundledRecoveryIssue(
+  issue: { path?: string; message?: string },
+  request: PluginInstallRequestContext,
+): boolean {
+  const pluginId = request.bundledPluginId?.trim();
+  if (!pluginId) {
+    return false;
+  }
   return (
-    (issue.path === "channels.matrix" && issue.message === "unknown channel id: matrix") ||
+    (issue.path === `channels.${pluginId}` &&
+      issue.message === `unknown channel id: ${pluginId}`) ||
     (issue.path === "plugins.load.paths" &&
       typeof issue.message === "string" &&
       issue.message.includes("plugin path not found"))
@@ -192,7 +200,7 @@ function buildInvalidPluginInstallConfigError(message: string): Error {
 async function loadConfigFromSnapshotForInstall(
   request: PluginInstallRequestContext,
 ): Promise<OpenClawConfig> {
-  if (resolvePluginInstallInvalidConfigPolicy(request) !== "recover-matrix-only") {
+  if (resolvePluginInstallInvalidConfigPolicy(request) !== "allow-bundled-recovery") {
     throw buildInvalidPluginInstallConfigError(
       "Config invalid; run `openclaw doctor --fix` before installing plugins.",
     );
@@ -207,14 +215,18 @@ async function loadConfigFromSnapshotForInstall(
   if (
     snapshot.legacyIssues.length > 0 ||
     snapshot.issues.length === 0 ||
-    snapshot.issues.some((issue) => !isAllowedMatrixRecoveryIssue(issue))
+    snapshot.issues.some((issue) => !isAllowedBundledRecoveryIssue(issue, request))
   ) {
+    const pluginLabel = request.bundledPluginId ?? "the requested plugin";
     throw buildInvalidPluginInstallConfigError(
-      "Config invalid outside the Matrix upgrade recovery path; run `openclaw doctor --fix` before reinstalling Matrix.",
+      `Config invalid outside the bundled recovery path for ${pluginLabel}; run \`openclaw doctor --fix\` before reinstalling it.`,
     );
   }
-  const cleaned = await cleanStaleMatrixPluginConfig(snapshot.config);
-  return cleaned.config;
+  let nextConfig = snapshot.config;
+  for (const mutation of await collectChannelDoctorStaleConfigMutations(snapshot.config)) {
+    nextConfig = mutation.config;
+  }
+  return nextConfig;
 }
 
 export async function loadConfigForInstall(

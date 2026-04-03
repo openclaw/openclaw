@@ -136,7 +136,7 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("accepts model provider request secret refs for auth and headers", () => {
+  it("accepts model provider request secret refs for auth, headers, and tls material", () => {
     const result = validateConfigObjectRaw({
       models: {
         providers: {
@@ -150,6 +150,17 @@ describe("config secret refs schema", () => {
                 mode: "authorization-bearer",
                 token: { source: "env", provider: "default", id: "OPENAI_PROVIDER_TOKEN" },
               },
+              proxy: {
+                mode: "explicit-proxy",
+                url: "http://proxy.example:8080",
+                tls: {
+                  ca: { source: "file", provider: "filemain", id: "/tls/provider-proxy-ca" },
+                },
+              },
+              tls: {
+                cert: { source: "file", provider: "filemain", id: "/tls/provider-cert" },
+                key: { source: "file", provider: "filemain", id: "/tls/provider-key" },
+              },
             },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
@@ -160,7 +171,7 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("rejects model provider request proxy and tls overrides", () => {
+  it("rejects model provider request proxy url secret refs", () => {
     const result = validateConfigObjectRaw({
       models: {
         providers: {
@@ -169,10 +180,7 @@ describe("config secret refs schema", () => {
             request: {
               proxy: {
                 mode: "explicit-proxy",
-                url: "http://proxy.example:8080",
-              },
-              tls: {
-                cert: { source: "file", provider: "filemain", id: "/tls/provider-cert" },
+                url: { source: "env", provider: "default", id: "PROVIDER_PROXY_URL" },
               },
             },
             models: [{ id: "gpt-5", name: "gpt-5" }],
@@ -184,7 +192,7 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(
-        result.issues.some((issue) => issue.path.includes("models.providers.openai.request")),
+        result.issues.some((issue) => issue.path.includes("models.providers.openai.request.proxy")),
       ).toBe(true);
     }
   });

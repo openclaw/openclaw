@@ -33,11 +33,10 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "self-hosted chat",
     configuredScore: 1,
     unconfiguredScore: 5,
-    resolveConfigured: ({ cfg }) =>
-      listNextcloudTalkAccountIds(cfg as CoreConfig).some((accountId) => {
-        const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
-        return Boolean(account.secret && account.baseUrl);
-      }),
+    resolveConfigured: ({ cfg, accountId }) => {
+      const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
+      return Boolean(account.secret && account.baseUrl);
+    },
   }),
   introNote: {
     title: "Nextcloud Talk bot setup",

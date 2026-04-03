@@ -39,8 +39,8 @@ describe("doctor preview warnings", () => {
     vi.restoreAllMocks();
   });
 
-  it("collects provider and shared preview warnings", () => {
-    const warnings = collectDoctorPreviewWarnings({
+  it("collects provider and shared preview warnings", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         channels: {
           telegram: {
@@ -60,8 +60,8 @@ describe("doctor preview warnings", () => {
     ]);
   });
 
-  it("sanitizes empty-allowlist warning paths before returning preview output", () => {
-    const warnings = collectDoctorPreviewWarnings({
+  it("sanitizes empty-allowlist warning paths before returning preview output", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         channels: {
           signal: {
@@ -83,8 +83,8 @@ describe("doctor preview warnings", () => {
     expect(warnings[0]).not.toContain("\r");
   });
 
-  it("includes stale plugin config warnings", () => {
-    const warnings = collectDoctorPreviewWarnings({
+  it("includes stale plugin config warnings", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         plugins: {
           allow: ["acpx"],
@@ -104,7 +104,7 @@ describe("doctor preview warnings", () => {
     expect(warnings[0]).not.toContain("Auto-removal is paused");
   });
 
-  it("includes bundled plugin load path migration warnings", () => {
+  it("includes bundled plugin load path migration warnings", async () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
     const legacyPath = path.join(packageRoot, "extensions", "feishu");
     const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
@@ -125,7 +125,7 @@ describe("doctor preview warnings", () => {
       ]),
     );
 
-    const warnings = collectDoctorPreviewWarnings({
+    const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         plugins: {
           load: {
@@ -142,7 +142,7 @@ describe("doctor preview warnings", () => {
     expect(warnings[0]).toContain('Run "openclaw doctor --fix"');
   });
 
-  it("warns but skips auto-removal when plugin discovery has errors", () => {
+  it("warns but skips auto-removal when plugin discovery has errors", async () => {
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
       plugins: [],
       diagnostics: [
@@ -150,7 +150,7 @@ describe("doctor preview warnings", () => {
       ],
     });
 
-    const warnings = collectDoctorPreviewWarnings({
+    const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         plugins: {
           allow: ["acpx"],
@@ -169,13 +169,13 @@ describe("doctor preview warnings", () => {
     expect(warnings[0]).toContain('rerun "openclaw doctor --fix"');
   });
 
-  it("warns when a configured channel plugin is disabled explicitly", () => {
+  it("warns when a configured channel plugin is disabled explicitly", async () => {
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
       plugins: [channelManifest("telegram", "telegram")],
       diagnostics: [],
     });
 
-    const warnings = collectDoctorPreviewWarnings({
+    const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         channels: {
           telegram: {
@@ -202,13 +202,13 @@ describe("doctor preview warnings", () => {
     expect(warnings[0]).not.toContain("first-time setup mode");
   });
 
-  it("warns when channel plugins are blocked globally", () => {
+  it("warns when channel plugins are blocked globally", async () => {
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
       plugins: [channelManifest("telegram", "telegram")],
       diagnostics: [],
     });
 
-    const warnings = collectDoctorPreviewWarnings({
+    const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         channels: {
           telegram: {

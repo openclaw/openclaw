@@ -11,7 +11,6 @@ import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-h
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { performGatewaySessionReset } from "./session-reset-service.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   connectOk,
@@ -105,8 +104,10 @@ vi.mock("../auto-reply/reply/abort.js", async () => {
   };
 });
 
-vi.mock("../agents/bootstrap-cache.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/bootstrap-cache.js")>();
+vi.mock("../agents/bootstrap-cache.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/bootstrap-cache.js")>(
+    "../agents/bootstrap-cache.js",
+  );
   return {
     ...actual,
     clearBootstrapSnapshot: bootstrapCacheMocks.clearBootstrapSnapshot,
@@ -124,8 +125,10 @@ vi.mock("../hooks/internal-hooks.js", async () => {
   };
 });
 
-vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/hook-runner-global.js")>();
+vi.mock("../plugins/hook-runner-global.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
+    "../plugins/hook-runner-global.js",
+  );
   return {
     ...actual,
     getGlobalHookRunner: vi.fn(() => ({
@@ -142,26 +145,24 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/runtime/runtime-discord.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/runtime/runtime-discord.js")>();
+vi.mock("../infra/outbound/session-binding-service.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../infra/outbound/session-binding-service.js")
+  >("../infra/outbound/session-binding-service.js");
   return {
     ...actual,
-    createRuntimeDiscord: () => {
-      const runtime = actual.createRuntimeDiscord();
-      return {
-        ...runtime,
-        threadBindings: {
-          ...runtime.threadBindings,
-          unbindBySessionKey: (params: unknown) =>
-            threadBindingMocks.unbindThreadBindingsBySessionKey(params),
-        },
-      };
-    },
+    getSessionBindingService: () => ({
+      ...actual.getSessionBindingService(),
+      unbind: async (params: unknown) =>
+        threadBindingMocks.unbindThreadBindingsBySessionKey(params),
+    }),
   };
 });
 
-vi.mock("../acp/runtime/registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../acp/runtime/registry.js")>();
+vi.mock("../acp/runtime/registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../acp/runtime/registry.js")>(
+    "../acp/runtime/registry.js",
+  );
   return {
     ...actual,
     getAcpRuntimeBackend: acpRuntimeMocks.getAcpRuntimeBackend,
@@ -1862,9 +1863,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:discord:group:dev",
-      targetKind: "acp",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2022,9 +2021,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2053,9 +2050,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2083,9 +2078,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2140,9 +2133,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:main",
-      targetKind: "acp",
       reason: "session-reset",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2308,9 +2299,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-reset",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2338,9 +2327,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:main",
-      targetKind: "acp",
       reason: "session-reset",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2580,7 +2567,10 @@ describe("gateway server sessions", () => {
       key: "main",
     }).storePath;
 
-    let pendingReset: ReturnType<typeof performGatewaySessionReset> | undefined;
+    let pendingReset:
+      | ReturnType<(typeof import("./session-reset-service.js"))["performGatewaySessionReset"]>
+      | undefined;
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
     await withSessionStoreLockForTest(gatewayStorePath, async () => {
       pendingReset = performGatewaySessionReset({
         key: "main",

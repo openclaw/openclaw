@@ -15,7 +15,7 @@ import { registerPluginCommand, validatePluginCommandDefinition } from "./comman
 import type { PluginActivationSource } from "./config-state.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
-import { registerPluginInteractiveHandler } from "./interactive.js";
+import { registerPluginInteractiveHandler } from "./interactive-registry.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider,
@@ -205,6 +205,8 @@ export type PluginRecord = {
   activationReason?: string;
   status: "loaded" | "disabled" | "error";
   error?: string;
+  failedAt?: Date;
+  failurePhase?: "validation" | "load" | "register";
   toolNames: string[];
   hookNames: string[];
   channelIds: string[];

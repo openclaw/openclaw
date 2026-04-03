@@ -21,10 +21,16 @@ vi.mock("../../plugin-sdk/facade-runtime.js", () => ({
       : null,
 }));
 
-vi.mock("../../plugins/bundled-plugin-metadata.js", () => ({
-  resolveBundledPluginPublicSurfacePath: ({ dirName }: { dirName: string }) =>
-    dirName === fallbackState.activeDirName ? `/tmp/${dirName}/session-key-api.js` : null,
-}));
+vi.mock("../../plugins/bundled-plugin-metadata.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/bundled-plugin-metadata.js")>(
+    "../../plugins/bundled-plugin-metadata.js",
+  );
+  return {
+    ...actual,
+    resolveBundledPluginPublicSurfacePath: ({ dirName }: { dirName: string }) =>
+      dirName === fallbackState.activeDirName ? `/tmp/${dirName}/session-key-api.js` : null,
+  };
+});
 
 import { resolveSessionConversationRef } from "./session-conversation.js";
 

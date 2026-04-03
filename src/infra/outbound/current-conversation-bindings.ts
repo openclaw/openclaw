@@ -22,7 +22,6 @@ type PersistedCurrentConversationBindingsFile = {
 
 const CURRENT_BINDINGS_FILE_VERSION = 1;
 const CURRENT_BINDINGS_ID_PREFIX = "generic:";
-const FALLBACK_CURRENT_CONVERSATION_BINDING_CHANNELS = new Set(["slack"]);
 
 let bindingsLoaded = false;
 let persistPromise: Promise<void> = Promise.resolve();
@@ -136,10 +135,7 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   if (plugin?.conversationBindings?.supportsCurrentConversationBinding === true) {
     return true;
   }
-  // Slack live/gateway tests intentionally skip channel startup, so there is no
-  // active runtime plugin snapshot even though the generic current-conversation
-  // path is still expected to work.
-  return FALLBACK_CURRENT_CONVERSATION_BINDING_CHANNELS.has(normalized);
+  return false;
 }
 
 export function getGenericCurrentConversationBindingCapabilities(params: {

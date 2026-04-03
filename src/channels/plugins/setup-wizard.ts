@@ -26,17 +26,23 @@ export type ChannelSetupWizardStatus = {
   unconfiguredHint?: string;
   configuredScore?: number;
   unconfiguredScore?: number;
-  resolveConfigured: (params: { cfg: OpenClawConfig }) => boolean | Promise<boolean>;
+  resolveConfigured: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+  }) => boolean | Promise<boolean>;
   resolveStatusLines?: (params: {
     cfg: OpenClawConfig;
+    accountId?: string;
     configured: boolean;
   }) => string[] | Promise<string[]>;
   resolveSelectionHint?: (params: {
     cfg: OpenClawConfig;
+    accountId?: string;
     configured: boolean;
   }) => string | undefined | Promise<string | undefined>;
   resolveQuickstartScore?: (params: {
     cfg: OpenClawConfig;
+    accountId?: string;
     configured: boolean;
   }) => number | undefined | Promise<number | undefined>;
 };
@@ -283,9 +289,11 @@ async function buildStatus(
   wizard: ChannelSetupWizard,
   ctx: ChannelSetupStatusContext,
 ): Promise<ChannelSetupStatus> {
-  const configured = await wizard.status.resolveConfigured({ cfg: ctx.cfg });
+  const accountId = ctx.accountOverrides[plugin.id];
+  const configured = await wizard.status.resolveConfigured({ cfg: ctx.cfg, accountId });
   const statusLines = (await wizard.status.resolveStatusLines?.({
     cfg: ctx.cfg,
+    accountId,
     configured,
   })) ?? [
     `${plugin.meta.label}: ${configured ? wizard.status.configuredLabel : wizard.status.unconfiguredLabel}`,
@@ -293,11 +301,13 @@ async function buildStatus(
   const selectionHint =
     (await wizard.status.resolveSelectionHint?.({
       cfg: ctx.cfg,
+      accountId,
       configured,
     })) ?? (configured ? wizard.status.configuredHint : wizard.status.unconfiguredHint);
   const quickstartScore =
     (await wizard.status.resolveQuickstartScore?.({
       cfg: ctx.cfg,
+      accountId,
       configured,
     })) ?? (configured ? wizard.status.configuredScore : wizard.status.unconfiguredScore);
   return {

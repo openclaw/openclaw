@@ -32,7 +32,7 @@ export function applyLegacyCompatibilityStep(params: {
           ? params.state.fixHints
           : [
               ...params.state.fixHints,
-              `Run "${params.doctorFixCommand}" to apply compatibility migrations.`,
+              `Run "${params.doctorFixCommand}" to migrate legacy config keys.`,
             ],
       },
       issueLines,
@@ -49,7 +49,7 @@ export function applyLegacyCompatibilityStep(params: {
         ? params.state.fixHints
         : [
             ...params.state.fixHints,
-            `Run "${params.doctorFixCommand}" to apply compatibility migrations.`,
+            `Run "${params.doctorFixCommand}" to migrate legacy config keys.`,
           ],
     },
     issueLines,

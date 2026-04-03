@@ -1,27 +1,14 @@
-import type {
-  InlineKeyboardButton,
-  InlineKeyboardMarkup,
-  ReactionType,
-  ReactionTypeEmoji,
-} from "@grammyjs/types";
+import type { ReactionType, ReactionTypeEmoji } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import * as grammy from "grammy";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
-import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
-import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
-import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
@@ -29,6 +16,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
+import { buildInlineKeyboard } from "./inline-keyboard.js";
 import {
   isRecoverableTelegramNetworkError,
   isTelegramRateLimitError,
@@ -37,6 +25,18 @@ import {
 } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 import { makeProxyFetch } from "./proxy.js";
+import {
+  buildOutboundMediaLoadOptions,
+  getImageMetadata,
+  isGifMedia,
+  kindFromMime,
+  loadConfig,
+  loadWebMedia,
+  normalizePollInput,
+  type PollInput,
+  type MediaKind,
+  resolveMarkdownTableMode,
+} from "./send.runtime.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import {
@@ -45,6 +45,8 @@ import {
   parseTelegramTarget,
 } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
+
+export { buildInlineKeyboard } from "./inline-keyboard.js";
 
 type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
@@ -610,31 +612,6 @@ function createTelegramNonIdempotentRequestWithDiag(params: {
     shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
     strictShouldRetry: true,
   });
-}
-
-export function buildInlineKeyboard(
-  buttons?: TelegramSendOpts["buttons"],
-): InlineKeyboardMarkup | undefined {
-  if (!buttons?.length) {
-    return undefined;
-  }
-  const rows = buttons
-    .map((row) =>
-      row
-        .filter((button) => button?.text && button?.callback_data)
-        .map(
-          (button): InlineKeyboardButton => ({
-            text: button.text,
-            callback_data: button.callback_data,
-            ...(button.style ? { style: button.style } : {}),
-          }),
-        ),
-    )
-    .filter((row) => row.length > 0);
-  if (rows.length === 0) {
-    return undefined;
-  }
-  return { inline_keyboard: rows };
 }
 
 export async function sendMessageTelegram(

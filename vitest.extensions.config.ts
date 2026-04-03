@@ -1,4 +1,4 @@
-import { BUNDLED_PLUGIN_TEST_GLOB } from "./scripts/lib/bundled-plugin-paths.mjs";
+import { BUNDLED_PLUGIN_TEST_GLOB } from "./vitest.bundled-plugin-paths.ts";
 import { extensionExcludedChannelTestGlobs } from "./vitest.channel-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
@@ -17,8 +17,8 @@ export function createExtensionsVitestConfig(
     env,
     passWithNoTests: true,
     setupFiles: ["test/setup.extensions.ts"],
-    // Most channel implementations stay on the channel surface, but a few
-    // transport-only suites live better in the general extensions lane.
+    // Some bundled plugins still run on the channel surface; keep those roots
+    // out of the shared extensions lane.
     exclude: extensionExcludedChannelTestGlobs,
   });
 }

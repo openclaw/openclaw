@@ -12,7 +12,6 @@ import {
   sanitizeTextContent,
   stripToolMessages,
 } from "../../../agents/tools/sessions-helpers.js";
-import { parseExplicitTargetForChannel } from "../../../channels/plugins/target-parsing.js";
 import type {
   SessionEntry,
   loadSessionStore as loadSessionStoreFn,
@@ -29,14 +28,7 @@ import {
   formatTokenUsageDisplay,
   truncateLine,
 } from "../../../shared/subagents-format.js";
-import {
-  isDiscordSurface,
-  isMatrixSurface,
-  isTelegramSurface,
-  resolveCommandSurfaceChannel,
-  resolveDiscordAccountId,
-  resolveChannelAccountId,
-} from "../channel-context.js";
+import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   formatRunLabel,
@@ -44,18 +36,9 @@ import {
   resolveSubagentTargetFromRuns,
   type SubagentTargetResolution,
 } from "../subagents-utils.js";
-import { resolveTelegramConversationId } from "../telegram-context.js";
 
 export { extractAssistantText, stripToolMessages };
-export {
-  isDiscordSurface,
-  isMatrixSurface,
-  isTelegramSurface,
-  resolveCommandSurfaceChannel,
-  resolveDiscordAccountId,
-  resolveChannelAccountId,
-  resolveTelegramConversationId,
-};
+export { resolveCommandSurfaceChannel, resolveChannelAccountId };
 
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";
@@ -307,23 +290,6 @@ export type FocusTargetResolution = {
   agentId: string;
   label?: string;
 };
-
-export function resolveDiscordChannelIdForFocus(
-  params: SubagentsCommandParams,
-): string | undefined {
-  const toCandidates = [
-    typeof params.ctx.OriginatingTo === "string" ? params.ctx.OriginatingTo.trim() : "",
-    typeof params.command.to === "string" ? params.command.to.trim() : "",
-    typeof params.ctx.To === "string" ? params.ctx.To.trim() : "",
-  ].filter(Boolean);
-  for (const candidate of toCandidates) {
-    const target = parseExplicitTargetForChannel("discord", candidate);
-    if (target?.chatType === "channel" && target.to) {
-      return target.to;
-    }
-  }
-  return undefined;
-}
 
 export async function resolveFocusTargetSession(params: {
   runs: SubagentRunRecord[];

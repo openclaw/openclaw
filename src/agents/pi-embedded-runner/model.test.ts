@@ -232,22 +232,27 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].headers).toEqual({ "X-Tenant": "acme" });
   });
 
-  it("rejects inline provider transport overrides that the llm model path cannot carry", () => {
-    expect(() =>
-      buildInlineProviderModels({
-        proxy: {
-          baseUrl: "https://proxy.example.com/v1",
-          api: "openai-completions",
-          request: {
-            proxy: {
-              mode: "explicit-proxy",
-              url: "http://proxy.internal:8443",
-            },
+  it("keeps inline provider transport overrides once the llm transport adapter is available", () => {
+    const result = buildInlineProviderModels({
+      proxy: {
+        baseUrl: "https://proxy.example.com/v1",
+        api: "openai-completions",
+        request: {
+          proxy: {
+            mode: "explicit-proxy",
+            url: "http://proxy.internal:8443",
           },
-          models: [makeModel("proxy-model")],
         },
-      } as unknown as Parameters<typeof buildInlineProviderModels>[0]),
-    ).toThrow(/models\.providers\.\*\.request only supports headers and auth overrides/i);
+        models: [makeModel("proxy-model")],
+      },
+    } as unknown as Parameters<typeof buildInlineProviderModels>[0]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      provider: "proxy",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
+    });
   });
 
   it("omits headers when neither provider nor model specifies them", () => {
@@ -987,6 +992,17 @@ describe("resolveModel", () => {
     );
   });
 
+  it("resolves github-copilot Claude dynamic models to anthropic-messages by default", () => {
+    const result = resolveModelForTest("github-copilot", "claude-sonnet-4.6", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "github-copilot",
+      id: "claude-sonnet-4.6",
+      api: "anthropic-messages",
+    });
+  });
+
   it("builds an openai fallback for gpt-5.4 mini from the gpt-5-mini template", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",
@@ -1142,6 +1158,7 @@ describe("resolveModel", () => {
       runtimeHooks: {
         applyProviderResolvedModelCompatWithPlugins: () => undefined,
         buildProviderUnknownModelHintWithPlugin: () => undefined,
+        clearProviderRuntimeHookCache: () => {},
         prepareProviderDynamicModel: async () => {},
         runProviderDynamicModel: () => undefined,
         applyProviderResolvedTransportWithPlugin: ({ provider, context }) =>
