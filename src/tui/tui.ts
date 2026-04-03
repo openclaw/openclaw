@@ -96,6 +96,31 @@ export function resolveInitialTuiAgentId(params: {
   return normalizeAgentId(params.fallbackAgentId);
 }
 
+function isMouseSgrSequence(data: string): boolean {
+  return /^\x1b\[<\d+;\d+;\d+[Mm]$/.test(data);
+}
+
+export function parseMouseWheelEvent(data: string): { direction: "up" | "down"; row: number; col: number } | null {
+  const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
+  if (!match) {
+    return null;
+  }
+  const code = Number.parseInt(match[1] ?? "", 10);
+  const col = Number.parseInt(match[2] ?? "", 10);
+  const row = Number.parseInt(match[3] ?? "", 10);
+  if (!Number.isFinite(code) || !Number.isFinite(col) || !Number.isFinite(row)) {
+    return null;
+  }
+  const baseCode = code & ~4 & ~8 & ~16;
+  if (baseCode === 64) {
+    return { direction: "up", row, col };
+  }
+  if (baseCode === 65) {
+    return { direction: "down", row, col };
+  }
+  return null;
+}
+
 export function resolveGatewayDisconnectState(reason?: string): {
   connectionStatus: string;
   activityStatus: string;
@@ -404,6 +429,26 @@ export async function runTui(opts: TuiOptions) {
   const tui = new TUI(new ProcessTerminal());
   const dedupeBackspace = createBackspaceDeduper();
   tui.addInputListener((data) => {
+    if (!isMouseSgrSequence(data)) {
+      return undefined;
+    }
+    const mouse = parseMouseWheelEvent(data);
+    if (!mouse || tui.hasOverlay()) {
+      return { consume: true };
+    }
+    if (mouse.row < chatViewportTop || mouse.row > chatViewportBottom) {
+      return { consume: true };
+    }
+    if (mouse.direction === "up") {
+      chatLog.scrollLines(3);
+    } else {
+      chatLog.scrollLines(-3);
+    }
+    tui.requestRender();
+    return { consume: true };
+  });
+
+  tui.addInputListener((data) => {
     const next = dedupeBackspace(data);
     if (next.length === 0) {
       return { consume: true };
@@ -415,12 +460,24 @@ export async function runTui(opts: TuiOptions) {
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
   const editor = new CustomEditor(tui, editorTheme);
-  const root = new Container();
-  root.addChild(header);
-  root.addChild(chatLog);
-  root.addChild(statusContainer);
-  root.addChild(footer);
-  root.addChild(editor);
+  let chatViewportTop = 1;
+  let chatViewportBottom = 1;
+  const root = new (class extends Container {
+    override render(width: number) {
+      const headerLines = header.render(width);
+      const statusLines = statusContainer.render(width);
+      const footerLines = footer.render(width);
+      const editorLines = editor.render(width);
+      const reserved =
+        headerLines.length + statusLines.length + footerLines.length + editorLines.length;
+      const available = Math.max(1, tui.terminal.rows - reserved);
+      chatLog.setViewportHeight(available);
+      const chatLines = chatLog.render(width);
+      chatViewportTop = headerLines.length + 1;
+      chatViewportBottom = chatViewportTop + Math.max(chatLines.length, 1) - 1;
+      return [...headerLines, ...chatLines, ...statusLines, ...footerLines, ...editorLines];
+    }
+  })();
 
   const updateAutocompleteProvider = () => {
     editor.setAutocompleteProvider(
@@ -437,6 +494,14 @@ export async function runTui(opts: TuiOptions) {
 
   tui.addChild(root);
   tui.setFocus(editor);
+  editor.onPageUp = () => {
+    chatLog.scrollPageUp();
+    tui.requestRender();
+  };
+  editor.onPageDown = () => {
+    chatLog.scrollPageDown();
+    tui.requestRender();
+  };
 
   const formatSessionKey = (key: string) => {
     if (key === "global" || key === "unknown") {
@@ -733,6 +798,7 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
     exitRequested = true;
+    tui.terminal.write("\x1b[?1000l\x1b[?1002l\x1b[?1006l");
     client.stop();
     stopTuiSafely(() => tui.stop());
     process.exit(0);
@@ -916,6 +982,7 @@ export async function runTui(opts: TuiOptions) {
   process.on("SIGINT", sigintHandler);
   process.on("SIGTERM", sigtermHandler);
   tui.start();
+  tui.terminal.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
   client.start();
   await new Promise<void>((resolve) => {
     const finish = () => {

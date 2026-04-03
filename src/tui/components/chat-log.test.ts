@@ -89,4 +89,25 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("BTW: what is 17 * 19?");
     expect(chatLog.hasVisibleBtw()).toBe(false);
   });
+
+  it("supports paging back through transcript history", () => {
+    const chatLog = new ChatLog(80);
+    for (let i = 1; i <= 12; i++) {
+      chatLog.addSystem(`system-${i}`);
+    }
+    chatLog.setViewportHeight(6);
+
+    let rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("system-12");
+    expect(rendered).not.toContain("system-7");
+
+    chatLog.scrollPageUp();
+    rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("system-7");
+    expect(rendered).not.toContain("system-12");
+
+    chatLog.scrollToLatest();
+    rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("system-12");
+  });
 });

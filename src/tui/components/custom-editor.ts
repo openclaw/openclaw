@@ -11,6 +11,8 @@ export class CustomEditor extends Editor {
   onCtrlT?: () => void;
   onShiftTab?: () => void;
   onAltEnter?: () => void;
+  onPageUp?: () => void;
+  onPageDown?: () => void;
 
   handleInput(data: string): void {
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
@@ -35,6 +37,14 @@ export class CustomEditor extends Editor {
     }
     if (matchesKey(data, Key.ctrl("t")) && this.onCtrlT) {
       this.onCtrlT();
+      return;
+    }
+    if (matchesKey(data, Key.pageUp) && this.onPageUp) {
+      this.onPageUp();
+      return;
+    }
+    if (matchesKey(data, Key.pageDown) && this.onPageDown) {
+      this.onPageDown();
       return;
     }
     if (matchesKey(data, Key.shift("tab")) && this.onShiftTab) {

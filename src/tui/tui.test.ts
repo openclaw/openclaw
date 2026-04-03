@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseMouseWheelEvent } from "./tui.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
@@ -260,5 +261,20 @@ describe("TUI shutdown safety", () => {
         throw new Error("boom");
       });
     }).toThrow("boom");
+  });
+});
+
+
+describe("parseMouseWheelEvent", () => {
+  it("parses wheel up sgr mouse sequences", () => {
+    expect(parseMouseWheelEvent("\x1b[<64;20;5M")).toEqual({ direction: "up", col: 20, row: 5 });
+  });
+
+  it("parses wheel down sgr mouse sequences with modifiers", () => {
+    expect(parseMouseWheelEvent("\x1b[<69;7;11M")).toEqual({ direction: "down", col: 7, row: 11 });
+  });
+
+  it("ignores non-wheel mouse sequences", () => {
+    expect(parseMouseWheelEvent("\x1b[<0;20;5M")).toBeNull();
   });
 });
