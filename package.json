@@ -1197,7 +1197,7 @@
     "test:perf:profile:main": "node scripts/run-vitest-profile.mjs main",
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
     "test:perf:update-memory-hotspots": "node scripts/test-update-memory-hotspots.mjs",
-    "test:perf:update-memory-hotspots:extensions": "node scripts/test-update-memory-hotspots.mjs --config vitest.extensions.config.ts --out test/fixtures/test-memory-hotspots.extensions.json --lane extensions --lane-prefix extensions-batch-",
+    "test:perf:update-memory-hotspots:extensions": "node scripts/test-update-memory-hotspots.mjs --config vitest.extensions.config.ts --out test/fixtures/test-memory-hotspots.extensions.json --lane extensions --lane-prefix extensions-batch- --min-delta-kb 1048576",
     "test:perf:update-timings": "node scripts/test-update-timings.mjs",
     "test:perf:update-timings:extensions": "node scripts/test-update-timings.mjs --config vitest.extensions.config.ts",
     "test:sectriage": "pnpm exec vitest run --config vitest.gateway.config.ts && vitest run --config vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
