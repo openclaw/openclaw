@@ -146,6 +146,13 @@ function isNonRecoverableFeishuError(err: unknown): boolean {
 }
 
 /**
+ * How many consecutive stable poll ticks (lastConnectTime non-zero and
+ * unchanged, no stall detected) we require before declaring the SDK
+ * "confirmed connected". Two ticks ≈ 20 s of observed liveness.
+ */
+const FEISHU_WS_STABLE_TICKS_REQUIRED = 2;
+
+/**
  * Start a Lark `WSClient` and return a Promise that resolves once either:
  *   (a) the abort signal fires, or
  *   (b) the SDK's internal retry budget appears exhausted (stall detected).
@@ -163,6 +170,19 @@ function isNonRecoverableFeishuError(err: unknown): boolean {
  * comment for SDK source details), the stall clock only starts after we see the
  * SECOND `lastConnectTime` change — i.e. after the first genuine reconnect
  * attempt. This avoids falsely evicting healthy connections.
+ *
+ * ## Confirmed-connection detection
+ *
+ * `onFirstConnect` (removed) used to fire when the SDK recorded its first
+ * connect *attempt* — not when the WebSocket handshake was confirmed live. In a
+ * startup-outage scenario the callback would fire but the connection would never
+ * become healthy, causing `hadSuccessfulConnect` to be set prematurely, which
+ * reset `supervisorAttempt` to 0 and suppressed exponential backoff.
+ *
+ * `onConfirmedConnect` is the replacement: it fires only after the poll loop
+ * observes `lastConnectTime` stable and non-zero for
+ * `FEISHU_WS_STABLE_TICKS_REQUIRED` consecutive ticks (~20 s of confirmed
+ * liveness). This cleanly separates "attempted" from "confirmed connected".
  */
 function runFeishuWSClientUntilDead(params: {
   wsClient: Lark.WSClient;
@@ -170,10 +190,16 @@ function runFeishuWSClientUntilDead(params: {
   accountId: string;
   log: (msg: string) => void;
   abortSignal?: AbortSignal;
-  /** Called once when the SDK records its first connect attempt. */
-  onFirstConnect?: () => void;
+  /**
+   * Called once when the SDK has been observed in a steady connected state
+   * for at least `FEISHU_WS_STABLE_TICKS_REQUIRED` consecutive poll ticks.
+   * This is distinct from the first *attempt*: the callback only fires after
+   * confirmed liveness, preventing a startup-outage from appearing as a
+   * successful connect.
+   */
+  onConfirmedConnect?: () => void;
 }): Promise<"aborted" | "stalled"> {
-  const { wsClient, eventDispatcher, accountId, log, abortSignal, onFirstConnect } = params;
+  const { wsClient, eventDispatcher, accountId, log, abortSignal, onConfirmedConnect } = params;
 
   return new Promise<"aborted" | "stalled">((resolve) => {
     if (abortSignal?.aborted) {
@@ -193,6 +219,12 @@ function runFeishuWSClientUntilDead(params: {
     let connectChangeCount = 0;
     let staleSinceMs: number | null = null; // null = initial connection, not yet reconnecting
 
+    // Counts consecutive poll ticks where lastConnectTime is non-zero and has
+    // not changed (i.e. the SDK is in a stable connected state, not mid-attempt).
+    // Resets to 0 whenever lastConnectTime changes (new attempt observed).
+    let connectedAndStableCount = 0;
+    let confirmedConnectFired = false;
+
     const handleAbort = () => {
       clearInterval(stallPoller);
       resolve("aborted");
@@ -208,20 +240,32 @@ function runFeishuWSClientUntilDead(params: {
       const { lastConnectTime } = wsClient.getReconnectInfo();
 
       if (lastConnectTime !== lastSeenConnectTime) {
-        // SDK recorded a new connect attempt.
+        // SDK recorded a new connect attempt — reset stable-tick counter.
         const isFirstChange = connectChangeCount === 0;
         lastSeenConnectTime = lastConnectTime;
         connectChangeCount += 1;
+        connectedAndStableCount = 0;
 
-        if (isFirstChange) {
-          // Initial connect: notify caller but don't start the stall clock.
-          // A healthy connection that never drops must not be evicted.
-          onFirstConnect?.();
-        } else {
+        if (!isFirstChange) {
           // Genuine reconnect attempt: start (or reset) the stall clock.
           staleSinceMs = Date.now();
         }
+        // On first change (initial connect): do not start the stall clock.
+        // A healthy connection that never drops must not be evicted.
         return;
+      }
+
+      // lastConnectTime is unchanged this tick.
+
+      // Accumulate stable ticks only when the SDK has actually recorded a
+      // connect attempt (lastConnectTime non-zero) and the stall clock has not
+      // yet fired (connection looks healthy).
+      if (!confirmedConnectFired && lastConnectTime !== 0 && staleSinceMs === null) {
+        connectedAndStableCount += 1;
+        if (connectedAndStableCount >= FEISHU_WS_STABLE_TICKS_REQUIRED) {
+          confirmedConnectFired = true;
+          onConfirmedConnect?.();
+        }
       }
 
       // Stall clock not yet started (still on the initial healthy connection).
@@ -292,7 +336,7 @@ export async function monitorWebSocket({
           accountId,
           log,
           abortSignal,
-          onFirstConnect: () => {
+          onConfirmedConnect: () => {
             hadSuccessfulConnect = true;
           },
         });
