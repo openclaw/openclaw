@@ -28,6 +28,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -186,6 +187,7 @@ class TalkModeManager(
 
   fun playTtsForText(text: String) {
     val playbackToken = playbackGeneration.incrementAndGet()
+    cancelActivePlayback()
     scope.launch {
       reloadConfig()
       runPlaybackSession(playbackToken) {
@@ -676,14 +678,16 @@ class TalkModeManager(
     block: suspend () -> Unit,
   ) {
     val currentJob = coroutineContext[Job]
-    onBeforeSpeak()
-    val previousJob =
-      synchronized(ttsJobLock) {
-        val previous = ttsJob
-        ttsJob = currentJob
-        previous
-      }
+    var shouldResumeAfterSpeak = false
     try {
+      shouldResumeAfterSpeak = true
+      onBeforeSpeak()
+      val previousJob =
+        synchronized(ttsJobLock) {
+          val previous = ttsJob
+          ttsJob = currentJob
+          previous
+        }
       previousJob?.takeIf { it !== currentJob }?.cancel()
       stopTextToSpeechPlayback()
       ensurePlaybackActive(playbackToken)
@@ -697,8 +701,21 @@ class TalkModeManager(
         }
       }
       _isSpeaking.value = false
-      onAfterSpeak()
+      if (shouldResumeAfterSpeak) {
+        withContext(NonCancellable) {
+          onAfterSpeak()
+        }
+      }
     }
+  }
+
+  private fun cancelActivePlayback() {
+    val activeJob =
+      synchronized(ttsJobLock) {
+        ttsJob
+      }
+    activeJob?.cancel()
+    stopTextToSpeechPlayback()
   }
 
   private suspend fun speakWithSystemTts(text: String, directive: TalkDirective?, playbackToken: Long) {
