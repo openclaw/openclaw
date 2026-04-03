@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugins/public-artifacts.js";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
+const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
+  GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES,
+);
 
 const allowedNonExtensionTests = new Set<string>([
   "src/agents/pi-embedded-runner-extraparams.test.ts",
@@ -44,6 +48,20 @@ function findPluginSdkImports(source: string): string[] {
   ].map((match) => match[1]);
 }
 
+function getImportBasename(importPath: string): string {
+  return importPath.split("/").at(-1) ?? importPath;
+}
+
+function isAllowedCoreContractSuite(file: string, imports: readonly string[]): boolean {
+  return (
+    file.startsWith("src/channels/plugins/contracts/") &&
+    file.endsWith(".contract.test.ts") &&
+    imports.every((entry) =>
+      ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES.has(getImportBasename(entry)),
+    )
+  );
+}
+
 describe("non-extension test boundaries", () => {
   it("keeps plugin-owned behavior suites under the bundled plugin tree", () => {
     const testFiles = [
@@ -64,7 +82,7 @@ describe("non-extension test boundaries", () => {
         if (imports.length === 0) {
           return null;
         }
-        if (allowedNonExtensionTests.has(file)) {
+        if (allowedNonExtensionTests.has(file) || isAllowedCoreContractSuite(file, imports)) {
           return null;
         }
         return {

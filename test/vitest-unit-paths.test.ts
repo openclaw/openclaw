@@ -19,6 +19,7 @@ describe("isUnitConfigTestFile", () => {
     expect(isUnitConfigTestFile("src/infra/matrix-plugin-helper.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/plugin-sdk/facade-runtime.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/plugins/loader.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("test/extension-test-boundary.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/agents/pi-embedded-runner.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/commands/onboard.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("ui/src/ui/views/other.test.ts")).toBe(false);

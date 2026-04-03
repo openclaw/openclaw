@@ -17,6 +17,7 @@ export const unitTestIncludePatterns = [
 
 export const boundaryTestFiles = [
   "test/extension-plugin-sdk-boundary.test.ts",
+  "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
   "test/web-fetch-provider-boundary.test.ts",
   "test/web-search-provider-boundary.test.ts",
