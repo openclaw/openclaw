@@ -60,6 +60,16 @@ const feishuGetStatus = createPluginSetupWizardStatus(feishuPlugin);
 type FeishuConfigureRuntime = Parameters<typeof feishuConfigure>[0]["runtime"];
 
 describe("feishu setup wizard", () => {
+  it("setup adapter preserves a selected named account id", () => {
+    expect(
+      feishuPlugin.setup?.resolveAccountId?.({
+        cfg: {} as never,
+        accountId: "work",
+        input: {},
+      } as never),
+    ).toBe("work");
+  });
+
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi
       .fn()
