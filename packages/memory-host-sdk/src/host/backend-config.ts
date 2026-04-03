@@ -13,6 +13,9 @@ import type {
   MemoryQmdMcporterConfig,
   MemoryQmdSearchMode,
 } from "../../../../src/config/types.memory.js";
+
+// Re-export MemoryChainConfig for external use
+export type { MemoryChainConfig } from "../../../../src/config/types.memory.js";
 import { normalizeAgentId } from "../../../../src/routing/session-key.js";
 import { resolveUserPath } from "../../../../src/utils.js";
 import { splitShellArgs } from "../../../../src/utils/shell-argv.js";

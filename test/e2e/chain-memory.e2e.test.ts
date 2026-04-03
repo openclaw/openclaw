@@ -13,6 +13,9 @@ import { describe, it, expect, beforeAll } from "vitest";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import type { MemorySearchManager } from "../../src/memory/types.js";
 
+// Import from correct location
+const getMemorySearchManagerPath = "../../../extensions/memory-core/src/memory/search-manager.js";
+
 // Mock OpenClaw config with chain backend
 function createMockConfig(backend: "builtin" | "chain" = "chain"): Partial<OpenClawConfig> {
   if (backend === "chain") {
@@ -41,7 +44,7 @@ function createMockConfig(backend: "builtin" | "chain" = "chain"): Partial<OpenC
 describe("Chain Memory Backend - E2E Integration", () => {
   describe("Factory and Initialization", () => {
     it("should create chain manager via getMemorySearchManager", async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       const result = await getMemorySearchManager({
         cfg: createMockConfig("chain"),
@@ -54,7 +57,7 @@ describe("Chain Memory Backend - E2E Integration", () => {
     });
 
     it("should create builtin manager when backend is not chain", async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       const result = await getMemorySearchManager({
         cfg: createMockConfig("builtin"),
@@ -66,7 +69,7 @@ describe("Chain Memory Backend - E2E Integration", () => {
     });
 
     it("should cache chain managers for same config", async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       const cfg = createMockConfig("chain");
       const agentId = "test-agent-cache";
@@ -90,7 +93,7 @@ describe("Chain Memory Backend - E2E Integration", () => {
     let manager: MemorySearchManager;
 
     beforeAll(async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       const result = await getMemorySearchManager({
         cfg: createMockConfig("chain"),
@@ -143,7 +146,7 @@ describe("Chain Memory Backend - E2E Integration", () => {
     let manager: MemorySearchManager;
 
     beforeAll(async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       const result = await getMemorySearchManager({
         cfg: createMockConfig("chain"),
@@ -176,7 +179,7 @@ describe("Chain Memory Backend - E2E Integration", () => {
     let manager: MemorySearchManager;
 
     beforeAll(async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       const result = await getMemorySearchManager({
         cfg: createMockConfig("chain"),
@@ -227,7 +230,7 @@ describe("Chain Memory Backend - E2E Integration", () => {
 
   describe("Fallback Logic", () => {
     it("should work with secondary provider when primary fails", async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       // Config with primary that will fail and secondary that works
       const cfg: Partial<OpenClawConfig> = {
@@ -267,7 +270,7 @@ describe("Chain Memory Backend - E2E Integration", () => {
     });
 
     it("should work with fallback provider when all others fail", async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       const cfg: Partial<OpenClawConfig> = {
         memory: {
@@ -307,7 +310,7 @@ describe("Chain Memory Backend - E2E Integration", () => {
 
   describe("Error Handling", () => {
     it("should handle invalid config gracefully", async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       const cfg = {
         memory: {
@@ -329,7 +332,7 @@ describe("Chain Memory Backend - E2E Integration", () => {
     });
 
     it("should handle unknown backend gracefully", async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       const cfg: Partial<OpenClawConfig> = {
         memory: {
@@ -359,7 +362,7 @@ describe("Chain Memory Backend - E2E Integration", () => {
 
   describe("Resource Management", () => {
     it("should close without throwing", async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       const result = await getMemorySearchManager({
         cfg: createMockConfig("chain"),
@@ -373,7 +376,7 @@ describe("Chain Memory Backend - E2E Integration", () => {
     });
 
     it("should handle multiple close calls", async () => {
-      const { getMemorySearchManager } = await import("../../src/memory/search-manager.js");
+      const { getMemorySearchManager } = await import(getMemorySearchManagerPath);
 
       const result = await getMemorySearchManager({
         cfg: createMockConfig("chain"),
