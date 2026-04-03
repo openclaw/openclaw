@@ -6,6 +6,7 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 
 const tempDirs: string[] = [];
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 const originalVitest = process.env.VITEST;
 const originalArgv1 = process.argv[1];
 
@@ -52,6 +53,7 @@ function expectResolvedBundledDir(params: {
   expectedDir: string;
   argv1?: string;
   bundledDirOverride?: string;
+  disableBundledPlugins?: string;
   vitest?: string;
 }) {
   vi.spyOn(process, "cwd").mockReturnValue(params.cwd);
@@ -65,6 +67,11 @@ function expectResolvedBundledDir(params: {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = params.bundledDirOverride;
+  }
+  if (params.disableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = params.disableBundledPlugins;
   }
 
   expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
@@ -121,6 +128,11 @@ afterEach(() => {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledDir;
+  }
+  if (originalDisableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalDisableBundledPlugins;
   }
   if (originalVitest === undefined) {
     delete process.env.VITEST;
@@ -190,6 +202,25 @@ describe("resolveBundledPluginsDir", () => {
       expectedRelativeDir: expectation.expectedRelativeDir,
       ...("vitest" in expectation ? { vitest: expectation.vitest } : {}),
     });
+  });
+
+  it("returns a stable empty bundled plugin directory when bundled plugins are disabled", () => {
+    const repoRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-disabled-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasGitCheckout: true,
+    });
+    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
+    process.argv[1] = "/usr/bin/env";
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(bundledDir).toBeTruthy();
+    expect(fs.existsSync(bundledDir ?? "")).toBe(true);
+    expect(fs.readdirSync(bundledDir ?? "")).toEqual([]);
   });
 
   it.each([
