@@ -18,6 +18,7 @@ type ApprovalAdapterParams = {
 
 type DeliverySuppressionParams = {
   cfg: OpenClawConfig;
+  approvalKind: ApprovalKind;
   target: { channel: string; accountId?: string | null };
   request: { request: { turnSourceChannel?: string | null; turnSourceAccountId?: string | null } };
 };
