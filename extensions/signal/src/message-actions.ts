@@ -1,5 +1,5 @@
-import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
+import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,

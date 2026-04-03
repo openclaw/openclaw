@@ -1,36 +1,35 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   attachChannelToResult,
   attachChannelToResults,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
 } from "openclaw/plugin-sdk/channel-targets";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
-import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import {
+  buildBaseChannelStatusSummary,
+  collectStatusIssuesFromLastError,
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { signalApprovalAuth } from "./approval-auth.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import { signalMessageActions } from "./message-actions.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
-import {
-  buildBaseChannelStatusSummary,
-  chunkText,
-  collectStatusIssuesFromLastError,
-  createDefaultChannelRuntimeState,
-  DEFAULT_ACCOUNT_ID,
-  normalizeE164,
-  PAIRING_APPROVED_MESSAGE,
-  resolveChannelMediaMaxBytes,
-  type ChannelPlugin,
-} from "./runtime-api.js";
 import { sendMessageSignal } from "./send.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
