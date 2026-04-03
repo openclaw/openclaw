@@ -2955,6 +2955,8 @@ td.data-table-key-col {
   white-space: pre-wrap;
   font-family: var(--mono);
   font-size: 13px;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .exec-approval-meta {
