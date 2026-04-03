@@ -3983,6 +3983,30 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.skills",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Skills",
+      "help": "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.skills.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.skipBootstrap",
       "kind": "core",
       "type": "boolean",

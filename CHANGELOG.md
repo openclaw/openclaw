@@ -79,9 +79,12 @@ Docs: https://docs.openclaw.ai
 - Discord/ack reactions: keep automatic ACK reaction auth on the active hydrated Discord account so SecretRef-backed and non-default-account reactions stop falling back to stale default config resolution. (#60081) Thanks @FunJim.
 - Telegram/model switching: render non-default `/model` callback confirmations with HTML formatting so Telegram shows the selected model in bold instead of raw `**...**` markers. (#60042) Thanks @GitZhangChi.
 - Plugins/update: allow `openclaw plugins update` to use `--dangerously-force-unsafe-install` for built-in dangerous-code false positives during plugin updates. (#60066) Thanks @huntharo.
+<<<<<<< HEAD
+- Agents/skills: add inherited `agents.defaults.skills` allowlists, make per-agent `agents.list[].skills` replace defaults instead of merging, and scope embedded, session, sandbox, and cron skill snapshots through the effective runtime agent. (#59992) Thanks @gumadeiras.
 - Gateway/auth: disconnect shared-auth websocket sessions only for effective auth rotations on restart-capable config writes, and keep `config.set` auth edits from dropping still-valid live sessions. (#60387) Thanks @mappel-nv.
 - Control UI/chat: keep the Stop button visible during tool-only execution so abortable runs do not fall back to Send while tools are still running. (#54528) thanks @chziyue.
 - Discord/voice: make READY auto-join fire-and-forget while keeping the shorter initial voice-connect timeout separate from the longer playback-start wait. (#60345) Thanks @geekhuashan.
+- Agents/skills: add inherited `agents.defaults.skills` allowlists, make per-agent `agents.list[].skills` replace defaults instead of merging, and scope embedded, session, sandbox, and cron skill snapshots through the effective runtime agent. (#59992) Thanks @gumadeiras.
 
 ## 2026.4.2
 

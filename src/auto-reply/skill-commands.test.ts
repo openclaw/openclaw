@@ -33,6 +33,13 @@ function resolveWorkspaceSkills(
       { skillName: "extra-skill", description: "Extra skill" },
     ];
   }
+  if (dirName === "shared-defaults") {
+    return [
+      { skillName: "alpha-skill", description: "Alpha skill" },
+      { skillName: "beta-skill", description: "Beta skill" },
+      { skillName: "hidden-skill", description: "Hidden skill" },
+    ];
+  }
   return [];
 }
 
@@ -290,6 +297,53 @@ describe("listSkillCommandsForAgents", () => {
     });
 
     expect(commands.map((entry) => entry.skillName)).toEqual(["extra-skill"]);
+  });
+
+  it("uses inherited defaults for agents that share one workspace", async () => {
+    const baseDir = await makeTempDir("openclaw-skills-defaults-");
+    const sharedWorkspace = path.join(baseDir, "shared-defaults");
+    await fs.mkdir(sharedWorkspace, { recursive: true });
+
+    const commands = listSkillCommandsForAgents({
+      cfg: {
+        agents: {
+          defaults: {
+            skills: ["alpha-skill"],
+          },
+          list: [
+            { id: "alpha", workspace: sharedWorkspace },
+            { id: "beta", workspace: sharedWorkspace, skills: ["beta-skill"] },
+            { id: "gamma", workspace: sharedWorkspace },
+          ],
+        },
+      },
+      agentIds: ["alpha", "beta", "gamma"],
+    });
+
+    expect(commands.map((entry) => entry.skillName)).toEqual(["alpha-skill", "beta-skill"]);
+  });
+
+  it("does not inherit defaults when an agent sets an explicit empty skills list", async () => {
+    const baseDir = await makeTempDir("openclaw-skills-defaults-empty-");
+    const sharedWorkspace = path.join(baseDir, "shared-defaults");
+    await fs.mkdir(sharedWorkspace, { recursive: true });
+
+    const commands = listSkillCommandsForAgents({
+      cfg: {
+        agents: {
+          defaults: {
+            skills: ["alpha-skill", "hidden-skill"],
+          },
+          list: [
+            { id: "alpha", workspace: sharedWorkspace, skills: [] },
+            { id: "beta", workspace: sharedWorkspace, skills: ["beta-skill"] },
+          ],
+        },
+      },
+      agentIds: ["alpha", "beta"],
+    });
+
+    expect(commands.map((entry) => entry.skillName)).toEqual(["beta-skill"]);
   });
 
   it("skips agents with missing workspaces gracefully", async () => {

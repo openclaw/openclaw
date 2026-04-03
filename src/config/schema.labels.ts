@@ -322,6 +322,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "broadcast.*": "Broadcast Destination List",
   "skills.load.watch": "Watch Skills",
   "skills.load.watchDebounceMs": "Skills Watch Debounce (ms)",
+  "agents.defaults.skills": "Skills",
   "agents.defaults.workspace": "Workspace",
   "agents.defaults.repoRoot": "Repo Root",
   "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",
