@@ -1,4 +1,4 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import { buildUsageErrorSnapshot, buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -77,7 +77,10 @@ export async function fetchCodexUsage(
     });
   }
 
-  const data = (await res.json()) as CodexUsageResponse;
+  const data = (await res.json().catch(() => null)) as CodexUsageResponse | null;
+  if (!data) {
+    return buildUsageErrorSnapshot("openai-codex", "Invalid JSON");
+  }
   const windows: UsageWindow[] = [];
 
   if (data.rate_limit?.primary_window) {
