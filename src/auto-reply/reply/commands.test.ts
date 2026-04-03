@@ -940,6 +940,60 @@ describe("/approve command", () => {
     );
   });
 
+  it("honors the configured default account for omitted-account /approve auth", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: {
+            ...telegramCommandTestPlugin,
+            config: {
+              ...telegramCommandTestPlugin.config,
+              defaultAccountId: (cfg) =>
+                ((cfg.channels?.telegram as { defaultAccount?: string } | undefined)?.defaultAccount ??
+                  DEFAULT_ACCOUNT_ID),
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          allowFrom: ["*"],
+          accounts: {
+            work: {
+              execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+      AccountId: undefined,
+    });
+    params.command.isAuthorizedSender = false;
+
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc12345", decision: "allow-once" },
+      }),
+    );
+  });
+
   it("accepts Signal /approve from configured approvers even when chat access is otherwise blocked", async () => {
     const cfg = {
       commands: { text: true },

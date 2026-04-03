@@ -7,6 +7,7 @@ import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
 import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { resolveChannelAccountId } from "./channel-context.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -167,12 +168,17 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   const isPluginId = parsed.id.startsWith("plugin:");
+  const effectiveAccountId = resolveChannelAccountId({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    command: params.command,
+  });
   const approvalCapability = resolveChannelApprovalCapability(
     getChannelPlugin(params.command.channel),
   );
   const approveCommandBehavior = approvalCapability?.resolveApproveCommandBehavior?.({
     cfg: params.cfg,
-    accountId: params.ctx.AccountId,
+    accountId: effectiveAccountId,
     senderId: params.command.senderId,
     approvalKind: isPluginId ? "plugin" : "exec",
   });
@@ -185,14 +191,14 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   const execApprovalAuthorization = resolveApprovalCommandAuthorization({
     cfg: params.cfg,
     channel: params.command.channel,
-    accountId: params.ctx.AccountId,
+    accountId: effectiveAccountId,
     senderId: params.command.senderId,
     kind: "exec",
   });
   const pluginApprovalAuthorization = resolveApprovalCommandAuthorization({
     cfg: params.cfg,
     channel: params.command.channel,
-    accountId: params.ctx.AccountId,
+    accountId: effectiveAccountId,
     senderId: params.command.senderId,
     kind: "plugin",
   });
