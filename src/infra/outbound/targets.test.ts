@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
 import {
   isWhatsAppGroupJid,
   normalizeWhatsAppTarget,
@@ -20,6 +19,26 @@ import {
   runResolveOutboundTargetCoreTests,
 } from "./targets.shared-test.js";
 import { telegramMessagingForTest } from "./targets.test-helpers.js";
+
+const createOutboundStub = (channel: "telegram" | "whatsapp"): ChannelOutboundAdapter => ({
+  deliveryMode: channel === "whatsapp" ? "gateway" : "direct",
+  resolveTarget:
+    channel === "whatsapp"
+      ? ({ to }) => {
+          const normalized = to ? normalizeWhatsAppTarget(to) : null;
+          return normalized
+            ? { ok: true, to: normalized }
+            : { ok: false, error: new Error("WhatsApp target required") };
+        }
+      : ({ to }) =>
+          typeof to === "string" && to.trim()
+            ? { ok: true, to: to.trim() }
+            : { ok: false, error: new Error("Telegram target required") },
+  sendText: async () => ({ channel, messageId: `${channel}-msg` }),
+});
+
+const telegramOutbound = createOutboundStub("telegram");
+const whatsappOutbound = createOutboundStub("whatsapp");
 
 runResolveOutboundTargetCoreTests();
 

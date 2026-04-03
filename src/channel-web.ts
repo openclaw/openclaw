@@ -1,6 +1,6 @@
 // Barrel exports for the web channel pieces. Splitting the original 900+ line
 // module keeps responsibilities small and testable.
-import { resolveWaWebAuthDir } from "./plugins/runtime/runtime-whatsapp-boundary.js";
+import { resolveWaWebAuthDir } from "./plugins/runtime/runtime-web-channel-boundary.js";
 
 export { HEARTBEAT_PROMPT } from "./auto-reply/heartbeat.js";
 export { HEARTBEAT_TOKEN } from "./auto-reply/tokens.js";
@@ -23,7 +23,7 @@ export {
   sendReactionWhatsApp,
   waitForWaConnection,
   webAuthExists,
-} from "./plugins/runtime/runtime-whatsapp-boundary.js";
+} from "./plugins/runtime/runtime-web-channel-boundary.js";
 
 // Keep the historic constant surface available, but resolve it through the
 // plugin boundary only when a caller actually coerces the value to string.

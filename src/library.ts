@@ -14,7 +14,7 @@ import {
   handlePortError,
   PortInUseError,
 } from "./infra/ports.js";
-import type { monitorWebChannel as monitorWebChannelRuntime } from "./plugins/runtime/runtime-whatsapp-boundary.js";
+import type { monitorWebChannel as monitorWebChannelRuntime } from "./plugins/runtime/runtime-web-channel-boundary.js";
 import type {
   runCommandWithTimeout as runCommandWithTimeoutRuntime,
   runExec as runExecRuntime,
@@ -33,7 +33,7 @@ let promptRuntimePromise: Promise<typeof import("./cli/prompt.js")> | null = nul
 let binariesRuntimePromise: Promise<typeof import("./infra/binaries.js")> | null = null;
 let execRuntimePromise: Promise<typeof import("./process/exec.js")> | null = null;
 let whatsappRuntimePromise: Promise<
-  typeof import("./plugins/runtime/runtime-whatsapp-boundary.js")
+  typeof import("./plugins/runtime/runtime-web-channel-boundary.js")
 > | null = null;
 
 function loadReplyRuntime() {
@@ -57,7 +57,7 @@ function loadExecRuntime() {
 }
 
 function loadWhatsAppRuntime() {
-  whatsappRuntimePromise ??= import("./plugins/runtime/runtime-whatsapp-boundary.js");
+  whatsappRuntimePromise ??= import("./plugins/runtime/runtime-web-channel-boundary.js");
   return whatsappRuntimePromise;
 }
 

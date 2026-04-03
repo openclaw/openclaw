@@ -151,6 +151,19 @@ describe("plugin-sdk subpath exports", () => {
     }
   });
 
+  it("keeps removed bundled-channel prefixes out of the public sdk list", () => {
+    const bannedPrefixes = ["discord", "signal", "slack", "telegram", "whatsapp"];
+    const banned = pluginSdkSubpaths.filter((subpath) =>
+      bannedPrefixes.some(
+        (prefix) =>
+          subpath === prefix ||
+          subpath.startsWith(`${prefix}-`) ||
+          subpath.startsWith(`${prefix}.`),
+      ),
+    );
+    expect(banned).toEqual([]);
+  });
+
   it("keeps helper subpaths aligned", () => {
     expectSourceMentions("core", [
       "emptyPluginConfigSchema",
@@ -468,8 +481,10 @@ describe("plugin-sdk subpath exports", () => {
       "applyChannelMatchMeta",
       "buildChannelKeyCandidates",
       "buildMessagingTarget",
+      "ChannelId",
       "createAllowedChatSenderMatcher",
       "ensureTargetId",
+      "normalizeChannelId",
       "parseChatAllowTargetPrefixes",
       "parseMentionPrefixOrAtUserTarget",
       "parseChatTargetPrefixesOrThrow",
@@ -775,6 +790,7 @@ describe("plugin-sdk subpath exports", () => {
       "createChannelPairingChallengeIssuer",
       "createLoggedPairingApprovalNotifier",
       "createPairingPrefixStripper",
+      "readChannelAllowFromStoreSync",
       "createTextPairingAdapter",
     ]);
     expect("createScopedPairingAccess" in channelPairingSdk).toBe(false);

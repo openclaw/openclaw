@@ -1,9 +1,4 @@
 import { appendCronStyleCurrentTimeLine } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  emitHeartbeatEvent,
-  resolveHeartbeatVisibility,
-  resolveIndicatorType,
-} from "openclaw/plugin-sdk/channel-runtime";
 import { canonicalizeMainSessionAlias, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
@@ -11,6 +6,11 @@ import {
   resolveStorePath,
   updateSessionStore,
 } from "openclaw/plugin-sdk/config-runtime";
+import {
+  emitHeartbeatEvent,
+  resolveHeartbeatVisibility,
+  resolveIndicatorType,
+} from "openclaw/plugin-sdk/infra-runtime";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,

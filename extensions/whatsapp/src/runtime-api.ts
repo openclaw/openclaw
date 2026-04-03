@@ -19,24 +19,24 @@ export { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 
-export {
-  type ChannelMessageActionName,
-  createWhatsAppOutboundBase,
-  looksLikeWhatsAppTargetId,
-  normalizeWhatsAppAllowFromEntries,
-  normalizeWhatsAppMessagingTarget,
-  resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppHeartbeatRecipients,
-  resolveWhatsAppMentionStripRegexes,
-} from "openclaw/plugin-sdk/channel-runtime";
+export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 export {
+  resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppMentionStripRegexes,
+} from "./group-intro.js";
+export { resolveWhatsAppHeartbeatRecipients } from "./heartbeat-recipients.js";
+export { createWhatsAppOutboundBase } from "./outbound-base.js";
+export {
   isWhatsAppGroupJid,
   isWhatsAppUserTarget,
+  looksLikeWhatsAppTargetId,
+  normalizeWhatsAppAllowFromEntries,
+  normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
 export { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
