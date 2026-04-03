@@ -39,8 +39,8 @@ function expectResolvedPackageRoot(
   return expect(asyncResolver(opts)).resolves.toBe(expected);
 }
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+const mockFsModule = async (importOriginal: () => Promise<typeof import("node:fs")>) => {
+  const actual = await importOriginal();
   const wrapped = {
     ...actual,
     existsSync: (p: string) =>
@@ -80,10 +80,12 @@ vi.mock("node:fs", async (importOriginal) => {
         : actual.realpathSync(p),
   };
   return { ...wrapped, default: wrapped };
-});
+};
 
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
+const mockFsPromisesModule = async (
+  importOriginal: () => Promise<typeof import("node:fs/promises")>,
+) => {
+  const actual = await importOriginal();
   const wrapped = {
     ...actual,
     readFile: async (p: string, encoding?: BufferEncoding) => {
@@ -98,19 +100,26 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     },
   };
   return { ...wrapped, default: wrapped };
-});
+};
 
 describe("resolveOpenClawPackageRoot", () => {
   let resolveOpenClawPackageRoot: typeof import("./openclaw-root.js").resolveOpenClawPackageRoot;
   let resolveOpenClawPackageRootSync: typeof import("./openclaw-root.js").resolveOpenClawPackageRootSync;
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
-      await import("./openclaw-root.js"));
+  beforeEach(() => {
     state.entries.clear();
     state.realpaths.clear();
     state.realpathErrors.clear();
+  });
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doUnmock("node:fs");
+    vi.doUnmock("node:fs/promises");
+    vi.doMock("node:fs", mockFsModule);
+    vi.doMock("node:fs/promises", mockFsPromisesModule);
+    ({ resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
+      await import("./openclaw-root.js"));
   });
 
   it.each([

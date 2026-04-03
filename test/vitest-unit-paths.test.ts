@@ -17,6 +17,7 @@ describe("isUnitConfigTestFile", () => {
       ),
     ).toBe(false);
     expect(isUnitConfigTestFile("src/infra/matrix-plugin-helper.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("src/infra/openclaw-root.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/plugin-sdk/facade-runtime.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/plugins/loader.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("test/extension-test-boundary.test.ts")).toBe(false);

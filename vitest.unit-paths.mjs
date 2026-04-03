@@ -16,6 +16,7 @@ export const unitTestIncludePatterns = [
 ];
 
 export const boundaryTestFiles = [
+  "src/infra/openclaw-root.test.ts",
   "test/extension-plugin-sdk-boundary.test.ts",
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
@@ -39,6 +40,7 @@ export const unitTestAdditionalExcludePatterns = [
   "src/commands/**",
   "src/channels/plugins/contracts/**",
   "src/plugins/contracts/**",
+  "src/infra/openclaw-root.test.ts",
   ...bundledPluginDependentUnitTestFiles,
   "src/config/doc-baseline.integration.test.ts",
   "src/config/schema.base.generated.test.ts",
