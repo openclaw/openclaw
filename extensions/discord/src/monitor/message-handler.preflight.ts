@@ -753,16 +753,17 @@ export async function preflightDiscordMessage(
   const mentionText = hasTypedText ? baseText : "";
   const wasMentioned =
     !isDirectMessage &&
-    matchesMentionWithExplicit({
-      text: mentionText,
-      mentionRegexes,
-      explicit: {
-        hasAnyMention,
-        isExplicitlyMentioned: explicitlyMentioned,
-        canResolveExplicit: Boolean(botId),
-      },
-      transcript: preflightTranscript,
-    });
+    (Boolean(message.mentionedEveryone) ||
+      matchesMentionWithExplicit({
+        text: mentionText,
+        mentionRegexes,
+        explicit: {
+          hasAnyMention,
+          isExplicitlyMentioned: explicitlyMentioned,
+          canResolveExplicit: Boolean(botId),
+        },
+        transcript: preflightTranscript,
+      }));
   const implicitMention = Boolean(
     !isDirectMessage &&
     botId &&

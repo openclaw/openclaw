@@ -529,6 +529,31 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
   });
 
+  it("allows guild messages that mention @everyone", async () => {
+    const channelId = "channel-everyone-mention";
+    const guildId = "guild-everyone-mention";
+    const message = createDiscordMessage({
+      id: "m-everyone-mention",
+      channelId,
+      content: "@everyone standup time!",
+      mentionedEveryone: true,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Peter",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+    });
+
+    expect(result).not.toBeNull();
+  });
+
   it("accepts allowlisted guild messages when guild object is missing", async () => {
     const message = createDiscordMessage({
       id: "m-guild-id-only",
