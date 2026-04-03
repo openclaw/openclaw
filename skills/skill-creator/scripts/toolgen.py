@@ -26,7 +26,8 @@ set -euo pipefail
 
 # Defaults''']
     for opt in options:
-        name = opt['flag'].lstrip('-')
+        # Sanitize flag name: replace hyphens with underscores for valid bash variable
+        name = opt['flag'].lstrip('-').replace('-', '_')
         default = opt.get('default', '')
         lines.append(f"{name}=\"{default}\"")
     lines.append("")
@@ -36,8 +37,9 @@ set -euo pipefail
         lines.append("    case $1 in")
         for opt in options:
             flag = opt['flag']
-            name = flag.lstrip('-')
-            lines.append(f"        {flag}|--{name})")
+            name = flag.lstrip('-').replace('-', '_')
+            # Only emit option itself (no duplicate), since short aliases not supported
+            lines.append(f"        {flag})")
             lines.append(f"            {name}=\"$2\"; shift 2;;")
         lines.append("        *) break;;")
         lines.append("    esac")
@@ -57,7 +59,7 @@ set -euo pipefail
 echo "Running {tool_name}"
 # Access variables:''')
     for opt in options:
-        name = opt['flag'].lstrip('-')
+        name = opt['flag'].lstrip('-').replace('-', '_')
         lines.append(f"#   ${name}: ${name}")
     for pos in positional:
         name = pos.get('name', 'arg')
@@ -88,6 +90,9 @@ def generate_python(tool_name, description, arguments):
             # positional argument
             arg_lines.append(f"parser.add_argument('{name}', type={arg_type}, help='{help_text}')")
             extract_lines.append(f"{name} = args.{name}")
+
+    arg_code = "\\n    ".join(arg_lines)
+    extract_code = "\\n    ".join(extract_lines)
 
     arg_code = "\n    ".join(arg_lines)
     extract_code = "\n    ".join(extract_lines)
@@ -137,7 +142,7 @@ def generate_node(tool_name, description, arguments):
     options = []
     for arg in arguments:
         if arg['flag'].startswith('-'):
-            name = arg.get('name', arg['flag'].lstrip('-'))
+            name = arg.get('name', arg['flag'].lstrip('-').replace('-', '_'))
             opt_type = arg.get('type', 'string')
             options.append(f"    '{name}': {{ type: '{opt_type}' }}")
     opts_str = ",\n".join(options) if options else ""
@@ -148,7 +153,10 @@ def generate_node(tool_name, description, arguments):
  * Description: {description}
  */
 
-const args = require('minimist')(process.argv.slice(2));
+// ESM syntax
+import minimist from 'minimist';
+
+const args = minimist(process.argv.slice(2));
 
 // TODO: implement
 console.log('Running {tool_name} with args:', args);

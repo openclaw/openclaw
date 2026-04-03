@@ -405,11 +405,11 @@ def main():
         if not args.tool_desc:
             print("[WARN] No --tool-desc provided; using generic description")
             args.tool_desc = f"Tool for {skill_name}"
-        if "scripts" not in args.resources and not args.resources:
-            # Auto-add scripts if not specified
-            resources = parse_resources(args.resources) + ["scripts"]
+        resources_parsed = parse_resources(args.resources)
+        if "scripts" not in resources_parsed:
+            resources = resources_parsed + ["scripts"]
         else:
-            resources = parse_resources(args.resources)
+            resources = resources_parsed
     else:
         resources = parse_resources(args.resources)
 
