@@ -1,6 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeOptionalSecretInput } from "openclaw/plugin-sdk/provider-auth";
+import {
+  isNonSecretApiKeyMarker,
+  normalizeOptionalSecretInput,
+} from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   enablePluginInConfig,
@@ -53,7 +56,7 @@ type OllamaWebSearchResponse = {
 
 function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
   const providerApiKey = normalizeOptionalSecretInput(config?.models?.providers?.ollama?.apiKey);
-  if (providerApiKey) {
+  if (providerApiKey && !isNonSecretApiKeyMarker(providerApiKey)) {
     return providerApiKey;
   }
   return resolveEnvApiKey("ollama")?.apiKey;

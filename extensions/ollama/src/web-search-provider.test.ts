@@ -185,6 +185,32 @@ describe("ollama web search provider", () => {
     ]);
   });
 
+  it("resolves env var when config apiKey is a marker string", () => {
+    const original = process.env.OLLAMA_API_KEY;
+    try {
+      process.env.OLLAMA_API_KEY = "real-secret-from-env";
+      const key = testing.resolveOllamaWebSearchApiKey({
+        models: {
+          providers: {
+            ollama: {
+              apiKey: "OLLAMA_API_KEY",
+              baseUrl: "http://localhost:11434",
+              api: "ollama",
+              models: [],
+            },
+          },
+        },
+      });
+      expect(key).toBe("real-secret-from-env");
+    } finally {
+      if (original === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = original;
+      }
+    }
+  });
+
   it("warns when ollama signin is missing during setup without cancelling", async () => {
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
