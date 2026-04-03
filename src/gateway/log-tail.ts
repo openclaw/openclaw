@@ -19,11 +19,11 @@ export function isRollingLogFile(file: string): boolean {
 }
 
 export async function resolveLogFile(file: string): Promise<string> {
-  const stat = await fs.stat(file).catch(() => null);
-  if (stat) {
-    return file;
-  }
   if (!isRollingLogFile(file)) {
+    const stat = await fs.stat(file).catch(() => null);
+    if (stat) {
+      return file;
+    }
     return file;
   }
 
@@ -44,7 +44,7 @@ export async function resolveLogFile(file: string): Promise<string> {
   );
   const sorted = candidates
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-    .toSorted((a, b) => b.mtimeMs - a.mtimeMs);
+    .toSorted((a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path));
   return sorted[0]?.path ?? file;
 }
 

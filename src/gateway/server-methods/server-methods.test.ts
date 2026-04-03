@@ -1520,6 +1520,40 @@ describe("logs.tail", () => {
     await fsPromises.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("prefers the most recently updated rolling log even when the configured day file exists", async () => {
+    const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-"));
+    const active = path.join(tempDir, "openclaw-2026-01-21.log");
+    const configured = path.join(tempDir, "openclaw-2026-01-22.log");
+
+    await fsPromises.writeFile(active, '{"msg":"active"}\n');
+    await fsPromises.writeFile(configured, '{"msg":"stale"}\n');
+    await fsPromises.utimes(configured, new Date(0), new Date(0));
+    await fsPromises.utimes(active, new Date(), new Date());
+
+    setLoggerOverride({ file: configured });
+
+    const respond = vi.fn();
+    await logsHandlers["logs.tail"]({
+      params: {},
+      respond,
+      context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
+      client: null,
+      req: { id: "req-rolling-active", type: "req", method: "logs.tail" },
+      isWebchatConnect: logsNoop,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: active,
+        lines: ['{"msg":"active"}'],
+      }),
+      undefined,
+    );
+
+    await fsPromises.rm(tempDir, { recursive: true, force: true });
+  });
+
   it("resets to the new file tail when the caller resumes after rolling log file changes", async () => {
     const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-"));
     const older = path.join(tempDir, "openclaw-2026-01-20.log");

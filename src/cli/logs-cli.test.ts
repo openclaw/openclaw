@@ -347,7 +347,49 @@ describe("logs cli", () => {
       await waitPromise;
 
       expect(waitUntilReady).toHaveBeenCalledTimes(2);
+      expect(waitUntilReady).toHaveBeenNthCalledWith(1, {
+        timeoutMs: 2_000,
+        keepAlive: true,
+      });
       expect(stderrWrites.join("")).toContain("gateway timeout after 25ms");
+      expect(stderrWrites.join("")).toContain("Retrying in 2s");
+      expect(stderrWrites.join("")).not.toContain("Gateway target:");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps waiting for reconnects after a stream disconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      const waitUntilReady = vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(new Error("gateway log stream disconnected"))
+        .mockResolvedValueOnce(undefined);
+      const stderrWrites: string[] = [];
+
+      const waitPromise = __testing.waitForFollowClientReconnect({
+        followClient: { waitUntilReady },
+        opts: { timeout: "25" },
+        rich: false,
+        jsonMode: false,
+        retryMs: 2_000,
+        emitJsonLine: () => true,
+        errorLine: (text) => {
+          stderrWrites.push(text);
+          return true;
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitPromise;
+
+      expect(waitUntilReady).toHaveBeenCalledTimes(2);
+      expect(waitUntilReady).toHaveBeenNthCalledWith(1, {
+        timeoutMs: 2_000,
+        keepAlive: true,
+      });
+      expect(stderrWrites.join("")).toContain("gateway log stream disconnected");
       expect(stderrWrites.join("")).toContain("Retrying in 2s");
     } finally {
       vi.useRealTimers();
