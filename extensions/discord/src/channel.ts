@@ -98,6 +98,22 @@ function resolveRuntimeDiscordMessageActions() {
   }
 }
 
+function resolveOptionalDiscordRuntime() {
+  try {
+    return getDiscordRuntime();
+  } catch {
+    return null;
+  }
+}
+
+function resolveDiscordSend(deps?: { [channelId: string]: unknown }): DiscordSendFn {
+  return (
+    resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
+    resolveOptionalDiscordRuntime()?.channel?.discord?.sendMessageDiscord ??
+    sendMessageDiscord
+  );
+}
+
 const discordMessageActions = {
   describeMessageTool: (
     ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.describeMessageTool>>[0],
@@ -685,7 +701,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       attachedResults: {
         channel: "discord",
         sendText: async ({ cfg, to, text, accountId, deps, replyToId, silent }) => {
-          const send = resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ?? sendMessageDiscord;
+          const send = resolveDiscordSend(deps);
           return await send(to, text, {
             verbose: false,
             cfg,
@@ -705,7 +721,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           replyToId,
           silent,
         }) => {
-          const send = resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ?? sendMessageDiscord;
+          const send = resolveDiscordSend(deps);
           return await send(to, text, {
             verbose: false,
             cfg,
