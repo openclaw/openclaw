@@ -8,7 +8,7 @@ import {
   resolveAnthropicBetas,
   resolveAnthropicFastMode,
   resolveAnthropicServiceTier,
-} from "../../extensions/anthropic/api.js";
+} from "../../test/helpers/providers/anthropic-contract.js";
 import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {

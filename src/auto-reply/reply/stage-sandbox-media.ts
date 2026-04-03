@@ -9,10 +9,8 @@ import { logVerbose } from "../../globals.js";
 import { copyFileWithinRoot, SafeOpenError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import {
-  isInboundPathAllowed,
-  resolveIMessageRemoteAttachmentRoots,
-} from "../../media/inbound-path-policy.js";
+import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
+import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
 import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -49,10 +47,7 @@ export async function stageSandboxMedia(params: {
   }
 
   await fs.mkdir(effectiveWorkspaceDir, { recursive: true });
-  const remoteAttachmentRoots = resolveIMessageRemoteAttachmentRoots({
-    cfg,
-    accountId: ctx.AccountId,
-  });
+  const remoteAttachmentRoots = resolveChannelRemoteInboundAttachmentRoots({ cfg, ctx }) ?? [];
 
   const usedNames = new Set<string>();
   const staged = new Map<string, string>(); // absolute source -> relative sandbox path
@@ -187,7 +182,7 @@ function resolveAbsolutePath(value: string): string | null {
 async function isAllowedSourcePath(params: {
   source: string;
   mediaRemoteHost?: string;
-  remoteAttachmentRoots: string[];
+  remoteAttachmentRoots: readonly string[];
 }): Promise<boolean> {
   if (params.mediaRemoteHost) {
     if (

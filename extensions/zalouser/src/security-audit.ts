@@ -1,7 +1,7 @@
 import { isDangerousNameMatchingEnabled } from "../runtime-api.js";
 import type { ResolvedZalouserAccount } from "./accounts.js";
 
-function isZalouserMutableGroupEntry(raw: string): boolean {
+export function isZalouserMutableGroupEntry(raw: string): boolean {
   const text = raw.trim();
   if (!text || text === "*") {
     return false;
