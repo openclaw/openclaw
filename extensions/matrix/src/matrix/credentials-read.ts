@@ -76,6 +76,28 @@ function parseMatrixCredentialsFile(filePath: string): MatrixStoredCredentials |
   return parsed as MatrixStoredCredentials;
 }
 
+function loadCurrentMatrixCredentialsIfPresent(credPath: string): MatrixStoredCredentials | null {
+  try {
+    return fs.existsSync(credPath) ? parseMatrixCredentialsFile(credPath) : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseLegacyMatrixCredentialsWithRetry(params: {
+  legacyPath: string;
+  credPath: string;
+}): MatrixStoredCredentials | null {
+  try {
+    return parseMatrixCredentialsFile(params.legacyPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
+    return loadCurrentMatrixCredentialsIfPresent(params.credPath);
+  }
+}
+
 export function resolveMatrixCredentialsDir(
   env: NodeJS.ProcessEnv = process.env,
   stateDir?: string,
@@ -107,7 +129,7 @@ export function loadMatrixCredentials(
       return null;
     }
 
-    const parsed = parseMatrixCredentialsFile(legacyPath);
+    const parsed = parseLegacyMatrixCredentialsWithRetry({ legacyPath, credPath });
     if (!parsed) {
       return null;
     }
