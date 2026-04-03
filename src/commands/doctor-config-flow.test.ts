@@ -1309,6 +1309,57 @@ describe("doctor config flow", () => {
     }
   });
 
+  it("repairs legacy gateway.bind host aliases on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        gateway: {
+          bind: "0.0.0.0",
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      gateway?: {
+        bind?: string;
+      };
+    };
+    expect(cfg.gateway?.bind).toBe("lan");
+  });
+
+  it("warns clearly about legacy gateway.bind host aliases and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          gateway: {
+            bind: "localhost",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            String(message).includes("gateway.bind:") &&
+            String(message).includes("gateway.bind host aliases"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("warns clearly about legacy talk config and points to doctor --fix", async () => {
     const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     try {
