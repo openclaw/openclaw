@@ -324,7 +324,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           allowedHostnames: ["localhost"],
         },
       },
-    });
+    } as unknown as OpenClawConfig);
 
     expect(
       (res.config.browser?.ssrfPolicy as Record<string, unknown> | undefined)?.allowPrivateNetwork,
@@ -344,7 +344,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           dangerouslyAllowPrivateNetwork: false,
         },
       },
-    });
+    } as unknown as OpenClawConfig);
 
     expect(
       (res.config.browser?.ssrfPolicy as Record<string, unknown> | undefined)?.allowPrivateNetwork,
@@ -658,7 +658,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         interruptOnSpeech: false,
         silenceTimeoutMs: 1500,
       },
-    });
+    } as unknown as OpenClawConfig);
 
     expect(res.config.talk).toEqual({
       providers: {
@@ -689,7 +689,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
         apiKey: "secret-key",
       },
-    });
+    } as unknown as OpenClawConfig);
 
     expect(res.config.talk).toEqual({
       provider: "elevenlabs",

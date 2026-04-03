@@ -681,8 +681,10 @@ describe("tts", () => {
           messages: {
             tts: {
               provider: "edge",
-              edge: {
-                enabled: true,
+              providers: {
+                edge: {
+                  enabled: true,
+                },
               },
             },
           },
