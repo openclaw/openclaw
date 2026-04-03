@@ -4,7 +4,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   resolveDefaultModelForAgent,
-  resolvePersistedSelectedModelRef,
+  resolvePersistedOverrideModelRef,
 } from "./model-selection.js";
 import {
   abortEmbeddedPiRun,
@@ -39,16 +39,14 @@ export function resolveLiveSessionModelSelection(params: {
     agentId,
   });
   const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-  const persisted = resolvePersistedSelectedModelRef({
+  const overrideSelection = resolvePersistedOverrideModelRef({
     defaultProvider: defaultModelRef.provider,
-    runtimeProvider: entry?.modelProvider,
-    runtimeModel: entry?.model,
     overrideProvider: entry?.providerOverride,
     overrideModel: entry?.modelOverride,
   });
   const provider =
-    persisted?.provider ?? entry?.providerOverride?.trim() ?? defaultModelRef.provider;
-  const model = persisted?.model ?? defaultModelRef.model;
+    overrideSelection?.provider ?? entry?.providerOverride?.trim() ?? defaultModelRef.provider;
+  const model = overrideSelection?.model ?? defaultModelRef.model;
   const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
   return {
     provider,

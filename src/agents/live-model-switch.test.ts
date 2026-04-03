@@ -207,7 +207,7 @@ describe("live model switch", () => {
     });
   });
 
-  it("preserves provider when runtime model is a vendor-prefixed OpenRouter id", async () => {
+  it("falls back to the configured selection when only runtime model fields are present", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {
         modelProvider: "openrouter",
@@ -226,8 +226,8 @@ describe("live model switch", () => {
         defaultModel: "claude-opus-4-6",
       }),
     ).toEqual({
-      provider: "openrouter",
-      model: "anthropic/claude-haiku-4.5",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
