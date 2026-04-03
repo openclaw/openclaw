@@ -671,10 +671,13 @@ export class OpenAIRealtimeVoiceBridge {
 
       case "response.done":
         console.log("[RealtimeVoice] Response done");
-        // Reset mark queue and timestamps for next turn
-        this.markQueue = [];
-        this.responseStartTimestamp = null;
-        this.lastAssistantItemId = null;
+        // Do NOT clear markQueue/responseStartTimestamp/lastAssistantItemId here.
+        // response.done fires when OpenAI finishes generating audio, but Twilio
+        // may still be playing buffered tail audio. If the user barges in during
+        // that window, handleBargein() needs the mark state to send
+        // conversation.item.truncate correctly. State is cleared in
+        // acknowledgeMark() once the queue drains (all audio confirmed played),
+        // or in handleBargein() if an interruption arrives first.
         break;
 
       case "response.content.done":
@@ -750,10 +753,21 @@ export class OpenAIRealtimeVoiceBridge {
   /**
    * Handle Twilio mark acknowledgment (when a mark event comes back from Twilio).
    * Call this method when you receive a "mark" event from the Twilio WebSocket.
+   *
+   * When the queue drains to zero, all buffered audio has been confirmed played,
+   * so barge-in state is cleared. This is the correct point to reset rather than
+   * response.done, which fires before Twilio finishes playing tail audio.
    */
   acknowledgeMark(): void {
     if (this.markQueue.length > 0) {
       this.markQueue.shift();
+      // Queue drained — Twilio has confirmed playback of all buffered audio.
+      // Safe to clear barge-in state now; any subsequent speech_started event
+      // has nothing left to truncate.
+      if (this.markQueue.length === 0) {
+        this.responseStartTimestamp = null;
+        this.lastAssistantItemId = null;
+      }
     }
   }
 
