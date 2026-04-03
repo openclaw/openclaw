@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type {
   ResolveProviderRuntimeGroupPolicyParams,

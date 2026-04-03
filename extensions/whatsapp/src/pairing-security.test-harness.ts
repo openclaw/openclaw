@@ -3,7 +3,6 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-import { resolveDmGroupAccessWithLists } from "openclaw/plugin-sdk/security-runtime";
 import { vi } from "vitest";
 
 export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {
@@ -38,8 +37,12 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/security-runtime", () => {
+vi.mock("openclaw/plugin-sdk/security-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+    "openclaw/plugin-sdk/security-runtime",
+  );
   return {
+    ...actual,
     readStoreAllowFromForDmPolicy: async (params: {
       provider: string;
       accountId: string;
@@ -55,6 +58,5 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => {
         return [];
       }
     },
-    resolveDmGroupAccessWithLists,
   };
 });
