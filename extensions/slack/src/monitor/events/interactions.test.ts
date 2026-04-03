@@ -1,18 +1,21 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const enqueueSystemEventMock = vi.fn();
-const dispatchPluginInteractiveHandlerMock = vi.fn(async () => ({
-  matched: false,
-  handled: false,
-  duplicate: false,
-}));
-const resolvePluginConversationBindingApprovalMock = vi.fn();
-const buildPluginBindingResolvedTextMock = vi.fn(() => "Binding updated.");
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const dispatchPluginInteractiveHandlerMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    matched: false,
+    handled: false,
+    duplicate: false,
+  })),
+);
+const resolvePluginConversationBindingApprovalMock = vi.hoisted(() => vi.fn());
+const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn(() => "Binding updated."));
 
 let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
-let infraRuntimeModule: typeof import("openclaw/plugin-sdk/infra-runtime");
-let pluginRuntimeModule: typeof import("openclaw/plugin-sdk/plugin-runtime");
-let conversationRuntimeModule: typeof import("openclaw/plugin-sdk/conversation-runtime");
+let enqueueSystemEventSpy: ReturnType<typeof vi.spyOn>;
+let dispatchPluginInteractiveHandlerSpy: ReturnType<typeof vi.spyOn>;
+let resolvePluginConversationBindingApprovalSpy: ReturnType<typeof vi.spyOn>;
+let buildPluginBindingResolvedTextSpy: ReturnType<typeof vi.spyOn>;
 
 type RegisteredHandler = (args: {
   ack: () => Promise<void>;
@@ -163,36 +166,49 @@ function createContext(overrides?: {
 
 describe("registerSlackInteractionEvents", () => {
   beforeAll(async () => {
-    infraRuntimeModule = await import("openclaw/plugin-sdk/infra-runtime");
-    pluginRuntimeModule = await import("openclaw/plugin-sdk/plugin-runtime");
-    conversationRuntimeModule = await import("openclaw/plugin-sdk/conversation-runtime");
-    vi
-      .spyOn(infraRuntimeModule, "enqueueSystemEvent")
-      .mockImplementation(
-        enqueueSystemEventMock as unknown as typeof infraRuntimeModule.enqueueSystemEvent,
-      );
-    vi
-      .spyOn(pluginRuntimeModule, "dispatchPluginInteractiveHandler")
-      .mockImplementation(
-        dispatchPluginInteractiveHandlerMock as unknown as
-          typeof pluginRuntimeModule.dispatchPluginInteractiveHandler,
-      );
-    vi
-      .spyOn(conversationRuntimeModule, "resolvePluginConversationBindingApproval")
-      .mockImplementation(
-        resolvePluginConversationBindingApprovalMock as unknown as
-          typeof conversationRuntimeModule.resolvePluginConversationBindingApproval,
-      );
-    vi
-      .spyOn(conversationRuntimeModule, "buildPluginBindingResolvedText")
-      .mockImplementation(
-        buildPluginBindingResolvedTextMock as unknown as
-          typeof conversationRuntimeModule.buildPluginBindingResolvedText,
-      );
+    const channelRuntime = await import("openclaw/plugin-sdk/infra-runtime");
+    const pluginRuntime = await import("openclaw/plugin-sdk/plugin-runtime");
+    const conversationBinding = await import("../../../../../src/plugins/conversation-binding.js");
+    enqueueSystemEventSpy = vi
+      .spyOn(channelRuntime, "enqueueSystemEvent")
+      .mockImplementation(((...args: Parameters<typeof channelRuntime.enqueueSystemEvent>) =>
+        (enqueueSystemEventMock as (...innerArgs: unknown[]) => boolean)(
+          ...args,
+        )) as typeof channelRuntime.enqueueSystemEvent);
+    dispatchPluginInteractiveHandlerSpy = vi
+      .spyOn(pluginRuntime, "dispatchPluginInteractiveHandler")
+      .mockImplementation(((
+        ...args: Parameters<typeof pluginRuntime.dispatchPluginInteractiveHandler>
+      ) =>
+        (dispatchPluginInteractiveHandlerMock as (...innerArgs: unknown[]) => Promise<unknown>)(
+          ...args,
+        )) as typeof pluginRuntime.dispatchPluginInteractiveHandler);
+    resolvePluginConversationBindingApprovalSpy = vi
+      .spyOn(conversationBinding, "resolvePluginConversationBindingApproval")
+      .mockImplementation(((
+        ...args: Parameters<typeof conversationBinding.resolvePluginConversationBindingApproval>
+      ) =>
+        (
+          resolvePluginConversationBindingApprovalMock as (
+            ...innerArgs: unknown[]
+          ) => Promise<unknown>
+        )(...args)) as typeof conversationBinding.resolvePluginConversationBindingApproval);
+    buildPluginBindingResolvedTextSpy = vi
+      .spyOn(conversationBinding, "buildPluginBindingResolvedText")
+      .mockImplementation(((
+        ...args: Parameters<typeof conversationBinding.buildPluginBindingResolvedText>
+      ) =>
+        (buildPluginBindingResolvedTextMock as (...innerArgs: unknown[]) => string)(
+          ...args,
+        )) as typeof conversationBinding.buildPluginBindingResolvedText);
     ({ registerSlackInteractionEvents } = await import("./interactions.js"));
   });
 
   beforeEach(() => {
+    enqueueSystemEventSpy.mockClear();
+    dispatchPluginInteractiveHandlerSpy.mockClear();
+    resolvePluginConversationBindingApprovalSpy.mockClear();
+    buildPluginBindingResolvedTextSpy.mockClear();
     enqueueSystemEventMock.mockClear();
     dispatchPluginInteractiveHandlerMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockClear();
@@ -338,20 +354,42 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
+    const dispatchCalls = dispatchPluginInteractiveHandlerMock.mock.calls as unknown[][];
+    const dispatchCall = dispatchCalls[0]?.[0] as
+      | {
+          channel?: string;
+          data?: string;
+          dedupeId?: string;
+          invoke?: (params: {
+            registration: { handler: (ctx: unknown) => unknown };
+            namespace: string;
+            payload: string;
+          }) => Promise<unknown>;
+        }
+      | undefined;
+    expect(dispatchCall).toMatchObject({
+      channel: "slack",
+      data: "codex:approve:thread-1",
+      dedupeId: "U123:C1:100.200:123.trigger:codex:approve:thread-1",
+    });
+    const registrationHandler = vi.fn();
+    await dispatchCall?.invoke?.({
+      registration: { handler: registrationHandler },
+      namespace: "codex",
+      payload: "approve:thread-1",
+    });
+    expect(registrationHandler).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "slack",
-        data: "codex:approve:thread-1",
+        accountId: ctx.accountId,
+        conversationId: "C1",
         interactionId: "U123:C1:100.200:123.trigger:codex:approve:thread-1",
-        ctx: expect.objectContaining({
-          accountId: ctx.accountId,
-          conversationId: "C1",
-          interactionId: "U123:C1:100.200:123.trigger:codex:approve:thread-1",
-          threadId: "100.100",
-          interaction: expect.objectContaining({
-            actionId: "codex",
-            value: "approve:thread-1",
-          }),
+        threadId: "100.100",
+        interaction: expect.objectContaining({
+          actionId: "codex",
+          value: "approve:thread-1",
+          data: "codex:approve:thread-1",
+          namespace: "codex",
+          payload: "approve:thread-1",
         }),
       }),
     );
@@ -475,17 +513,17 @@ describe("registerSlackInteractionEvents", () => {
     const calls = dispatchPluginInteractiveHandlerMock.mock.calls as unknown[][];
     const firstCall = calls[0]?.[0] as
       | {
-          interactionId?: string;
+          dedupeId?: string;
         }
       | undefined;
     const secondCall = calls[1]?.[0] as
       | {
-          interactionId?: string;
+          dedupeId?: string;
         }
       | undefined;
-    expect(firstCall?.interactionId).toContain(":trigger-1:");
-    expect(secondCall?.interactionId).toContain(":trigger-2:");
-    expect(firstCall?.interactionId).not.toBe(secondCall?.interactionId);
+    expect(firstCall?.dedupeId).toContain(":trigger-1:");
+    expect(secondCall?.dedupeId).toContain(":trigger-2:");
+    expect(firstCall?.dedupeId).not.toBe(secondCall?.dedupeId);
   });
 
   it("resolves plugin binding approvals from shared interactive Slack actions", async () => {
