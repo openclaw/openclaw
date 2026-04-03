@@ -168,6 +168,7 @@ class TalkModeManager(
           ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000)
         if (!assistant.isNullOrBlank()) {
           val playbackToken = playbackGeneration.incrementAndGet()
+          cancelActivePlayback()
           _statusText.value = "Speaking…"
           runPlaybackSession(playbackToken) {
             playAssistant(assistant, playbackToken)
@@ -489,6 +490,7 @@ class TalkModeManager(
       }
       Log.d(tag, "assistant text ok chars=${assistant.length}")
       val playbackToken = playbackGeneration.incrementAndGet()
+      cancelActivePlayback()
       runPlaybackSession(playbackToken) {
         playAssistant(assistant, playbackToken)
       }
@@ -680,14 +682,12 @@ class TalkModeManager(
   ) {
     val currentJob = coroutineContext[Job]
     var shouldResumeAfterSpeak = false
-    var previousJob: Job? = null
     try {
       val claimedPlayback =
         synchronized(ttsJobLock) {
           if (!playbackEnabled || playbackToken != playbackGeneration.get()) {
             false
           } else {
-            previousJob = ttsJob
             ttsJob = currentJob
             true
           }
@@ -696,8 +696,7 @@ class TalkModeManager(
         ensurePlaybackActive(playbackToken)
         return
       }
-      previousJob?.takeIf { it !== currentJob }?.cancel()
-      stopTextToSpeechPlayback()
+      ensurePlaybackActive(playbackToken)
       shouldResumeAfterSpeak = true
       onBeforeSpeak()
       ensurePlaybackActive(playbackToken)
