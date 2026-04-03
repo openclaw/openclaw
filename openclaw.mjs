@@ -47,6 +47,73 @@ if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
   }
 }
 
+// Fast-path: print version and exit without loading the dist bundle.
+// Matches the semantics of configureProgramHelp() in src/cli/program/help.ts
+// which uses hasFlag() (respects -- terminator) for --version/-V and
+// hasRootVersionAlias() for -v. We only handle --version/-V here; the -v
+// alias needs the full CLI parser for positional-aware logic.
+{
+  const VERSION_FLAGS = new Set(["--version", "-V"]);
+  const args = process.argv.slice(2);
+  let wantsVersion = false;
+  for (const arg of args) {
+    if (arg === "--") {
+      break;
+    }
+    if (VERSION_FLAGS.has(arg)) {
+      wantsVersion = true;
+      break;
+    }
+  }
+  if (wantsVersion) {
+    // Mirror resolveBinaryVersion() in src/version.ts:
+    //   1. package.json (name === "openclaw") → 2. build-info.json → 3. env var
+    const require = module.createRequire(import.meta.url);
+    const PACKAGE_JSON_CANDIDATES = [
+      "../package.json",
+      "../../package.json",
+      "../../../package.json",
+      "./package.json",
+    ];
+    const BUILD_INFO_CANDIDATES = [
+      "../build-info.json",
+      "../../build-info.json",
+      "./build-info.json",
+    ];
+
+    const readVersion = (candidates, { requirePackageName = false } = {}) => {
+      for (const candidate of candidates) {
+        try {
+          const pkg = require(candidate);
+          const v = pkg.version?.trim?.();
+          if (!v) {
+            continue;
+          }
+          if (requirePackageName && pkg.name !== "openclaw") {
+            continue;
+          }
+          return v;
+        } catch {
+          // candidate missing or unreadable
+        }
+      }
+      return undefined;
+    };
+
+    const version =
+      readVersion(PACKAGE_JSON_CANDIDATES, { requirePackageName: true }) ||
+      readVersion(BUILD_INFO_CANDIDATES) ||
+      process.env.OPENCLAW_BUNDLED_VERSION;
+
+    if (version) {
+      process.stdout.write(`${version}\n`);
+      process.exit(0);
+    }
+    // No source available — fall through to full CLI which also has
+    // the compile-time __OPENCLAW_VERSION__ define.
+  }
+}
+
 const isModuleNotFoundError = (err) =>
   err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
 
