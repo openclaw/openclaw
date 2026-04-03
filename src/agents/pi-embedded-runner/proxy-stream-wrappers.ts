@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { isXaiModelHint } from "../../../extensions/xai/api.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
@@ -133,7 +134,7 @@ export function createOpenRouterWrapper(
 }
 
 export function isProxyReasoningUnsupported(modelId: string): boolean {
-  return modelId.toLowerCase().startsWith("x-ai/");
+  return isXaiModelHint(modelId);
 }
 
 export function createKilocodeWrapper(
