@@ -151,7 +151,7 @@ export async function handleToolsInvokeHttpRequest(
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const url = new URL(req.url ?? "/", "http://localhost");
   if (url.pathname !== "/tools/invoke") {
     return false;
   }
