@@ -13,7 +13,7 @@ export function getMaxAuthenticatedConnectionsPerIdentityFromEnv(
   if (!Number.isFinite(parsed) || parsed < 1) {
     return DEFAULT_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY;
   }
-  return Math.max(1, Math.floor(parsed));
+  return Math.floor(parsed);
 }
 
 export type AuthenticatedConnectionBudget = {
