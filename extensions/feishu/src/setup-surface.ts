@@ -41,7 +41,7 @@ function getScopedFeishuConfig(
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return feishuCfg ?? {};
   }
-  return (feishuCfg.accounts?.[accountId] as FeishuAccountConfig | undefined) ?? {};
+  return (feishuCfg?.accounts?.[accountId] as FeishuAccountConfig | undefined) ?? {};
 }
 
 function patchFeishuConfig(
