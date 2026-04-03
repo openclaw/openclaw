@@ -96,7 +96,7 @@ export async function reactMessageMSTeams(
   );
 
   const reactionType = resolveTeamsReactionType(emoji);
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(cfg, { preferDelegated: true });
 
   // POST /chats/{chatId}/messages/{messageId}/setReaction
   const path = `/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(activityId)}/setReaction`;
@@ -159,7 +159,7 @@ export async function removeReactionMSTeams(
   );
 
   const reactionType = resolveTeamsReactionType(emoji);
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(cfg, { preferDelegated: true });
 
   // POST /chats/{chatId}/messages/{messageId}/unsetReaction
   const path = `/chats/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(activityId)}/unsetReaction`;

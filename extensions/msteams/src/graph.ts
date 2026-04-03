@@ -152,13 +152,29 @@ export async function fetchAllGraphPages<T>(params: {
   return { items, truncated: Boolean(nextPath) };
 }
 
-export async function resolveGraphToken(cfg: unknown): Promise<string> {
-  const creds = resolveMSTeamsCredentials(
-    (cfg as { channels?: { msteams?: unknown } })?.channels?.msteams as MSTeamsConfig | undefined,
-  );
+export async function resolveGraphToken(
+  cfg: unknown,
+  options?: { preferDelegated?: boolean },
+): Promise<string> {
+  const msteamsCfg = (cfg as { channels?: { msteams?: MSTeamsConfig } })?.channels?.msteams;
+  const creds = resolveMSTeamsCredentials(msteamsCfg);
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
+
+  // Try delegated token if requested and configured
+  if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled) {
+    // Dynamic import to avoid circular dependency (token.ts imports from graph.ts indirectly)
+    const { resolveDelegatedAccessToken } = await import("./token.js");
+    const delegated = await resolveDelegatedAccessToken({
+      tenantId: creds.tenantId,
+      clientId: creds.appId,
+      clientSecret: creds.appPassword,
+    });
+    if (delegated) return delegated;
+    // Fall through to app-only token
+  }
+
   const { app } = await loadMSTeamsSdkWithAuth(creds);
   const tokenProvider = createMSTeamsTokenProvider(app);
   const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
