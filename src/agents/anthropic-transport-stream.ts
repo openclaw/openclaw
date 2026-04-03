@@ -10,6 +10,10 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
+import {
+  applyAnthropicPayloadPolicyToParams,
+  resolveAnthropicPayloadPolicy,
+} from "./anthropic-payload-policy.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -164,22 +168,6 @@ function fromClaudeCodeName(name: string, tools: Context["tools"] | undefined): 
   return name;
 }
 
-function resolveCacheControl(
-  baseUrl: string | undefined,
-  cacheRetention: AnthropicOptions["cacheRetention"],
-): { type: "ephemeral"; ttl?: "1h" } | undefined {
-  const retention =
-    cacheRetention ?? (process.env.PI_CACHE_RETENTION === "long" ? "long" : "short");
-  if (retention === "none") {
-    return undefined;
-  }
-  const ttl =
-    retention === "long" && typeof baseUrl === "string" && baseUrl.includes("api.anthropic.com")
-      ? "1h"
-      : undefined;
-  return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
-}
-
 function convertContentBlocks(
   content: Array<
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
@@ -224,7 +212,6 @@ function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
-  cacheControl: { type: "ephemeral"; ttl?: "1h" } | undefined,
 ) {
   const params: Array<Record<string, unknown>> = [];
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
@@ -361,33 +348,6 @@ function convertAnthropicMessages(
       });
     }
   }
-  if (cacheControl && params.length > 0) {
-    const lastMessage = params[params.length - 1];
-    if (lastMessage.role === "user") {
-      const content = lastMessage.content;
-      if (Array.isArray(content)) {
-        const lastBlock = content[content.length - 1];
-        if (
-          lastBlock &&
-          typeof lastBlock === "object" &&
-          "type" in lastBlock &&
-          (lastBlock.type === "text" ||
-            lastBlock.type === "image" ||
-            lastBlock.type === "tool_result")
-        ) {
-          (lastBlock as Record<string, unknown>).cache_control = cacheControl;
-        }
-      } else if (typeof content === "string") {
-        lastMessage.content = [
-          {
-            type: "text",
-            text: content,
-            cache_control: cacheControl,
-          },
-        ];
-      }
-    }
-  }
   return params;
 }
 
@@ -515,11 +475,17 @@ function buildAnthropicParams(
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
 ) {
-  const cacheControl = resolveCacheControl(model.baseUrl, options?.cacheRetention);
+  const payloadPolicy = resolveAnthropicPayloadPolicy({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    cacheRetention: options?.cacheRetention,
+    enableCacheControl: true,
+  });
   const defaultMaxTokens = Math.min(model.maxTokens, 32_000);
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertAnthropicMessages(context.messages, model, isOAuthToken, cacheControl),
+    messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
     max_tokens: options?.maxTokens || defaultMaxTokens,
     stream: true,
   };
@@ -528,14 +494,12 @@ function buildAnthropicParams(
       {
         type: "text",
         text: "You are Claude Code, Anthropic's official CLI for Claude.",
-        ...(cacheControl ? { cache_control: cacheControl } : {}),
       },
       ...(context.systemPrompt
         ? [
             {
               type: "text",
               text: sanitizeTransportPayloadText(context.systemPrompt),
-              ...(cacheControl ? { cache_control: cacheControl } : {}),
             },
           ]
         : []),
@@ -545,7 +509,6 @@ function buildAnthropicParams(
       {
         type: "text",
         text: sanitizeTransportPayloadText(context.systemPrompt),
-        ...(cacheControl ? { cache_control: cacheControl } : {}),
       },
     ];
   }
@@ -579,6 +542,7 @@ function buildAnthropicParams(
     params.tool_choice =
       typeof options.toolChoice === "string" ? { type: options.toolChoice } : options.toolChoice;
   }
+  applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
   return params;
 }
 
