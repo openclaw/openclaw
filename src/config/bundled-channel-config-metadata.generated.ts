@@ -12400,6 +12400,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               type: "string",
               enum: ["ipv4first", "verbatim"],
             },
+            dangerouslyAllowPrivateNetwork: {
+              description:
+                "Dangerous opt-in for trusted Telegram fake-IP or transparent-proxy environments where api.telegram.org resolves to private/internal/special-use addresses during media downloads.",
+              type: "boolean",
+            },
           },
           additionalProperties: false,
         },
@@ -13396,6 +13401,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     type: "string",
                     enum: ["ipv4first", "verbatim"],
                   },
+                  dangerouslyAllowPrivateNetwork: {
+                    description:
+                      "Dangerous opt-in for trusted Telegram fake-IP or transparent-proxy environments where api.telegram.org resolves to private/internal/special-use addresses during media downloads.",
+                    type: "boolean",
+                  },
                 },
                 additionalProperties: false,
               },
@@ -13690,6 +13700,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       "network.autoSelectFamily": {
         label: "Telegram autoSelectFamily",
         help: "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
+      },
+      "network.dangerouslyAllowPrivateNetwork": {
+        label: "Telegram Dangerously Allow Private Network",
+        help: "Dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve api.telegram.org to private/internal/special-use addresses.",
       },
       timeoutSeconds: {
         label: "Telegram API Timeout (seconds)",

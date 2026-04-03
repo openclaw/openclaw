@@ -9,7 +9,6 @@ import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/config-runtime";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
@@ -437,9 +436,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const sessionKey =
       params.sessionKey ??
       `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
     try {
-      const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath);
+      const loadSessionStore = telegramDeps.loadSessionStore;
+      if (!loadSessionStore) {
+        return undefined;
+      }
+      const store = loadSessionStore(storePath);
       const entry = store[sessionKey];
       if (entry?.groupActivation === "always") {
         return false;

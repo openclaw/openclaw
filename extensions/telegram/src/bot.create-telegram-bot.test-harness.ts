@@ -1,11 +1,11 @@
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
+import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
+import { createReplyDispatcher } from "../../../src/auto-reply/reply/reply-dispatcher.js";
+import type { MsgContext } from "../../../src/auto-reply/templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../../../src/auto-reply/types.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
@@ -18,7 +18,7 @@ type TelegramBotRuntimeForTest = NonNullable<
   Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
 >;
 type DispatchReplyWithBufferedBlockDispatcherFn =
-  typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher;
+  typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
   ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
 >;
@@ -79,16 +79,6 @@ export function setSessionStoreEntriesForTest(entries: SessionStore) {
   sessionStoreEntries.value = JSON.parse(JSON.stringify(entries)) as SessionStore;
 }
 
-vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig,
-    loadSessionStore: loadSessionStoreMock,
-    resolveStorePath: resolveStorePathMock,
-  };
-});
-
 const { readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(
   (): {
     readChannelAllowFromStore: MockFn<TelegramBotDeps["readChannelAllowFromStore"]>;
@@ -109,23 +99,6 @@ export function getReadChannelAllowFromStoreMock(): AnyAsyncMock {
 export function getUpsertChannelPairingRequestMock(): AnyAsyncMock {
   return upsertChannelPairingRequest;
 }
-
-vi.doMock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    readChannelAllowFromStore,
-    upsertChannelPairingRequest,
-  };
-});
-vi.doMock("openclaw/plugin-sdk/conversation-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    readChannelAllowFromStore,
-    upsertChannelPairingRequest,
-  };
-});
 
 const skillCommandListHoisted = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
@@ -249,43 +222,6 @@ function createModelsProviderDataFromConfig(cfg: OpenClawConfig): {
   return { byProvider, providers, resolvedDefault, modelNames: new Map<string, string>() };
 }
 
-vi.doMock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
-  return {
-    ...actual,
-    listSkillCommandsForAgents: skillCommandListHoisted.listSkillCommandsForAgents,
-    buildModelsProviderData,
-  };
-});
-vi.doMock("openclaw/plugin-sdk/command-auth.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
-  return {
-    ...actual,
-    listSkillCommandsForAgents: skillCommandListHoisted.listSkillCommandsForAgents,
-    buildModelsProviderData,
-  };
-});
-vi.doMock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    getReplyFromConfig: replySpyHoisted.replySpy,
-    __replySpy: replySpyHoisted.replySpy,
-    dispatchReplyWithBufferedBlockDispatcher:
-      dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher,
-  };
-});
-vi.doMock("openclaw/plugin-sdk/reply-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    getReplyFromConfig: replySpyHoisted.replySpy,
-    __replySpy: replySpyHoisted.replySpy,
-    dispatchReplyWithBufferedBlockDispatcher:
-      dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher,
-  };
-});
-
 const systemEventsHoisted = vi.hoisted(() => ({
   enqueueSystemEventSpy: vi.fn<TelegramBotDeps["enqueueSystemEvent"]>(() => false),
 }));
@@ -295,14 +231,6 @@ const execApprovalHoisted = vi.hoisted(() => ({
   resolveExecApprovalSpy: vi.fn(async () => undefined),
 }));
 export const resolveExecApprovalSpy = execApprovalHoisted.resolveExecApprovalSpy;
-
-vi.doMock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
-  return {
-    ...actual,
-    enqueueSystemEvent: systemEventsHoisted.enqueueSystemEventSpy,
-  };
-});
 
 const sentMessageCacheHoisted = vi.hoisted(() => ({
   wasSentByBot: vi.fn(() => false),

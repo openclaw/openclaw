@@ -107,6 +107,10 @@
       "types": "./dist/plugin-sdk/reply-dispatch-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-dispatch-runtime.js"
     },
+    "./plugin-sdk/reply-reference": {
+      "types": "./dist/plugin-sdk/reply-reference.d.ts",
+      "default": "./dist/plugin-sdk/reply-reference.js"
+    },
     "./plugin-sdk/reply-chunking": {
       "types": "./dist/plugin-sdk/reply-chunking.d.ts",
       "default": "./dist/plugin-sdk/reply-chunking.js"
@@ -127,6 +131,10 @@
       "types": "./dist/plugin-sdk/interactive-runtime.d.ts",
       "default": "./dist/plugin-sdk/interactive-runtime.js"
     },
+    "./plugin-sdk/outbound-media": {
+      "types": "./dist/plugin-sdk/outbound-media.d.ts",
+      "default": "./dist/plugin-sdk/outbound-media.js"
+    },
     "./plugin-sdk/outbound-runtime": {
       "types": "./dist/plugin-sdk/outbound-runtime.d.ts",
       "default": "./dist/plugin-sdk/outbound-runtime.js"
@@ -142,6 +150,10 @@
     "./plugin-sdk/runtime-group-policy": {
       "types": "./dist/plugin-sdk/runtime-group-policy.d.ts",
       "default": "./dist/plugin-sdk/runtime-group-policy.js"
+    },
+    "./plugin-sdk/ssrf-policy": {
+      "types": "./dist/plugin-sdk/ssrf-policy.d.ts",
+      "default": "./dist/plugin-sdk/ssrf-policy.js"
     },
     "./plugin-sdk/ssrf-runtime": {
       "types": "./dist/plugin-sdk/ssrf-runtime.d.ts",
@@ -382,38 +394,6 @@
     "./plugin-sdk/diffs": {
       "types": "./dist/plugin-sdk/diffs.d.ts",
       "default": "./dist/plugin-sdk/diffs.js"
-    },
-    "./plugin-sdk/discord": {
-      "types": "./dist/plugin-sdk/discord.d.ts",
-      "default": "./dist/plugin-sdk/discord.js"
-    },
-    "./plugin-sdk/discord-account": {
-      "types": "./dist/plugin-sdk/discord-account.d.ts",
-      "default": "./dist/plugin-sdk/discord-account.js"
-    },
-    "./plugin-sdk/discord-core": {
-      "types": "./dist/plugin-sdk/discord-core.d.ts",
-      "default": "./dist/plugin-sdk/discord-core.js"
-    },
-    "./plugin-sdk/discord-runtime-surface": {
-      "types": "./dist/plugin-sdk/discord-runtime-surface.d.ts",
-      "default": "./dist/plugin-sdk/discord-runtime-surface.js"
-    },
-    "./plugin-sdk/discord-session-key": {
-      "types": "./dist/plugin-sdk/discord-session-key.d.ts",
-      "default": "./dist/plugin-sdk/discord-session-key.js"
-    },
-    "./plugin-sdk/discord-surface": {
-      "types": "./dist/plugin-sdk/discord-surface.d.ts",
-      "default": "./dist/plugin-sdk/discord-surface.js"
-    },
-    "./plugin-sdk/discord-thread-bindings": {
-      "types": "./dist/plugin-sdk/discord-thread-bindings.d.ts",
-      "default": "./dist/plugin-sdk/discord-thread-bindings.js"
-    },
-    "./plugin-sdk/discord-timeouts": {
-      "types": "./dist/plugin-sdk/discord-timeouts.d.ts",
-      "default": "./dist/plugin-sdk/discord-timeouts.js"
     },
     "./plugin-sdk/error-runtime": {
       "types": "./dist/plugin-sdk/error-runtime.d.ts",
@@ -831,49 +811,9 @@
       "types": "./dist/plugin-sdk/secret-input.d.ts",
       "default": "./dist/plugin-sdk/secret-input.js"
     },
-    "./plugin-sdk/signal": {
-      "types": "./dist/plugin-sdk/signal.d.ts",
-      "default": "./dist/plugin-sdk/signal.js"
-    },
-    "./plugin-sdk/signal-account": {
-      "types": "./dist/plugin-sdk/signal-account.d.ts",
-      "default": "./dist/plugin-sdk/signal-account.js"
-    },
-    "./plugin-sdk/signal-surface": {
-      "types": "./dist/plugin-sdk/signal-surface.d.ts",
-      "default": "./dist/plugin-sdk/signal-surface.js"
-    },
     "./plugin-sdk/channel-status": {
       "types": "./dist/plugin-sdk/channel-status.d.ts",
       "default": "./dist/plugin-sdk/channel-status.js"
-    },
-    "./plugin-sdk/slack": {
-      "types": "./dist/plugin-sdk/slack.d.ts",
-      "default": "./dist/plugin-sdk/slack.js"
-    },
-    "./plugin-sdk/slack-account": {
-      "types": "./dist/plugin-sdk/slack-account.d.ts",
-      "default": "./dist/plugin-sdk/slack-account.js"
-    },
-    "./plugin-sdk/slack-core": {
-      "types": "./dist/plugin-sdk/slack-core.d.ts",
-      "default": "./dist/plugin-sdk/slack-core.js"
-    },
-    "./plugin-sdk/slack-runtime-surface": {
-      "types": "./dist/plugin-sdk/slack-runtime-surface.d.ts",
-      "default": "./dist/plugin-sdk/slack-runtime-surface.js"
-    },
-    "./plugin-sdk/slack-surface": {
-      "types": "./dist/plugin-sdk/slack-surface.d.ts",
-      "default": "./dist/plugin-sdk/slack-surface.js"
-    },
-    "./plugin-sdk/slack-target-parser": {
-      "types": "./dist/plugin-sdk/slack-target-parser.d.ts",
-      "default": "./dist/plugin-sdk/slack-target-parser.js"
-    },
-    "./plugin-sdk/slack-targets": {
-      "types": "./dist/plugin-sdk/slack-targets.d.ts",
-      "default": "./dist/plugin-sdk/slack-targets.js"
     },
     "./plugin-sdk/status-helpers": {
       "types": "./dist/plugin-sdk/status-helpers.d.ts",
@@ -902,26 +842,6 @@
     "./plugin-sdk/synthetic": {
       "types": "./dist/plugin-sdk/synthetic.d.ts",
       "default": "./dist/plugin-sdk/synthetic.js"
-    },
-    "./plugin-sdk/telegram-account": {
-      "types": "./dist/plugin-sdk/telegram-account.d.ts",
-      "default": "./dist/plugin-sdk/telegram-account.js"
-    },
-    "./plugin-sdk/telegram-command-config": {
-      "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
-      "default": "./dist/plugin-sdk/telegram-command-config.js"
-    },
-    "./plugin-sdk/telegram-allow-from": {
-      "types": "./dist/plugin-sdk/telegram-allow-from.d.ts",
-      "default": "./dist/plugin-sdk/telegram-allow-from.js"
-    },
-    "./plugin-sdk/telegram-core": {
-      "types": "./dist/plugin-sdk/telegram-core.d.ts",
-      "default": "./dist/plugin-sdk/telegram-core.js"
-    },
-    "./plugin-sdk/telegram-surface": {
-      "types": "./dist/plugin-sdk/telegram-surface.d.ts",
-      "default": "./dist/plugin-sdk/telegram-surface.js"
     },
     "./plugin-sdk/thread-ownership": {
       "types": "./dist/plugin-sdk/thread-ownership.d.ts",
@@ -974,26 +894,6 @@
     "./plugin-sdk/volcengine": {
       "types": "./dist/plugin-sdk/volcengine.d.ts",
       "default": "./dist/plugin-sdk/volcengine.js"
-    },
-    "./plugin-sdk/whatsapp-auth-presence": {
-      "types": "./dist/plugin-sdk/whatsapp-auth-presence.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-auth-presence.js"
-    },
-    "./plugin-sdk/whatsapp-core": {
-      "types": "./dist/plugin-sdk/whatsapp-core.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-core.js"
-    },
-    "./plugin-sdk/whatsapp-shared": {
-      "types": "./dist/plugin-sdk/whatsapp-shared.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-shared.js"
-    },
-    "./plugin-sdk/whatsapp-surface": {
-      "types": "./dist/plugin-sdk/whatsapp-surface.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-surface.js"
-    },
-    "./plugin-sdk/whatsapp-targets": {
-      "types": "./dist/plugin-sdk/whatsapp-targets.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-targets.js"
     },
     "./plugin-sdk/zalo": {
       "types": "./dist/plugin-sdk/zalo.d.ts",
@@ -1143,16 +1043,17 @@
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
     "stage:bundled-plugin-runtime-deps": "node scripts/stage-bundled-plugin-runtime-deps.mjs",
     "start": "node scripts/run-node.mjs",
-    "test": "node scripts/test-parallel.mjs",
+    "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "vitest run --config vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
-    "test:changed": "pnpm test -- --changed origin/main",
-    "test:changed:max": "node scripts/test-parallel.mjs --profile max --changed origin/main",
-    "test:channels": "node scripts/test-parallel.mjs --surface channels",
+    "test:bundled": "vitest run --config vitest.bundled.config.ts",
+    "test:changed": "node scripts/test-projects.mjs --changed origin/main",
+    "test:changed:max": "OPENCLAW_VITEST_MAX_WORKERS=8 node scripts/test-projects.mjs --changed origin/main",
+    "test:channels": "vitest run --config vitest.channels.config.ts",
     "test:contracts": "pnpm test:contracts:channels && pnpm test:contracts:plugins",
-    "test:contracts:channels": "OPENCLAW_TEST_PROFILE=serial pnpm exec vitest run --config vitest.contracts.config.ts src/channels/plugins/contracts",
-    "test:contracts:plugins": "OPENCLAW_TEST_PROFILE=serial pnpm exec vitest run --config vitest.contracts.config.ts src/plugins/contracts",
+    "test:contracts:channels": "pnpm exec vitest run --config vitest.contracts.config.ts --maxWorkers=1 src/channels/plugins/contracts",
+    "test:contracts:plugins": "pnpm exec vitest run --config vitest.contracts.config.ts --maxWorkers=1 src/plugins/contracts",
     "test:coverage": "vitest run --config vitest.unit.config.ts --coverage",
     "test:coverage:changed": "vitest run --config vitest.unit.config.ts --coverage --changed origin/main",
     "test:docker:all": "pnpm test:docker:live-build && OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-models && OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-gateway && pnpm test:docker:openwebui && pnpm test:docker:onboard && pnpm test:docker:gateway-network && pnpm test:docker:mcp-channels && pnpm test:docker:qr && pnpm test:docker:doctor-switch && pnpm test:docker:plugins && pnpm test:docker:cleanup",
@@ -1172,7 +1073,7 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:e2e:openshell": "OPENCLAW_E2E_OPENSHELL=1 vitest run --config vitest.e2e.config.ts test/openshell-sandbox.e2e.test.ts",
     "test:extension": "node scripts/test-extension.mjs",
-    "test:extensions": "node scripts/test-parallel.mjs --surface extensions",
+    "test:extensions": "vitest run --config vitest.extensions.config.ts",
     "test:extensions:memory": "node scripts/profile-extension-memory.mjs",
     "test:fast": "vitest run --config vitest.unit.config.ts",
     "test:force": "node --import tsx scripts/test-force.ts",
@@ -1185,23 +1086,19 @@
     "test:live": "node scripts/test-live.mjs",
     "test:live:gateway-profiles": "node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts",
     "test:live:models-profiles": "node scripts/test-live.mjs -- src/agents/models.profiles.live.test.ts",
-    "test:max": "node scripts/test-parallel.mjs --profile max",
+    "test:max": "OPENCLAW_VITEST_MAX_WORKERS=8 node scripts/test-projects.mjs",
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "bash scripts/e2e/parallels-macos-smoke.sh",
     "test:parallels:npm-update": "bash scripts/e2e/parallels-npm-update-smoke.sh",
     "test:parallels:windows": "bash scripts/e2e/parallels-windows-smoke.sh",
     "test:perf:budget": "node scripts/test-perf-budget.mjs",
     "test:perf:hotspots": "node scripts/test-hotspots.mjs",
-    "test:perf:imports": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 pnpm test",
-    "test:perf:imports:changed": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 pnpm test -- --changed origin/main",
+    "test:perf:imports": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 node scripts/test-projects.mjs",
+    "test:perf:imports:changed": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 node scripts/test-projects.mjs --changed origin/main",
     "test:perf:profile:main": "node scripts/run-vitest-profile.mjs main",
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
-    "test:perf:update-memory-hotspots": "node scripts/test-update-memory-hotspots.mjs",
-    "test:perf:update-memory-hotspots:extensions": "node scripts/test-update-memory-hotspots.mjs --config vitest.extensions.config.ts --out test/fixtures/test-memory-hotspots.extensions.json --lane extensions --lane-prefix extensions-batch- --min-delta-kb 1048576",
-    "test:perf:update-timings": "node scripts/test-update-timings.mjs",
-    "test:perf:update-timings:extensions": "node scripts/test-update-timings.mjs --config vitest.extensions.config.ts",
     "test:sectriage": "pnpm exec vitest run --config vitest.gateway.config.ts && vitest run --config vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
-    "test:serial": "node scripts/test-parallel.mjs --profile serial",
+    "test:serial": "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
     "test:startup:bench": "node --import tsx scripts/bench-cli-startup.ts",
     "test:startup:bench:check": "node scripts/test-cli-startup-bench-budget.mjs",
     "test:startup:bench:save": "node --import tsx scripts/bench-cli-startup.ts --preset all --runs 5 --warmup 1 --output .artifacts/cli-startup-bench-all.json",
@@ -1210,7 +1107,7 @@
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
-    "test:watch": "vitest",
+    "test:watch": "node scripts/test-projects.mjs --watch",
     "ts-topology": "node --import tsx scripts/ts-topology.ts",
     "tsgo": "node scripts/run-tsgo.mjs",
     "tui": "node scripts/run-node.mjs tui",

@@ -1,11 +1,21 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildDmGroupAccountAllowlistAdapter,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  PAIRING_APPROVED_MESSAGE,
+  buildTokenChannelStatusSummary,
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
+} from "openclaw/plugin-sdk/channel-status";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { clearAccountEntryFields } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import {
   resolveOutboundSendDep,
@@ -22,17 +32,6 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import {
-  buildTokenChannelStatusSummary,
-  clearAccountEntryFields,
-  DEFAULT_ACCOUNT_ID,
-  PAIRING_APPROVED_MESSAGE,
-  parseTelegramTopicConversation,
-  projectCredentialSnapshotFields,
-  resolveConfiguredFromCredentialStatuses,
-  type ChannelMessageActionAdapter,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/telegram-core";
 import {
   listTelegramAccountIds,
   resolveTelegramAccount,
@@ -89,6 +88,7 @@ import {
 } from "./thread-bindings.js";
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 import { resolveTelegramToken } from "./token.js";
+import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
 type TelegramSendFn = typeof sendMessageTelegram;
 

@@ -229,6 +229,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
     acquireSessionWriteLock: vi.fn(async () => ({
       release: async () => {},
     })),
+    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
   }));
   vi.doMock("../../agents/pi-embedded.js", () => ({
     abortEmbeddedPiRun: vi.fn(async () => false),

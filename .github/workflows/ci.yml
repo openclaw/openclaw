@@ -17,8 +17,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # Preflight: establish routing truth and planner-owned matrices once, then let
-  # real work fan out from a single source of truth.
+  # Preflight: establish routing truth and job matrices once, then let real
+  # work fan out from a single source of truth.
   preflight:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -103,7 +103,7 @@ jobs:
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
-          import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
+          import { listChangedExtensionIds } from "./scripts/lib/changed-extensions.mjs";
 
           const extensionIds = listChangedExtensionIds({
             base: process.env.BASE_SHA,
@@ -129,7 +129,134 @@ jobs:
           OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
           OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
           OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
-        run: node scripts/ci-write-manifest-outputs.mjs --workflow ci
+        run: |
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+
+          const parseBoolean = (value, fallback = false) => {
+            if (value === undefined) return fallback;
+            const normalized = value.trim().toLowerCase();
+            if (normalized === "true" || normalized === "1") return true;
+            if (normalized === "false" || normalized === "0" || normalized === "") return false;
+            return fallback;
+          };
+
+          const parseJson = (value, fallback) => {
+            try {
+              return value ? JSON.parse(value) : fallback;
+            } catch {
+              return fallback;
+            }
+          };
+
+          const createMatrix = (include) => ({ include });
+          const outputPath = process.env.GITHUB_OUTPUT;
+          const eventName = process.env.GITHUB_EVENT_NAME ?? "pull_request";
+          const isPush = eventName === "push";
+          const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
+          const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
+          const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
+          const runMacos = parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly;
+          const runAndroid = parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly;
+          const runWindows = parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) && !docsOnly;
+          const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
+          const hasChangedExtensions =
+            parseBoolean(process.env.OPENCLAW_CI_HAS_CHANGED_EXTENSIONS) && !docsOnly;
+          const changedExtensionsMatrix = hasChangedExtensions
+            ? parseJson(process.env.OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX, { include: [] })
+            : { include: [] };
+
+          const manifest = {
+            docs_only: docsOnly,
+            docs_changed: docsChanged,
+            run_node: runNode,
+            run_macos: runMacos,
+            run_android: runAndroid,
+            run_skills_python: runSkillsPython,
+            run_windows: runWindows,
+            has_changed_extensions: hasChangedExtensions,
+            changed_extensions_matrix: changedExtensionsMatrix,
+            run_build_artifacts: runNode,
+            run_checks_fast: runNode,
+            checks_fast_matrix: createMatrix(
+              runNode
+                ? [
+                    { check_name: "checks-fast-bundled", runtime: "node", task: "bundled" },
+                    { check_name: "checks-fast-extensions", runtime: "node", task: "extensions" },
+                    {
+                      check_name: "checks-fast-contracts-protocol",
+                      runtime: "node",
+                      task: "contracts-protocol",
+                    },
+                  ]
+                : [],
+            ),
+            run_checks: runNode,
+            checks_matrix: createMatrix(
+              runNode
+                ? [
+                    { check_name: "checks-node-test", runtime: "node", task: "test" },
+                    { check_name: "checks-node-channels", runtime: "node", task: "channels" },
+                    ...(isPush
+                      ? [
+                          {
+                            check_name: "checks-node-compat-node22",
+                            runtime: "node",
+                            task: "compat-node22",
+                            node_version: "22.x",
+                            cache_key_suffix: "node22",
+                          },
+                        ]
+                      : []),
+                  ]
+                : [],
+            ),
+            run_extension_fast: hasChangedExtensions,
+            extension_fast_matrix: createMatrix(
+              hasChangedExtensions
+                ? (changedExtensionsMatrix.include ?? []).map((entry) => ({
+                    check_name: `extension-fast-${entry.extension}`,
+                    extension: entry.extension,
+                  }))
+                : [],
+            ),
+            run_check: runNode,
+            run_check_additional: runNode,
+            run_build_smoke: runNode,
+            run_check_docs: docsChanged,
+            run_skills_python_job: runSkillsPython,
+            run_checks_windows: runWindows,
+            checks_windows_matrix: createMatrix(
+              runWindows
+                ? [{ check_name: "checks-windows-node-test", runtime: "node", task: "test" }]
+                : [],
+            ),
+            run_macos_node: runMacos,
+            macos_node_matrix: createMatrix(
+              runMacos ? [{ check_name: "macos-node", runtime: "node", task: "test" }] : [],
+            ),
+            run_macos_swift: runMacos,
+            run_android_job: runAndroid,
+            android_matrix: createMatrix(
+              runAndroid
+                ? [
+                    { check_name: "android-test-play", task: "test-play" },
+                    { check_name: "android-test-third-party", task: "test-third-party" },
+                    { check_name: "android-build-play", task: "build-play" },
+                    { check_name: "android-build-third-party", task: "build-third-party" },
+                  ]
+                : [],
+            ),
+          };
+
+          for (const [key, value] of Object.entries(manifest)) {
+            appendFileSync(
+              outputPath,
+              `${key}=${typeof value === "string" ? value : JSON.stringify(value)}\n`,
+              "utf8",
+            );
+          }
+          EOF
 
   # Run the fast security/SCM checks in parallel with scope detection so the
   # main Node jobs do not have to wait for Python/pre-commit setup.
@@ -302,17 +429,14 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           TASK: ${{ matrix.task }}
-          SHARD_COUNT: ${{ matrix.shard_count || '' }}
-          SHARD_INDEX: ${{ matrix.shard_index || '' }}
         shell: bash
         run: |
           set -euo pipefail
           case "$TASK" in
+            bundled)
+              pnpm test:bundled
+              ;;
             extensions)
-              if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
-                export OPENCLAW_TEST_SHARDS="$SHARD_COUNT"
-                export OPENCLAW_TEST_SHARD_INDEX="$SHARD_INDEX"
-              fi
               pnpm test:extensions
               ;;
             contracts|contracts-protocol)
@@ -360,20 +484,11 @@ jobs:
         if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
         env:
           TASK: ${{ matrix.task }}
-          SHARD_COUNT: ${{ matrix.shard_count || '' }}
-          SHARD_INDEX: ${{ matrix.shard_index || '' }}
         run: |
-          # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
-          # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+          echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
           if [ "$TASK" = "channels" ]; then
-            echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
+            echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
             echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
-          fi
-          if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
-            echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
           fi
 
       - name: Download dist artifact
@@ -394,6 +509,7 @@ jobs:
         if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
         env:
           TASK: ${{ matrix.task }}
+          NODE_OPTIONS: --max-old-space-size=6144
         shell: bash
         run: |
           set -euo pipefail
@@ -735,8 +851,7 @@ jobs:
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.
-      # Windows shard 2 has shown intermittent instability at 2 workers.
-      OPENCLAW_TEST_WORKERS: 1
+      OPENCLAW_VITEST_MAX_WORKERS: 1
     defaults:
       run:
         shell: bash
@@ -809,15 +924,6 @@ jobs:
           # caches can skip repeated rebuild/download work on later shards/runs.
           pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
-      - name: Configure test shard (Windows)
-        if: matrix.task == 'test'
-        env:
-          SHARD_COUNT: ${{ matrix.shard_count }}
-          SHARD_INDEX: ${{ matrix.shard_index }}
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
-
       - name: Download dist artifact
         if: matrix.task == 'test'
         uses: actions/download-artifact@v8
@@ -881,17 +987,10 @@ jobs:
           name: canvas-a2ui-bundle
           path: src/canvas-host/a2ui/
 
-      - name: Configure test shard (macOS)
-        env:
-          SHARD_COUNT: ${{ matrix.shard_count }}
-          SHARD_INDEX: ${{ matrix.shard_index }}
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
-
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          OPENCLAW_VITEST_MAX_WORKERS: 2
           TASK: ${{ matrix.task }}
         shell: bash
         run: |

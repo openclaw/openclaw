@@ -1,11 +1,11 @@
 import { expect, it } from "vitest";
-import { installChannelRuntimeGroupPolicyFallbackSuite } from "../../../src/channels/plugins/contracts/suites.js";
-import { resolveOpenProviderRuntimeGroupPolicy } from "../../../src/config/runtime-group-policy.js";
-import { whatsappAccessControlTesting } from "../../../src/plugin-sdk/whatsapp-surface.js";
+import { whatsappAccessControlTesting } from "../../../extensions/whatsapp/api.js";
 import {
   evaluateZaloGroupAccess,
   resolveZaloRuntimeGroupPolicy,
-} from "../../../src/plugin-sdk/zalo-setup.js";
+} from "../../../extensions/zalo/api.js";
+import { installChannelRuntimeGroupPolicyFallbackSuite } from "../../../src/channels/plugins/contracts/suites.js";
+import { resolveOpenProviderRuntimeGroupPolicy } from "../../../src/config/runtime-group-policy.js";
 
 export function installSlackGroupPolicyContractSuite() {
   installChannelRuntimeGroupPolicyFallbackSuite({
