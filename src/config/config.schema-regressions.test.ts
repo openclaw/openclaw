@@ -182,6 +182,13 @@ describe("config schema regressions", () => {
           },
           pdfMaxBytesMb: 12,
           pdfMaxPages: 25,
+          pdfExtraction: {
+            engine: "nutrient",
+            fallbackOnError: true,
+            logTelemetry: true,
+            nutrientCommand: "pdf-to-markdown",
+            nutrientTimeoutMs: 45000,
+          },
         },
       },
     });
@@ -204,6 +211,20 @@ describe("config schema regressions", () => {
     if (!res.ok) {
       expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
     }
+  });
+
+  it("rejects invalid pdf extraction engine values", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          pdfExtraction: {
+            engine: "legacy",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
   });
 
   it("rejects relative iMessage attachment roots", () => {

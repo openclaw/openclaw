@@ -1,7 +1,11 @@
 import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
+import {
+  extractPdfContent,
+  type PdfExtractedContent,
+  type PdfExtractionMeta,
+} from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
 import {
@@ -21,6 +25,7 @@ import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpe
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
+  coercePdfExtractionConfig,
   coercePdfModelConfig,
   parsePageRange,
   providerSupportsNativePdf,
@@ -48,6 +53,75 @@ const ANTHROPIC_PDF_FALLBACK = "anthropic/claude-opus-4-5";
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
+const PDF_EXTRACTION_EXPERIMENT = "pdf-fallback-dogfood-v1";
+
+function buildPdfExtractionDetails(extractions: PdfExtractedContent[]) {
+  if (extractions.length === 0) {
+    return {};
+  }
+  const summarized = extractions.map((extraction) => ({
+    engineConfigured: extraction.meta?.engineConfigured,
+    engineUsed: extraction.meta?.engineUsed,
+    engineFallback: extraction.meta?.engineFallback,
+    ...(extraction.meta?.fallbackReason ? { fallbackReason: extraction.meta.fallbackReason } : {}),
+    ...(typeof extraction.meta?.durationMs === "number"
+      ? { durationMs: extraction.meta.durationMs }
+      : {}),
+    ...(typeof extraction.meta?.chars === "number" ? { chars: extraction.meta.chars } : {}),
+    ...(typeof extraction.meta?.pageCountProcessed === "number"
+      ? { pageCountProcessed: extraction.meta.pageCountProcessed }
+      : {}),
+    ...(typeof extraction.meta?.pageCountTotal === "number"
+      ? { pageCountTotal: extraction.meta.pageCountTotal }
+      : {}),
+    ...(typeof extraction.meta?.imageCount === "number"
+      ? { imageCount: extraction.meta.imageCount }
+      : {}),
+    ...(typeof extraction.meta?.empty === "boolean" ? { empty: extraction.meta.empty } : {}),
+  }));
+  return extractions.length === 1 ? { extraction: summarized[0] } : { extractions: summarized };
+}
+
+function logPdfExtractionTelemetry(params: {
+  toolCallId: string;
+  provider: string;
+  model: string;
+  pdfCount: number;
+  pageNumbers?: number[];
+  loadedPdfs: Array<{ buffer: Buffer; resolvedPath: string }>;
+  extractions: PdfExtractedContent[];
+}) {
+  for (const [index, extraction] of params.extractions.entries()) {
+    const pdf = params.loadedPdfs[index];
+    const meta: PdfExtractionMeta | undefined = extraction.meta;
+    const record = {
+      kind: "pdf_extraction_telemetry",
+      experiment: PDF_EXTRACTION_EXPERIMENT,
+      arm: meta?.engineUsed === "nutrient" ? "treatment" : "control",
+      toolCallId: params.toolCallId,
+      provider: params.provider,
+      model: params.model,
+      pdfIndex: index + 1,
+      pdfCount: params.pdfCount,
+      pdf: pdf?.resolvedPath,
+      bytes: pdf?.buffer.length,
+      pagesRequested: Array.isArray(params.pageNumbers) ? params.pageNumbers.length : 0,
+      engineConfigured: meta?.engineConfigured,
+      engineUsed: meta?.engineUsed,
+      engineFallback: meta?.engineFallback,
+      fallbackReason: meta?.fallbackReason,
+      durationMs: meta?.durationMs,
+      chars: meta?.chars,
+      pageCountProcessed: meta?.pageCountProcessed,
+      pageCountTotal: meta?.pageCountTotal,
+      imageCount: meta?.imageCount,
+      empty: meta?.empty,
+      stderrSnippet: meta?.stderrSnippet,
+      timestamp: new Date().toISOString(),
+    };
+    console.info(JSON.stringify(record));
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Model resolution (mirrors image tool pattern)
@@ -326,6 +400,7 @@ export function createPdfTool(options?: {
     typeof maxPagesDefault === "number" && Number.isFinite(maxPagesDefault)
       ? Math.floor(maxPagesDefault)
       : DEFAULT_MAX_PAGES;
+  const pdfExtractionConfig = coercePdfExtractionConfig(options?.config);
 
   const description =
     "Analyze one or more PDF documents with a model. Supports native PDF analysis for Anthropic and Google models, with text/image extraction fallback for other providers. Use pdf for a single path/URL, or pdfs for multiple (up to 10). Provide a prompt describing what to analyze.";
@@ -513,8 +588,12 @@ export function createPdfTool(options?: {
       }
 
       const pageNumbers = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
+      let extractionCache: PdfExtractedContent[] | null = null;
 
       const getExtractions = async (): Promise<PdfExtractedContent[]> => {
+        if (extractionCache) {
+          return extractionCache;
+        }
         const extractedAll: PdfExtractedContent[] = [];
         for (const pdf of loadedPdfs) {
           const extracted = await extractPdfContent({
@@ -523,9 +602,14 @@ export function createPdfTool(options?: {
             maxPixels: PDF_MAX_PIXELS,
             minTextChars: PDF_MIN_TEXT_CHARS,
             pageNumbers,
+            engine: pdfExtractionConfig.engine ?? "pdfjs",
+            fallbackOnError: pdfExtractionConfig.fallbackOnError ?? true,
+            nutrientCommand: pdfExtractionConfig.nutrientCommand,
+            nutrientTimeoutMs: pdfExtractionConfig.nutrientTimeoutMs,
           });
           extractedAll.push(extracted);
         }
+        extractionCache = extractedAll;
         return extractedAll;
       };
 
@@ -539,6 +623,18 @@ export function createPdfTool(options?: {
         pageNumbers,
         getExtractions,
       });
+
+      if (!result.native && pdfExtractionConfig.logTelemetry === true && extractionCache) {
+        logPdfExtractionTelemetry({
+          toolCallId: _toolCallId,
+          provider: result.provider,
+          model: result.model,
+          pdfCount: loadedPdfs.length,
+          pageNumbers,
+          loadedPdfs,
+          extractions: extractionCache,
+        });
+      }
 
       const pdfDetails =
         loadedPdfs.length === 1
@@ -555,7 +651,11 @@ export function createPdfTool(options?: {
               })),
             };
 
-      return buildTextToolResult(result, { native: result.native, ...pdfDetails });
+      return buildTextToolResult(result, {
+        native: result.native,
+        ...pdfDetails,
+        ...(!result.native && extractionCache ? buildPdfExtractionDetails(extractionCache) : {}),
+      });
     },
   };
 }

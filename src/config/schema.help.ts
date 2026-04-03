@@ -1105,6 +1105,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
+  "agents.defaults.pdfExtraction.engine":
+    'Extraction engine for non-native PDF fallback mode: "pdfjs" (default, current behavior), "nutrient", or "auto".',
+  "agents.defaults.pdfExtraction.fallbackOnError":
+    "When true, falls back to pdfjs extraction if the preferred non-native PDF extraction engine fails.",
+  "agents.defaults.pdfExtraction.logTelemetry":
+    "Emit structured logs for non-native PDF extraction runs so experiments can compare engines and fallbacks.",
+  "agents.defaults.pdfExtraction.nutrientCommand":
+    'Command used to invoke the Nutrient PDF→Markdown extractor CLI (default: "pdf-to-markdown").',
+  "agents.defaults.pdfExtraction.nutrientTimeoutMs":
+    "Timeout in milliseconds for the Nutrient PDF→Markdown extractor CLI.",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",

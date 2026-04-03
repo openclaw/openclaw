@@ -117,6 +117,19 @@ export type CliBackendConfig = {
   };
 };
 
+export type PdfExtractionDefaultsConfig = {
+  /** Extraction engine for non-native PDF fallback mode. */
+  engine?: "auto" | "nutrient" | "pdfjs";
+  /** Fall back to pdfjs extraction when the preferred engine fails. */
+  fallbackOnError?: boolean;
+  /** Emit structured extraction telemetry records to logs. */
+  logTelemetry?: boolean;
+  /** CLI command used for Nutrient PDF→Markdown extraction. */
+  nutrientCommand?: string;
+  /** Timeout in milliseconds for the Nutrient extractor CLI. */
+  nutrientTimeoutMs?: number;
+};
+
 export type AgentDefaultsConfig = {
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
@@ -132,6 +145,8 @@ export type AgentDefaultsConfig = {
   pdfMaxBytesMb?: number;
   /** Maximum number of PDF pages to process (default: 20). */
   pdfMaxPages?: number;
+  /** Extraction-engine controls for non-native PDF fallback mode. */
+  pdfExtraction?: PdfExtractionDefaultsConfig;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */

@@ -24,6 +24,16 @@ export const AgentDefaultsSchema = z
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
+    pdfExtraction: z
+      .object({
+        engine: z.union([z.literal("auto"), z.literal("nutrient"), z.literal("pdfjs")]).optional(),
+        fallbackOnError: z.boolean().optional(),
+        logTelemetry: z.boolean().optional(),
+        nutrientCommand: z.string().optional(),
+        nutrientTimeoutMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     models: z
       .record(
         z.string(),

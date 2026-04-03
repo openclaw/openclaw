@@ -950,6 +950,13 @@ Time format in system prompt. Default: `auto` (OS preference).
       params: { cacheRetention: "long" }, // global default provider params
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
+      pdfExtraction: {
+        engine: "pdfjs",
+        fallbackOnError: true,
+        logTelemetry: false,
+        nutrientCommand: "pdf-to-markdown",
+        nutrientTimeoutMs: 30000,
+      },
       thinkingDefault: "low",
       verboseDefault: "off",
       elevatedDefault: "on",
@@ -978,6 +985,14 @@ Time format in system prompt. Default: `auto` (OS preference).
   - If omitted, the PDF tool falls back to `imageModel`, then to best-effort provider defaults.
 - `pdfMaxBytesMb`: default PDF size limit for the `pdf` tool when `maxBytesMb` is not passed at call time.
 - `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
+- `pdfExtraction.engine`: extraction engine for non-native PDF fallback mode.
+  - `pdfjs` (default): preserve current extraction behavior.
+  - `nutrient`: use the `pdf-to-markdown` CLI first.
+  - `auto`: prefer Nutrient when possible, but keep pdfjs for page-filtered requests.
+- `pdfExtraction.fallbackOnError`: when `true`, fall back to pdfjs if the preferred extractor fails.
+- `pdfExtraction.logTelemetry`: emit machine-readable extraction telemetry to logs for experiment analysis.
+- `pdfExtraction.nutrientCommand`: override the CLI command used for Nutrient PDF→Markdown extraction.
+- `pdfExtraction.nutrientTimeoutMs`: timeout for the Nutrient extractor process.
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `anthropic/claude-opus-4-6`). If you omit the provider, OpenClaw assumes `anthropic` (deprecated).

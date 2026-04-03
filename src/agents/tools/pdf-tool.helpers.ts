@@ -4,9 +4,17 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import type { PdfExtractionConfiguredEngine } from "../../media/pdf-extract.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 
 export type PdfModelConfig = { primary?: string; fallbacks?: string[] };
+export type PdfExtractionConfig = {
+  engine?: PdfExtractionConfiguredEngine;
+  fallbackOnError?: boolean;
+  logTelemetry?: boolean;
+  nutrientCommand?: string;
+  nutrientTimeoutMs?: number;
+};
 
 /**
  * Providers known to support native PDF document input.
@@ -92,6 +100,41 @@ export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
     modelConfig.fallbacks = fallbacks;
   }
   return modelConfig;
+}
+
+export function coercePdfExtractionConfig(cfg?: OpenClawConfig): PdfExtractionConfig {
+  const raw = cfg?.agents?.defaults?.pdfExtraction;
+  if (!raw || typeof raw !== "object") {
+    return {};
+  }
+  const record = raw as Record<string, unknown>;
+  const engineRaw =
+    typeof record.engine === "string" ? record.engine.trim().toLowerCase() : undefined;
+  const engine =
+    engineRaw === "auto" || engineRaw === "nutrient" || engineRaw === "pdfjs"
+      ? (engineRaw as PdfExtractionConfiguredEngine)
+      : undefined;
+  const fallbackOnError =
+    typeof record.fallbackOnError === "boolean" ? record.fallbackOnError : undefined;
+  const logTelemetry = typeof record.logTelemetry === "boolean" ? record.logTelemetry : undefined;
+  const nutrientCommand =
+    typeof record.nutrientCommand === "string" && record.nutrientCommand.trim()
+      ? record.nutrientCommand.trim()
+      : undefined;
+  const nutrientTimeoutMs =
+    typeof record.nutrientTimeoutMs === "number" &&
+    Number.isFinite(record.nutrientTimeoutMs) &&
+    record.nutrientTimeoutMs > 0
+      ? Math.floor(record.nutrientTimeoutMs)
+      : undefined;
+
+  return {
+    ...(engine ? { engine } : {}),
+    ...(typeof fallbackOnError === "boolean" ? { fallbackOnError } : {}),
+    ...(typeof logTelemetry === "boolean" ? { logTelemetry } : {}),
+    ...(nutrientCommand ? { nutrientCommand } : {}),
+    ...(typeof nutrientTimeoutMs === "number" ? { nutrientTimeoutMs } : {}),
+  };
 }
 
 export function resolvePdfToolMaxTokens(

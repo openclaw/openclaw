@@ -72,15 +72,20 @@ Fallback mode is used for non-native providers.
 
 Flow:
 
-1. Extract text from selected pages (up to `agents.defaults.pdfMaxPages`, default `20`).
-2. If extracted text length is below `200` chars, render selected pages to PNG images and include them.
-3. Send extracted content plus prompt to the selected model.
+1. Resolve the configured extraction engine (`agents.defaults.pdfExtraction.engine`, default `pdfjs`).
+2. For `pdfjs`, extract text from selected pages (up to `agents.defaults.pdfMaxPages`, default `20`).
+3. If pdfjs extracted text length is below `200` chars, render selected pages to PNG images and include them.
+4. For `nutrient`, run the `pdf-to-markdown` CLI and use its Markdown output as extracted text.
+5. Send extracted content plus prompt to the selected model.
 
 Fallback details:
 
-- Page image extraction uses a pixel budget of `4,000,000`.
+- `pdfjs` page image extraction uses a pixel budget of `4,000,000`.
 - If the target model does not support image input and there is no extractable text, the tool errors.
-- Extraction fallback requires `pdfjs-dist` (and `@napi-rs/canvas` for image rendering).
+- `nutrient` does not support `pages` filtering yet; page-filtered requests stay on `pdfjs` when engine=`auto`.
+- Extraction fallback can optionally use `agents.defaults.pdfExtraction.fallbackOnError` to fall back from Nutrient to `pdfjs`.
+- Extraction telemetry can be enabled with `agents.defaults.pdfExtraction.logTelemetry`.
+- `pdfjs` extraction requires `pdfjs-dist` (and `@napi-rs/canvas` for image rendering).
 
 ## Config
 
@@ -94,12 +99,29 @@ Fallback details:
       },
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
+      pdfExtraction: {
+        engine: "pdfjs",
+        fallbackOnError: true,
+        logTelemetry: false,
+        nutrientCommand: "pdf-to-markdown",
+        nutrientTimeoutMs: 30000,
+      },
     },
   },
 }
 ```
 
 See [Configuration Reference](/gateway/configuration-reference) for full field details.
+
+### Rollout guidance
+
+For a cautious rollout:
+
+1. Keep `engine: "pdfjs"` as the control.
+2. Enable `logTelemetry: true` on a staging or low-risk environment.
+3. Move to `engine: "auto"` to let non-page-filtered requests try Nutrient first while preserving `pdfjs` for `pages=...` requests.
+4. Keep `fallbackOnError: true` until you have enough telemetry to trust the Nutrient path.
+5. Use `engine: "nutrient"` only when you explicitly want hard failure instead of silent fallback behavior.
 
 ## Output details
 
@@ -110,6 +132,7 @@ Common `details` fields:
 - `model`: resolved model ref (`provider/model`)
 - `native`: `true` for native provider mode, `false` for fallback
 - `attempts`: fallback attempts that failed before success
+- `extraction` / `extractions`: non-native extraction metadata including configured engine, used engine, fallback flag, duration, and counts
 
 Path fields:
 
@@ -123,6 +146,7 @@ Path fields:
 - Too many PDFs: returns structured error in `details.error = "too_many_pdfs"`
 - Unsupported reference scheme: returns `details.error = "unsupported_pdf_reference"`
 - Native mode with `pages`: throws clear `pages is not supported with native PDF providers` error
+- Nutrient extraction with `fallbackOnError=false`: surfaces the CLI failure instead of silently falling back
 
 ## Examples
 

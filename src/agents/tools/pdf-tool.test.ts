@@ -12,6 +12,7 @@ import * as modelDiscovery from "../pi-model-discovery.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
+  coercePdfExtractionConfig,
   coercePdfModelConfig,
   parsePageRange,
   providerSupportsNativePdf,
@@ -133,9 +134,9 @@ function withDefaultModel(primary: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function withPdfModel(primary: string): OpenClawConfig {
+function withPdfModel(primary: string, defaults?: Record<string, unknown>): OpenClawConfig {
   return {
-    agents: { defaults: { pdfModel: { primary } } },
+    agents: { defaults: { pdfModel: { primary }, ...defaults } },
   } as OpenClawConfig;
 }
 
@@ -244,6 +245,51 @@ describe("providerSupportsNativePdf", () => {
   it("is case-insensitive", () => {
     expect(providerSupportsNativePdf("Anthropic")).toBe(true);
     expect(providerSupportsNativePdf("GOOGLE")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PDF model config resolution
+// ---------------------------------------------------------------------------
+
+describe("coercePdfExtractionConfig", () => {
+  it("reads configured nutrient extraction options", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          pdfExtraction: {
+            engine: "nutrient",
+            fallbackOnError: true,
+            logTelemetry: true,
+            nutrientCommand: "pdf-to-markdown",
+            nutrientTimeoutMs: 45000,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(coercePdfExtractionConfig(cfg)).toEqual({
+      engine: "nutrient",
+      fallbackOnError: true,
+      logTelemetry: true,
+      nutrientCommand: "pdf-to-markdown",
+      nutrientTimeoutMs: 45000,
+    });
+  });
+
+  it("ignores invalid extraction config values", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          pdfExtraction: {
+            engine: "legacy",
+            nutrientTimeoutMs: 0,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(coercePdfExtractionConfig(cfg)).toEqual({});
   });
 });
 
@@ -493,6 +539,17 @@ describe("createPdfTool", () => {
       const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
         images: [],
+        meta: {
+          engineConfigured: "pdfjs",
+          engineUsed: "pdfjs",
+          engineFallback: false,
+          durationMs: 12,
+          chars: 17,
+          empty: false,
+          pageCountProcessed: 1,
+          pageCountTotal: 1,
+          imageCount: 0,
+        },
       });
 
       completeMock.mockResolvedValue({
@@ -513,8 +570,118 @@ describe("createPdfTool", () => {
       expect(extractSpy).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({
         content: [{ type: "text", text: "fallback summary" }],
-        details: { native: false, model: OPENAI_PDF_MODEL },
+        details: {
+          native: false,
+          model: OPENAI_PDF_MODEL,
+          extraction: { engineConfigured: "pdfjs", engineUsed: "pdfjs", engineFallback: false },
+        },
       });
+    });
+  });
+
+  it("passes configured nutrient extraction settings to the fallback extractor", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+
+      const extractModule = await import("../../media/pdf-extract.js");
+      const extractSpy = vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
+        text: "# markdown",
+        images: [],
+        meta: {
+          engineConfigured: "nutrient",
+          engineUsed: "nutrient",
+          engineFallback: false,
+          durationMs: 7,
+          chars: 10,
+          empty: false,
+          imageCount: 0,
+        },
+      });
+
+      const piAi = await import("@mariozechner/pi-ai");
+      vi.mocked(piAi.complete).mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      } as never);
+
+      const cfg = withPdfModel(OPENAI_PDF_MODEL, {
+        pdfExtraction: {
+          engine: "nutrient",
+          fallbackOnError: false,
+          nutrientCommand: "pdf-to-markdown",
+          nutrientTimeoutMs: 45000,
+        },
+      });
+
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(extractSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          engine: "nutrient",
+          fallbackOnError: false,
+          nutrientCommand: "pdf-to-markdown",
+          nutrientTimeoutMs: 45000,
+        }),
+      );
+    });
+  });
+
+  it("logs extraction telemetry when enabled", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+
+      const extractModule = await import("../../media/pdf-extract.js");
+      vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted content",
+        images: [],
+        meta: {
+          engineConfigured: "nutrient",
+          engineUsed: "pdfjs",
+          engineFallback: true,
+          fallbackReason: "Nutrient extractor command not found: pdf-to-markdown",
+          durationMs: 23,
+          chars: 17,
+          empty: false,
+          pageCountProcessed: 1,
+          pageCountTotal: 1,
+          imageCount: 0,
+        },
+      });
+
+      const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+      const piAi = await import("@mariozechner/pi-ai");
+      vi.mocked(piAi.complete).mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      } as never);
+
+      const cfg = withPdfModel(OPENAI_PDF_MODEL, {
+        pdfExtraction: {
+          engine: "nutrient",
+          fallbackOnError: true,
+          logTelemetry: true,
+        },
+      });
+
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      await tool.execute("t-telemetry", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.stringContaining('"kind":"pdf_extraction_telemetry"'),
+      );
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('"toolCallId":"t-telemetry"'));
     });
   });
 
