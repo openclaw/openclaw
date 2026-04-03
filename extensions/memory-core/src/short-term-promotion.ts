@@ -11,7 +11,10 @@ export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = 3;
 export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
-const storeWriteQueues = new Map<string, Promise<void>>();
+const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-promotion.lock");
+const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
+const SHORT_TERM_LOCK_STALE_MS = 60_000;
+const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
 
 export type PromotionWeights = {
   frequency: number;
@@ -288,20 +291,51 @@ function resolveStorePath(workspaceDir: string): string {
   return path.join(workspaceDir, SHORT_TERM_STORE_RELATIVE_PATH);
 }
 
-async function queueStoreWrite<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
-  const storePath = resolveStorePath(workspaceDir);
-  const previous = storeWriteQueues.get(storePath) ?? Promise.resolve();
-  const queuedTask = previous.catch(() => undefined).then(task);
-  const tail = queuedTask.then(
-    () => undefined,
-    () => undefined,
-  );
-  storeWriteQueues.set(storePath, tail);
-  try {
-    return await queuedTask;
-  } finally {
-    if (storeWriteQueues.get(storePath) === tail) {
-      storeWriteQueues.delete(storePath);
+function resolveLockPath(workspaceDir: string): string {
+  return path.join(workspaceDir, SHORT_TERM_LOCK_RELATIVE_PATH);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
+  const lockPath = resolveLockPath(workspaceDir);
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  const startedAt = Date.now();
+
+  while (true) {
+    let lockHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+    try {
+      lockHandle = await fs.open(lockPath, "wx");
+      await lockHandle.writeFile(`${process.pid}:${Date.now()}\n`, "utf-8").catch(() => undefined);
+      try {
+        return await task();
+      } finally {
+        await lockHandle.close().catch(() => undefined);
+        await fs.unlink(lockPath).catch(() => undefined);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "EEXIST") {
+        throw err;
+      }
+
+      const ageMs = await fs
+        .stat(lockPath)
+        .then((stats) => Date.now() - stats.mtimeMs)
+        .catch(() => 0);
+      if (ageMs > SHORT_TERM_LOCK_STALE_MS) {
+        await fs.unlink(lockPath).catch(() => undefined);
+        continue;
+      }
+
+      if (Date.now() - startedAt >= SHORT_TERM_LOCK_WAIT_TIMEOUT_MS) {
+        throw new Error(`Timed out waiting for short-term promotion lock at ${lockPath}`);
+      }
+
+      await sleep(SHORT_TERM_LOCK_RETRY_DELAY_MS);
     }
   }
 }
@@ -360,7 +394,7 @@ export async function recordShortTermRecalls(params: {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const nowIso = new Date(nowMs).toISOString();
   const queryHash = hashQuery(query);
-  await queueStoreWrite(workspaceDir, async () => {
+  await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
 
     for (const result of relevant) {
@@ -544,43 +578,55 @@ export async function applyShortTermPromotions(
     options.minUniqueQueries,
     DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
   );
-
-  const selected = options.candidates
-    .filter(
-      (candidate) =>
-        !candidate.promotedAt &&
-        candidate.score >= minScore &&
-        candidate.recallCount >= minRecallCount &&
-        candidate.uniqueQueries >= minUniqueQueries,
-    )
-    .slice(0, limit);
-
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
-  if (selected.length === 0) {
-    return {
-      memoryPath,
-      applied: 0,
-      appliedCandidates: [],
-    };
-  }
 
-  const existingMemory = await fs.readFile(memoryPath, "utf-8").catch((err: unknown) => {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return "";
-    }
-    throw err;
-  });
-
-  const header = existingMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
-  const section = buildPromotionSection(selected, nowMs);
-  await fs.writeFile(
-    memoryPath,
-    `${header}${withTrailingNewline(existingMemory)}${section}`,
-    "utf-8",
-  );
-
-  await queueStoreWrite(workspaceDir, async () => {
+  return await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
+    const selected = options.candidates
+      .filter((candidate) => {
+        if (candidate.promotedAt) {
+          return false;
+        }
+        if (candidate.score < minScore) {
+          return false;
+        }
+        if (candidate.recallCount < minRecallCount) {
+          return false;
+        }
+        if (candidate.uniqueQueries < minUniqueQueries) {
+          return false;
+        }
+        const latest = store.entries[candidate.key];
+        if (latest?.promotedAt) {
+          return false;
+        }
+        return true;
+      })
+      .slice(0, limit);
+
+    if (selected.length === 0) {
+      return {
+        memoryPath,
+        applied: 0,
+        appliedCandidates: [],
+      };
+    }
+
+    const existingMemory = await fs.readFile(memoryPath, "utf-8").catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+        return "";
+      }
+      throw err;
+    });
+
+    const header = existingMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
+    const section = buildPromotionSection(selected, nowMs);
+    await fs.writeFile(
+      memoryPath,
+      `${header}${withTrailingNewline(existingMemory)}${section}`,
+      "utf-8",
+    );
+
     for (const candidate of selected) {
       const entry = store.entries[candidate.key];
       if (!entry) {
@@ -590,13 +636,13 @@ export async function applyShortTermPromotions(
     }
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
-  });
 
-  return {
-    memoryPath,
-    applied: selected.length,
-    appliedCandidates: selected,
-  };
+    return {
+      memoryPath,
+      applied: selected.length,
+      appliedCandidates: selected,
+    };
+  });
 }
 
 export function resolveShortTermRecallStorePath(workspaceDir: string): string {

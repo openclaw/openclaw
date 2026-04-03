@@ -258,4 +258,51 @@ describe("short-term promotion", () => {
       expect(rankedIncludingPromoted[0]?.promotedAt).toBeTruthy();
     });
   });
+
+  it("does not re-append candidates that were promoted in a prior run", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "gateway host",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 10,
+            endLine: 12,
+            score: 0.92,
+            snippet: "Gateway binds loopback and port 18789",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const first = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(first.applied).toBe(1);
+
+      const second = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(second.applied).toBe(0);
+
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      const sectionCount = memoryText.match(/Promoted From Short-Term Memory/g)?.length ?? 0;
+      expect(sectionCount).toBe(1);
+    });
+  });
 });
