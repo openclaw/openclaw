@@ -350,6 +350,39 @@ describe("live model switch", () => {
       expect(result).toBeUndefined();
     });
 
+    it("clears the stale liveModelSwitchPending flag when models already match", async () => {
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+      state.updateSessionStoreMock.mockImplementation(
+        async (_path: string, updater: (store: Record<string, unknown>) => void) => {
+          const store: Record<string, typeof sessionEntry> = { main: sessionEntry };
+          updater(store);
+        },
+      );
+
+      const { shouldSwitchToLiveModel } = await loadModule();
+
+      const result = shouldSwitchToLiveModel({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        currentProvider: "anthropic",
+        currentModel: "claude-opus-4-6",
+      });
+
+      expect(result).toBeUndefined();
+      // Give the fire-and-forget clearLiveModelSwitchPending a tick to resolve
+      await new Promise((r) => setTimeout(r, 10));
+      expect(state.updateSessionStoreMock).toHaveBeenCalledTimes(1);
+      expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
+    });
+
     it("returns undefined when sessionKey is missing", async () => {
       const { shouldSwitchToLiveModel } = await loadModule();
 
