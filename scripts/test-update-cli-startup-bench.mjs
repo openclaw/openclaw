@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { parseFlagArgs, stringFlag, intFlag } from "./lib/arg-utils.mjs";
-import { cliStartupBenchManifestPath } from "./test-runner-manifest.mjs";
+
+const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
 
 if (process.argv.slice(2).includes("--help")) {
   console.log(
@@ -28,7 +29,7 @@ if (process.argv.slice(2).includes("--help")) {
 const opts = parseFlagArgs(
   process.argv.slice(2),
   {
-    out: cliStartupBenchManifestPath,
+    out: CLI_STARTUP_BENCH_FIXTURE_PATH,
     entry: "openclaw.mjs",
     preset: "all",
     runs: 5,

@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { floatFlag, intFlag, parseFlagArgs, readEnvNumber, stringFlag } from "./lib/arg-utils.mjs";
 import { readJsonFile } from "./test-report-utils.mjs";
-import { cliStartupBenchManifestPath } from "./test-runner-manifest.mjs";
+
+const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
 
 function formatMs(value) {
   return `${value.toFixed(1)}ms`;
@@ -42,7 +43,7 @@ if (process.argv.slice(2).includes("--help")) {
 const opts = parseFlagArgs(
   process.argv.slice(2),
   {
-    baseline: cliStartupBenchManifestPath,
+    baseline: CLI_STARTUP_BENCH_FIXTURE_PATH,
     report: "",
     entry: "openclaw.mjs",
     preset: "all",

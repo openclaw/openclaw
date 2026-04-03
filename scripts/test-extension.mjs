@@ -9,13 +9,11 @@ import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
-import { loadTestRunnerBehavior } from "./test-runner-manifest.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 const pnpm = "pnpm";
-const testRunnerBehavior = loadTestRunnerBehavior();
 
 function runGit(args, options = {}) {
   return execFileSync("git", args, {
@@ -236,40 +234,13 @@ export function resolveExtensionTestPlan(params = {}) {
   const testFiles = roots
     .flatMap((root) => collectTestFiles(path.join(repoRoot, root)))
     .map((filePath) => normalizeRelative(path.relative(repoRoot, filePath)));
-  const { isolatedTestFiles, sharedTestFiles } = partitionExtensionTestFiles({ config, testFiles });
-
   return {
     config,
     extensionDir: relativeExtensionDir,
     extensionId,
-    isolatedTestFiles,
     roots,
-    sharedTestFiles,
     testFiles,
   };
-}
-
-export function partitionExtensionTestFiles(params) {
-  const testFiles = params.testFiles.map((filePath) => normalizeRelative(filePath));
-  let isolatedEntries = [];
-  let isolatedPrefixes = [];
-
-  if (params.config === "vitest.channels.config.ts") {
-    isolatedEntries = testRunnerBehavior.channels.isolated;
-    isolatedPrefixes = testRunnerBehavior.channels.isolatedPrefixes;
-  } else if (params.config === "vitest.extensions.config.ts") {
-    isolatedEntries = testRunnerBehavior.extensions.isolated;
-  }
-
-  const isolatedEntrySet = new Set(isolatedEntries.map((entry) => entry.file));
-  const isolatedTestFiles = testFiles.filter(
-    (file) =>
-      isolatedEntrySet.has(file) || isolatedPrefixes.some((prefix) => file.startsWith(prefix)),
-  );
-  const isolatedTestFileSet = new Set(isolatedTestFiles);
-  const sharedTestFiles = testFiles.filter((file) => !isolatedTestFileSet.has(file));
-
-  return { isolatedTestFiles, sharedTestFiles };
 }
 
 async function runVitestBatch(params) {
@@ -412,8 +383,6 @@ async function run() {
       console.log(`config: ${plan.config}`);
       console.log(`roots: ${plan.roots.join(", ")}`);
       console.log(`tests: ${plan.testFiles.length}`);
-      console.log(`shared: ${plan.sharedTestFiles.length}`);
-      console.log(`isolated: ${plan.isolatedTestFiles.length}`);
     }
     return;
   }
@@ -425,36 +394,13 @@ async function run() {
   console.log(
     `[test-extension] Running ${plan.testFiles.length} test files for ${plan.extensionId} with ${plan.config}`,
   );
-
-  if (plan.sharedTestFiles.length > 0 && plan.isolatedTestFiles.length > 0) {
-    console.log(
-      `[test-extension] Split into ${plan.sharedTestFiles.length} shared and ${plan.isolatedTestFiles.length} isolated files`,
-    );
-  }
-
-  if (plan.sharedTestFiles.length > 0) {
-    const sharedExitCode = await runVitestBatch({
-      args: passthroughArgs,
-      config: plan.config,
-      env: process.env,
-      files: plan.sharedTestFiles,
-    });
-    if (sharedExitCode !== 0) {
-      process.exit(sharedExitCode);
-    }
-  }
-
-  if (plan.isolatedTestFiles.length > 0) {
-    const isolatedExitCode = await runVitestBatch({
-      args: passthroughArgs,
-      config: plan.config,
-      env: { ...process.env, OPENCLAW_TEST_ISOLATE: "1" },
-      files: plan.isolatedTestFiles,
-    });
-    process.exit(isolatedExitCode);
-  }
-
-  process.exit(0);
+  const exitCode = await runVitestBatch({
+    args: passthroughArgs,
+    config: plan.config,
+    env: process.env,
+    files: plan.testFiles,
+  });
+  process.exit(exitCode);
 }
 
 const entryHref = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
