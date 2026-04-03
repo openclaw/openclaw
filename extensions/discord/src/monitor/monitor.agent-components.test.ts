@@ -5,8 +5,8 @@ import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
-import { peekSystemEvents, resetSystemEventsForTest } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import { expectPairingReplyText } from "../../../../test/helpers/pairing-reply.js";
 import {
   readAllowFromStoreMock,
