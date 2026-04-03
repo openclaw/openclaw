@@ -355,28 +355,26 @@ export async function handleFeishuCardAction(params: {
         log(
           `feishu[${account.accountId}]: exec approval ${execApprovalDecision} for ${approvalId} by ${event.operator.open_id}`,
         );
-        try {
-          // Resolve the exec approval directly via gateway RPC.  The
-          // FeishuExecApprovalHandler will receive the resolved event and
-          // update all tracked cards (including this one) in-place.
-          const resolvedBy = `feishu:${event.operator.open_id}`;
-          await callGateway({
-            method: "exec.approval.resolve",
-            params: { id: approvalId, decision: execApprovalDecision },
-            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-            clientDisplayName: `Feishu card approval (${resolvedBy})`,
-            mode: GATEWAY_CLIENT_MODES.BACKEND,
-          });
-        } catch (err) {
+        // Complete the card action token immediately so Feishu does not
+        // time out (error 200340).  The gateway RPC and card update run
+        // asynchronously after the response.
+        completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+        const resolvedBy = `feishu:${event.operator.open_id}`;
+        callGateway({
+          method: "exec.approval.resolve",
+          params: { id: approvalId, decision: execApprovalDecision },
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          clientDisplayName: `Feishu card approval (${resolvedBy})`,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        }).catch((err) => {
           const errorText = `❌ 审批提交失败: ${String(err)}`;
-          await sendMessageFeishu({
+          sendMessageFeishu({
             cfg,
             to: resolveCallbackTarget(event),
             text: errorText,
             accountId,
           }).catch(() => {});
-        }
-        completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+        });
         return;
       }
 

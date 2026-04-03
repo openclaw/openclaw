@@ -151,12 +151,13 @@ export function createExecApprovalResolvedCard(params: {
   }
   bodyLines.push(`**结果：** ${decisionLabel}`);
   if (params.resolvedBy) {
-    // Only use Feishu <at> tag for Feishu open_ids (ou_xxx / on_xxx).
-    // For other resolvedBy values (e.g. gateway labels), display as plain text.
-    const isFeishuOpenId =
-      params.resolvedBy.startsWith("ou_") || params.resolvedBy.startsWith("on_");
-    if (isFeishuOpenId) {
-      bodyLines.push(`**操作人：** <at id="${params.resolvedBy}"></at>`);
+    // Extract Feishu open_id from resolvedBy.  The gateway sets resolvedBy
+    // to clientDisplayName which may be "Feishu card approval (feishu:ou_xxx)".
+    // Try to extract the ou_/on_ ID for a proper <at> tag.
+    const openIdMatch = params.resolvedBy.match(/\b(ou_[a-zA-Z0-9]+|on_[a-zA-Z0-9]+)\b/);
+    const openId = openIdMatch?.[1];
+    if (openId) {
+      bodyLines.push(`**操作人：** <at id="${openId}"></at>`);
     } else {
       bodyLines.push(`**操作人：** ${params.resolvedBy}`);
     }

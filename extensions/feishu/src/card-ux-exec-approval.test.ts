@@ -146,6 +146,19 @@ describe("createExecApprovalResolvedCard", () => {
     expect(body.elements[0].content).toContain('<at id="ou_abc123"></at>');
   });
 
+  it("extracts open_id from gateway clientDisplayName for at-tag", () => {
+    const card = createExecApprovalResolvedCard({
+      approvalId: "test123",
+      decision: "allow-once",
+      resolvedBy: "Feishu card approval (feishu:ou_261ca44fc6b6181c03f8b42e020671d6)",
+    });
+
+    const body = card.body as { elements: Array<Record<string, unknown>> };
+    expect(body.elements[0].content).toContain(
+      '<at id="ou_261ca44fc6b6181c03f8b42e020671d6"></at>',
+    );
+  });
+
   it("includes resolvedBy as plain text for non-Feishu identifiers", () => {
     const card = createExecApprovalResolvedCard({
       approvalId: "test123",
