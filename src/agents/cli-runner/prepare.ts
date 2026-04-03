@@ -60,7 +60,7 @@ export async function prepareCliRunContext(
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
   const preparedBackend = await prepareCliBundleMcpConfig({
-    enabled: backendResolved.bundleMcp,
+    enabled: backendResolved.bundleMcp && params.disableTools !== true,
     backend: backendResolved.config,
     workspaceDir,
     config: params.config,

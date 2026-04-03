@@ -90,4 +90,25 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(1, 1);
   });
+
+  it("runs a no-tools repair pass when the final output is empty after sanitization", async () => {
+    usePayloadTextExtraction();
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "Recovered final summary." }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runTurnAndExpectOk(2, 2);
+    expect(result.outputText).toBe("Recovered final summary.");
+    expect(runEmbeddedPiAgentMock.mock.calls[1]?.[0]?.disableTools).toBe(true);
+    expect(runEmbeddedPiAgentMock.mock.calls[1]?.[0]?.prompt).toContain(
+      "produced no deliverable user-visible text after sanitization",
+    );
+  });
 });

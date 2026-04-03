@@ -96,6 +96,15 @@ type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarge
 
 type IsolatedDeliveryContract = "cron-owned" | "shared";
 
+function buildEmptyOutputRepairPrompt(): string {
+  return [
+    "Your previous response for this cron task produced no deliverable user-visible text after sanitization.",
+    "Repair it now using only information already available in this session.",
+    "Do not call tools, do not browse, do not spawn subagents, and do not delegate.",
+    "Return only the final user-facing text for the original cron task.",
+  ].join(" ");
+}
+
 function resolveCronToolPolicy(params: {
   deliveryRequested: boolean;
   resolvedDelivery: ResolvedCronDeliveryTarget;
@@ -480,7 +489,12 @@ export async function runCronIsolatedAgentTurn(params: {
       cronSession.sessionEntry.systemPromptReport,
     );
 
-    const runPrompt = async (promptText: string) => {
+    const runPrompt = async (
+      promptText: string,
+      options?: {
+        disableTools?: boolean;
+      },
+    ) => {
       const fallbackResult = await runWithModelFallback({
         cfg: cfgWithAgentDefaults,
         provider: liveSelection.provider,
@@ -518,6 +532,16 @@ export async function runCronIsolatedAgentTurn(params: {
               timeoutMs,
               runId: cronSession.sessionEntry.sessionId,
               cliSessionId,
+              disableTools: options?.disableTools,
+              extraSystemPrompt:
+                options?.disableTools === true
+                  ? [
+                      "Repair mode for cron delivery:",
+                      "- Do not call tools or use MCP.",
+                      "- Use only information already present in this session.",
+                      "- Return only the final user-facing text.",
+                    ].join("\n")
+                  : undefined,
               bootstrapPromptWarningSignaturesSeen,
               bootstrapPromptWarningSignature,
             });
@@ -568,6 +592,7 @@ export async function runCronIsolatedAgentTurn(params: {
             runId: cronSession.sessionEntry.sessionId,
             requireExplicitMessageTarget: toolPolicy.requireExplicitMessageTarget,
             disableMessageTool: toolPolicy.disableMessageTool,
+            disableTools: options?.disableTools,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
@@ -676,6 +701,38 @@ export async function runCronIsolatedAgentTurn(params: {
           "Use tools when needed, including sessions_spawn for parallel subtasks, wait for spawned subagents to finish, then return only the final summary.",
         ].join(" ");
         await runPrompt(continuationPrompt);
+      }
+
+      const finalPayloads = runResult.payloads ?? [];
+      const {
+        deliveryPayloadHasStructuredContent: finalPayloadHasStructuredContent,
+        outputText: finalOutputText,
+        hasFatalErrorPayload: finalHasFatalErrorPayload,
+      } = resolveCronPayloadOutcome({
+        payloads: finalPayloads,
+        runLevelError: runResult.meta?.error,
+      });
+      const finalText = finalOutputText?.trim() ?? "";
+      const hasDescendantsForEmptyOutputRepair = listDescendantRunsForRequester(
+        agentSessionKey,
+      ).some((entry) => {
+        const descendantStartedAt =
+          typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
+        return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
+      });
+      const shouldRetryEmptyOutput =
+        !runResult.meta?.error &&
+        !runResult.didSendViaMessagingTool &&
+        !finalPayloadHasStructuredContent &&
+        !finalHasFatalErrorPayload &&
+        finalText.length === 0 &&
+        countActiveDescendantRuns(agentSessionKey) === 0 &&
+        !hasDescendantsForEmptyOutputRepair;
+      if (shouldRetryEmptyOutput) {
+        logWarn(
+          `[cron:${params.job.id}] empty deliverable output after sanitization; attempting no-tools repair pass`,
+        );
+        await runPrompt(buildEmptyOutputRepairPrompt(), { disableTools: true });
       }
     }
   } catch (err) {
@@ -804,7 +861,8 @@ export async function runCronIsolatedAgentTurn(params: {
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
-  const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
+  const skipHeartbeatDelivery =
+    deliveryRequested && payloads.length > 0 && isHeartbeatOnlyResponse(payloads, ackMaxChars);
   const skipMessagingToolDelivery =
     deliveryContract === "shared" &&
     deliveryRequested &&
