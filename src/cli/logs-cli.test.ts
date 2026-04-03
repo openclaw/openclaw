@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
-import { formatLogTimestamp } from "./logs-cli.js";
+import { __testing, formatLogTimestamp } from "./logs-cli.js";
 
 const callGatewayFromCli = vi.fn();
 const resolveGatewayClientConnection = vi.fn();
@@ -9,6 +9,22 @@ const gatewayClientStopAndWait = vi.fn();
 let lastGatewayClientOptions: Record<string, unknown> | undefined;
 let mockGatewayMethods: string[] = [];
 let gatewayClientStartImpl: ((opts: Record<string, unknown>) => void) | undefined;
+
+function emitGatewayHello(
+  methods: string[] = mockGatewayMethods,
+  opts: Record<string, unknown> | undefined = lastGatewayClientOptions,
+) {
+  void (opts?.onHelloOk as ((hello: { features?: { methods?: string[] } }) => void) | undefined)?.({
+    features: { methods },
+  });
+}
+
+function emitGatewayConnectError(
+  message: string,
+  opts: Record<string, unknown> | undefined = lastGatewayClientOptions,
+) {
+  void (opts?.onConnectError as ((err: Error) => void) | undefined)?.(new Error(message));
+}
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
@@ -38,11 +54,7 @@ vi.mock("../gateway/client.js", () => {
         gatewayClientStartImpl(lastGatewayClientOptions ?? {});
         return;
       }
-      void (
-        lastGatewayClientOptions?.onHelloOk as
-          | ((hello: { features?: { methods?: string[] } }) => void)
-          | undefined
-      )?.({ features: { methods: mockGatewayMethods } });
+      emitGatewayHello();
     }
 
     request(...args: unknown[]) {
@@ -264,16 +276,10 @@ describe("logs cli", () => {
       gatewayClientStartImpl = (opts) => {
         startAttempts += 1;
         if (startAttempts < 3) {
-          void (opts.onConnectError as ((err: Error) => void) | undefined)?.(
-            new Error("connect ECONNREFUSED 127.0.0.1:18789"),
-          );
+          emitGatewayConnectError("connect ECONNREFUSED 127.0.0.1:18789", opts);
           return;
         }
-        void (
-          opts.onHelloOk as ((hello: { features?: { methods?: string[] } }) => void) | undefined
-        )?.({
-          features: { methods: [] },
-        });
+        emitGatewayHello([], opts);
       };
       gatewayClientRequest.mockResolvedValueOnce({
         file: "/tmp/openclaw.log",
@@ -313,6 +319,47 @@ describe("logs cli", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps waiting for reconnects after a follow wait timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const waitUntilReady = vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(new Error("gateway timeout after 25ms"))
+        .mockResolvedValueOnce(undefined);
+      const stderrWrites: string[] = [];
+
+      const waitPromise = __testing.waitForFollowClientReconnect({
+        followClient: { waitUntilReady },
+        opts: { timeout: "25" },
+        rich: false,
+        jsonMode: false,
+        retryMs: 2_000,
+        emitJsonLine: () => true,
+        errorLine: (text) => {
+          stderrWrites.push(text);
+          return true;
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitPromise;
+
+      expect(waitUntilReady).toHaveBeenCalledTimes(2);
+      expect(stderrWrites.join("")).toContain("gateway timeout after 25ms");
+      expect(stderrWrites.join("")).toContain("Retrying in 2s");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-evaluates stream support from the current gateway method set", () => {
+    const methods = new Set(["logs.subscribe", "logs.unsubscribe"]);
+    expect(__testing.supportsStreamingFollow(methods)).toBe(true);
+
+    methods.delete("logs.unsubscribe");
+    expect(__testing.supportsStreamingFollow(methods)).toBe(false);
   });
 
   describe("formatLogTimestamp", () => {
