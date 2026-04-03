@@ -63,9 +63,7 @@ export async function writeCrashLoopSentinel(
  *
  * This prevents infinite restart loops caused by config errors.
  */
-export async function checkCrashLoopAndAbort(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
+export async function checkCrashLoopAndAbort(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const now = Date.now();
   const data = await readCrashLoopSentinel(env);
 

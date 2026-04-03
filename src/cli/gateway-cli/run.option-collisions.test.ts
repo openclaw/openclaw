@@ -126,6 +126,19 @@ vi.mock("./run-loop.js", () => ({
   runGatewayLoop: (params: { start: () => Promise<unknown> }) => runGatewayLoop(params),
 }));
 
+vi.mock("../../infra/supervisor-markers.js", () => ({
+  detectRespawnSupervisor: () => null,
+}));
+
+vi.mock("../../infra/crash-loop-sentinel.js", () => ({
+  checkCrashLoopAndAbort: () => {},
+  CrashLoopAbortError: class CrashLoopAbortError extends Error {},
+}));
+
+vi.mock("../../infra/restart-stale-pids.js", () => ({
+  cleanStaleGatewayProcessesSync: () => [],
+}));
+
 describe("gateway run option collisions", () => {
   let addGatewayRunCommand: typeof import("./run.js").addGatewayRunCommand;
   let sharedProgram: Command;

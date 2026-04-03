@@ -16,6 +16,7 @@ import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { resolveControlUiRootSync } from "../../infra/control-ui-assets.js";
+import { checkCrashLoopAndAbort, CrashLoopAbortError } from "../../infra/crash-loop-sentinel.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
@@ -29,7 +30,6 @@ import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
 import { withProgress } from "../progress.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
-import { checkCrashLoopAndAbort, CrashLoopAbortError } from "../../infra/crash-loop-sentinel.js";
 import {
   describeUnknownError,
   extractGatewayMiskeys,
