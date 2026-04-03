@@ -167,7 +167,7 @@ describe("before_tool_call hook integration", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("continues execution when hook throws", async () => {
+  it("blocks tool execution when hook throws", async () => {
     beforeToolCallHook = installBeforeToolCallHook({
       runBeforeToolCallImpl: async () => {
         throw new Error("boom");
@@ -178,14 +178,10 @@ describe("before_tool_call hook integration", () => {
     const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any);
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
-    await tool.execute("call-4", { path: "/tmp/file" }, undefined, extensionContext);
-
-    expect(execute).toHaveBeenCalledWith(
-      "call-4",
-      { path: "/tmp/file" },
-      undefined,
-      extensionContext,
-    );
+    await expect(
+      tool.execute("call-4", { path: "/tmp/file" }, undefined, extensionContext),
+    ).rejects.toThrow("Tool call blocked because before_tool_call hook failed");
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("normalizes non-object params for hook contract", async () => {

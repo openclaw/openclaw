@@ -40,6 +40,9 @@ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
       error: (msg) => log.error(msg),
     },
     catchErrors: true,
+    failurePolicyByHook: {
+      before_tool_call: "fail-closed",
+    },
   });
 
   const hookCount = registry.hooks.length;

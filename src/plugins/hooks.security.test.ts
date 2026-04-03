@@ -163,6 +163,32 @@ describe("before_tool_call terminal block semantics", () => {
     expect(result?.block).toBe(true);
     expect(low).not.toHaveBeenCalled();
   });
+
+  it("throws for before_tool_call when configured as fail-closed", async () => {
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [
+        {
+          pluginId: "failing",
+          result: {},
+          priority: 100,
+          handler: () => {
+            throw new Error("boom");
+          },
+        },
+      ],
+    });
+    const runner = createHookRunner(registry, {
+      catchErrors: true,
+      failurePolicyByHook: {
+        before_tool_call: "fail-closed",
+      },
+    });
+
+    await expect(runner.runBeforeToolCall(toolEvent, toolCtx)).rejects.toThrow(
+      "before_tool_call handler from failing failed: Error: boom",
+    );
+  });
 });
 
 describe("message_sending terminal cancel semantics", () => {
