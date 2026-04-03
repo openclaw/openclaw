@@ -14,7 +14,9 @@ import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
   FunctionTool,
   ResponseCreateParamsStreaming,
+  ResponseFunctionCallOutputItemList,
   ResponseInput,
+  ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
@@ -400,8 +402,8 @@ function convertResponsesMessages(
           content: [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
         });
       } else {
-        const content = msg.content
-          .map((item) =>
+        const content = (
+          msg.content.map((item) =>
             item.type === "text"
               ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
               : {
@@ -409,8 +411,8 @@ function convertResponsesMessages(
                   detail: "auto",
                   image_url: `data:${item.mimeType};base64,${item.data}`,
                 },
-          )
-          .filter((item) => model.input.includes("image") || item.type !== "input_image");
+          ) as ResponseInputMessageContentList
+        ).filter((item) => model.input.includes("image") || item.type !== "input_image");
         if (content.length > 0) {
           messages.push({ role: "user", content });
         }
@@ -470,7 +472,7 @@ function convertResponsesMessages(
         call_id: callId,
         output:
           hasImages && model.input.includes("image")
-            ? [
+            ? ([
                 ...(textResult
                   ? [{ type: "input_text", text: sanitizeTransportPayloadText(textResult) }]
                   : []),
@@ -481,7 +483,7 @@ function convertResponsesMessages(
                     detail: "auto",
                     image_url: `data:${item.mimeType};base64,${item.data}`,
                   })),
-              ]
+              ] as ResponseFunctionCallOutputItemList)
             : sanitizeTransportPayloadText(textResult || "(see attached image)"),
       });
     }
@@ -1406,10 +1408,11 @@ function getCompat(model: OpenAIModeModel): {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
   return {
-    supportsStore: compat.supportsStore ?? detected.supportsStore,
+    supportsStore: (compat.supportsStore as boolean | undefined) ?? detected.supportsStore,
     supportsDeveloperRole:
       (compat.supportsDeveloperRole as boolean | undefined) ?? detected.supportsDeveloperRole,
-    supportsReasoningEffort: compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
+    supportsReasoningEffort:
+      (compat.supportsReasoningEffort as boolean | undefined) ?? detected.supportsReasoningEffort,
     reasoningEffortMap:
       (compat.reasoningEffortMap as Record<string, string> | undefined) ??
       detected.reasoningEffortMap,
