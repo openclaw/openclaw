@@ -251,6 +251,8 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
 
   for (const job of jobs) {
     // Stored legacy jobs can be malformed; keep `cron list` readable instead of crashing.
+    const payload = job.payload;
+    const payloadModel = payload && payload.kind === "agentTurn" ? displayText(payload.model) : "-";
     const idLabel = pad(job.id, CRON_ID_PAD);
     const nameLabel = pad(truncate(job.name, CRON_NAME_PAD), CRON_NAME_PAD);
     const scheduleLabel = pad(
@@ -266,13 +268,7 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
-    const modelLabel = pad(
-      truncate(
-        (job.payload.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
-        CRON_MODEL_PAD,
-      ),
-      CRON_MODEL_PAD,
-    );
+    const modelLabel = pad(truncate(payloadModel, CRON_MODEL_PAD), CRON_MODEL_PAD);
 
     const coloredStatus = (() => {
       if (statusRaw === "ok") {
@@ -307,7 +303,7 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
       coloredStatus,
       coloredTarget,
       coloredAgent,
-      job.payload.kind === "agentTurn" && job.payload.model
+      payload?.kind === "agentTurn" && payload.model
         ? colorize(rich, theme.info, modelLabel)
         : colorize(rich, theme.muted, modelLabel),
     ].join(" ");

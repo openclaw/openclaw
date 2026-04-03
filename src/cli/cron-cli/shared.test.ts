@@ -74,7 +74,20 @@ describe("printCronList", () => {
     const job = createBaseJob({ id: undefined as unknown as string, name: "Missing ID" });
 
     expect(() => printCronList([job], runtime)).not.toThrow();
-    expect(logs.length).toBeGreaterThan(1);
+    expect(logs.some((line) => line.includes("Missing ID"))).toBe(true);
+    expect(logs.some((line) => line.includes("-"))).toBe(true);
+  });
+
+  it("handles job with undefined payload from persisted legacy data", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "missing-payload-job",
+      payload: undefined as unknown as CronJob["payload"],
+    });
+
+    expect(() => printCronList([job], runtime)).not.toThrow();
+    expect(logs.some((line) => line.includes("missing-payload-job"))).toBe(true);
+    expect(logs.some((line) => line.includes("-"))).toBe(true);
   });
 
   it("handles job with defined sessionTarget", () => {
