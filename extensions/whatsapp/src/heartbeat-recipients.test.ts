@@ -173,4 +173,31 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
       source: "allowFrom",
     });
   });
+
+  it("uses configured defaultAccount allowFrom config and pairing store when accountId is omitted", () => {
+    setSessionStore({
+      a: { lastChannel: "whatsapp", lastTo: "+15550000077", updatedAt: 2, sessionId: "a" },
+    });
+    setAllowFromStore(["+15550000002"]);
+
+    const result = resolveWith({
+      channels: {
+        whatsapp: {
+          defaultAccount: "work",
+          allowFrom: ["+15550000001"],
+          accounts: {
+            work: {
+              allowFrom: ["+15550000003"],
+            },
+          },
+        } as never,
+      },
+    });
+
+    expect(readChannelAllowFromStoreSyncMock).toHaveBeenCalledWith("whatsapp", process.env, "work");
+    expect(result).toEqual({
+      recipients: ["+15550000003", "+15550000002"],
+      source: "allowFrom",
+    });
+  });
 });

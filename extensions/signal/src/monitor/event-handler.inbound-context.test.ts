@@ -31,8 +31,10 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
-vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
+vi.mock("../../../../src/auto-reply/dispatch.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../../src/auto-reply/dispatch.js")>(
+    "../../../../src/auto-reply/dispatch.js",
+  );
   return {
     ...actual,
     dispatchInboundMessage: dispatchInboundMessageMock,

@@ -218,6 +218,29 @@ describe("resolveMatrixAccount", () => {
     expect(resolveDefaultMatrixAccountId(cfg)).toBe("ops");
   });
 
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          defaultAccount: "ops",
+          homeserver: "https://matrix.example.org",
+          accessToken: "default-token",
+          accounts: {
+            ops: {
+              homeserver: "https://ops.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg });
+    expect(account.accountId).toBe("ops");
+    expect(account.homeserver).toBe("https://ops.example.org");
+    expect(account.configured).toBe(true);
+  });
+
   it("includes env-backed named accounts in plugin account enumeration", () => {
     const keys = getMatrixScopedEnvVarNames("team-ops");
     process.env[keys.homeserver] = "https://matrix.example.org";

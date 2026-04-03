@@ -122,8 +122,21 @@ export function createImageLifecycleCore() {
     path: "/tmp/zalo-photo.jpg",
     contentType: "image/jpeg",
   }));
+  const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
+  const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
   const core = {
+    logging: {
+      shouldLogVerbose: vi.fn(
+        () => false,
+      ) as unknown as PluginRuntime["logging"]["shouldLogVerbose"],
+    },
     channel: {
+      pairing: {
+        readAllowFromStore:
+          readAllowFromStoreMock as unknown as PluginRuntime["channel"]["pairing"]["readAllowFromStore"],
+        upsertPairingRequest:
+          upsertPairingRequestMock as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
+      },
       routing: {
         resolveAgentRoute: vi.fn(() => ({
           agentId: "main",
@@ -184,6 +197,8 @@ export function createImageLifecycleCore() {
     recordInboundSessionMock,
     fetchRemoteMediaMock,
     saveMediaBufferMock,
+    readAllowFromStoreMock,
+    upsertPairingRequestMock,
   };
 }
 

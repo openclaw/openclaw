@@ -52,6 +52,20 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("auth.cooldowns auth_permanent backoff config", () => {
+  it("accepts auth_permanent backoff knobs", () => {
+    const result = OpenClawSchema.safeParse({
+      auth: {
+        cooldowns: {
+          authPermanentBackoffMinutes: 10,
+          authPermanentMaxMinutes: 60,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
@@ -700,12 +714,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "session.threadBindings")).toBe(true);
-      expect(
-        snap.legacyIssues.some((issue) => issue.path === "channels.discord.threadBindings"),
-      ).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
-        true,
-      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels")).toBe(true);
       expect(snap.sourceConfig.session?.threadBindings).toMatchObject({
         idleHours: 24,
       });

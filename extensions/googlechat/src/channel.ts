@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -212,6 +213,12 @@ export const googlechatPlugin = createChatChannelPlugin({
       },
     },
     actions: googlechatActions,
+    doctor: {
+      dmAllowFromMode: "nestedOnly",
+      groupModel: "route",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: false,
+    },
     status: createComputedAccountStatusAdapter<ResolvedGoogleChatAccount>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: (accounts): ChannelStatusIssue[] =>
@@ -355,6 +362,7 @@ export const googlechatPlugin = createChatChannelPlugin({
       chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
+      sanitizeText: ({ text }) => sanitizeForPlainText(text),
       resolveTarget: ({ to }) => {
         const trimmed = to?.trim() ?? "";
 

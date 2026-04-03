@@ -36,8 +36,9 @@ openclaw agents add <name>
 
 <Tip>
 CLI onboarding includes a web search step where you can pick a provider
-(Perplexity, Brave, Gemini, Grok, or Kimi) and paste your API key so the agent
-can use `web_search`. You can also configure this later with
+such as Brave, Firecrawl, Gemini, Grok, Kimi, Ollama Web Search, Perplexity,
+or Tavily. Some providers require an API key, while others are key-free. You
+can also configure this later with
 `openclaw configure --section web`. Docs: [Web tools](/tools/web).
 </Tip>
 

@@ -29,7 +29,6 @@ export {
 export {
   dispatchReplyFromConfigWithSettledDispatcher,
   ensureConfiguredAcpBindingReady,
-  maybeCreateMatrixMigrationSnapshot,
   resolveConfiguredAcpBindingRecord,
 } from "openclaw/plugin-sdk/matrix-runtime-heavy";
 // resolveMatrixAccountStringValues already comes from plugin-sdk/matrix.

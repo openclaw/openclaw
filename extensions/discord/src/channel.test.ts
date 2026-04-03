@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
@@ -98,6 +100,15 @@ beforeAll(async () => {
 });
 
 describe("discordPlugin outbound", () => {
+  it("avoids local require calls for bundled-only sibling modules", async () => {
+    const source = await readFile(
+      resolve(process.cwd(), "extensions/discord/src/channel.ts"),
+      "utf8",
+    );
+    expect(source).not.toContain('require("./ui.js")');
+    expect(source).not.toContain('require("./channel-actions.js")');
+  });
+
   it("honors per-account replyToMode overrides", () => {
     const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
     if (!resolveReplyToMode) {

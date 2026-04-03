@@ -109,7 +109,7 @@ describe("failover-error", () => {
         status: 410,
         message: "invalid_api_key",
       }),
-    ).toBe("auth_permanent");
+    ).toBe("auth");
     expect(
       resolveFailoverReasonFromError({
         status: 410,
@@ -500,9 +500,9 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 403, message: "Forbidden" })).toBe("auth");
   });
 
-  it("401 with permanent auth message returns auth_permanent", () => {
+  it("401 with ambiguous auth message returns auth", () => {
     expect(resolveFailoverReasonFromError({ status: 401, message: "invalid_api_key" })).toBe(
-      "auth_permanent",
+      "auth",
     );
   });
 
@@ -516,26 +516,22 @@ describe("failover-error", () => {
     expect(resolveFailoverStatus("auth_permanent")).toBe(403);
   });
 
-  it("coerces permanent auth error with correct reason", () => {
+  it("coerces ambiguous auth error into the short auth lane", () => {
     const err = coerceToFailoverError(
       { status: 401, message: "invalid_api_key" },
       { provider: "anthropic", model: "claude-opus-4-6" },
     );
-    expect(err?.reason).toBe("auth_permanent");
+    expect(err?.reason).toBe("auth");
     expect(err?.provider).toBe("anthropic");
   });
 
-  it("403 permission_error returns auth_permanent", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        status: 403,
-        message:
-          "permission_error: OAuth authentication is currently not allowed for this organization.",
-      }),
-    ).toBe("auth_permanent");
+  it("403 bare permission_error returns auth", () => {
+    expect(resolveFailoverReasonFromError({ status: 403, message: "permission_error" })).toBe(
+      "auth",
+    );
   });
 
-  it("permission_error in error message string classifies as auth_permanent", () => {
+  it("permission_error with organization denial stays auth_permanent", () => {
     const err = coerceToFailoverError(
       "HTTP 403 permission_error: OAuth authentication is currently not allowed for this organization.",
       { provider: "anthropic", model: "claude-opus-4-6" },

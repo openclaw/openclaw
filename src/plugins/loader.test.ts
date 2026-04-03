@@ -731,7 +731,7 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      name: "loads bundled channel plugins when channels.<id>.enabled=true even if plugins.allow excludes them",
+      name: "lets explicit bundled channel enablement bypass restrictive allowlists",
       config: {
         channels: {
           telegram: {
@@ -743,7 +743,10 @@ describe("loadOpenClawPlugins", () => {
         },
       } satisfies PluginLoadConfig,
       assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-        expectTelegramLoaded(registry);
+        const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+        expect(telegram?.status).toBe("loaded");
+        expect(telegram?.error).toBeUndefined();
+        expect(telegram?.explicitlyEnabled).toBe(true);
       },
     },
     {
@@ -1259,7 +1262,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     expect(active.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
-    expect(getPluginCommandSpecs("telegram")).toEqual([
+    expect(getPluginCommandSpecs()).toEqual([
       {
         name: "pair",
         description: "Pair device",

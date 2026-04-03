@@ -109,10 +109,7 @@ export function createDiscordSetupWizardBase(handlers: {
       configuredScore: 2,
       unconfiguredScore: 1,
       resolveConfigured: ({ cfg, accountId }) =>
-        (accountId ? [accountId] : listDiscordSetupAccountIds(cfg)).some((resolvedAccountId) => {
-          const account = inspectDiscordSetupAccount({ cfg, accountId: resolvedAccountId });
-          return account.configured;
-        }),
+        inspectDiscordSetupAccount({ cfg, accountId }).configured,
     }),
     credentials: [
       {

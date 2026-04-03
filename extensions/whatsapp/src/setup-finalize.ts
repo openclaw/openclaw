@@ -10,7 +10,11 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { resolveWhatsAppAccount, resolveWhatsAppAuthDir } from "./accounts.js";
+import {
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAccount,
+  resolveWhatsAppAuthDir,
+} from "./accounts.js";
 import { loginWeb } from "./login.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 
@@ -333,19 +337,20 @@ export async function finalizeWhatsAppSetup(params: {
   prompter: SetupPrompter;
   runtime: SetupRuntime;
 }) {
+  const accountId = params.accountId.trim() || resolveDefaultWhatsAppAccountId(params.cfg);
   let next =
-    params.accountId === DEFAULT_ACCOUNT_ID
+    accountId === DEFAULT_ACCOUNT_ID
       ? params.cfg
       : whatsappSetupAdapter.applyAccountConfig({
           cfg: params.cfg,
-          accountId: params.accountId,
+          accountId,
           input: {},
         });
 
-  const linked = await detectWhatsAppLinked(next, params.accountId);
+  const linked = await detectWhatsAppLinked(next, accountId);
   const { authDir } = resolveWhatsAppAuthDir({
     cfg: next,
-    accountId: params.accountId,
+    accountId,
   });
 
   if (!linked) {
@@ -365,7 +370,7 @@ export async function finalizeWhatsAppSetup(params: {
   });
   if (wantsLink) {
     try {
-      await loginWeb(false, undefined, params.runtime, params.accountId);
+      await loginWeb(false, undefined, params.runtime, accountId);
     } catch (error) {
       params.runtime.error(`WhatsApp login failed: ${String(error)}`);
       await params.prompter.note(
@@ -382,7 +387,7 @@ export async function finalizeWhatsAppSetup(params: {
 
   next = await promptWhatsAppDmAccess({
     cfg: next,
-    accountId: params.accountId,
+    accountId,
     forceAllowFrom: params.forceAllowFrom,
     prompter: params.prompter,
   });

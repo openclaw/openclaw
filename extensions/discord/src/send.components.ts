@@ -67,26 +67,55 @@ function withImplicitComponentAttachmentBlock(
   };
 }
 
-function canSendAsClassicDiscordMessage(spec: DiscordComponentMessageSpec): boolean {
-  if (spec.modal || spec.container) {
-    return false;
-  }
+function hasClassicOnlyBlocks(spec: DiscordComponentMessageSpec): boolean {
+  return (spec.blocks ?? []).every((block) => block.type === "text" || block.type === "file");
+}
 
+function hasUnsupportedClassicFeatures(spec: DiscordComponentMessageSpec): boolean {
+  return Boolean(spec.modal || spec.container);
+}
+
+function hasAtMostOneNonSpoilerFile(spec: DiscordComponentMessageSpec): boolean {
   let fileBlockCount = 0;
   for (const block of spec.blocks ?? []) {
-    if (block.type === "text") {
+    if (block.type !== "file") {
       continue;
     }
-    if (block.type === "file") {
-      fileBlockCount += 1;
-      if (block.spoiler) {
-        return false;
-      }
-      continue;
+    fileBlockCount += 1;
+    if (block.spoiler) {
+      return false;
     }
-    return false;
   }
   return fileBlockCount <= 1;
+}
+
+type ClassicDiscordMessageDecision =
+  | {
+      mode: "classic";
+      reason: "plain-text-single-file";
+    }
+  | {
+      mode: "components";
+      reason: "unsupported-feature" | "unsupported-block" | "multiple-or-spoiler-files";
+    };
+
+/**
+ * Keep the downgrade rules explicit because this path is only safe when the
+ * spec means exactly what a plain Discord message can represent.
+ */
+function getClassicDiscordMessageDecision(
+  spec: DiscordComponentMessageSpec,
+): ClassicDiscordMessageDecision {
+  if (hasUnsupportedClassicFeatures(spec)) {
+    return { mode: "components", reason: "unsupported-feature" };
+  }
+  if (!hasClassicOnlyBlocks(spec)) {
+    return { mode: "components", reason: "unsupported-block" };
+  }
+  if (!hasAtMostOneNonSpoilerFile(spec)) {
+    return { mode: "components", reason: "multiple-or-spoiler-files" };
+  }
+  return { mode: "classic", reason: "plain-text-single-file" };
 }
 
 function collapseClassicComponentText(spec: DiscordComponentMessageSpec): string {
@@ -217,10 +246,8 @@ export async function sendDiscordComponentMessage(
   spec: DiscordComponentMessageSpec,
   opts: DiscordComponentSendOpts = {},
 ): Promise<DiscordSendResult> {
-  // Only downgrade when the spec is semantically identical to a plain Discord
-  // message. Modal triggers, container styling, spoiler files, and multi-file
-  // specs need the component-v2 path so we do not silently drop behavior.
-  if (opts.mediaUrl && canSendAsClassicDiscordMessage(spec)) {
+  const classicDecision = getClassicDiscordMessageDecision(spec);
+  if (opts.mediaUrl && classicDecision.mode === "classic") {
     return await sendMessageDiscord(to, collapseClassicComponentText(spec), {
       cfg: opts.cfg,
       accountId: opts.accountId,

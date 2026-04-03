@@ -1,6 +1,9 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
@@ -174,6 +177,7 @@ export const defaultRegistry = createTestRegistry([
 export const emptyRegistry = createTestRegistry([]);
 
 export function resetDeliverTestState() {
+  releasePinnedPluginChannelRegistry();
   setActivePluginRegistry(defaultRegistry);
   deliverMocks.hooks.runner.hasHooks = () => false;
   deliverMocks.hooks.runner.runMessageSent = async () => {};
@@ -190,6 +194,7 @@ export function resetDeliverTestState() {
 }
 
 export function clearDeliverTestRegistry() {
+  releasePinnedPluginChannelRegistry();
   setActivePluginRegistry(emptyRegistry);
 }
 
@@ -227,7 +232,7 @@ export async function runChunkedWhatsAppDelivery(params: {
     channel: "whatsapp",
     to: "+1555",
     payloads: [{ text: "abcd" }],
-    deps: { sendWhatsApp },
+    deps: { whatsapp: sendWhatsApp },
     ...(params.mirror ? { mirror: params.mirror } : {}),
   });
   return { sendWhatsApp, results };

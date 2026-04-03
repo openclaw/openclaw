@@ -5,7 +5,6 @@ import {
   type ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { SlackActionContext } from "./action-runtime.js";
-import { handleSlackAction } from "./action-runtime.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend, listSlackMessageActions } from "./message-actions.js";
@@ -17,6 +16,13 @@ type SlackActionInvoke = (
   cfg: unknown,
   toolContext: unknown,
 ) => Promise<AgentToolResult<unknown>>;
+
+let slackActionRuntimePromise: Promise<typeof import("./action-runtime.runtime.js")> | undefined;
+
+async function loadSlackActionRuntime() {
+  slackActionRuntimePromise ??= import("./action-runtime.runtime.js");
+  return await slackActionRuntimePromise;
+}
 
 export function createSlackActions(
   providerId: string,
@@ -61,7 +67,7 @@ export function createSlackActions(
         invoke: async (action, cfg, toolContext) =>
           await (options?.invoke
             ? options.invoke(action, cfg, toolContext)
-            : handleSlackAction(action, cfg, {
+            : (await loadSlackActionRuntime()).handleSlackAction(action, cfg, {
                 ...(toolContext as SlackActionContext | undefined),
                 mediaLocalRoots: ctx.mediaLocalRoots,
                 mediaReadFile: ctx.mediaReadFile,
