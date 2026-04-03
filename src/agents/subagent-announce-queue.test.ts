@@ -204,13 +204,13 @@ describe("subagent-announce-queue", () => {
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalledTimes(2);
     });
-    const firstCall = send.mock.calls[0];
-    const secondCall = send.mock.calls[1];
-    const firstSent = firstCall[0]!;
-    const secondSent = secondCall[0]!;
-    expect(firstSent.display.text).toBe("first visible");
-    expect(secondSent.display.summaryLine).toBeUndefined();
-    expect(secondSent.execution.agentPrompt).toBe("second internal");
+    const firstSent = send.mock.calls.at(0)?.at(0);
+    const secondSent = send.mock.calls.at(1)?.at(0);
+    expect(firstSent).toBeDefined();
+    expect(secondSent).toBeDefined();
+    expect(firstSent?.display.text).toBe("first visible");
+    expect(secondSent?.display.summaryLine).toBeUndefined();
+    expect(secondSent?.execution.agentPrompt).toBe("second internal");
   });
 
   it("keeps individual-drain fallback across retries after collect render failure", async () => {
@@ -306,9 +306,9 @@ describe("subagent-announce-queue", () => {
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalledTimes(1);
     });
-    const firstCall = send.mock.calls[0];
-    const overflowSent = firstCall[0]!;
-    const overflowSummary = overflowSent.display.text;
+    const overflowSent = send.mock.calls.at(0)?.at(0);
+    expect(overflowSent).toBeDefined();
+    const overflowSummary = overflowSent?.display.text ?? "";
     expect(overflowSummary).toContain("[Queue overflow]");
     expect(overflowSummary).toContain("[summary unavailable]");
     expect(overflowSummary).not.toContain("hidden fallback prompt");
@@ -347,8 +347,9 @@ describe("subagent-announce-queue", () => {
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalledTimes(1);
     });
-    const overflowSent = send.mock.calls[0]?.[0]!;
-    const overflowSummary = overflowSent.display.text ?? "";
+    const overflowSent = send.mock.calls.at(0)?.at(0);
+    expect(overflowSent).toBeDefined();
+    const overflowSummary = overflowSent?.display.text ?? "";
     expect(overflowSummary).toContain("[Queue overflow]");
     expect(overflowSummary).toContain("[summary unavailable]");
     expect(overflowSummary).not.toContain("hidden execution fallback");
@@ -385,8 +386,9 @@ describe("subagent-announce-queue", () => {
     });
 
     const prompts = send.mock.calls.map((call) => {
-      const item = call[0]!;
-      return item.display.text ?? item.display.summaryLine ?? item.execution.agentPrompt;
+      const item = call.at(0);
+      expect(item).toBeDefined();
+      return item?.display.text ?? item?.display.summaryLine ?? item?.execution.agentPrompt ?? "";
     });
     expect(prompts[0]).toContain("[Queue overflow]");
     expect(prompts[0]).toContain("first visible");
