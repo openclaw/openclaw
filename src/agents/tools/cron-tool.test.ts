@@ -281,6 +281,24 @@ describe("cron tool", () => {
     expect(sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
   });
 
+  it("downgrades current sessionTarget to isolated on add when caller session is direct", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:feishu:direct:ou_d666cad4e4b102c17a9191f25cedb63f",
+    });
+    await tool.execute("call-direct-add", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        sessionTarget: "current",
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add") as
+      | { sessionTarget?: string }
+      | undefined;
+    expect(params?.sessionTarget).toBe("isolated");
+  });
+
   it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
@@ -829,5 +847,24 @@ describe("cron tool", () => {
       kind: "agentTurn",
       toolsAllow: null,
     });
+  });
+
+  it("downgrades current sessionTarget to isolated on update when caller session is direct", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:feishu:direct:ou_d666cad4e4b102c17a9191f25cedb63f",
+    });
+    await tool.execute("call-update-direct", {
+      action: "update",
+      jobId: "job-direct",
+      sessionTarget: "current",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | { id?: string; patch?: { sessionTarget?: string } }
+      | undefined;
+    expect(params?.id).toBe("job-direct");
+    expect(params?.patch?.sessionTarget).toBe("isolated");
   });
 });

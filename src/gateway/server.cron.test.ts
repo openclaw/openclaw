@@ -617,6 +617,102 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("guards direct session bindings on add/update and falls back to cron sessions at runtime", async () => {
+    const now = Date.now();
+    const directSessionKey = "agent:main:feishu:direct:ou_d666cad4e4b102c17a9191f25cedb63f";
+    const safeGroupSessionKey = "agent:main:discord:group:ops";
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-direct-guard-",
+      cronEnabled: false,
+      jobs: [
+        {
+          id: "dirty-direct-job",
+          name: "dirty direct job",
+          enabled: true,
+          createdAtMs: now - 60_000,
+          updatedAtMs: now - 60_000,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: `session:${directSessionKey}`,
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "dirty direct" },
+          delivery: { mode: "none" },
+          state: {},
+        },
+        {
+          id: "safe-group-job",
+          name: "safe group job",
+          enabled: true,
+          createdAtMs: now - 60_000,
+          updatedAtMs: now - 60_000,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: `session:${safeGroupSessionKey}`,
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "safe group" },
+          delivery: { mode: "none" },
+          state: {},
+        },
+      ],
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "direct current add",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionKey: directSessionKey,
+        sessionTarget: "current",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: { mode: "none" },
+      });
+      expect(addRes.ok).toBe(true);
+      const addPayload = addRes.payload as { id?: unknown; sessionTarget?: unknown } | undefined;
+      expect(addPayload?.sessionTarget).toBe("isolated");
+      const addJobId = typeof addPayload?.id === "string" ? addPayload.id : "";
+      expect(addJobId.length > 0).toBe(true);
+
+      const updateRes = await rpcReq(ws, "cron.update", {
+        id: addJobId,
+        sessionKey: directSessionKey,
+        patch: {
+          sessionTarget: "current",
+        },
+      });
+      expect(updateRes.ok).toBe(true);
+      const updatePayload = updateRes.payload as { sessionTarget?: unknown } | undefined;
+      expect(updatePayload?.sessionTarget).toBe("isolated");
+
+      cronIsolatedRun.mockClear();
+      const directFinished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === "dirty-direct-job" && payload?.action === "finished",
+      );
+      await runCronJobForce(ws, "dirty-direct-job");
+      await directFinished;
+      const directCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string }
+        | undefined;
+      expect(directCall?.sessionKey).toBe("cron:dirty-direct-job");
+
+      cronIsolatedRun.mockClear();
+      const safeFinished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === "safe-group-job" && payload?.action === "finished",
+      );
+      await runCronJobForce(ws, "safe-group-job");
+      await safeFinished;
+      const safeCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string }
+        | undefined;
+      expect(safeCall?.sessionKey).toBe(safeGroupSessionKey);
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
   test("returns already-running without starting background work", async () => {
     const now = Date.now();
     let resolveRun: ((result: { status: "ok"; summary: string }) => void) | undefined;

@@ -17,6 +17,7 @@ import {
   resolveCronRunLogPruneOptions,
 } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
+import { isUnsafeCronSessionTarget } from "../cron/session-target-guard.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -287,8 +288,13 @@ export function buildGatewayCronService(params: {
       let sessionKey = `cron:${job.id}`;
       if (job.sessionTarget.startsWith("session:")) {
         const customSessionId = job.sessionTarget.slice(8).trim();
-        if (customSessionId) {
+        if (customSessionId && !isUnsafeCronSessionTarget(job.sessionTarget)) {
           sessionKey = customSessionId;
+        } else if (customSessionId) {
+          cronLogger.warn(
+            { jobId: job.id },
+            "cron: ignoring direct sessionTarget and falling back to isolated cron session",
+          );
         }
       }
       return await runCronIsolatedAgentTurn({

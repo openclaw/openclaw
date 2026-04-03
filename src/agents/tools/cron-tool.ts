@@ -460,7 +460,7 @@ JOB SCHEMA (for add action):
 SESSION TARGET OPTIONS:
 - "main": Run in the main session (requires payload.kind="systemEvent")
 - "isolated": Run in an ephemeral isolated session (requires payload.kind="agentTurn")
-- "current": Bind to the current session where the cron is created (resolved at creation time)
+- "current": Bind to the current session where the cron is created (resolved at creation time; direct chats fall back to isolated)
 - "session:<custom-id>": Run in a persistent named session (e.g., "session:project-alpha-daily")
 
 DEFAULT BEHAVIOR (unchanged for backward compatibility):
@@ -681,7 +681,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
           }
-          const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
+          const patch =
+            normalizeCronJobPatch(params.patch, {
+              sessionContext: { sessionKey: opts?.agentSessionKey },
+            }) ?? params.patch;
           if (
             recoveredFlatPatch &&
             typeof patch === "object" &&
