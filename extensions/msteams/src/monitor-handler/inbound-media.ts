@@ -52,11 +52,11 @@ export async function resolveMSTeamsInboundMedia(params: {
   });
 
   if (mediaList.length === 0) {
-    const onlyHtmlAttachments =
+    const hasHtmlAttachment =
       attachments.length > 0 &&
-      attachments.every((att) => String(att.contentType ?? "").startsWith("text/html"));
+      attachments.some((att) => String(att.contentType ?? "").startsWith("text/html"));
 
-    if (onlyHtmlAttachments) {
+    if (hasHtmlAttachment) {
       const messageUrls = buildMSTeamsGraphMessageUrls({
         conversationType,
         conversationId,
