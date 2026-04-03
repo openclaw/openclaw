@@ -31,6 +31,12 @@ export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = "MEMORY.md";
 export const DEFAULT_MEMORY_ALT_FILENAME = "memory.md";
+// Operator-managed sandbox policy artifact delivered by the platform's config
+// sync worker via agents.files.set RPC.  The gateway writes this JSON file into
+// each agent's workspace directory; sandbox-bash.sh reads it on every command
+// invocation to enforce per-agent allowed/denied commands, CWD constraints,
+// path rules, and network/file-write permissions.
+export const DEFAULT_SANDBOX_POLICY_FILENAME = "SANDBOX_POLICY.json";
 const WORKSPACE_STATE_DIRNAME = ".openclaw";
 const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_STATE_VERSION = 1;
