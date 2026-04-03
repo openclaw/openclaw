@@ -104,28 +104,12 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     }),
   };
 });
-vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
-  return {
-    ...actual,
-    listSkillCommandsForAgents: vi.fn(() => []),
-  };
-});
-vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/reply-dispatch-runtime")>();
+vi.mock("./bot-native-commands.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bot-native-commands.runtime.js")>();
   return {
     ...actual,
     finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
     dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
-  };
-});
-vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
-  return {
-    ...actual,
-    recordSessionMetaFromInbound: sessionMocks.recordSessionMetaFromInbound,
-    resolveStorePath: sessionMocks.resolveStorePath,
   };
 });
 vi.mock("../../../src/pairing/pairing-store.js", () => ({

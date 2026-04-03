@@ -355,6 +355,15 @@ describe("convertTools", () => {
     expect(result[0]?.name).toBe("ping");
   });
 
+  it("normalizes truly empty parameter schemas for parameter-free tools", () => {
+    const tools = [{ name: "ping", description: "No params", parameters: {} }];
+    const result = convertTools(tools as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+    });
+  });
+
   it("injects properties:{} for type:object schemas missing properties (MCP no-param tools)", () => {
     const tools = [
       { name: "list_regions", description: "List AWS regions", parameters: { type: "object" } },
@@ -418,6 +427,22 @@ describe("convertTools", () => {
       },
       required: ["action"],
       additionalProperties: true,
+    });
+  });
+
+  it("leaves top-level allOf schemas unchanged", () => {
+    const tools = [
+      {
+        name: "conditional",
+        description: "Conditional schema",
+        parameters: {
+          allOf: [{ type: "object", properties: { id: { type: "string" } } }],
+        },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      allOf: [{ type: "object", properties: { id: { type: "string" } } }],
     });
   });
 

@@ -141,7 +141,7 @@ export function installReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
     listSkillCommandsForWorkspace: () => [],
   }));
 
-  vi.mock("../plugins/runtime/runtime-web-channel-boundary.js", () => ({
+  vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
     webAuthExists: mocks.webAuthExists,
     getWebAuthAgeMs: mocks.getWebAuthAgeMs,
     readWebSelfId: mocks.readWebSelfId,
