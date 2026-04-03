@@ -96,6 +96,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime: honor explicit capability allowlists during fallback speech, media-understanding, and image-generation provider loading so bundled capability plugins do not bypass restrictive `plugins.allow` config. (#52262) Thanks @PerfectPan.
 - Hooks/tool policy: block tool calls when a `before_tool_call` hook crashes so hook failures fail closed instead of silently allowing execution. (#59822) Thanks @pgondhi987.
 - Node-host/exec approvals: forward `systemRunPlan` on `system.run` invokes so async approvals keep mutable script operand binding and drift revalidation enforced at execution time. (#59804) Thanks @pgondhi987.
+- Matrix/media: surface a dedicated `[matrix <kind> attachment too large]` marker for oversized inbound media instead of the generic unavailable marker, and classify size-limit failures with a typed Matrix error. (#60289) Thanks @efe-arv.
 
 ## 2026.4.2
 
