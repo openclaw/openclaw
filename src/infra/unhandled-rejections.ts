@@ -81,6 +81,28 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "write eproto",
 ];
 
+/**
+ * Error codes produced by SDKs that wrap underlying transport/network failures.
+ * When a rejection carries one of these codes AND the wrapper message indicates a
+ * request-level failure (not a business-logic error), we treat it as transient
+ * even when the inner error has no identifiable code or message.
+ *
+ * Specifically, the `@slack/web-api` `WebClient` wraps *all* `axios` / `undici`
+ * request errors via `requestErrorWithOriginal()` under the code
+ * `slack_webapi_request_error`.  The wrapper message is always
+ * `"A request error occurred: <original.message>"`.  When the original error has
+ * an empty message (observed during macOS sleep/wake and prolonged network
+ * outages), the resulting string is just `"A request error occurred: "` — which
+ * matches no existing transient snippet or code, causing the gateway to crash.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/23169
+ * @see https://github.com/openclaw/openclaw/issues/21082
+ * @see https://github.com/openclaw/openclaw/issues/43689
+ */
+const TRANSIENT_REQUEST_WRAPPER_CODES = new Set(["SLACK_WEBAPI_REQUEST_ERROR"]);
+
+const TRANSIENT_REQUEST_WRAPPER_MESSAGE_RE = /^a request error occurred:/i;
+
 const TRANSIENT_SQLITE_MESSAGE_SNIPPETS = [
   "unable to open database file",
   "database is locked",
@@ -238,6 +260,20 @@ export function isTransientNetworkError(err: unknown): boolean {
     }
     const rawMessage = (candidate as { message?: unknown }).message;
     const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+
+    // Detect SDK wrapper errors whose code marks them as request-level failures.
+    // When the wrapper message matches the expected pattern (e.g.
+    // "A request error occurred: ...") but the inner error carries no
+    // identifiable network code, we still treat the rejection as transient
+    // because these wrappers *only* fire for transport/network failures.
+    if (
+      code &&
+      TRANSIENT_REQUEST_WRAPPER_CODES.has(code) &&
+      (!message || TRANSIENT_REQUEST_WRAPPER_MESSAGE_RE.test(message))
+    ) {
+      return true;
+    }
+
     if (!message) {
       continue;
     }
@@ -342,6 +378,20 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
 export function installUnhandledRejectionHandler(): void {
   process.on("unhandledRejection", (reason, _promise) => {
     if (isUnhandledRejectionHandled(reason)) {
+      return;
+    }
+
+    // An undefined/null rejection reason means reject() was called without an
+    // argument.  This happens in some third-party SDKs (e.g. @slack/socket-mode
+    // during WebSocket TLS errors).  Since we have no way to classify the error,
+    // and the only known producers are transient network paths, treat it as
+    // non-fatal rather than crashing the gateway.
+    // See: https://github.com/openclaw/openclaw/issues/43689
+    if (reason == null) {
+      console.warn(
+        "[openclaw] Non-fatal unhandled rejection (undefined reason, continuing):",
+        String(reason),
+      );
       return;
     }
 
