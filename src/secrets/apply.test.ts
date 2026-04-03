@@ -519,13 +519,17 @@ describe("secrets apply", () => {
     expect(rawConfig).not.toContain("sk-skill-plaintext");
   });
 
-  it("applies non-legacy target types", async () => {
+  it("applies talk provider target types", async () => {
     await fs.writeFile(
       fixture.configPath,
       `${JSON.stringify(
         {
           talk: {
-            apiKey: "sk-talk-plaintext", // pragma: allowlist secret
+            providers: {
+              elevenlabs: {
+                apiKey: "sk-talk-plaintext", // pragma: allowlist secret
+              },
+            },
           },
         },
         null,
@@ -541,9 +545,9 @@ describe("secrets apply", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "talk.apiKey",
-          path: "talk.apiKey",
-          pathSegments: ["talk", "apiKey"],
+          type: "talk.providers.*.apiKey",
+          path: "talk.providers.elevenlabs.apiKey",
+          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
           ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         },
       ],
@@ -558,9 +562,9 @@ describe("secrets apply", () => {
     expect(result.changed).toBe(true);
 
     const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
-      talk?: { apiKey?: unknown };
+      talk?: { providers?: { elevenlabs?: { apiKey?: unknown } } };
     };
-    expect(nextConfig.talk?.apiKey).toEqual({
+    expect(nextConfig.talk?.providers?.elevenlabs?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "OPENAI_API_KEY",

@@ -175,16 +175,25 @@ beforeAll(async () => {
 });
 
 describe("web search provider config", () => {
-  it("does not warn for legacy brave config when bundled web search allowlist compat applies", () => {
+  it("does not warn for brave plugin config when bundled web search allowlist compat applies", () => {
     const res = validateConfigObjectWithPlugins({
       plugins: {
         allow: ["bluebubbles", "memory-core"],
+        entries: {
+          brave: {
+            config: {
+              webSearch: {
+                apiKey: "test-brave-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
       },
       tools: {
         web: {
           search: {
             enabled: true,
-            apiKey: "test-brave-key", // pragma: allowlist secret
+            provider: "brave",
           },
         },
       },

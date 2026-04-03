@@ -66,7 +66,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
           totalMemoryBytes: 128 * 1024 ** 3,
         },
       ),
-    ).toBe(6);
+    ).toBe(8);
   });
 });
 
