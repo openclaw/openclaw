@@ -222,6 +222,20 @@ That means:
 - channels should consume shared core capabilities instead of re-implementing
   provider behavior ad hoc
 
+For messaging UX specifically, plugins should express intent in terms of lanes,
+actors, semantic actions, and fallback affordances. Channel plugins own the
+projection to native transport UX:
+
+- plugins reply on a lane instead of choosing a Telegram/Discord/Slack send API
+- plugins DM actors instead of building provider-specific direct-message routes
+- plugins describe semantic interactive actions plus text/command fallbacks
+- channels render native buttons, selects, or cards when available and degrade
+  to text-only affordances when they are not
+
+That keeps plugin code portable across Slack, Microsoft Teams, Feishu/Lark,
+Telegram, Discord, and future channels while still allowing host-owned raw
+channel runtimes as explicit escape hatches.
+
 Examples:
 
 - the bundled `openai` plugin owns OpenAI model-provider behavior and OpenAI
@@ -1077,6 +1091,9 @@ Recommended split:
 - Keep provider-native ids like chat ids, thread ids, JIDs, handles, and room
   ids inside `target` values or provider-specific params, not in generic SDK
   fields.
+
+At the plugin runtime boundary, normalize those provider-native ids into
+`PluginLaneRef` and `PluginActorRef` before exposing them to plugin code.
 
 ## Config-backed directories
 

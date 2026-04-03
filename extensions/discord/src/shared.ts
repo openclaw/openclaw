@@ -64,6 +64,17 @@ export function createDiscordPluginBase(params: {
       threads: true,
       media: true,
       nativeCommands: true,
+      richReplies: {
+        buttons: true,
+        selects: true,
+        commandFallback: true,
+      },
+      interactionResponses: {
+        acknowledge: true,
+        clearInteractive: true,
+        editText: true,
+        followUp: true,
+      },
     },
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },

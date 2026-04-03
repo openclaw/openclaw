@@ -447,4 +447,52 @@ describe("registerPluginCommand", () => {
       sessionId: "session-123",
     });
   });
+
+  it("projects normalized lane and sender refs into the plugin command context", async () => {
+    let receivedCtx:
+      | {
+          lane?: { channel: string; to: string; threadId?: string | number };
+          sender?: { channel: string; id: string; dmLane?: { to: string } };
+        }
+      | undefined;
+    const handler = async (ctx: typeof receivedCtx) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "lanecheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      senderId: "12345",
+      isAuthorizedSender: true,
+      commandBody: "/lanecheck",
+      config: {} as never,
+      from: "telegram:12345",
+      to: "-10099:topic:77",
+      accountId: "default",
+      messageThreadId: 77,
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx).toMatchObject({
+      lane: {
+        channel: "telegram",
+        to: "-10099",
+        threadId: 77,
+      },
+      sender: {
+        channel: "telegram",
+        id: "12345",
+        dmLane: {
+          to: "12345",
+        },
+      },
+    });
+  });
 });

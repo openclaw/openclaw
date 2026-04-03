@@ -2,6 +2,8 @@ export { reduceInteractiveReply } from "../channels/plugins/outbound/interactive
 export type {
   InteractiveButtonStyle,
   InteractiveReply,
+  InteractiveReplyActionDescriptor,
+  InteractiveReplyActionFallback,
   InteractiveReplyBlock,
   InteractiveReplyButton,
   InteractiveReplyOption,
@@ -9,9 +11,12 @@ export type {
   InteractiveReplyTextBlock,
 } from "../interactive/payload.js";
 export {
+  collectInteractiveCommandFallbacks,
   hasInteractiveReplyBlocks,
   hasReplyChannelData,
   hasReplyContent,
   normalizeInteractiveReply,
+  renderInteractiveCommandFallback,
+  resolveInteractiveActionId,
   resolveInteractiveTextFallback,
 } from "../interactive/payload.js";

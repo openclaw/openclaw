@@ -330,6 +330,44 @@ api.runtime.tools.registerMemoryCli(/* ... */);
 
 Channel-specific runtime helpers (available when a channel plugin is loaded).
 
+Prefer the generic outbound helpers when you want to reply on the same lane a
+message came from or DM the sender without owning channel transport details:
+
+```typescript
+await api.runtime.channel.outbound.sendToLane({
+  cfg: api.config,
+  lane: ctx.lane,
+  payload: {
+    text: "Build finished.",
+  },
+});
+
+await api.runtime.channel.outbound.sendToActorDm({
+  cfg: api.config,
+  actor: ctx.sender,
+  payload: {
+    text: "I sent the result privately.",
+  },
+});
+```
+
+`api.runtime.channel.outbound` also exposes:
+
+- `loadAdapter(channelId)` to work with the host-owned outbound adapter for a
+  specific channel when you are writing channel runtime code
+- `resolveActorDmLane(actor)` to discover a sender's DM route before deciding
+  whether to DM or stay in-channel
+
+For rich interactions, prefer semantic `ReplyPayload.interactive` data plus the
+helpers exported from `openclaw/plugin-sdk/interactive-runtime`. Channel
+plugins project that semantic payload into native buttons, selects, cards, or
+fallback text/commands based on channel capabilities.
+
+Raw namespaces such as `api.runtime.channel.telegram` or
+`api.runtime.channel.discord` still exist for host-owned runtime code, but they
+are escape hatches. New plugin-facing features should usually land on a generic
+SDK subpath or on `api.runtime.channel.outbound` first.
+
 ## Storing runtime references
 
 Use `createPluginRuntimeStore` to store the runtime reference for use outside

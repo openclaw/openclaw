@@ -540,6 +540,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         reactions: true,
         edit: true,
         reply: true,
+        richReplies: {
+          buttons: true,
+          selects: true,
+          cards: true,
+          commandFallback: true,
+        },
+        interactionResponses: {
+          editText: true,
+        },
       },
       agentPrompt: {
         messageToolHints: () => [

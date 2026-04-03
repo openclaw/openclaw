@@ -8,9 +8,11 @@ import type {
 import {
   clearPluginInteractiveHandlers,
   dispatchPluginInteractiveHandler,
+  registerPluginInteractionHandler,
   registerPluginInteractiveHandler,
 } from "./interactive.js";
 import type {
+  PluginInteractionHandlerContext,
   PluginInteractiveDiscordHandlerContext,
   PluginInteractiveSlackHandlerContext,
   PluginInteractiveTelegramHandlerContext,
@@ -204,6 +206,16 @@ function registerInteractiveHandler(params: {
   });
 }
 
+function registerInteractionHandler(params: {
+  namespace: string;
+  handler: ReturnType<typeof vi.fn>;
+}) {
+  return registerPluginInteractionHandler("codex-plugin", {
+    namespace: params.namespace,
+    handler: params.handler as never,
+  });
+}
+
 type BindingHelperCase = {
   name: string;
   registerParams: { channel: "telegram" | "discord" | "slack"; namespace: string };
@@ -328,6 +340,69 @@ describe("plugin interactive handlers", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("dispatches generic interaction handlers with lane, sender, and semantic action metadata", async () => {
+    const handler = vi.fn(async (_ctx: PluginInteractionHandlerContext) => ({
+      handled: true,
+    }));
+
+    expect(
+      registerInteractionHandler({
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const params = createSlackDispatchParams({
+      data: "codex:approve.thread",
+      interactionId: "interaction-generic-1",
+    });
+
+    const result = await dispatchInteractive(params);
+
+    expect(result).toEqual({ matched: true, handled: true, duplicate: false });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        interactionId: "interaction-generic-1",
+        lane: expect.objectContaining({
+          channel: "slack",
+          to: "C123",
+          threadId: "1710000000.000100",
+        }),
+        sender: expect.objectContaining({
+          channel: "slack",
+          id: "user-1",
+        }),
+        action: expect.objectContaining({
+          namespace: "codex",
+          payload: "approve.thread",
+          actionId: "approve.thread",
+          kind: "button",
+        }),
+      }),
+    );
+  });
+
+  it("rejects generic and legacy namespace collisions", () => {
+    expect(
+      registerInteractionHandler({
+        namespace: "codex",
+        handler: vi.fn(async () => ({ handled: true })),
+      }),
+    ).toEqual({ ok: true });
+
+    expect(
+      registerInteractiveHandler({
+        channel: "telegram",
+        namespace: "codex",
+        handler: vi.fn(async () => ({ handled: true })),
+      }),
+    ).toEqual({
+      ok: false,
+      error: 'Interactive handler namespace "codex" already registered by plugin "codex-plugin"',
+    });
   });
 
   it.each([

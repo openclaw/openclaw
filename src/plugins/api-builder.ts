@@ -32,6 +32,7 @@ export type BuildPluginApiParams = {
       | "registerImageGenerationProvider"
       | "registerWebFetchProvider"
       | "registerWebSearchProvider"
+      | "registerInteractionHandler"
       | "registerInteractiveHandler"
       | "onConversationBindingResolved"
       | "registerCommand"
@@ -61,6 +62,7 @@ const noopRegisterImageGenerationProvider: OpenClawPluginApi["registerImageGener
   () => {};
 const noopRegisterWebFetchProvider: OpenClawPluginApi["registerWebFetchProvider"] = () => {};
 const noopRegisterWebSearchProvider: OpenClawPluginApi["registerWebSearchProvider"] = () => {};
+const noopRegisterInteractionHandler: OpenClawPluginApi["registerInteractionHandler"] = () => {};
 const noopRegisterInteractiveHandler: OpenClawPluginApi["registerInteractiveHandler"] = () => {};
 const noopOnConversationBindingResolved: OpenClawPluginApi["onConversationBindingResolved"] =
   () => {};
@@ -103,6 +105,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerImageGenerationProvider ?? noopRegisterImageGenerationProvider,
     registerWebFetchProvider: handlers.registerWebFetchProvider ?? noopRegisterWebFetchProvider,
     registerWebSearchProvider: handlers.registerWebSearchProvider ?? noopRegisterWebSearchProvider,
+    registerInteractionHandler:
+      handlers.registerInteractionHandler ?? noopRegisterInteractionHandler,
     registerInteractiveHandler:
       handlers.registerInteractiveHandler ?? noopRegisterInteractiveHandler,
     onConversationBindingResolved:

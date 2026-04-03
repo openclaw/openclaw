@@ -123,6 +123,16 @@ is a small, self-contained module with a clear purpose and documented contract.
     | `ensureAgentWorkspace` | `api.runtime.agent.ensureAgentWorkspace` |
     | session store helpers | `api.runtime.agent.session.*` |
 
+    For messaging plugins, also move away from channel-branded send and
+    interaction contracts when possible:
+
+    | Legacy pattern | Modern equivalent |
+    | --- | --- |
+    | channel-specific outbound helper | `api.runtime.channel.outbound.sendToLane(...)` |
+    | channel-specific DM helper | `api.runtime.channel.outbound.sendToActorDm(...)` |
+    | channel-specific interactive callback handler | `api.registerInteractionHandler(...)` |
+    | raw button/select payload shaping | semantic `InteractiveReply` plus `interactive-runtime` fallback helpers |
+
   </Step>
 
   <Step title="Build and test">

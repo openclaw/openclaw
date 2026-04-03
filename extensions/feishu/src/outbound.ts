@@ -1,6 +1,16 @@
 import fs from "fs";
 import path from "path";
-import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  attachChannelToResult,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
+import {
+  reduceInteractiveReply,
+  renderInteractiveCommandFallback,
+  resolveInteractiveActionId,
+  resolveInteractiveTextFallback,
+  type InteractiveReply,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -8,7 +18,12 @@ import { parseFeishuCommentTarget } from "./comment-target.js";
 import { replyComment } from "./drive.js";
 import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
+import {
+  sendCardFeishu,
+  sendMarkdownCardFeishu,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+} from "./send.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -60,6 +75,75 @@ function resolveReplyToMessageId(params: {
   }
   const trimmed = String(params.threadId).trim();
   return trimmed || undefined;
+}
+
+function buildFeishuInteractiveCard(params: {
+  interactive: InteractiveReply;
+  text?: string;
+}): Record<string, unknown> {
+  const elements: Array<Record<string, unknown>> = [];
+
+  reduceInteractiveReply(params.interactive, undefined, (_state, block) => {
+    if (block.type === "text") {
+      const text = block.text.trim();
+      if (text) {
+        elements.push({ tag: "markdown", content: text });
+      }
+      return undefined;
+    }
+
+    const actions =
+      block.type === "buttons"
+        ? block.buttons.map((button) => ({
+            tag: "button",
+            text: { tag: "plain_text", content: button.label },
+            type: button.style === "danger" ? "danger" : "primary",
+            value: {
+              oc: "interactive",
+              kind: "button",
+              actionId: resolveInteractiveActionId(button),
+              value: button.value,
+              fallbackCommand: button.fallback?.command,
+            },
+          }))
+        : block.options.map((option) => ({
+            tag: "button",
+            text: { tag: "plain_text", content: option.label },
+            type: "default",
+            value: {
+              oc: "interactive",
+              kind: "select",
+              actionId: resolveInteractiveActionId(option),
+              value: option.value,
+              fallbackCommand: option.fallback?.command,
+            },
+          }));
+
+    if (actions.length > 0) {
+      elements.push({ tag: "action", actions });
+    }
+    return undefined;
+  });
+
+  const fallbackText =
+    resolveInteractiveTextFallback({
+      text: params.text,
+      interactive: params.interactive,
+    }) ?? renderInteractiveCommandFallback(params.interactive);
+  if (fallbackText && elements.length === 0) {
+    elements.push({ tag: "markdown", content: fallbackText });
+  }
+  const commandFallback = renderInteractiveCommandFallback(params.interactive);
+  if (commandFallback && commandFallback !== fallbackText) {
+    elements.push({ tag: "hr" });
+    elements.push({ tag: "markdown", content: `<font color='grey'>${commandFallback}</font>` });
+  }
+
+  return {
+    schema: "2.0",
+    config: { wide_screen_mode: true },
+    body: { elements },
+  };
 }
 
 async function sendCommentThreadReply(params: {
@@ -120,6 +204,43 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  sendPayload: async (ctx) => {
+    if (ctx.payload.interactive && !ctx.payload.mediaUrl && !(ctx.payload.mediaUrls?.length ?? 0)) {
+      return attachChannelToResult(
+        "feishu",
+        await sendCardFeishu({
+          cfg: ctx.cfg,
+          to: ctx.to,
+          card: buildFeishuInteractiveCard({
+            interactive: ctx.payload.interactive,
+            text: ctx.payload.text,
+          }),
+          replyToMessageId: resolveReplyToMessageId({
+            replyToId: ctx.replyToId,
+            threadId: ctx.threadId,
+          }),
+          replyInThread: ctx.threadId != null && !ctx.replyToId,
+          accountId: ctx.accountId ?? undefined,
+        }),
+      );
+    }
+    const text =
+      resolveInteractiveTextFallback({
+        text: ctx.payload.text,
+        interactive: ctx.payload.interactive,
+      }) ?? "";
+    if (ctx.payload.mediaUrl) {
+      return await feishuOutbound.sendMedia!({
+        ...ctx,
+        text,
+        mediaUrl: ctx.payload.mediaUrl,
+      });
+    }
+    return await feishuOutbound.sendText!({
+      ...ctx,
+      text,
+    });
+  },
   ...createAttachedChannelResultAdapter({
     channel: "feishu",
     sendText: async ({

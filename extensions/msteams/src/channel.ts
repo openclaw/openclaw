@@ -358,6 +358,12 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         polls: true,
         threads: true,
         media: true,
+        richReplies: {
+          buttons: true,
+          selects: true,
+          cards: true,
+          commandFallback: true,
+        },
       },
       streaming: {
         blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },

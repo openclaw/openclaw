@@ -243,6 +243,19 @@ export type ChannelCapabilities = {
   media?: boolean;
   nativeCommands?: boolean;
   blockStreaming?: boolean;
+  richReplies?: {
+    buttons?: boolean;
+    selects?: boolean;
+    cards?: boolean;
+    commandFallback?: boolean;
+  };
+  interactionResponses?: {
+    acknowledge?: boolean;
+    clearInteractive?: boolean;
+    deleteMessage?: boolean;
+    editText?: boolean;
+    followUp?: boolean;
+  };
 };
 
 export type ChannelSecurityDmPolicy = {

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
+const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
@@ -15,6 +16,7 @@ vi.mock("./media.js", () => ({
 }));
 
 vi.mock("./send.js", () => ({
+  sendCardFeishu: sendCardFeishuMock,
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
@@ -52,6 +54,7 @@ const cardRenderConfig: ClawdbotConfig = {
 function resetOutboundMocks() {
   vi.clearAllMocks();
   sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
+  sendCardFeishuMock.mockResolvedValue({ messageId: "interactive_card_msg" });
   sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
@@ -184,6 +187,57 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         text: "hello",
         replyToMessageId: "om_reply_1",
         accountId: "main",
+      }),
+    );
+  });
+
+  it("projects interactive payloads into Feishu cards", async () => {
+    const result = await feishuOutbound.sendPayload!({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      payload: {
+        interactive: {
+          blocks: [
+            { type: "text", text: "Choose an action" },
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", value: "approve", actionId: "approval.approve" }],
+            },
+          ],
+        },
+      },
+      accountId: "main",
+    });
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        accountId: "main",
+        card: expect.objectContaining({
+          schema: "2.0",
+          body: expect.objectContaining({
+            elements: expect.arrayContaining([
+              expect.objectContaining({ tag: "markdown", content: "Choose an action" }),
+              expect.objectContaining({
+                tag: "action",
+                actions: [
+                  expect.objectContaining({
+                    value: expect.objectContaining({
+                      actionId: "approval.approve",
+                    }),
+                  }),
+                ],
+              }),
+            ]),
+          }),
+        }),
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        channel: "feishu",
+        messageId: "interactive_card_msg",
       }),
     );
   });

@@ -107,6 +107,31 @@ export type PluginRuntimeChannel = {
   };
   outbound: {
     loadAdapter: typeof import("../../channels/plugins/outbound/load.js").loadChannelOutboundAdapter;
+    resolveActorDmLane: (
+      actor?: import("../types.js").PluginActorRef | null,
+    ) => import("../types.js").PluginLaneRef | undefined;
+    sendToLane: (params: {
+      cfg: import("../../config/config.js").OpenClawConfig;
+      lane: import("../types.js").PluginLaneRef;
+      payload:
+        | import("../../auto-reply/types.js").ReplyPayload
+        | import("../../auto-reply/types.js").ReplyPayload[];
+      identity?: import("../../infra/outbound/identity.js").OutboundIdentity;
+      deps?: import("../../infra/outbound/send-deps.js").OutboundSendDeps;
+      silent?: boolean;
+      gatewayClientScopes?: readonly string[];
+    }) => Promise<import("../../infra/outbound/deliver.js").OutboundDeliveryResult[]>;
+    sendToActorDm: (params: {
+      cfg: import("../../config/config.js").OpenClawConfig;
+      actor: import("../types.js").PluginActorRef;
+      payload:
+        | import("../../auto-reply/types.js").ReplyPayload
+        | import("../../auto-reply/types.js").ReplyPayload[];
+      identity?: import("../../infra/outbound/identity.js").OutboundIdentity;
+      deps?: import("../../infra/outbound/send-deps.js").OutboundSendDeps;
+      silent?: boolean;
+      gatewayClientScopes?: readonly string[];
+    }) => Promise<import("../../infra/outbound/deliver.js").OutboundDeliveryResult[]>;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectInteractiveCommandFallbacks,
   hasReplyChannelData,
   hasReplyContent,
   hasReplyPayloadContent,
   normalizeInteractiveReply,
+  renderInteractiveCommandFallback,
+  resolveInteractiveActionId,
   resolveInteractiveTextFallback,
 } from "./payload.js";
 
@@ -89,20 +92,82 @@ describe("hasReplyPayloadContent", () => {
 describe("interactive payload helpers", () => {
   it("normalizes interactive replies and resolves text fallbacks", () => {
     const interactive = normalizeInteractiveReply({
+      fallbackText: "Use one of the commands below if buttons are unavailable.",
       blocks: [
         { type: "text", text: "First" },
-        { type: "buttons", buttons: [{ label: "Retry", value: "retry" }] },
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Retry",
+              value: "retry",
+              actionId: "job.retry",
+              fallbackCommand: "/job retry",
+              fallbackText: "Retry the job",
+            },
+          ],
+        },
         { type: "text", text: "Second" },
       ],
     });
 
     expect(interactive).toEqual({
+      fallbackText: "Use one of the commands below if buttons are unavailable.",
       blocks: [
         { type: "text", text: "First" },
-        { type: "buttons", buttons: [{ label: "Retry", value: "retry" }] },
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Retry",
+              value: "retry",
+              actionId: "job.retry",
+              fallback: {
+                command: "/job retry",
+                text: "Retry the job",
+              },
+            },
+          ],
+        },
         { type: "text", text: "Second" },
       ],
     });
     expect(resolveInteractiveTextFallback({ interactive })).toBe("First\n\nSecond");
+    const retryButton = interactive?.blocks[1];
+    expect(retryButton?.type).toBe("buttons");
+    if (retryButton?.type !== "buttons") {
+      throw new Error("expected buttons block");
+    }
+    expect(resolveInteractiveActionId(retryButton.buttons[0])).toBe("job.retry");
+    expect(collectInteractiveCommandFallbacks(interactive)).toEqual([
+      {
+        actionId: "job.retry",
+        label: "Retry",
+        command: "/job retry",
+        text: "Retry the job",
+      },
+    ]);
+    expect(renderInteractiveCommandFallback(interactive)).toBe("Retry: Retry the job (/job retry)");
+  });
+
+  it("uses fallback text and commands when there is no explicit text block", () => {
+    const interactive = normalizeInteractiveReply({
+      fallbackText: "Choose one of these commands:",
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Approve",
+              value: "approve",
+              fallbackCommand: "/approve yes",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(resolveInteractiveTextFallback({ interactive })).toBe("Choose one of these commands:");
+    expect(renderInteractiveCommandFallback(interactive)).toBe("Approve: /approve yes");
   });
 });

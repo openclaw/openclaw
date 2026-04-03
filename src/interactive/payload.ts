@@ -1,15 +1,29 @@
 export type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
+export type InteractiveReplyActionFallback = {
+  text?: string;
+  command?: string;
+};
+
+export type InteractiveReplyActionDescriptor = {
+  /** Stable semantic action id for cross-channel interaction handling. */
+  actionId?: string;
+  /** Optional human-readable detail for card/select renderers. */
+  description?: string;
+  /** Plain-text or command fallback shown when native interaction UI is unavailable. */
+  fallback?: InteractiveReplyActionFallback;
+};
+
 export type InteractiveReplyButton = {
   label: string;
   value: string;
   style?: InteractiveButtonStyle;
-};
+} & InteractiveReplyActionDescriptor;
 
 export type InteractiveReplyOption = {
   label: string;
   value: string;
-};
+} & InteractiveReplyActionDescriptor;
 
 export type InteractiveReplyTextBlock = {
   type: "text";
@@ -34,6 +48,8 @@ export type InteractiveReplyBlock =
 
 export type InteractiveReply = {
   blocks: InteractiveReplyBlock[];
+  /** Optional host-owned fallback copy for text-only channels. */
+  fallbackText?: string;
 };
 
 function readTrimmedString(value: unknown): string | undefined {
@@ -64,10 +80,14 @@ function normalizeInteractiveButton(raw: unknown): InteractiveReplyButton | unde
   if (!label || !value) {
     return undefined;
   }
+  const fallback = normalizeInteractiveFallback(record);
   return {
     label,
     value,
     style: normalizeButtonStyle(record.style),
+    actionId: readTrimmedString(record.actionId) ?? readTrimmedString(record.action_id),
+    description: readTrimmedString(record.description),
+    ...(fallback ? { fallback } : {}),
   };
 }
 
@@ -81,7 +101,38 @@ function normalizeInteractiveOption(raw: unknown): InteractiveReplyOption | unde
   if (!label || !value) {
     return undefined;
   }
-  return { label, value };
+  const fallback = normalizeInteractiveFallback(record);
+  return {
+    label,
+    value,
+    actionId: readTrimmedString(record.actionId) ?? readTrimmedString(record.action_id),
+    description: readTrimmedString(record.description),
+    ...(fallback ? { fallback } : {}),
+  };
+}
+
+function normalizeInteractiveFallback(
+  record: Record<string, unknown>,
+): InteractiveReplyActionFallback | undefined {
+  const nestedFallback =
+    record.fallback && typeof record.fallback === "object" && !Array.isArray(record.fallback)
+      ? (record.fallback as Record<string, unknown>)
+      : undefined;
+  const text =
+    readTrimmedString(record.fallbackText) ??
+    readTrimmedString(record.fallback_text) ??
+    readTrimmedString(nestedFallback?.text);
+  const command =
+    readTrimmedString(record.fallbackCommand) ??
+    readTrimmedString(record.fallback_command) ??
+    readTrimmedString(nestedFallback?.command);
+  if (!text && !command) {
+    return undefined;
+  }
+  return {
+    ...(text ? { text } : {}),
+    ...(command ? { command } : {}),
+  };
 }
 
 function normalizeInteractiveBlock(raw: unknown): InteractiveReplyBlock | undefined {
@@ -129,7 +180,14 @@ export function normalizeInteractiveReply(raw: unknown): InteractiveReply | unde
         .map((entry) => normalizeInteractiveBlock(entry))
         .filter((entry): entry is InteractiveReplyBlock => Boolean(entry))
     : [];
-  return blocks.length > 0 ? { blocks } : undefined;
+  const fallbackText =
+    readTrimmedString(record.fallbackText) ?? readTrimmedString(record.fallback_text);
+  return blocks.length > 0 || fallbackText
+    ? {
+        blocks,
+        ...(fallbackText ? { fallbackText } : {}),
+      }
+    : undefined;
 }
 
 export function hasInteractiveReplyBlocks(value: unknown): value is InteractiveReply {
@@ -197,5 +255,83 @@ export function resolveInteractiveTextFallback(params: {
     .map((block) => block.text.trim())
     .filter(Boolean)
     .join("\n\n");
-  return interactiveText || params.text;
+  if (interactiveText) {
+    return interactiveText;
+  }
+  const explicitFallbackText = readTrimmedString(params.interactive?.fallbackText);
+  if (explicitFallbackText) {
+    return explicitFallbackText;
+  }
+  const commandFallback = renderInteractiveCommandFallback(params.interactive);
+  return commandFallback || params.text;
+}
+
+export function resolveInteractiveActionId(
+  action: Pick<InteractiveReplyButton, "actionId" | "value">,
+): string {
+  return action.actionId?.trim() || action.value;
+}
+
+export function collectInteractiveCommandFallbacks(interactive?: InteractiveReply): Array<{
+  actionId: string;
+  label: string;
+  command: string;
+  text?: string;
+}> {
+  const fallbacks: Array<{
+    actionId: string;
+    label: string;
+    command: string;
+    text?: string;
+  }> = [];
+
+  for (const block of interactive?.blocks ?? []) {
+    if (block.type === "buttons") {
+      for (const button of block.buttons) {
+        const command = button.fallback?.command?.trim();
+        if (!command) {
+          continue;
+        }
+        fallbacks.push({
+          actionId: resolveInteractiveActionId(button),
+          label: button.label,
+          command,
+          ...(button.fallback?.text?.trim() ? { text: button.fallback.text.trim() } : {}),
+        });
+      }
+      continue;
+    }
+    if (block.type === "select") {
+      for (const option of block.options) {
+        const command = option.fallback?.command?.trim();
+        if (!command) {
+          continue;
+        }
+        fallbacks.push({
+          actionId: resolveInteractiveActionId(option),
+          label: option.label,
+          command,
+          ...(option.fallback?.text?.trim() ? { text: option.fallback.text.trim() } : {}),
+        });
+      }
+    }
+  }
+
+  return fallbacks;
+}
+
+export function renderInteractiveCommandFallback(
+  interactive?: InteractiveReply,
+): string | undefined {
+  const fallbacks = collectInteractiveCommandFallbacks(interactive);
+  if (fallbacks.length === 0) {
+    return undefined;
+  }
+  return fallbacks
+    .map((fallback) =>
+      fallback.text
+        ? `${fallback.label}: ${fallback.text} (${fallback.command})`
+        : `${fallback.label}: ${fallback.command}`,
+    )
+    .join("\n");
 }

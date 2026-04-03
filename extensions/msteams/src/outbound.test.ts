@@ -3,12 +3,14 @@ import type { OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({
   sendMessageMSTeams: vi.fn(),
+  sendAdaptiveCardMSTeams: vi.fn(),
   sendPollMSTeams: vi.fn(),
   createPoll: vi.fn(),
 }));
 
 vi.mock("./send.js", () => ({
   sendMessageMSTeams: mocks.sendMessageMSTeams,
+  sendAdaptiveCardMSTeams: mocks.sendAdaptiveCardMSTeams,
   sendPollMSTeams: mocks.sendPollMSTeams,
 }));
 
@@ -27,6 +29,10 @@ describe("msteamsOutbound cfg threading", () => {
     mocks.createPoll.mockReset();
     mocks.sendMessageMSTeams.mockResolvedValue({
       messageId: "msg-1",
+      conversationId: "conv-1",
+    });
+    mocks.sendAdaptiveCardMSTeams.mockResolvedValue({
+      messageId: "card-1",
       conversationId: "conv-1",
     });
     mocks.sendPollMSTeams.mockResolvedValue({
@@ -57,6 +63,58 @@ describe("msteamsOutbound cfg threading", () => {
       to: "conversation:abc",
       text: "hello",
     });
+  });
+
+  it("projects interactive payloads into Adaptive Cards", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "resolved-app-id",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await msteamsOutbound.sendPayload!({
+      cfg,
+      to: "conversation:abc",
+      text: "",
+      payload: {
+        interactive: {
+          blocks: [
+            { type: "text", text: "Choose an action" },
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", value: "approve", actionId: "approval.approve" }],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        to: "conversation:abc",
+        card: expect.objectContaining({
+          type: "AdaptiveCard",
+          actions: [
+            expect.objectContaining({
+              type: "Action.Submit",
+              title: "Approve",
+              data: expect.objectContaining({
+                actionId: "approval.approve",
+              }),
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        channel: "msteams",
+        messageId: "card-1",
+      }),
+    );
   });
 
   it("passes resolved cfg and media roots for media sends", async () => {

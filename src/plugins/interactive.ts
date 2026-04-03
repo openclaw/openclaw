@@ -1,6 +1,9 @@
 import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
+  dispatchGenericDiscordInteractiveHandler,
+  dispatchGenericSlackInteractiveHandler,
+  dispatchGenericTelegramInteractiveHandler,
   dispatchDiscordInteractiveHandler,
   dispatchSlackInteractiveHandler,
   dispatchTelegramInteractiveHandler,
@@ -9,6 +12,7 @@ import {
   type TelegramInteractiveDispatchContext,
 } from "./interactive-dispatch-adapters.js";
 import type {
+  PluginInteractionHandlerRegistration,
   PluginInteractiveDiscordHandlerContext,
   PluginInteractiveButtons,
   PluginInteractiveDiscordHandlerRegistration,
@@ -18,6 +22,12 @@ import type {
   PluginInteractiveTelegramHandlerRegistration,
   PluginInteractiveTelegramHandlerContext,
 } from "./types.js";
+
+type RegisteredInteractionHandler = PluginInteractionHandlerRegistration & {
+  pluginId: string;
+  pluginName?: string;
+  pluginRoot?: string;
+};
 
 type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration & {
   pluginId: string;
@@ -35,6 +45,7 @@ type InteractiveDispatchResult =
   | { matched: true; handled: boolean; duplicate: boolean };
 
 type InteractiveState = {
+  interactionHandlers: Map<string, RegisteredInteractionHandler>;
   interactiveHandlers: Map<string, RegisteredInteractiveHandler>;
   callbackDedupe: ReturnType<typeof createDedupeCache>;
 };
@@ -43,6 +54,7 @@ const PLUGIN_INTERACTIVE_STATE_KEY = Symbol.for("openclaw.pluginInteractiveState
 
 const getState = () =>
   resolveGlobalSingleton<InteractiveState>(PLUGIN_INTERACTIVE_STATE_KEY, () => ({
+    interactionHandlers: new Map<string, RegisteredInteractionHandler>(),
     interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
     callbackDedupe: resolveGlobalDedupeCache(
       Symbol.for("openclaw.pluginInteractiveCallbackDedupe"),
@@ -53,6 +65,7 @@ const getState = () =>
     ),
   }));
 
+const getInteractionHandlers = () => getState().interactionHandlers;
 const getInteractiveHandlers = () => getState().interactiveHandlers;
 const getCallbackDedupe = () => getState().callbackDedupe;
 
@@ -72,6 +85,30 @@ function validateNamespace(namespace: string): string | null {
     return "Interactive handler namespace must contain only letters, numbers, dots, underscores, and hyphens";
   }
   return null;
+}
+
+function resolveGenericNamespaceMatch(
+  data: string,
+): { registration: RegisteredInteractionHandler; namespace: string; payload: string } | null {
+  const interactionHandlers = getInteractionHandlers();
+  const trimmedData = data.trim();
+  if (!trimmedData) {
+    return null;
+  }
+
+  const separatorIndex = trimmedData.indexOf(":");
+  const namespace =
+    separatorIndex >= 0 ? trimmedData.slice(0, separatorIndex) : normalizeNamespace(trimmedData);
+  const registration = interactionHandlers.get(normalizeNamespace(namespace));
+  if (!registration) {
+    return null;
+  }
+
+  return {
+    registration,
+    namespace,
+    payload: separatorIndex >= 0 ? trimmedData.slice(separatorIndex + 1) : "",
+  };
 }
 
 function resolveNamespaceMatch(
@@ -99,16 +136,61 @@ function resolveNamespaceMatch(
   };
 }
 
+export function registerPluginInteractionHandler(
+  pluginId: string,
+  registration: PluginInteractionHandlerRegistration,
+  opts?: { pluginName?: string; pluginRoot?: string },
+): InteractiveRegistrationResult {
+  const interactionHandlers = getInteractionHandlers();
+  const interactiveHandlers = getInteractiveHandlers();
+  const namespace = normalizeNamespace(registration.namespace);
+  const validationError = validateNamespace(namespace);
+  if (validationError) {
+    return { ok: false, error: validationError };
+  }
+  if (interactionHandlers.has(namespace)) {
+    const existing = interactionHandlers.get(namespace)!;
+    return {
+      ok: false,
+      error: `Interaction handler namespace "${namespace}" already registered by plugin "${existing.pluginId}"`,
+    };
+  }
+  for (const existing of interactiveHandlers.values()) {
+    if (existing.namespace === namespace) {
+      return {
+        ok: false,
+        error: `Interaction handler namespace "${namespace}" already registered by plugin "${existing.pluginId}"`,
+      };
+    }
+  }
+  interactionHandlers.set(namespace, {
+    ...registration,
+    namespace,
+    pluginId,
+    pluginName: opts?.pluginName,
+    pluginRoot: opts?.pluginRoot,
+  });
+  return { ok: true };
+}
+
 export function registerPluginInteractiveHandler(
   pluginId: string,
   registration: PluginInteractiveHandlerRegistration,
   opts?: { pluginName?: string; pluginRoot?: string },
 ): InteractiveRegistrationResult {
   const interactiveHandlers = getInteractiveHandlers();
+  const interactionHandlers = getInteractionHandlers();
   const namespace = normalizeNamespace(registration.namespace);
   const validationError = validateNamespace(namespace);
   if (validationError) {
     return { ok: false, error: validationError };
+  }
+  const genericExisting = interactionHandlers.get(namespace);
+  if (genericExisting) {
+    return {
+      ok: false,
+      error: `Interactive handler namespace "${namespace}" already registered by plugin "${genericExisting.pluginId}"`,
+    };
   }
   const key = toRegistryKey(registration.channel, namespace);
   const existing = interactiveHandlers.get(key);
@@ -150,14 +232,22 @@ export function registerPluginInteractiveHandler(
 }
 
 export function clearPluginInteractiveHandlers(): void {
+  const interactionHandlers = getInteractionHandlers();
   const interactiveHandlers = getInteractiveHandlers();
   const callbackDedupe = getCallbackDedupe();
+  interactionHandlers.clear();
   interactiveHandlers.clear();
   callbackDedupe.clear();
 }
 
 export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
+  const interactionHandlers = getInteractionHandlers();
   const interactiveHandlers = getInteractiveHandlers();
+  for (const [key, value] of interactionHandlers.entries()) {
+    if (value.pluginId === pluginId) {
+      interactionHandlers.delete(key);
+    }
+  }
   for (const [key, value] of interactiveHandlers.entries()) {
     if (value.pluginId === pluginId) {
       interactiveHandlers.delete(key);
@@ -220,7 +310,8 @@ export async function dispatchPluginInteractiveHandler(params: {
   onMatched?: () => Promise<void> | void;
 }): Promise<InteractiveDispatchResult> {
   const callbackDedupe = getCallbackDedupe();
-  const match = resolveNamespaceMatch(params.channel, params.data);
+  const genericMatch = resolveGenericNamespaceMatch(params.data);
+  const match = genericMatch ?? resolveNamespaceMatch(params.channel, params.data);
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
   }
@@ -234,10 +325,41 @@ export async function dispatchPluginInteractiveHandler(params: {
   await params.onMatched?.();
 
   let result:
+    | ReturnType<PluginInteractionHandlerRegistration["handler"]>
     | ReturnType<PluginInteractiveTelegramHandlerRegistration["handler"]>
     | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>
     | ReturnType<PluginInteractiveSlackHandlerRegistration["handler"]>;
-  if (params.channel === "telegram") {
+  if (genericMatch && params.channel === "telegram") {
+    result = dispatchGenericTelegramInteractiveHandler({
+      registration: match.registration as RegisteredInteractionHandler &
+        PluginInteractionHandlerRegistration,
+      data: params.data,
+      namespace: match.namespace,
+      payload: match.payload,
+      ctx: params.ctx as TelegramInteractiveDispatchContext,
+      respond: params.respond as PluginInteractiveTelegramHandlerContext["respond"],
+    });
+  } else if (genericMatch && params.channel === "discord") {
+    result = dispatchGenericDiscordInteractiveHandler({
+      registration: match.registration as RegisteredInteractionHandler &
+        PluginInteractionHandlerRegistration,
+      data: params.data,
+      namespace: match.namespace,
+      payload: match.payload,
+      ctx: params.ctx as DiscordInteractiveDispatchContext,
+      respond: params.respond as PluginInteractiveDiscordHandlerContext["respond"],
+    });
+  } else if (genericMatch) {
+    result = dispatchGenericSlackInteractiveHandler({
+      registration: match.registration as RegisteredInteractionHandler &
+        PluginInteractionHandlerRegistration,
+      data: params.data,
+      namespace: match.namespace,
+      payload: match.payload,
+      ctx: params.ctx as SlackInteractiveDispatchContext,
+      respond: params.respond as PluginInteractiveSlackHandlerContext["respond"],
+    });
+  } else if (params.channel === "telegram") {
     result = dispatchTelegramInteractiveHandler({
       registration: match.registration as RegisteredInteractiveHandler &
         PluginInteractiveTelegramHandlerRegistration,

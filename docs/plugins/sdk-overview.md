@@ -90,6 +90,9 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
+    | `plugin-sdk/conversation-runtime` | Conversation binding and session binding helpers |
+    | `plugin-sdk/outbound-runtime` | `PluginLaneRef`, `PluginActorRef`, outbound identity/send-deps helpers |
+    | `plugin-sdk/interactive-runtime` | `InteractiveReply`, normalization, fallback, and action helpers |
     | `plugin-sdk/config-runtime` | Config load/write helpers |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
@@ -140,14 +143,23 @@ methods:
 
 ### Infrastructure
 
-| Method                                         | What it registers     |
-| ---------------------------------------------- | --------------------- |
-| `api.registerHook(events, handler, opts?)`     | Event hook            |
-| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint |
-| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method    |
-| `api.registerCli(registrar, opts?)`            | CLI subcommand        |
-| `api.registerService(service)`                 | Background service    |
-| `api.registerInteractiveHandler(registration)` | Interactive handler   |
+| Method                                         | What it registers                 |
+| ---------------------------------------------- | --------------------------------- |
+| `api.registerHook(events, handler, opts?)`     | Event hook                        |
+| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint             |
+| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method                |
+| `api.registerCli(registrar, opts?)`            | CLI subcommand                    |
+| `api.registerService(service)`                 | Background service                |
+| `api.registerInteractionHandler(registration)` | Lane-oriented interaction handler |
+| `api.registerInteractiveHandler(registration)` | Interactive handler               |
+
+`api.registerInteractionHandler(...)` is the preferred interaction surface for
+new plugins. It gives handlers a normalized lane, sender, semantic action, and
+capability-aware response helpers without forcing the plugin to branch on
+Telegram, Discord, Slack, Teams, or Lark-specific payload shapes.
+
+`api.registerInteractiveHandler(...)` remains available as a compatibility path
+for legacy channel-specific handlers.
 
 ### CLI registration metadata
 

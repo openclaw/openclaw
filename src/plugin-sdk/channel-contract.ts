@@ -6,6 +6,7 @@ export type {
   ChannelAccountSnapshot,
   ChannelApprovalAdapter,
   ChannelApprovalCapability,
+  ChannelCapabilities,
   ChannelCommandConversationContext,
   ChannelGroupContext,
   ChannelMessageActionAdapter,

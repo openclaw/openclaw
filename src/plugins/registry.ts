@@ -15,7 +15,10 @@ import { registerPluginCommand, validatePluginCommandDefinition } from "./comman
 import type { PluginActivationSource } from "./config-state.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
-import { registerPluginInteractiveHandler } from "./interactive.js";
+import {
+  registerPluginInteractionHandler,
+  registerPluginInteractiveHandler,
+} from "./interactive.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider,
@@ -1017,6 +1020,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerGatewayMethod(record, method, handler, opts),
               registerService: (service) => registerService(record, service),
               registerCliBackend: (backend) => registerCliBackend(record, backend),
+              registerInteractionHandler: (registration) => {
+                const result = registerPluginInteractionHandler(record.id, registration, {
+                  pluginName: record.name,
+                  pluginRoot: record.rootDir,
+                });
+                if (!result.ok) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: result.error ?? "interaction handler registration failed",
+                  });
+                }
+              },
               registerInteractiveHandler: (registration) => {
                 const result = registerPluginInteractiveHandler(record.id, registration, {
                   pluginName: record.name,

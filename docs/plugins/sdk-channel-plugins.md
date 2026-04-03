@@ -23,17 +23,52 @@ pairing, reply threading, and outbound messaging.
 ## How channel plugins work
 
 Channel plugins do not need their own send/edit/react tools. OpenClaw keeps one
-shared `message` tool in core. Your plugin owns:
+shared `message` tool in core, and plugins should not own Telegram Bot API,
+Discord API, Slack Web API, Microsoft Graph, or Feishu/Lark transport code
+just to reply or render buttons. Your plugin owns:
 
 - **Config** — account resolution and setup wizard
 - **Security** — DM policy and allowlists
 - **Pairing** — DM approval flow
 - **Session grammar** — how provider-specific conversation ids map to base chats, thread ids, and parent fallbacks
 - **Outbound** — sending text, media, and polls to the platform
+- **Rich projection** — translating semantic `ReplyPayload.interactive`
+  content into native buttons, selects, cards, or text/command fallbacks
 - **Threading** — how replies are threaded
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
-generic `:thread:` bookkeeping, and dispatch.
+generic `:thread:` bookkeeping, semantic interactive payloads, and dispatch.
+
+## Lane-oriented plugin contract
+
+Plugin-facing interaction and outbound contracts are intentionally lane-based
+instead of channel-API based:
+
+- plugins reply on a `PluginLaneRef` when they want to continue in the same
+  chat/thread/topic
+- plugins DM a `PluginActorRef` when they want a private follow-up
+- plugins describe semantic actions and fallback affordances
+- channel plugins translate that intent into native UX when available
+
+This lets the same plugin code work across Slack, Microsoft Teams, Feishu/Lark,
+Telegram, Discord, and future channels without importing channel transport APIs.
+
+## Rich interactions and fallbacks
+
+When a reply includes `interactive` content, channel plugins should treat that
+payload as semantic intent rather than as "Telegram buttons" or "Discord
+components".
+
+- Render native buttons, selects, or cards when the channel supports them.
+- Preserve semantic action ids so generic interaction handlers can route by
+  action rather than raw provider payloads.
+- When the channel does not support the requested richness, fall back to text
+  and command affordances from the payload.
+
+The shared `ChannelCapabilities` contract now includes `richReplies` and
+`interactionResponses` so a channel can declare whether it supports buttons,
+selects, cards, command fallbacks, follow-ups, edit-in-place, and related
+interaction behaviors.
 
 If your platform stores extra scope inside conversation ids, keep that parsing
 in the plugin with `messaging.resolveSessionConversation(...)`. That is the

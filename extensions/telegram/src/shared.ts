@@ -125,6 +125,16 @@ export function createTelegramPluginBase(params: {
       polls: true,
       nativeCommands: true,
       blockStreaming: true,
+      richReplies: {
+        buttons: true,
+        selects: true,
+        commandFallback: true,
+      },
+      interactionResponses: {
+        clearInteractive: true,
+        deleteMessage: true,
+        editText: true,
+      },
     },
     reload: { configPrefixes: ["channels.telegram"] },
     configSchema: TelegramChannelConfigSchema,

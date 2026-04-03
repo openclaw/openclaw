@@ -22,6 +22,12 @@ import from this tree directly.
   instead of direct imports from `src/channels/**`.
 - When a bundled or third-party channel needs a new seam, add a typed SDK
   contract or facade first.
+- Channel plugins should project generic reply payloads and semantic interactive
+  actions into native channel UX. Prefer adding capability flags and outbound
+  projection hooks over asking plugins to call Telegram/Discord/Slack/Lark
+  APIs directly.
+- When a channel cannot render rich UI, degrade through documented text and
+  command fallbacks instead of inventing a channel-specific plugin-side branch.
 - Remember that shared channel changes affect both built-in and extension
   channels. Check routing, pairing, allowlists, command gating, onboarding, and
   reply behavior across the full set.

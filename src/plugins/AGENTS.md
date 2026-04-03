@@ -29,6 +29,9 @@ assembly, and contract enforcement.
   of `plugins.entries.<id>.config` through unrelated core paths. Prefer generic
   helpers, plugin runtime hooks, manifest metadata, and explicit auto-enable
   wiring.
+- Prefer generic lane/actor-oriented runtime contracts and semantic interaction
+  registration. Treat channel-specific interactive handler registration as a
+  compatibility bridge unless the surface is truly host-owned.
 - When plugin-owned tools or provider fallbacks need core participation, keep
   the contract generic and honor plugin disablement plus SecretRef semantics.
 - Keep contract loading and contract tests on the dedicated bundled registry

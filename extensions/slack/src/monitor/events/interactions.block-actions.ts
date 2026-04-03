@@ -564,7 +564,13 @@ async function dispatchSlackPluginInteraction(params: {
     },
     respond: {
       acknowledge: async () => {},
-      reply: async ({ text, responseType }) => {
+      reply: async ({
+        text,
+        responseType,
+      }: {
+        text: string;
+        responseType?: "ephemeral" | "in_channel";
+      }) => {
         if (!text) {
           return;
         }
@@ -573,7 +579,13 @@ async function dispatchSlackPluginInteraction(params: {
           response_type: responseType ?? "ephemeral",
         });
       },
-      followUp: async ({ text, responseType }) => {
+      followUp: async ({
+        text,
+        responseType,
+      }: {
+        text: string;
+        responseType?: "ephemeral" | "in_channel";
+      }) => {
         if (!text) {
           return;
         }
@@ -582,7 +594,7 @@ async function dispatchSlackPluginInteraction(params: {
           response_type: responseType ?? "ephemeral",
         });
       },
-      editMessage: async ({ text, blocks }) => {
+      editMessage: async ({ text, blocks }: { text?: string; blocks?: unknown[] }) => {
         await updateSlackInteractionMessage({
           ctx: params.ctx,
           channelId: params.parsed.channelId,
