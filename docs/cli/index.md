@@ -308,7 +308,7 @@ Manage extensions and their config:
 
 - `openclaw plugins list` — discover plugins (use `--json` for machine output).
 - `openclaw plugins inspect <id>` — show details for a plugin (`info` is an alias).
-- `openclaw plugins install <path|.tgz|npm-spec|plugin@marketplace>` — install a plugin (or add a plugin path to `plugins.load.paths`).
+- `openclaw plugins install <path|.tgz|npm-spec|plugin@marketplace>` — install a plugin (or add a plugin path to `plugins.load.paths`; use `--force` to overwrite an existing install target).
 - `openclaw plugins marketplace list <marketplace>` — list marketplace entries before install.
 - `openclaw plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
 - `openclaw plugins doctor` — report plugin load errors.

@@ -8,7 +8,7 @@ import {
   resolveAnthropicBetas,
   resolveAnthropicFastMode,
   resolveAnthropicServiceTier,
-} from "../../extensions/anthropic/api.js";
+} from "../../test/helpers/providers/anthropic-contract.js";
 import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
@@ -705,6 +705,62 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).not.toHaveProperty("reasoning");
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("strips disabled reasoning payloads for native OpenAI responses routes", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning: { effort: "none", summary: "auto" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5", undefined, "off");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+      baseUrl: "https://api.openai.com/v1",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+  });
+
+  it("keeps disabled reasoning payloads for proxied OpenAI responses routes", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning: { effort: "none", summary: "auto" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5", undefined, "off");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+      baseUrl: "https://proxy.example.com/v1",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toEqual({
+      reasoning: { effort: "none", summary: "auto" },
+    });
   });
 
   it("injects parallel_tool_calls for openai-completions payloads when configured", () => {
@@ -1913,6 +1969,54 @@ describe("applyExtraParamsToAgent", () => {
     const context: Context = { messages: [] };
 
     void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("long");
+  });
+
+  it("passes through explicit cacheRetention for custom anthropic-messages providers", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "litellm/claude-sonnet-4-6": {
+              params: {
+                cacheRetention: "long",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(
+      agent,
+      cfg,
+      "litellm",
+      "claude-sonnet-4-6",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        api: "anthropic-messages",
+        provider: "litellm",
+        id: "claude-sonnet-4-6",
+      } as Model<"anthropic-messages">,
+    );
+
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(
+      {
+        api: "anthropic-messages",
+        provider: "litellm",
+        id: "claude-sonnet-4-6",
+      } as Model<"anthropic-messages">,
+      context,
+      {},
+    );
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.cacheRetention).toBe("long");

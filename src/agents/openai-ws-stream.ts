@@ -222,6 +222,15 @@ function resolveWsWarmup(options: Parameters<StreamFn>[2]): boolean {
   return warmup === true;
 }
 
+function resetWsSession(params: { sessionId: string; session: WsSession }): void {
+  try {
+    params.session.manager.close();
+  } catch {
+    /* ignore */
+  }
+  wsRegistry.delete(params.sessionId);
+}
+
 async function runWarmUp(params: {
   manager: OpenAIWebSocketManager;
   modelId: string;
@@ -533,12 +542,7 @@ export function createOpenAIWebSocketStreamFn(
         );
         // Fully reset session state so the next WS turn doesn't use stale
         // previous_response_id or lastContextLength from before the failure.
-        try {
-          session.manager.close();
-        } catch {
-          /* ignore */
-        }
-        wsRegistry.delete(sessionId);
+        resetWsSession({ sessionId, session });
         return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
       }
 
@@ -553,72 +557,101 @@ export function createOpenAIWebSocketStreamFn(
 
       // ── 5. Wait for response.completed ───────────────────────────────────
       const capturedContextLength = context.messages.length;
+      let sawWsOutput = false;
 
-      await new Promise<void>((resolve, reject) => {
-        // Honour abort signal
-        const abortHandler = () => {
-          cleanup();
-          reject(new Error("aborted"));
-        };
-        if (signal?.aborted) {
-          reject(new Error("aborted"));
-          return;
-        }
-        signal?.addEventListener("abort", abortHandler, { once: true });
-
-        // If the WebSocket drops mid-request, reject so we don't hang forever.
-        const closeHandler = (code: number, reason: string) => {
-          cleanup();
-          reject(
-            new Error(`WebSocket closed mid-request (code=${code}, reason=${reason || "unknown"})`),
-          );
-        };
-        session.manager.on("close", closeHandler);
-
-        const cleanup = () => {
-          signal?.removeEventListener("abort", abortHandler);
-          session.manager.off("close", closeHandler);
-          unsubscribe();
-        };
-
-        const unsubscribe = session.manager.onMessage((event) => {
-          if (event.type === "response.completed") {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          // Honour abort signal
+          const abortHandler = () => {
             cleanup();
-            // Update session state
-            session.lastContextLength = capturedContextLength;
-            // Build and emit the assistant message
-            const assistantMsg = buildAssistantMessageFromResponse(event.response, {
-              api: model.api,
-              provider: model.provider,
-              id: model.id,
-            });
-            const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
-              assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";
-            eventStream.push({ type: "done", reason, message: assistantMsg });
-            resolve();
-          } else if (event.type === "response.failed") {
-            cleanup();
-            const errMsg = event.response?.error?.message ?? "Response failed";
-            reject(new Error(`OpenAI WebSocket response failed: ${errMsg}`));
-          } else if (event.type === "error") {
-            cleanup();
-            reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
-          } else if (event.type === "response.output_text.delta") {
-            // Stream partial text updates for responsive UI
-            const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
-              model,
-              content: [{ type: "text", text: event.delta }],
-              stopReason: "stop",
-            });
-            eventStream.push({
-              type: "text_delta",
-              contentIndex: 0,
-              delta: event.delta,
-              partial: partialMsg,
-            });
+            reject(new Error("aborted"));
+          };
+          if (signal?.aborted) {
+            reject(new Error("aborted"));
+            return;
           }
+          signal?.addEventListener("abort", abortHandler, { once: true });
+
+          // If the WebSocket drops mid-request, reject so we don't hang forever.
+          const closeHandler = (code: number, reason: string) => {
+            cleanup();
+            reject(
+              new Error(
+                `WebSocket closed mid-request (code=${code}, reason=${reason || "unknown"})`,
+              ),
+            );
+          };
+          session.manager.on("close", closeHandler);
+
+          const cleanup = () => {
+            signal?.removeEventListener("abort", abortHandler);
+            session.manager.off("close", closeHandler);
+            unsubscribe();
+          };
+
+          const unsubscribe = session.manager.onMessage((event) => {
+            if (
+              event.type === "response.output_item.added" ||
+              event.type === "response.output_item.done" ||
+              event.type === "response.content_part.added" ||
+              event.type === "response.content_part.done" ||
+              event.type === "response.output_text.delta" ||
+              event.type === "response.output_text.done" ||
+              event.type === "response.function_call_arguments.delta" ||
+              event.type === "response.function_call_arguments.done"
+            ) {
+              sawWsOutput = true;
+            }
+
+            if (event.type === "response.completed") {
+              cleanup();
+              // Update session state
+              session.lastContextLength = capturedContextLength;
+              // Build and emit the assistant message
+              const assistantMsg = buildAssistantMessageFromResponse(event.response, {
+                api: model.api,
+                provider: model.provider,
+                id: model.id,
+              });
+              const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
+                assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";
+              eventStream.push({ type: "done", reason, message: assistantMsg });
+              resolve();
+            } else if (event.type === "response.failed") {
+              cleanup();
+              const errMsg = event.response?.error?.message ?? "Response failed";
+              reject(new Error(`OpenAI WebSocket response failed: ${errMsg}`));
+            } else if (event.type === "error") {
+              cleanup();
+              reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
+            } else if (event.type === "response.output_text.delta") {
+              // Stream partial text updates for responsive UI
+              const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
+                model,
+                content: [{ type: "text", text: event.delta }],
+                stopReason: "stop",
+              });
+              eventStream.push({
+                type: "text_delta",
+                contentIndex: 0,
+                delta: event.delta,
+                partial: partialMsg,
+              });
+            }
+          });
         });
-      });
+      } catch (wsRunErr) {
+        if (transport !== "websocket" && !signal?.aborted && !sawWsOutput) {
+          log.warn(
+            `[ws-stream] session=${sessionId} runtime failure before output; falling back to HTTP. error=${String(wsRunErr)}`,
+          );
+          resetWsSession({ sessionId, session });
+          return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+            suppressStart: true,
+          });
+        }
+        throw wsRunErr;
+      }
     };
 
     queueMicrotask(() =>
@@ -648,18 +681,22 @@ export function createOpenAIWebSocketStreamFn(
 async function fallbackToHttp(
   model: Parameters<StreamFn>[0],
   context: Parameters<StreamFn>[1],
-  options: Parameters<StreamFn>[2],
+  streamOptions: Parameters<StreamFn>[2],
   apiKey: string,
   eventStream: AssistantMessageEventStreamLike,
   signal?: AbortSignal,
+  fallbackOptions?: { suppressStart?: boolean },
 ): Promise<void> {
   const mergedOptions = {
-    ...options,
+    ...streamOptions,
     apiKey,
     ...(signal ? { signal } : {}),
   };
   const httpStream = openAIWsStreamDeps.streamSimple(model, context, mergedOptions);
   for await (const event of httpStream) {
+    if (fallbackOptions?.suppressStart && event.type === "start") {
+      continue;
+    }
     eventStream.push(event);
   }
 }

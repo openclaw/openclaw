@@ -42,6 +42,7 @@ import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { probeZalouser, type ZalouserProbeResult } from "./probe.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import { getZalouserRuntime } from "./runtime.js";
+import { collectZalouserSecurityAuditFindings } from "./security-audit.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import {
   normalizeZalouserTarget,
@@ -179,10 +180,14 @@ const resolveZalouserDmPolicy = createScopedDmSecurityResolver<ResolvedZalouserA
 });
 
 const zalouserMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
-    const accounts = listZalouserAccountIds(cfg)
-      .map((accountId) => resolveZalouserAccountSync({ cfg, accountId }))
-      .filter((account) => account.enabled);
+  describeMessageTool: ({ cfg, accountId }) => {
+    const accounts = accountId
+      ? [resolveZalouserAccountSync({ cfg, accountId })].filter((account) => account.enabled)
+      : listZalouserAccountIds(cfg)
+          .map((resolvedAccountId) =>
+            resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId }),
+          )
+          .filter((account) => account.enabled);
     if (accounts.length === 0) {
       return null;
     }
@@ -346,7 +351,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
             try {
               const account = resolveZalouserAccountSync({
                 cfg: cfg,
-                accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+                accountId: accountId ?? resolveDefaultZalouserAccountId(cfg),
               });
               if (kind === "user") {
                 const friends = await listZaloFriendsMatching(account.profile, trimmed);
@@ -383,7 +388,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
         login: async ({ cfg, accountId, runtime }) => {
           const account = resolveZalouserAccountSync({
             cfg: cfg,
-            accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+            accountId: accountId ?? resolveDefaultZalouserAccountId(cfg),
           });
 
           runtime.log(
@@ -488,6 +493,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     },
     security: {
       resolveDmPolicy: resolveZalouserDmPolicy,
+      collectAuditFindings: collectZalouserSecurityAuditFindings,
     },
     threading: {
       resolveReplyToMode: createStaticReplyToModeResolver("off"),

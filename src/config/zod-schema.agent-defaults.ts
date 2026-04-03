@@ -45,6 +45,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    skills: z.array(z.string()).optional(),
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),

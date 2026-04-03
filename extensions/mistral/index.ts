@@ -1,4 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
 import { applyMistralModelCompat, MISTRAL_MODEL_COMPAT_PATCH } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -15,17 +16,6 @@ const MISTRAL_MODEL_HINTS = [
   "ministral",
 ] as const;
 
-function isMistralBaseUrl(baseUrl: unknown): boolean {
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return false;
-  }
-  try {
-    return new URL(baseUrl).hostname.toLowerCase() === "api.mistral.ai";
-  } catch {
-    return baseUrl.toLowerCase().includes("api.mistral.ai");
-  }
-}
-
 function isMistralModelHint(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
   return MISTRAL_MODEL_HINTS.some(
@@ -39,12 +29,30 @@ function isMistralModelHint(modelId: string): boolean {
 
 function shouldContributeMistralCompat(params: {
   modelId: string;
-  model: { api?: unknown; baseUrl?: unknown };
+  model: { api?: unknown; baseUrl?: unknown; provider?: unknown; compat?: unknown };
 }): boolean {
   if (params.model.api !== "openai-completions") {
     return false;
   }
-  return isMistralBaseUrl(params.model.baseUrl) || isMistralModelHint(params.modelId);
+
+  const capabilities = resolveProviderRequestCapabilities({
+    provider: typeof params.model.provider === "string" ? params.model.provider : undefined,
+    api: "openai-completions",
+    baseUrl: typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined,
+    capability: "llm",
+    transport: "stream",
+    modelId: params.modelId,
+    compat:
+      params.model.compat && typeof params.model.compat === "object"
+        ? (params.model.compat as { supportsStore?: boolean })
+        : undefined,
+  });
+
+  return (
+    capabilities.knownProviderFamily === "mistral" ||
+    capabilities.endpointClass === "mistral-public" ||
+    isMistralModelHint(params.modelId)
+  );
 }
 
 function buildMistralReplayPolicy() {

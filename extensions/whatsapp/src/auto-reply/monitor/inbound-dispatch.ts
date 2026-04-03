@@ -18,10 +18,10 @@ import {
   toLocationContext,
   type getChildLogger,
   type getReplyFromConfig,
-  type loadConfig,
+  type LoadConfigFn,
   type ReplyPayload,
   type resolveAgentRoute,
-} from "./runtime-api.js";
+} from "./inbound-dispatch.runtime.js";
 
 type ReplyLifecycleKind = "tool" | "block" | "final";
 type ChannelReplyOnModelSelected = NonNullable<
@@ -46,9 +46,7 @@ type SenderContext = {
   e164?: string;
 };
 
-function resolveWhatsAppDisableBlockStreaming(
-  cfg: ReturnType<typeof loadConfig>,
-): boolean | undefined {
+function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): boolean | undefined {
   if (typeof cfg.channels?.whatsapp?.blockStreaming !== "boolean") {
     return undefined;
   }
@@ -69,7 +67,7 @@ function shouldSuppressWhatsAppPayload(
 }
 
 export function resolveWhatsAppResponsePrefix(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: ReturnType<LoadConfigFn>;
   agentId: string;
   isSelfChat: boolean;
   pipelineResponsePrefix?: string;
@@ -161,13 +159,13 @@ export function resolveWhatsAppDmRouteTarget(params: {
 
 export function updateWhatsAppMainLastRoute(params: {
   backgroundTasks: Set<Promise<unknown>>;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: ReturnType<LoadConfigFn>;
   ctx: Record<string, unknown>;
   dmRouteTarget?: string;
   pinnedMainDmRecipient: string | null;
   route: ReturnType<typeof resolveAgentRoute>;
   updateLastRoute: (params: {
-    cfg: ReturnType<typeof loadConfig>;
+    cfg: ReturnType<LoadConfigFn>;
     backgroundTasks: Set<Promise<unknown>>;
     storeAgentId: string;
     sessionKey: string;
@@ -217,7 +215,7 @@ export function updateWhatsAppMainLastRoute(params: {
 }
 
 export async function dispatchWhatsAppBufferedReply(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: ReturnType<LoadConfigFn>;
   connectionId: string;
   context: Record<string, unknown>;
   conversationId: string;

@@ -1,1299 +1,19 @@
 [
   {
-    "source": "/channels/imessage#troubleshooting",
-    "target": "/channels/imessage#troubleshooting",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "/cli/devices",
-    "target": "/cli/devices",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "/concepts/memory",
-    "target": "/concepts/memory",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "/concepts/memory-search",
-    "target": "/concepts/memory-search",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "/help/faq#why-am-i-seeing-http-429-ratelimiterror-from-anthropic",
-    "target": "/help/faq#why-am-i-seeing-http-429-ratelimiterror-from-anthropic",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "/providers/anthropic",
-    "target": "/providers/anthropic",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "/reference/token-use",
-    "target": "/reference/token-use",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "/tools/browser-wsl2-windows-remote-cdp-troubleshooting",
-    "target": "/tools/browser-wsl2-windows-remote-cdp-troubleshooting",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "/tools/browser#missing-browser-command-or-tool",
-    "target": "/tools/browser#missing-browser-command-or-tool",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "ACP Agents",
-    "target": "ACP Agents",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Adding Capabilities (Contributor Guide)",
-    "target": "Adding Capabilities (Contributor Guide)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "agent",
-    "target": "智能体"
-  },
-  {
-    "source": "Agent CLI reference",
-    "target": "Agent CLI reference",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Agent Send",
-    "target": "Agent Send",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Agent tools",
-    "target": "Agent tools",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Agent Workspace",
-    "target": "Agent Workspace",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "AGENTS.dev Template",
-    "target": "AGENTS.dev Template",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "AGENTS.md Template",
-    "target": "AGENTS.md Template",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "All channels",
-    "target": "All channels",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Anthropic",
-    "target": "Anthropic",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Auth Credential Semantics",
-    "target": "Auth Credential Semantics",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Auth: where it lives (important)",
-    "target": "凭证：存储位置（重要）"
-  },
-  {
-    "source": "Azure",
-    "target": "Azure",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Background Tasks",
-    "target": "Background Tasks",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "backup",
-    "target": "backup",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Bake required binaries into the image",
-    "target": "Bake required binaries into the image",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "block streaming",
-    "target": "分块流式传输"
-  },
-  {
-    "source": "Block streaming",
-    "target": "分块流式传输"
-  },
-  {
-    "source": "Brave Search",
-    "target": "Brave Search",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Brave Search (legacy path)",
-    "target": "Brave Search (legacy path)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Browser",
-    "target": "Browser",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "BTW Side Questions",
-    "target": "BTW Side Questions",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Build and launch",
-    "target": "Build and launch",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Building Channel Plugins",
-    "target": "Building Channel Plugins",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Building plugins",
-    "target": "Building plugins",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Building Plugins",
-    "target": "Building Plugins",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Building Plugins (redirect)",
-    "target": "Building Plugins (redirect)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Building Provider Plugins",
-    "target": "Building Provider Plugins",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Builtin Engine",
-    "target": "Builtin Engine",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Builtin Memory Engine",
-    "target": "Builtin Memory Engine",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Capability cookbook",
-    "target": "Capability cookbook",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Capability Cookbook",
-    "target": "能力扩展手册"
-  },
-  {
-    "source": "channel",
-    "target": "渠道"
-  },
-  {
-    "source": "Channel Plugin SDK",
-    "target": "渠道插件 SDK"
-  },
-  {
-    "source": "Channel Plugins",
-    "target": "渠道插件"
-  },
-  {
-    "source": "Channels",
-    "target": "Channels",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "ClawDock",
-    "target": "ClawDock",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "ClawHub",
-    "target": "ClawHub",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "CLI",
-    "target": "CLI"
-  },
-  {
-    "source": "CLI Setup Reference",
-    "target": "CLI 设置参考"
-  },
-  {
-    "source": "CLI: Tasks",
-    "target": "CLI: Tasks",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Code Execution",
-    "target": "Code Execution",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Community plugins",
-    "target": "Community plugins",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Community Plugins",
-    "target": "Community Plugins",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Compaction",
-    "target": "Compaction",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Companion apps",
-    "target": "配套应用"
-  },
-  {
-    "source": "Configuration Reference",
-    "target": "Configuration Reference",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Context Engine",
-    "target": "Context Engine",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Context Engines",
-    "target": "Context Engines",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Contributing to the Threat Model",
-    "target": "Contributing to the Threat Model",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Control UI",
-    "target": "Control UI",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Credits",
-    "target": "致谢"
-  },
-  {
-    "source": "Cron Jobs",
-    "target": "Cron Jobs",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Cron vs Heartbeat",
-    "target": "Cron vs Heartbeat",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Dashboard auth troubleshooting",
-    "target": "Dashboard auth troubleshooting",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "DeepSeek",
-    "target": "DeepSeek",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Delegate Architecture",
-    "target": "Delegate Architecture",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Diffs",
-    "target": "Diffs"
-  },
-  {
-    "source": "DigitalOcean",
-    "target": "DigitalOcean",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "DigitalOcean (Platform)",
-    "target": "DigitalOcean (Platform)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Discord",
-    "target": "Discord",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Discovery",
-    "target": "设备发现"
-  },
-  {
-    "source": "Discovery + transports",
-    "target": "设备发现 + 传输协议"
-  },
-  {
-    "source": "DM",
-    "target": "私信"
-  },
-  {
-    "source": "DMs",
-    "target": "私信"
-  },
-  {
-    "source": "Docker",
-    "target": "Docker",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Docker VM Runtime",
-    "target": "Docker VM Runtime",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Docs directory",
-    "target": "文档目录"
-  },
-  {
-    "source": "Doctor",
-    "target": "Doctor"
-  },
-  {
-    "source": "DuckDuckGo Search",
-    "target": "DuckDuckGo Search",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Elevated Mode",
-    "target": "Elevated Mode",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Entry Points",
-    "target": "入口点"
-  },
-  {
-    "source": "env var",
-    "target": "环境变量"
-  },
-  {
-    "source": "env vars",
-    "target": "环境变量"
-  },
-  {
-    "source": "environment variable",
-    "target": "环境变量"
-  },
-  {
-    "source": "environment variables",
-    "target": "环境变量"
-  },
-  {
-    "source": "Exa Search",
-    "target": "Exa Search",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Exec",
-    "target": "Exec",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Exec approvals",
-    "target": "Exec approvals",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Exec tool",
-    "target": "Exec tool",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "expected keys",
-    "target": "预期键名"
-  },
-  {
-    "source": "FAQ",
-    "target": "常见问题"
-  },
-  {
-    "source": "Features",
-    "target": "功能"
-  },
-  {
-    "source": "Firecrawl",
-    "target": "Firecrawl",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "First 60 seconds",
-    "target": "最初的六十秒"
-  },
-  {
-    "source": "for full details",
-    "target": "了解详情"
+    "source": "OpenClaw",
+    "target": "OpenClaw"
   },
   {
     "source": "Gateway",
     "target": "Gateway 网关"
   },
   {
-    "source": "Gateway background process",
-    "target": "Gateway background process",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Gateway configuration",
-    "target": "Gateway configuration",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Gateway Configuration",
-    "target": "Gateway Configuration",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Gateway Configuration Reference",
-    "target": "Gateway Configuration Reference",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Gateway Logging",
-    "target": "Gateway Logging",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Gateway troubleshooting",
-    "target": "Gateway troubleshooting",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Gemini Search",
-    "target": "Gemini Search",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "General Troubleshooting",
-    "target": "General Troubleshooting",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "get unstuck",
-    "target": "解决问题"
-  },
-  {
-    "source": "Getting started",
-    "target": "入门指南"
-  },
-  {
-    "source": "Getting Started",
-    "target": "入门指南"
-  },
-  {
-    "source": "GitHub Copilot",
-    "target": "GitHub Copilot",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Google (Gemini)",
-    "target": "Google (Gemini)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Grok Search",
-    "target": "Grok Search",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Groq",
-    "target": "Groq",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Groq (LPU inference)",
-    "target": "Groq (LPU inference)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Health Checks (macOS)",
-    "target": "Health Checks (macOS)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Heartbeat",
-    "target": "Heartbeat",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Honcho Memory",
-    "target": "Honcho Memory",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "IDENTITY Template",
-    "target": "IDENTITY Template",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "IDENTITY.dev Template",
-    "target": "IDENTITY.dev Template",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Install and Configure Plugins",
-    "target": "Install and Configure Plugins",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Install and use plugins",
-    "target": "Install and use plugins",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "install sanity",
-    "target": "安装完整性检查"
-  },
-  {
-    "source": "Kilo Gateway",
-    "target": "Kilo Gateway",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Kilocode",
-    "target": "Kilocode",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Kimi Search",
-    "target": "Kimi Search",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Kubernetes",
-    "target": "Kubernetes",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Linux Server",
-    "target": "Linux Server",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "LiteLLM",
-    "target": "LiteLLM",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "local loopback",
-    "target": "local loopback"
-  },
-  {
-    "source": "Logging Overview",
-    "target": "Logging Overview",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Matrix",
-    "target": "Matrix",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Matrix migration",
-    "target": "Matrix migration",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "mcp",
-    "target": "mcp",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Memory",
-    "target": "Memory",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Memory configuration reference",
-    "target": "Memory configuration reference",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Memory Overview",
-    "target": "Memory Overview",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Memory Search",
-    "target": "Memory Search",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Microsoft Teams",
-    "target": "Microsoft Teams",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Migrating",
-    "target": "Migrating",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "model",
-    "target": "模型"
-  },
-  {
-    "source": "Multi-agent",
-    "target": "Multi-agent",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Multi-Agent Sandbox & Tools",
-    "target": "Multi-Agent Sandbox & Tools",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Multi-Agent Sandbox and Tools",
-    "target": "Multi-Agent Sandbox and Tools",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Network model",
-    "target": "网络模型"
-  },
-  {
-    "source": "Northflank",
-    "target": "Northflank",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Ollama (cloud + local models)",
-    "target": "Ollama (cloud + local models)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "onboarding",
-    "target": "新手引导"
-  },
-  {
-    "source": "Onboarding",
-    "target": "新手引导"
-  },
-  {
-    "source": "Onboarding (CLI)",
-    "target": "Onboarding (CLI)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Onboarding Reference",
-    "target": "Onboarding Reference",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "OpenClaw",
-    "target": "OpenClaw"
-  },
-  {
-    "source": "OpenClaw Threat Model",
-    "target": "OpenClaw Threat Model",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "OpenCode",
-    "target": "OpenCode",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "OpenCode (Zen + Go)",
-    "target": "OpenCode (Zen + Go)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "OpenCode Go",
-    "target": "OpenCode Go",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "OpenProse",
-    "target": "OpenProse",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "OpenShell",
-    "target": "OpenShell",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Oracle Cloud",
-    "target": "Oracle Cloud",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Oracle Cloud (Platform)",
-    "target": "Oracle Cloud (Platform)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "PDF tool",
-    "target": "PDF tool",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "PDF Tool",
-    "target": "PDF Tool",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Perplexity (Provider)",
-    "target": "Perplexity (Provider)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Perplexity (web search)",
-    "target": "Perplexity (web search)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Perplexity Search",
-    "target": "Perplexity Search",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Perplexity Search (legacy path)",
-    "target": "Perplexity Search (legacy path)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
     "source": "Pi",
     "target": "Pi"
   },
   {
-    "source": "Plugin bundles",
-    "target": "Plugin bundles",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Plugin Bundles",
-    "target": "Plugin Bundles",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Plugin Entry Points",
-    "target": "插件入口点"
-  },
-  {
-    "source": "Plugin Internals",
-    "target": "Plugin Internals",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Plugin manifest",
-    "target": "Plugin manifest",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Plugin Manifest",
-    "target": "Plugin Manifest",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Plugin Runtime",
-    "target": "插件运行时"
-  },
-  {
-    "source": "Plugin Runtime Helpers",
-    "target": "Plugin Runtime Helpers",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Plugin SDK",
-    "target": "插件 SDK"
-  },
-  {
-    "source": "Plugin SDK Migration",
-    "target": "Plugin SDK Migration",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Plugin SDK Overview",
-    "target": "插件 SDK 概览"
-  },
-  {
-    "source": "Plugin SDK Testing",
-    "target": "插件 SDK 测试"
-  },
-  {
-    "source": "Plugin Setup",
-    "target": "插件设置"
-  },
-  {
-    "source": "Plugin Setup and Config",
-    "target": "Plugin Setup and Config",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Plugin Testing",
-    "target": "Plugin Testing",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Plugins",
-    "target": "Plugins",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Plugins overview",
-    "target": "Plugins overview",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Polls",
-    "target": "投票"
-  },
-  {
-    "source": "Prompt Caching",
-    "target": "Prompt Caching",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "provider",
-    "target": "提供商"
-  },
-  {
-    "source": "Provider Directory",
-    "target": "Provider Directory",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Provider Plugin SDK",
-    "target": "提供商插件 SDK"
-  },
-  {
-    "source": "Provider Plugins",
-    "target": "提供商插件"
-  },
-  {
-    "source": "QMD Engine",
-    "target": "QMD Engine",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "QMD Memory Engine",
-    "target": "QMD Memory Engine",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Quick start",
-    "target": "快速开始"
-  },
-  {
-    "source": "Quick Start",
-    "target": "快速开始"
-  },
-  {
-    "source": "Qwen / Model Studio",
-    "target": "Qwen / Model Studio",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Qwen / Model Studio (Alibaba Cloud)",
-    "target": "Qwen / Model Studio (Alibaba Cloud)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Railway",
-    "target": "Railway",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Raspberry Pi",
-    "target": "Raspberry Pi",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Raspberry Pi (Platform)",
-    "target": "Raspberry Pi (Platform)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Registering Tools",
-    "target": "Registering Tools",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Release Channels",
-    "target": "Release Channels",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Release policy",
-    "target": "发布策略"
-  },
-  {
-    "source": "Release Policy",
-    "target": "发布策略"
-  },
-  {
-    "source": "Render",
-    "target": "Render",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Runtime",
-    "target": "运行时"
-  },
-  {
-    "source": "Runtime Helpers",
-    "target": "Runtime Helpers",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "sandbox",
-    "target": "沙箱"
-  },
-  {
-    "source": "Sandbox",
-    "target": "沙箱"
-  },
-  {
-    "source": "Sandbox CLI",
-    "target": "Sandbox CLI",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Sandbox vs Tool Policy vs Elevated",
-    "target": "Sandbox vs Tool Policy vs Elevated",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "sandboxed",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxed",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "sandboxing",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxing",
-    "target": "沙箱隔离"
-  },
-  {
-    "source": "Sandboxing note",
-    "target": "沙箱注意事项"
-  },
-  {
-    "source": "SDK Channel Plugins",
-    "target": "SDK Channel Plugins",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "SDK Entry Points",
-    "target": "SDK Entry Points",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "SDK Migration",
-    "target": "SDK Migration",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "SDK Overview",
-    "target": "SDK 概览"
-  },
-  {
-    "source": "SDK Provider Plugins",
-    "target": "SDK Provider Plugins",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "SDK Runtime",
-    "target": "SDK Runtime",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "SDK Testing",
-    "target": "SDK Testing",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "SecretRef Credential Surface",
-    "target": "SecretRef Credential Surface",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "secrets",
-    "target": "secrets",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Secrets Apply Plan Contract",
-    "target": "Secrets Apply Plan Contract",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Secrets Management",
-    "target": "Secrets Management",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "session",
-    "target": "会话"
-  },
-  {
-    "source": "Session",
-    "target": "Session",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Session Management",
-    "target": "Session Management",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Session Management Deep Dive",
-    "target": "Session Management Deep Dive",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Session Pruning",
-    "target": "Session Pruning",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Session Tools",
-    "target": "Session Tools",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Sessions",
-    "target": "Sessions",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Setup",
-    "target": "设置"
-  },
-  {
-    "source": "Setup and Config",
-    "target": "Setup and Config",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Setup Wizard (CLI)",
-    "target": "设置向导（CLI）"
-  },
-  {
-    "source": "Setup Wizard Reference",
-    "target": "设置向导参考"
-  },
-  {
-    "source": "SGLang",
-    "target": "SGLang",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "SGLang (local models)",
-    "target": "SGLang (local models)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
     "source": "Skills",
     "target": "Skills"
-  },
-  {
-    "source": "Skills (macOS)",
-    "target": "Skills (macOS)",
-    "ignore_case": false,
-    "whole_word": false
   },
   {
     "source": "Skills config",
@@ -1304,251 +24,287 @@
     "target": "Skills 配置"
   },
   {
-    "source": "Skills reference",
-    "target": "Skills reference",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Slash commands",
-    "target": "Slash commands",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "SOUL.dev Template",
-    "target": "SOUL.dev Template",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Standing Orders",
-    "target": "Standing Orders",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Sub-agents",
-    "target": "Sub-agents",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Synthetic",
-    "target": "Synthetic",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "local loopback",
+    "target": "local loopback"
   },
   {
     "source": "Tailscale",
     "target": "Tailscale"
   },
   {
-    "source": "Tavily",
-    "target": "Tavily",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "Getting Started",
+    "target": "入门指南"
   },
   {
-    "source": "Telegram",
-    "target": "Telegram",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "Getting started",
+    "target": "入门指南"
   },
   {
-    "source": "Testing",
-    "target": "测试"
+    "source": "Quick start",
+    "target": "快速开始"
   },
   {
-    "source": "Text-to-Speech",
-    "target": "Text-to-Speech",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "Quick Start",
+    "target": "快速开始"
   },
   {
-    "source": "Text-to-Speech (legacy path)",
-    "target": "Text-to-Speech (legacy path)",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "Diffs",
+    "target": "Diffs"
   },
   {
-    "source": "Thinking Levels",
-    "target": "Thinking Levels",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "Capability Cookbook",
+    "target": "能力扩展手册"
   },
   {
-    "source": "Threat Model (MITRE ATLAS)",
-    "target": "Threat Model (MITRE ATLAS)",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "Setup Wizard Reference",
+    "target": "设置向导参考"
   },
   {
-    "source": "Together AI",
-    "target": "Together AI",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "CLI Setup Reference",
+    "target": "CLI 设置参考"
   },
   {
-    "source": "Token Use and Costs",
-    "target": "Token Use and Costs",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "Setup Wizard (CLI)",
+    "target": "设置向导（CLI）"
+  },
+  {
+    "source": "Docs directory",
+    "target": "文档目录"
+  },
+  {
+    "source": "Credits",
+    "target": "致谢"
+  },
+  {
+    "source": "Features",
+    "target": "功能"
+  },
+  {
+    "source": "DMs",
+    "target": "私信"
+  },
+  {
+    "source": "DM",
+    "target": "私信"
+  },
+  {
+    "source": "sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "Sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "sandboxing",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxing note",
+    "target": "沙箱注意事项"
+  },
+  {
+    "source": "Companion apps",
+    "target": "配套应用"
+  },
+  {
+    "source": "expected keys",
+    "target": "预期键名"
+  },
+  {
+    "source": "block streaming",
+    "target": "分块流式传输"
+  },
+  {
+    "source": "Block streaming",
+    "target": "分块流式传输"
+  },
+  {
+    "source": "Discovery + transports",
+    "target": "设备发现 + 传输协议"
+  },
+  {
+    "source": "Discovery",
+    "target": "设备发现"
+  },
+  {
+    "source": "Network model",
+    "target": "网络模型"
+  },
+  {
+    "source": "Doctor",
+    "target": "Doctor"
+  },
+  {
+    "source": "Polls",
+    "target": "投票"
+  },
+  {
+    "source": "Release Policy",
+    "target": "发布策略"
+  },
+  {
+    "source": "Release policy",
+    "target": "发布策略"
+  },
+  {
+    "source": "for full details",
+    "target": "了解详情"
+  },
+  {
+    "source": "First 60 seconds",
+    "target": "最初的六十秒"
+  },
+  {
+    "source": "Auth: where it lives (important)",
+    "target": "凭证：存储位置（重要）"
+  },
+  {
+    "source": "agent",
+    "target": "智能体"
+  },
+  {
+    "source": "channel",
+    "target": "渠道"
+  },
+  {
+    "source": "session",
+    "target": "会话"
+  },
+  {
+    "source": "provider",
+    "target": "提供商"
+  },
+  {
+    "source": "model",
+    "target": "模型"
   },
   {
     "source": "tool",
     "target": "工具"
   },
   {
-    "source": "Tools and Plugins",
-    "target": "Tools and Plugins",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "CLI",
+    "target": "CLI"
   },
   {
-    "source": "Tools overview",
-    "target": "Tools overview",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "install sanity",
+    "target": "安装完整性检查"
   },
   {
-    "source": "TOOLS.dev Template",
-    "target": "TOOLS.dev Template",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "get unstuck",
+    "target": "解决问题"
   },
   {
     "source": "troubleshooting",
     "target": "故障排除"
   },
   {
-    "source": "Trusted Proxy Auth",
-    "target": "Trusted Proxy Auth",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "FAQ",
+    "target": "常见问题"
   },
   {
-    "source": "Updates",
-    "target": "Updates",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "Ollama Web Search",
+    "target": "Ollama Web 搜索"
   },
   {
-    "source": "Updating",
-    "target": "Updating",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "onboarding",
+    "target": "新手引导"
   },
   {
-    "source": "USER Template",
-    "target": "USER Template",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "USER.dev Template",
-    "target": "USER.dev Template",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Voice Call",
-    "target": "Voice Call",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Voice call plugin",
-    "target": "Voice call plugin",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Voice Wake (macOS)",
-    "target": "Voice Wake (macOS)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Volcengine (Doubao)",
-    "target": "Volcengine (Doubao)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Web Browser",
-    "target": "Web Browser",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Web Fetch",
-    "target": "Web Fetch",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Web Search",
-    "target": "Web Search",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Web Search overview",
-    "target": "Web Search overview",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Web tools",
-    "target": "Web tools",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "WebChat (macOS)",
-    "target": "WebChat (macOS)",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "What persists where",
-    "target": "What persists where",
-    "ignore_case": false,
-    "whole_word": false
-  },
-  {
-    "source": "Windows",
-    "target": "Windows",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "Onboarding",
+    "target": "新手引导"
   },
   {
     "source": "wizard",
     "target": "向导"
   },
   {
-    "source": "WSL2 + Windows + remote Chrome CDP troubleshooting",
-    "target": "WSL2 + Windows + remote Chrome CDP troubleshooting",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "environment variables",
+    "target": "环境变量"
   },
   {
-    "source": "x_search in Web Search",
-    "target": "x_search in Web Search",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "environment variable",
+    "target": "环境变量"
   },
   {
-    "source": "xAI",
-    "target": "xAI",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "env vars",
+    "target": "环境变量"
   },
   {
-    "source": "Zalo user plugin",
-    "target": "Zalo user plugin",
-    "ignore_case": false,
-    "whole_word": false
+    "source": "env var",
+    "target": "环境变量"
+  },
+  {
+    "source": "Plugin SDK",
+    "target": "插件 SDK"
+  },
+  {
+    "source": "Plugin SDK Overview",
+    "target": "插件 SDK 概览"
+  },
+  {
+    "source": "SDK Overview",
+    "target": "SDK 概览"
+  },
+  {
+    "source": "Plugin Entry Points",
+    "target": "插件入口点"
+  },
+  {
+    "source": "Entry Points",
+    "target": "入口点"
+  },
+  {
+    "source": "Plugin Runtime",
+    "target": "插件运行时"
+  },
+  {
+    "source": "Runtime",
+    "target": "运行时"
+  },
+  {
+    "source": "Plugin Setup",
+    "target": "插件设置"
+  },
+  {
+    "source": "Setup",
+    "target": "设置"
+  },
+  {
+    "source": "Channel Plugin SDK",
+    "target": "渠道插件 SDK"
+  },
+  {
+    "source": "Channel Plugins",
+    "target": "渠道插件"
+  },
+  {
+    "source": "Provider Plugin SDK",
+    "target": "提供商插件 SDK"
+  },
+  {
+    "source": "Provider Plugins",
+    "target": "提供商插件"
+  },
+  {
+    "source": "Plugin SDK Testing",
+    "target": "插件 SDK 测试"
+  },
+  {
+    "source": "Testing",
+    "target": "测试"
   }
 ]

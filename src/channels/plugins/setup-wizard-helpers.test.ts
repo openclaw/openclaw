@@ -1509,6 +1509,55 @@ describe("createLegacyCompatChannelDmPolicy", () => {
     expect(next.channels?.slack?.dmPolicy).toBe("open");
     expect(next.channels?.slack?.allowFrom).toEqual(["U123", "*"]);
   });
+
+  it("honors named-account dm policy state and paths", () => {
+    const dmPolicy = createLegacyCompatChannelDmPolicy({
+      label: "Slack",
+      channel: "slack",
+    });
+
+    expect(
+      dmPolicy.getCurrent(
+        {
+          channels: {
+            slack: {
+              dmPolicy: "disabled",
+              accounts: {
+                alerts: {
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        "alerts",
+      ),
+    ).toBe("allowlist");
+
+    expect(dmPolicy.resolveConfigKeys?.({}, "alerts")).toEqual({
+      policyKey: "channels.slack.accounts.alerts.dmPolicy",
+      allowFromKey: "channels.slack.accounts.alerts.allowFrom",
+    });
+
+    const next = dmPolicy.setPolicy(
+      {
+        channels: {
+          slack: {
+            allowFrom: ["U123"],
+            accounts: {
+              alerts: {},
+            },
+          },
+        },
+      },
+      "open",
+      "alerts",
+    );
+
+    expect(next.channels?.slack?.dmPolicy).toBeUndefined();
+    expect(next.channels?.slack?.accounts?.alerts?.dmPolicy).toBe("open");
+    expect(next.channels?.slack?.accounts?.alerts?.allowFrom).toEqual(["U123", "*"]);
+  });
 });
 
 describe("createTopLevelChannelGroupPolicySetter", () => {

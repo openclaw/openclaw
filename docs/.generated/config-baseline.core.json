@@ -3686,16 +3686,6 @@
       "hasChildren": false
     },
     {
-      "path": "agents.defaults.sandbox.perSession",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "agents.defaults.sandbox.prune",
       "kind": "core",
       "type": "object",
@@ -3985,6 +3975,30 @@
     },
     {
       "path": "agents.defaults.sandbox.workspaceRoot",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.skills",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Skills",
+      "help": "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.skills.*",
       "kind": "core",
       "type": "string",
       "required": false,
@@ -6162,16 +6176,6 @@
       "hasChildren": false
     },
     {
-      "path": "agents.list.*.sandbox.perSession",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "agents.list.*.sandbox.prune",
       "kind": "core",
       "type": "object",
@@ -6480,7 +6484,7 @@
         "advanced"
       ],
       "label": "Agent Skill Filter",
-      "help": "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
+      "help": "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
       "hasChildren": true
     },
     {
@@ -7837,6 +7841,38 @@
       "hasChildren": true
     },
     {
+      "path": "auth.cooldowns.authPermanentBackoffMinutes",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "auth",
+        "reliability"
+      ],
+      "label": "Auth-Permanent Backoff (minutes)",
+      "help": "Base backoff (minutes) for high-confidence auth_permanent failures (default: 10). Keep this shorter than billing so providers recover automatically after transient upstream auth incidents.",
+      "hasChildren": false
+    },
+    {
+      "path": "auth.cooldowns.authPermanentMaxMinutes",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "auth",
+        "performance"
+      ],
+      "label": "Auth-Permanent Backoff Cap (minutes)",
+      "help": "Cap (minutes) for auth_permanent backoff (default: 60).",
+      "hasChildren": false
+    },
+    {
       "path": "auth.cooldowns.billingBackoffHours",
       "kind": "core",
       "type": "number",
@@ -8762,20 +8798,6 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "browser.ssrfPolicy.allowPrivateNetwork",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Browser Allow Private Network",
-      "help": "Legacy alias for browser.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so risk intent is explicit.",
       "hasChildren": false
     },
     {
@@ -12257,7 +12279,7 @@
         "advanced"
       ],
       "label": "Internal Hooks Enabled",
-      "help": "Enables processing for internal hook handlers and configured entries in the internal hook runtime. Keep disabled unless internal hook handlers are intentionally configured.",
+      "help": "Enables processing for internal hooks and configured entries in the internal hook runtime. Keep disabled unless internal hooks are intentionally configured.",
       "hasChildren": false
     },
     {
@@ -12321,72 +12343,6 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.handlers",
-      "kind": "core",
-      "type": "array",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Handlers",
-      "help": "List of internal event handlers mapping event names to modules and optional exports. Keep handler definitions explicit so event-to-code routing is auditable.",
-      "hasChildren": true
-    },
-    {
-      "path": "hooks.internal.handlers.*",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "hooks.internal.handlers.*.event",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Event",
-      "help": "Internal event name that triggers this handler module when emitted by the runtime. Use stable event naming conventions to avoid accidental overlap across handlers.",
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.handlers.*.export",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Export",
-      "help": "Optional named export for the internal hook handler function when module default export is not used. Set this when one module ships multiple handler entrypoints.",
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.handlers.*.module",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Module",
-      "help": "Safe relative module path for the internal hook handler implementation loaded at runtime. Keep module files in reviewed directories and avoid dynamic path composition.",
       "hasChildren": false
     },
     {
@@ -14459,7 +14415,7 @@
         "advanced"
       ],
       "label": "Enable Status Reactions",
-      "help": "Enable lifecycle status reactions for Telegram. When enabled, the ack reaction becomes the initial 'queued' state and progresses through thinking, tool, done/error automatically. Default: false.",
+      "help": "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Telegram requires this to be true before lifecycle reactions are used.",
       "hasChildren": false
     },
     {
@@ -16445,7 +16401,7 @@
         "access"
       ],
       "label": "Plugin Allowlist",
-      "help": "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Use this to enforce approved extension inventories in controlled environments.",
+      "help": "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
       "hasChildren": true
     },
     {
@@ -18363,55 +18319,6 @@
       "hasChildren": true
     },
     {
-      "path": "talk.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "media",
-        "security"
-      ],
-      "label": "Talk API Key",
-      "help": "Use this legacy ElevenLabs API key for Talk mode only during migration, and keep secrets in env-backed storage. Prefer talk.providers.elevenlabs.apiKey (fallback: ELEVENLABS_API_KEY).",
-      "hasChildren": true
-    },
-    {
-      "path": "talk.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "talk.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "talk.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "talk.interruptOnSpeech",
       "kind": "core",
       "type": "boolean",
@@ -18423,35 +18330,6 @@
       ],
       "label": "Talk Interrupt on Speech",
       "help": "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
-      "hasChildren": false
-    },
-    {
-      "path": "talk.modelId",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media",
-        "models"
-      ],
-      "label": "Talk Model ID",
-      "help": "Legacy ElevenLabs model ID for Talk mode (default: eleven_v3). Prefer talk.providers.elevenlabs.modelId.",
-      "hasChildren": false
-    },
-    {
-      "path": "talk.outputFormat",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media"
-      ],
-      "label": "Talk Output Format",
-      "help": "Use this legacy ElevenLabs output format for Talk mode (for example pcm_44100 or mp3_44100_128) only during migration. Prefer talk.providers.elevenlabs.outputFormat.",
       "hasChildren": false
     },
     {
@@ -18630,44 +18508,6 @@
       ],
       "label": "Talk Silence Timeout (ms)",
       "help": "Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (700 ms on macOS and Android, 900 ms on iOS).",
-      "hasChildren": false
-    },
-    {
-      "path": "talk.voiceAliases",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media"
-      ],
-      "label": "Talk Voice Aliases",
-      "help": "Use this legacy ElevenLabs voice alias map (for example {\"Clawd\":\"EXAVITQu4vr4xnSDxMaL\"}) only during migration. Prefer talk.providers.elevenlabs.voiceAliases.",
-      "hasChildren": true
-    },
-    {
-      "path": "talk.voiceAliases.*",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "talk.voiceId",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media"
-      ],
-      "label": "Talk Voice ID",
-      "help": "Legacy ElevenLabs default voice ID for Talk mode. Prefer talk.providers.elevenlabs.voiceId.",
       "hasChildren": false
     },
     {

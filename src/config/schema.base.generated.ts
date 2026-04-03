@@ -428,9 +428,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           ssrfPolicy: {
             type: "object",
             properties: {
-              allowPrivateNetwork: {
-                type: "boolean",
-              },
               dangerouslyAllowPrivateNetwork: {
                 type: "boolean",
               },
@@ -795,6 +792,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 },
               },
               billingMaxHours: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              authPermanentBackoffMinutes: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              authPermanentMaxMinutes: {
                 type: "number",
                 exclusiveMinimum: 0,
               },
@@ -2644,6 +2649,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 },
                 additionalProperties: false,
               },
+              skills: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
               repoRoot: {
                 type: "string",
               },
@@ -4086,9 +4097,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
-                  perSession: {
-                    type: "boolean",
-                  },
                   workspaceRoot: {
                     type: "string",
                   },
@@ -5269,9 +5277,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           const: "shared",
                         },
                       ],
-                    },
-                    perSession: {
-                      type: "boolean",
                     },
                     workspaceRoot: {
                       type: "string",
@@ -18026,25 +18031,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               enabled: {
                 type: "boolean",
               },
-              handlers: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: {
-                    event: {
-                      type: "string",
-                    },
-                    module: {
-                      type: "string",
-                    },
-                    export: {
-                      type: "string",
-                    },
-                  },
-                  required: ["event", "module"],
-                  additionalProperties: false,
-                },
-              },
               entries: {
                 type: "object",
                 propertyNames: {
@@ -18389,90 +18375,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               additionalProperties: {},
             },
-          },
-          voiceId: {
-            type: "string",
-          },
-          voiceAliases: {
-            type: "object",
-            propertyNames: {
-              type: "string",
-            },
-            additionalProperties: {
-              type: "string",
-            },
-          },
-          modelId: {
-            type: "string",
-          },
-          outputFormat: {
-            type: "string",
-          },
-          apiKey: {
-            anyOf: [
-              {
-                type: "string",
-              },
-              {
-                oneOf: [
-                  {
-                    type: "object",
-                    properties: {
-                      source: {
-                        type: "string",
-                        const: "env",
-                      },
-                      provider: {
-                        type: "string",
-                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                      },
-                      id: {
-                        type: "string",
-                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                      },
-                    },
-                    required: ["source", "provider", "id"],
-                    additionalProperties: false,
-                  },
-                  {
-                    type: "object",
-                    properties: {
-                      source: {
-                        type: "string",
-                        const: "file",
-                      },
-                      provider: {
-                        type: "string",
-                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                      },
-                      id: {
-                        type: "string",
-                      },
-                    },
-                    required: ["source", "provider", "id"],
-                    additionalProperties: false,
-                  },
-                  {
-                    type: "object",
-                    properties: {
-                      source: {
-                        type: "string",
-                        const: "exec",
-                      },
-                      provider: {
-                        type: "string",
-                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                      },
-                      id: {
-                        type: "string",
-                      },
-                    },
-                    required: ["source", "provider", "id"],
-                    additionalProperties: false,
-                  },
-                ],
-              },
-            ],
           },
           interruptOnSpeech: {
             type: "boolean",
@@ -20494,7 +20396,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.list.*.skills": {
       label: "Agent Skill Filter",
-      help: "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
+      help: "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
       tags: ["advanced"],
     },
     "agents.list[].runtime": {
@@ -21885,6 +21787,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Debounce window in milliseconds for coalescing rapid skill file changes before reload logic runs. Increase to reduce reload churn on frequent writes, or lower for faster edit feedback.",
       tags: ["performance", "automation"],
     },
+    "agents.defaults.skills": {
+      label: "Skills",
+      help: "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
+      tags: ["advanced"],
+    },
     "agents.defaults.workspace": {
       label: "Workspace",
       help: "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
@@ -22682,6 +22589,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Cap (hours) for billing backoff (default: 24).",
       tags: ["auth", "access", "performance"],
     },
+    "auth.cooldowns.authPermanentBackoffMinutes": {
+      label: "Auth-Permanent Backoff (minutes)",
+      help: "Base backoff (minutes) for high-confidence auth_permanent failures (default: 10). Keep this shorter than billing so providers recover automatically after transient upstream auth incidents.",
+      tags: ["auth", "access", "reliability"],
+    },
+    "auth.cooldowns.authPermanentMaxMinutes": {
+      label: "Auth-Permanent Backoff Cap (minutes)",
+      help: "Cap (minutes) for auth_permanent backoff (default: 60).",
+      tags: ["auth", "access", "performance"],
+    },
     "auth.cooldowns.failureWindowHours": {
       label: "Failover Window (hours)",
       help: "Failure window (hours) for backoff counters (default: 24).",
@@ -23066,11 +22983,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "browser.ssrfPolicy": {
       label: "Browser SSRF Policy",
       help: "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
-      tags: ["access"],
-    },
-    "browser.ssrfPolicy.allowPrivateNetwork": {
-      label: "Browser Allow Private Network",
-      help: "Legacy alias for browser.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so risk intent is explicit.",
       tags: ["access"],
     },
     "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
@@ -23659,27 +23571,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "hooks.internal.enabled": {
       label: "Internal Hooks Enabled",
-      help: "Enables processing for internal hook handlers and configured entries in the internal hook runtime. Keep disabled unless internal hook handlers are intentionally configured.",
-      tags: ["advanced"],
-    },
-    "hooks.internal.handlers": {
-      label: "Internal Hook Handlers",
-      help: "List of internal event handlers mapping event names to modules and optional exports. Keep handler definitions explicit so event-to-code routing is auditable.",
-      tags: ["advanced"],
-    },
-    "hooks.internal.handlers[].event": {
-      label: "Internal Hook Event",
-      help: "Internal event name that triggers this handler module when emitted by the runtime. Use stable event naming conventions to avoid accidental overlap across handlers.",
-      tags: ["advanced"],
-    },
-    "hooks.internal.handlers[].module": {
-      label: "Internal Hook Module",
-      help: "Safe relative module path for the internal hook handler implementation loaded at runtime. Keep module files in reviewed directories and avoid dynamic path composition.",
-      tags: ["advanced"],
-    },
-    "hooks.internal.handlers[].export": {
-      label: "Internal Hook Export",
-      help: "Optional named export for the internal hook handler function when module default export is not used. Set this when one module ships multiple handler entrypoints.",
+      help: "Enables processing for internal hooks and configured entries in the internal hook runtime. Keep disabled unless internal hooks are intentionally configured.",
       tags: ["advanced"],
     },
     "hooks.internal.entries": {
@@ -23792,26 +23684,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Enables automatic live-reload behavior for canvas assets during development workflows. Keep disabled in production-like environments where deterministic output is preferred.",
       tags: ["reliability"],
     },
-    "talk.voiceId": {
-      label: "Talk Voice ID",
-      help: "Legacy ElevenLabs default voice ID for Talk mode. Prefer talk.providers.elevenlabs.voiceId.",
-      tags: ["media"],
-    },
-    "talk.voiceAliases": {
-      label: "Talk Voice Aliases",
-      help: 'Use this legacy ElevenLabs voice alias map (for example {"Clawd":"EXAVITQu4vr4xnSDxMaL"}) only during migration. Prefer talk.providers.elevenlabs.voiceAliases.',
-      tags: ["media"],
-    },
-    "talk.modelId": {
-      label: "Talk Model ID",
-      help: "Legacy ElevenLabs model ID for Talk mode (default: eleven_v3). Prefer talk.providers.elevenlabs.modelId.",
-      tags: ["models", "media"],
-    },
-    "talk.outputFormat": {
-      label: "Talk Output Format",
-      help: "Use this legacy ElevenLabs output format for Talk mode (for example pcm_44100 or mp3_44100_128) only during migration. Prefer talk.providers.elevenlabs.outputFormat.",
-      tags: ["media"],
-    },
     "talk.interruptOnSpeech": {
       label: "Talk Interrupt on Speech",
       help: "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
@@ -23914,7 +23786,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "messages.statusReactions.enabled": {
       label: "Enable Status Reactions",
-      help: "Enable lifecycle status reactions for Telegram. When enabled, the ack reaction becomes the initial 'queued' state and progresses through thinking, tool, done/error automatically. Default: false.",
+      help: "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Telegram requires this to be true before lifecycle reactions are used.",
       tags: ["advanced"],
     },
     "messages.statusReactions.emojis": {
@@ -23994,12 +23866,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["security", "auth", "media"],
       sensitive: true,
     },
-    "talk.apiKey": {
-      label: "Talk API Key",
-      help: "Use this legacy ElevenLabs API key for Talk mode only during migration, and keep secrets in env-backed storage. Prefer talk.providers.elevenlabs.apiKey (fallback: ELEVENLABS_API_KEY).",
-      tags: ["security", "auth", "media"],
-      sensitive: true,
-    },
     "channels.defaults": {
       label: "Channel Defaults",
       help: "Default channel behavior applied across providers when provider-specific settings are not set. Use this to enforce consistent baseline policy before per-provider tuning.",
@@ -24042,7 +23908,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.list[].skills": {
       label: "Agent Skill Filter",
-      help: "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
+      help: "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
       tags: ["advanced"],
     },
     "agents.list[].identity.avatar": {

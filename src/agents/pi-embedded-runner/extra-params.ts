@@ -180,6 +180,7 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  model?: ProviderRuntimeModel,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -205,21 +206,33 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
   }
-  const cacheRetention = resolveCacheRetention(extraParams, provider);
-  if (cacheRetention) {
-    streamParams.cacheRetention = cacheRetention;
+  const initialCacheRetention = resolveCacheRetention(
+    extraParams,
+    provider,
+    typeof model?.api === "string" ? model.api : undefined,
+    typeof model?.id === "string" ? model.id : undefined,
+  );
+  if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
+    const debugParams = initialCacheRetention
+      ? { ...streamParams, cacheRetention: initialCacheRetention }
+      : streamParams;
+    log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
   }
-
-  if (Object.keys(streamParams).length === 0) {
-    return undefined;
-  }
-
-  log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
 
   const underlying = baseStreamFn ?? streamSimple;
-  const wrappedStreamFn: StreamFn = (model, context, options) => {
-    return underlying(model, context, {
+  const wrappedStreamFn: StreamFn = (callModel, context, options) => {
+    const cacheRetention = resolveCacheRetention(
+      extraParams,
+      provider,
+      typeof callModel.api === "string" ? callModel.api : undefined,
+      typeof callModel.id === "string" ? callModel.id : undefined,
+    );
+    if (Object.keys(streamParams).length === 0 && !cacheRetention) {
+      return underlying(callModel, context, options);
+    }
+    return underlying(callModel, context, {
       ...streamParams,
+      ...(cacheRetention ? { cacheRetention } : {}),
       ...options,
     });
   };
@@ -290,6 +303,7 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
     ctx.agent.streamFn,
     ctx.effectiveExtraParams,
     ctx.provider,
+    ctx.model,
   );
 
   if (wrappedStreamFn) {

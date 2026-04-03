@@ -3,7 +3,7 @@ import {
   providerContractLoadError,
   resolveProviderContractProvidersForPluginIds,
 } from "../../../src/plugins/contracts/registry.js";
-import { installProviderPluginContractSuite } from "../../../src/plugins/contracts/suites.js";
+import { installProviderPluginContractSuite } from "./provider-contract-suites.js";
 
 export function describeProviderContracts(pluginId: string) {
   const providers = resolveProviderContractProvidersForPluginIds([pluginId]);

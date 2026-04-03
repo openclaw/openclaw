@@ -1168,6 +1168,8 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
     releaseWsSession("sess-max-tokens-zero");
+    releaseWsSession("sess-runtime-fallback");
+    releaseWsSession("sess-drop");
     openAIWsStreamTesting.setDepsForTest();
   });
 
@@ -1460,6 +1462,35 @@ describe("createOpenAIWebSocketStreamFn", () => {
     } finally {
       MockManager.globalConnectShouldFail = false;
     }
+  });
+
+  it("falls back to HTTP when WebSocket errors before any output in auto mode", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-runtime-fallback");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "auto" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "error",
+      message: "temporary upstream glitch",
+      code: "ws_runtime_error",
+    });
+
+    const events: Array<{ type?: string; message?: { content?: Array<{ text?: string }> } }> = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev as { type?: string; message?: { content?: Array<{ text?: string }> } });
+    }
+
+    expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
+    expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const doneEvent = events.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
   });
 
   it("tracks previous_response_id across turns (incremental send)", async () => {
@@ -1962,12 +1993,12 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.tool_choice).toBe("auto");
   });
 
-  it("rejects promise when WebSocket drops mid-request", async () => {
+  it("keeps explicit websocket mode surfacing mid-request drops", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-drop");
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
       contextStub as Parameters<typeof streamFn>[1],
-      {} as Parameters<typeof streamFn>[2],
+      { transport: "websocket" } as Parameters<typeof streamFn>[2],
     );
     // Let the send go through, then simulate connection drop before response.completed
     await new Promise<void>((resolve) => {

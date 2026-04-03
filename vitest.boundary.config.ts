@@ -1,17 +1,7 @@
-import { defineConfig } from "vitest/config";
-import baseConfig from "./vitest.config.ts";
+import { defineProject } from "vitest/config";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
+import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
-
-const base = baseConfig as unknown as Record<string, unknown>;
-const baseTest =
-  (
-    baseConfig as {
-      test?: {
-        exclude?: string[];
-      };
-    }
-  ).test ?? {};
 
 export function loadBoundaryIncludePatternsFromEnv(
   env: Record<string, string | undefined> = process.env,
@@ -20,14 +10,17 @@ export function loadBoundaryIncludePatternsFromEnv(
 }
 
 export function createBoundaryVitestConfig(env: Record<string, string | undefined> = process.env) {
-  return defineConfig({
-    ...base,
+  return defineProject({
+    ...sharedVitestConfig,
     test: {
-      ...baseTest,
+      ...sharedVitestConfig.test,
+      name: "boundary",
       isolate: false,
       runner: "./test/non-isolated-runner.ts",
       include: loadBoundaryIncludePatternsFromEnv(env) ?? boundaryTestFiles,
-      setupFiles: [],
+      // Boundary workers still need the shared isolated HOME/bootstrap. Only
+      // per-file module isolation is disabled here.
+      setupFiles: sharedVitestConfig.test.setupFiles,
     },
   });
 }

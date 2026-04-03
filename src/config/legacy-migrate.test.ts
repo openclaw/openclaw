@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
@@ -352,7 +353,7 @@ describe("legacy migrate talk provider shape", () => {
     expect(res.changes).toContain(
       "Moved talk legacy fields (voiceId, modelId) → talk.providers.elevenlabs (filled missing provider fields only).",
     );
-    expect(res.config?.talk).toEqual({
+    expect(res.config?.talk).toMatchObject({
       providers: {
         elevenlabs: {
           voiceId: "voice-1",
@@ -397,6 +398,113 @@ describe("legacy migrate talk provider shape", () => {
     expect(res.changes).toContain(
       "Migration applied, but config still invalid; fix remaining issues manually.",
     );
+  });
+});
+
+describe("legacy migrate sandbox scope aliases", () => {
+  it("moves agents.defaults.sandbox.perSession into scope", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            perSession: true,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved agents.defaults.sandbox.perSession → agents.defaults.sandbox.scope (session).",
+    );
+    expect(res.config?.agents?.defaults?.sandbox).toEqual({
+      scope: "session",
+    });
+  });
+
+  it("moves agents.list[].sandbox.perSession into scope", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        list: [
+          {
+            id: "pi",
+            sandbox: {
+              perSession: false,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved agents.list.0.sandbox.perSession → agents.list.0.sandbox.scope (shared).",
+    );
+    expect(res.config?.agents?.list?.[0]?.sandbox).toEqual({
+      scope: "shared",
+    });
+  });
+
+  it("drops legacy sandbox perSession when scope is already set", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            scope: "agent",
+            perSession: true,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed agents.defaults.sandbox.perSession (agents.defaults.sandbox.scope already set).",
+    );
+    expect(res.config?.agents?.defaults?.sandbox).toEqual({
+      scope: "agent",
+    });
+  });
+
+  it("does not migrate invalid sandbox perSession values", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          sandbox: {
+            perSession: "yes",
+          },
+        },
+      },
+    };
+
+    const res = migrateLegacyConfig(raw);
+
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
+    expect(validateConfigObjectWithPlugins(raw).ok).toBe(false);
+  });
+});
+
+describe("legacy migrate channel streaming aliases", () => {
+  it("migrates telegram and discord streaming aliases", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          streamMode: "block",
+        },
+        discord: {
+          streaming: false,
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.telegram.streamMode → channels.telegram.streaming (block).",
+    );
+    expect(res.changes).toContain("Normalized channels.discord.streaming boolean → enum (off).");
+    expect(res.config?.channels?.telegram).toMatchObject({
+      streaming: "block",
+    });
+    expect(res.config?.channels?.discord).toMatchObject({
+      streaming: "off",
+    });
   });
 });
 

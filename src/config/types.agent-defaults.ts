@@ -141,6 +141,8 @@ export type AgentDefaultsConfig = {
     /** Enable path-scoped write/edit serialization and workspace lock primitives. */
     enabled?: boolean;
   };
+  /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
+  skills?: string[];
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */

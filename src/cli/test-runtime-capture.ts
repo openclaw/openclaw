@@ -64,10 +64,10 @@ export function createCliRuntimeCapture(): CliRuntimeCapture {
 }
 
 export async function mockRuntimeModule<TModule extends { defaultRuntime: OutputRuntimeEnv }>(
-  importOriginal: () => Promise<TModule>,
+  loadActual: () => Promise<TModule>,
   defaultRuntime: TModule["defaultRuntime"],
 ): Promise<TModule> {
-  const actual = await importOriginal();
+  const actual = await loadActual();
   return {
     ...actual,
     defaultRuntime: {

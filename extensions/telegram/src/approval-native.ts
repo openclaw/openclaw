@@ -13,6 +13,7 @@ import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalAuthorizedSender,
   isTelegramExecApprovalClientEnabled,
+  isTelegramExecApprovalTargetRecipient,
   resolveTelegramExecApprovalTarget,
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
@@ -115,11 +116,14 @@ const resolveTelegramApproveCommandBehavior: NonNullable<
   if (isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
     return undefined;
   }
+  if (isTelegramExecApprovalTargetRecipient({ cfg, accountId, senderId })) {
+    return undefined;
+  }
   if (
     isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }) &&
     !isTelegramExecApprovalApprover({ cfg, accountId, senderId })
   ) {
-    return { kind: "ignore" };
+    return undefined;
   }
   return {
     kind: "reply",

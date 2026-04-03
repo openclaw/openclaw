@@ -16,7 +16,8 @@ function createMockSpawnChild() {
   return { child, stdout };
 }
 
-vi.mock("node:child_process", () => {
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
   const spawn = vi.fn(() => {
     const { child, stdout } = createMockSpawnChild();
     process.nextTick(() => {
@@ -35,7 +36,12 @@ vi.mock("node:child_process", () => {
     });
     return child;
   });
-  return { spawn };
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawn: spawn as unknown as typeof import("node:child_process").spawn,
+    },
+  );
 });
 
 const spawnMock = vi.mocked(spawn);

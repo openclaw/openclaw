@@ -1,6 +1,6 @@
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveCronDeliveryPlan } from "../delivery.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   dispatchCronDelivery,
@@ -23,8 +23,6 @@ import {
   deriveSessionTotalTokens,
   detectSuspiciousPatterns,
   ensureAgentWorkspace,
-  estimateUsageCost,
-  getCliSessionId,
   hasNonzeroUsage,
   isCliProvider,
   isExternalHookSession,
@@ -47,23 +45,28 @@ import {
   resolveDefaultAgentId,
   resolveFastModeState,
   resolveHookExternalContentSource,
-  resolveModelCostConfig,
   resolveNestedAgentLane,
   resolveSessionAuthProfileOverride,
   resolveSessionTranscriptPath,
   resolveThinkingDefault,
-  runCliAgent,
   runEmbeddedPiAgent,
   runWithModelFallback,
-  setCliSessionId,
   setSessionRuntimeModel,
   supportsXHighThinking,
-  updateSessionStore,
 } from "./run.runtime.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
-import { isLikelyInterimCronMessage } from "./subagent-followup.js";
+import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
+
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
+
+async function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return await sessionStoreRuntimePromise;
+}
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -166,6 +169,18 @@ function appendCronDeliveryInstruction(params: {
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
+function resolvePositiveContextTokens(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+async function loadCliRunnerRuntime() {
+  return await import("../../agents/cli-runner.runtime.js");
+}
+
+async function loadUsageFormatRuntime() {
+  return await import("../../utils/usage-format.js");
+}
+
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -262,6 +277,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (runSessionKey !== agentSessionKey) {
       cronSession.store[runSessionKey] = cronSession.sessionEntry;
     }
+    const { updateSessionStore } = await loadSessionStoreRuntime();
     await updateSessionStore(cronSession.storePath, (store) => {
       store[agentSessionKey] = cronSession.sessionEntry;
       if (runSessionKey !== agentSessionKey) {
@@ -492,6 +508,7 @@ export async function runCronIsolatedAgentTurn(params: {
           const bootstrapPromptWarningSignature =
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
           if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
+            const { getCliSessionId, runCliAgent } = await loadCliRunnerRuntime();
             // Fresh isolated cron sessions must not reuse a stored CLI session ID.
             // Passing an existing ID activates the resume watchdog profile
             // (noOutputTimeoutRatio 0.3, maxMs 180 s) instead of the fresh profile
@@ -700,8 +717,9 @@ export async function runCronIsolatedAgentTurn(params: {
     const providerUsed =
       finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? liveSelection.provider;
     const contextTokens =
-      agentCfg?.contextTokens ??
+      resolvePositiveContextTokens(agentCfg?.contextTokens) ??
       lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??
+      resolvePositiveContextTokens(cronSession.sessionEntry.contextTokens) ??
       DEFAULT_CONTEXT_TOKENS;
 
     setSessionRuntimeModel(cronSession.sessionEntry, {
@@ -712,10 +730,12 @@ export async function runCronIsolatedAgentTurn(params: {
     if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
       const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
       if (cliSessionId) {
+        const { setCliSessionId } = await loadCliRunnerRuntime();
         setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);
       }
     }
     if (hasNonzeroUsage(usage)) {
+      const { estimateUsageCost, resolveModelCostConfig } = await loadUsageFormatRuntime();
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
       const totalTokens = deriveSessionTotalTokens({

@@ -25,9 +25,9 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import {
   hasDifferentLiveSessionModelSelection,
-  LiveSessionModelSwitchError,
   consumeLiveSessionModelSwitch,
 } from "../live-model-switch.js";
 import {

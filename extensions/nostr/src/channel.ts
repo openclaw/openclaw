@@ -406,9 +406,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
           return entry.trim();
         }
       },
-      notify: async ({ id, message }) => {
-        // Get the default account's bus and send approval message
-        const bus = activeBuses.get(DEFAULT_ACCOUNT_ID);
+      notify: async ({ cfg, id, message, accountId }) => {
+        const bus = activeBuses.get(accountId ?? resolveDefaultNostrAccountId(cfg));
         if (bus) {
           await bus.sendDm(id, message);
         }
@@ -423,7 +422,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
     textChunkLimit: 4000,
     sendText: async ({ cfg, to, text, accountId }) => {
       const core = getNostrRuntime();
-      const aid = accountId ?? DEFAULT_ACCOUNT_ID;
+      const aid = accountId ?? resolveDefaultNostrAccountId(cfg);
       const bus = activeBuses.get(aid);
       if (!bus) {
         throw new Error(`Nostr bus not running for account ${aid}`);

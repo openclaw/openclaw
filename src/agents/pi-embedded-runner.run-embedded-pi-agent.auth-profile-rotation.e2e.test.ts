@@ -59,8 +59,10 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
     runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
   }));
-  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  vi.doMock("../plugins/provider-runtime.js", async () => {
+    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+      "../plugins/provider-runtime.js",
+    );
     return {
       ...actual,
       prepareProviderRuntimeAuth: async (params: {
@@ -92,8 +94,8 @@ const installRunEmbeddedMocks = () => {
       throw new Error("compact should not run in auth profile rotation tests");
     }),
   }));
-  vi.doMock("./models-config.js", async (importOriginal) => {
-    const mod = await importOriginal<typeof import("./models-config.js")>();
+  vi.doMock("./models-config.js", async () => {
+    const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
     return {
       ...mod,
       ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),

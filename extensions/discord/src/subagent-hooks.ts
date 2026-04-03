@@ -26,14 +26,14 @@ type DiscordSubagentSpawningEvent = {
     threadId?: string | number;
   };
   childSessionKey: string;
-  agentId?: string;
+  agentId: string;
   label?: string;
 };
 
 type DiscordSubagentEndedEvent = {
   targetSessionKey: string;
   accountId?: string;
-  targetKind?: string;
+  targetKind?: ThreadBindingTargetKind;
   reason?: string;
   sendFarewell?: boolean;
 };

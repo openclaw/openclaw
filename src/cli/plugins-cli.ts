@@ -53,6 +53,7 @@ export type PluginInspectOptions = {
 export type PluginUpdateOptions = {
   all?: boolean;
   dryRun?: boolean;
+  dangerouslyForceUnsafeInstall?: boolean;
 };
 
 export type PluginMarketplaceListOptions = {
@@ -769,6 +770,7 @@ export function registerPluginsCli(program: Command) {
       "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
     )
     .option("-l, --link", "Link a local path instead of copying", false)
+    .option("--force", "Overwrite an existing installed plugin or hook pack", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
       "--dangerously-force-unsafe-install",
@@ -784,6 +786,7 @@ export function registerPluginsCli(program: Command) {
         raw: string,
         opts: {
           dangerouslyForceUnsafeInstall?: boolean;
+          force?: boolean;
           link?: boolean;
           pin?: boolean;
           marketplace?: string;
@@ -799,6 +802,11 @@ export function registerPluginsCli(program: Command) {
     .argument("[id]", "Plugin or hook-pack id (omit with --all)")
     .option("--all", "Update all tracked plugins and hook packs", false)
     .option("--dry-run", "Show what would change without writing", false)
+    .option(
+      "--dangerously-force-unsafe-install",
+      "Bypass built-in dangerous-code update blocking for plugins (plugin hooks may still block)",
+      false,
+    )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       await runPluginUpdateCommand({ id, opts });
     });

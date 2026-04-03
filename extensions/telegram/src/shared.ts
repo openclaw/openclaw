@@ -19,7 +19,14 @@ import {
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
 } from "./accounts.js";
+import {
+  buildTelegramCommandsListChannelData,
+  buildTelegramModelBrowseChannelData,
+  buildTelegramModelsListChannelData,
+  buildTelegramModelsProviderChannelData,
+} from "./command-ui.js";
 import { TelegramChannelConfigSchema } from "./config-schema.js";
+import { telegramDoctor } from "./doctor.js";
 
 export const TELEGRAM_CHANNEL = "telegram" as const;
 
@@ -108,7 +115,16 @@ export function createTelegramPluginBase(params: {
   setup: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setup"]>;
 }): Pick<
   ChannelPlugin<ResolvedTelegramAccount>,
-  "id" | "meta" | "setupWizard" | "capabilities" | "reload" | "configSchema" | "config" | "setup"
+  | "id"
+  | "meta"
+  | "setupWizard"
+  | "capabilities"
+  | "commands"
+  | "doctor"
+  | "reload"
+  | "configSchema"
+  | "config"
+  | "setup"
 > {
   return createChannelPluginBase({
     id: TELEGRAM_CHANNEL,
@@ -126,6 +142,15 @@ export function createTelegramPluginBase(params: {
       nativeCommands: true,
       blockStreaming: true,
     },
+    commands: {
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: true,
+      buildCommandsListChannelData: buildTelegramCommandsListChannelData,
+      buildModelsProviderChannelData: buildTelegramModelsProviderChannelData,
+      buildModelsListChannelData: buildTelegramModelsListChannelData,
+      buildModelBrowseChannelData: buildTelegramModelBrowseChannelData,
+    },
+    doctor: telegramDoctor,
     reload: { configPrefixes: ["channels.telegram"] },
     configSchema: TelegramChannelConfigSchema,
     config: {
@@ -196,6 +221,15 @@ export function createTelegramPluginBase(params: {
     setup: params.setup,
   }) as Pick<
     ChannelPlugin<ResolvedTelegramAccount>,
-    "id" | "meta" | "setupWizard" | "capabilities" | "reload" | "configSchema" | "config" | "setup"
+    | "id"
+    | "meta"
+    | "setupWizard"
+    | "capabilities"
+    | "commands"
+    | "doctor"
+    | "reload"
+    | "configSchema"
+    | "config"
+    | "setup"
   >;
 }

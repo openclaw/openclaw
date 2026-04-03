@@ -32,8 +32,8 @@ vi.mock("./targets.js", () => ({
   resolveGoogleChatOutboundSpace,
 }));
 
-vi.mock("../runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+vi.mock("../runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
   return {
     ...actual,
     loadOutboundMediaFromUrl: (...args: Parameters<typeof actual.loadOutboundMediaFromUrl>) =>
@@ -65,6 +65,27 @@ describe("googlechat message actions", () => {
     ]);
 
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toEqual({
+      actions: ["send", "upload-file", "react", "reactions"],
+    });
+  });
+
+  it("honors account-scoped reaction gates during discovery", () => {
+    resolveGoogleChatAccount.mockImplementation(({ accountId }: { accountId?: string | null }) => ({
+      enabled: true,
+      credentialSource: "service-account",
+      config: {
+        actions: { reactions: accountId === "work" },
+      },
+    }));
+
+    expect(
+      googlechatMessageActions.describeMessageTool?.({ cfg: {} as never, accountId: "default" }),
+    ).toEqual({
+      actions: ["send", "upload-file"],
+    });
+    expect(
+      googlechatMessageActions.describeMessageTool?.({ cfg: {} as never, accountId: "work" }),
+    ).toEqual({
       actions: ["send", "upload-file", "react", "reactions"],
     });
   });

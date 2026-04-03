@@ -206,6 +206,58 @@ describe("provider attribution", () => {
     });
   });
 
+  it("classifies native Mistral hosts centrally", () => {
+    expect(resolveProviderEndpoint("https://api.mistral.ai/v1")).toMatchObject({
+      endpointClass: "mistral-public",
+      hostname: "api.mistral.ai",
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "mistral",
+        api: "openai-completions",
+        baseUrl: "https://api.mistral.ai/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "mistral-public",
+      isKnownNativeEndpoint: true,
+      knownProviderFamily: "mistral",
+    });
+  });
+
+  it("classifies native OpenAI-compatible vendor hosts centrally", () => {
+    expect(resolveProviderEndpoint("https://api.x.ai/v1")).toMatchObject({
+      endpointClass: "xai-native",
+      hostname: "api.x.ai",
+    });
+    expect(resolveProviderEndpoint("https://api.z.ai/api/coding/paas/v4")).toMatchObject({
+      endpointClass: "zai-native",
+      hostname: "api.z.ai",
+    });
+    expect(resolveProviderEndpoint("https://api.deepseek.com")).toMatchObject({
+      endpointClass: "deepseek-native",
+      hostname: "api.deepseek.com",
+    });
+    expect(resolveProviderEndpoint("https://llm.chutes.ai/v1")).toMatchObject({
+      endpointClass: "chutes-native",
+      hostname: "llm.chutes.ai",
+    });
+    expect(resolveProviderEndpoint("https://api.groq.com/openai/v1")).toMatchObject({
+      endpointClass: "groq-native",
+      hostname: "api.groq.com",
+    });
+    expect(resolveProviderEndpoint("https://api.cerebras.ai/v1")).toMatchObject({
+      endpointClass: "cerebras-native",
+      hostname: "api.cerebras.ai",
+    });
+    expect(resolveProviderEndpoint("https://opencode.ai/api")).toMatchObject({
+      endpointClass: "opencode-native",
+      hostname: "opencode.ai",
+    });
+  });
+
   it("treats OpenRouter-hosted Responses routes as explicit proxy-like endpoints", () => {
     expect(
       resolveProviderRequestPolicy({
@@ -456,6 +508,7 @@ describe("provider attribution", () => {
     ).toMatchObject({
       endpointClass: "openai-public",
       allowsOpenAIServiceTier: true,
+      supportsOpenAIReasoningCompatPayload: true,
       allowsResponsesStore: true,
       supportsResponsesStoreField: true,
       shouldStripResponsesPromptCache: false,
@@ -484,6 +537,7 @@ describe("provider attribution", () => {
     ).toMatchObject({
       endpointClass: "custom",
       allowsOpenAIServiceTier: false,
+      supportsOpenAIReasoningCompatPayload: false,
       allowsResponsesStore: false,
       supportsResponsesStoreField: true,
       shouldStripResponsesPromptCache: true,
@@ -544,5 +598,211 @@ describe("provider attribution", () => {
       knownProviderFamily: "github-copilot",
       isKnownNativeEndpoint: true,
     });
+  });
+
+  it("resolves a provider capability matrix for representative native and proxied routes", () => {
+    const cases = [
+      {
+        name: "native OpenAI responses",
+        input: {
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "openai-family",
+          endpointClass: "openai-public",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: true,
+          supportsOpenAIReasoningCompatPayload: true,
+          allowsResponsesStore: true,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "proxied OpenAI responses",
+        input: {
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://proxy.example.com/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "openai-family",
+          endpointClass: "custom",
+          isKnownNativeEndpoint: false,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: true,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "direct Anthropic messages",
+        input: {
+          provider: "anthropic",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "anthropic",
+          endpointClass: "anthropic-public",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: false,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: true,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "proxied custom anthropic api",
+        input: {
+          provider: "custom-anthropic",
+          api: "anthropic-messages",
+          baseUrl: "https://proxy.example.com/anthropic",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          endpointClass: "custom",
+          isKnownNativeEndpoint: false,
+          allowsAnthropicServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          supportsResponsesStoreField: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "native OpenRouter responses",
+        input: {
+          provider: "openrouter",
+          api: "openai-responses",
+          baseUrl: "https://openrouter.ai/api/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "openrouter",
+          endpointClass: "openrouter",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: true,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "native Moonshot completions",
+        input: {
+          provider: "moonshot",
+          api: "openai-completions",
+          baseUrl: "https://api.moonshot.ai/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "moonshot",
+          endpointClass: "moonshot-native",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: false,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: true,
+          compatibilityFamily: "moonshot",
+        },
+      },
+      {
+        name: "native ModelStudio completions",
+        input: {
+          provider: "modelstudio",
+          api: "openai-completions",
+          baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "modelstudio",
+          endpointClass: "modelstudio-native",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: false,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: true,
+        },
+      },
+      {
+        name: "native Google Gemini api",
+        input: {
+          provider: "google",
+          api: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "google",
+          endpointClass: "google-generative-ai",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: false,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "native GitHub Copilot responses",
+        input: {
+          provider: "github-copilot",
+          api: "openai-responses",
+          baseUrl: "https://api.individual.githubcopilot.com",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "github-copilot",
+          endpointClass: "github-copilot-native",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: true,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      expect(resolveProviderRequestCapabilities(testCase.input), testCase.name).toMatchObject(
+        testCase.expected,
+      );
+    }
   });
 });
