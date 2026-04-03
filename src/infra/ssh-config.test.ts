@@ -39,7 +39,7 @@ vi.mock("node:child_process", async () => {
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
-      spawn,
+      spawn: spawn as unknown as typeof import("node:child_process").spawn,
     },
   );
 });

@@ -354,7 +354,8 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    const dispatchCall = dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0] as
+    const dispatchCalls = dispatchPluginInteractiveHandlerMock.mock.calls as unknown[][];
+    const dispatchCall = dispatchCalls[0]?.[0] as
       | {
           channel?: string;
           data?: string;
