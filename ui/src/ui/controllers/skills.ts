@@ -253,7 +253,9 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
     }
     state.clawhubDetailError = getErrorMessage(err);
   } finally {
-    state.clawhubDetailLoading = false;
+    if (slug === state.clawhubDetailSlug) {
+      state.clawhubDetailLoading = false;
+    }
   }
 }
 
