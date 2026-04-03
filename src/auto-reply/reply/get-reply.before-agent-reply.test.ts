@@ -178,4 +178,15 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
 
     expect(result).toEqual({ text: SILENT_REPLY_TOKEN });
   });
+
+  it("skips before_agent_reply when skipHooks is enabled", async () => {
+    const result = await getReplyFromConfig(
+      buildCtx(),
+      { skipHooks: true, skipSessionPersistence: true },
+      {},
+    );
+
+    expect(result).toEqual({ text: "" });
+    expect(mocks.runBeforeAgentReply).not.toHaveBeenCalled();
+  });
 });

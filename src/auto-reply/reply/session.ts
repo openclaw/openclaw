@@ -596,6 +596,7 @@ export async function initSessionState(params: {
   const parentSessionKey = ctx.ParentSessionKey?.trim();
   const alreadyForked = sessionEntry.forkedFromParent === true;
   if (
+    !skipPersistence &&
     parentSessionKey &&
     parentSessionKey !== sessionKey &&
     sessionStore[parentSessionKey] &&
