@@ -1,8 +1,12 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
+import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import type { SkillEligibilityContext, SkillCommandSpec, SkillEntry } from "./types.js";
-import { filterWorkspaceSkillEntriesWithOptions, loadWorkspaceSkillEntries } from "./workspace.js";
+import {
+  filterWorkspaceSkillEntriesWithOptions,
+  loadVisibleWorkspaceSkillEntries,
+} from "./workspace.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
@@ -57,17 +61,27 @@ export function buildWorkspaceSkillCommandSpecs(
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
+    agentId?: string;
     skillFilter?: string[];
     eligibility?: SkillEligibilityContext;
     reservedNames?: Set<string>;
   },
 ): SkillCommandSpec[] {
-  const skillEntries = opts?.entries ?? loadWorkspaceSkillEntries(workspaceDir, opts);
-  const eligible = filterWorkspaceSkillEntriesWithOptions(skillEntries, {
-    config: opts?.config,
-    skillFilter: opts?.skillFilter,
-    eligibility: opts?.eligibility,
-  });
+  const effectiveSkillFilter =
+    opts?.skillFilter ?? resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId);
+  const eligible = opts?.entries
+    ? filterWorkspaceSkillEntriesWithOptions(opts.entries, {
+        config: opts?.config,
+        skillFilter: effectiveSkillFilter,
+        eligibility: opts?.eligibility,
+      })
+    : loadVisibleWorkspaceSkillEntries(workspaceDir, {
+        config: opts?.config,
+        managedSkillsDir: opts?.managedSkillsDir,
+        bundledSkillsDir: opts?.bundledSkillsDir,
+        skillFilter: effectiveSkillFilter,
+        eligibility: opts?.eligibility,
+      });
   const userInvocable = eligible.filter((entry) => entry.invocation?.userInvocable !== false);
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
