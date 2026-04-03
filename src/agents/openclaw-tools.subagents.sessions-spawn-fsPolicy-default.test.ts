@@ -1,13 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  createSessionsSpawnTool,
-  setupSessionsSpawnGatewayMock,
-  setSessionsSpawnConfigOverride,
-} from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import "./test-helpers/fast-core-tools.js";
+import * as sessionsHarness from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
+import { resetSubagentRegistryForTests } from "./subagent-registry.js";
+
+const MAIN_SESSION_KEY = "agent:test:main";
 
 describe("sessions_spawn fsPolicy defaults", () => {
+  beforeEach(() => {
+    sessionsHarness.resetSessionsSpawnConfigOverride();
+    resetSubagentRegistryForTests();
+    sessionsHarness.getCallGatewayMock().mockClear();
+  });
+
   it("applies tools.sessions_spawn.fsPolicy as a default tightening when params.fsPolicy is omitted", async () => {
-    setSessionsSpawnConfigOverride({
+    sessionsHarness.setSessionsSpawnConfigOverride({
       session: {
         mainKey: "main",
         scope: "per-sender",
@@ -19,25 +25,20 @@ describe("sessions_spawn fsPolicy defaults", () => {
           },
         },
       },
-    } as unknown);
+    });
 
     const onSessionsPatch = vi.fn();
-    const gateway = setupSessionsSpawnGatewayMock({ onSessionsPatch });
+    const gateway = sessionsHarness.setupSessionsSpawnGatewayMock({ onSessionsPatch });
 
-    const tool = createSessionsSpawnTool({
-      cfg: (await import("../config/config.js")).loadConfig(),
-      allowSubagents: true,
-    } as unknown);
-
-    const child = gateway.getChild();
-
+    const tool = await sessionsHarness.getSessionsSpawnTool({ agentSessionKey: MAIN_SESSION_KEY });
     await tool.execute("toolcall-1", {
       task: "do something",
-      agentId: "main",
       sandbox: "inherit",
       mode: "run",
       cleanup: "delete",
-    } as unknown);
+    });
+
+    const child = gateway.getChild();
 
     // Ensure we patched the child session with an fs ceiling.
     expect(onSessionsPatch).toHaveBeenCalledWith(

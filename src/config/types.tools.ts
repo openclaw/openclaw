@@ -609,10 +609,23 @@ export type ToolsConfig = {
   exec?: ExecToolConfig;
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
+  /** Optional defaults for sessions_spawn tool behavior. */
+  sessions_spawn?: {
+    /** Attachments policy for sessions_spawn tool. */
+    attachments?: {
+      enabled?: boolean;
+      maxTotalBytes?: number;
+      maxFiles?: number;
+      maxFileBytes?: number;
+      retainOnSessionKeep?: boolean;
+    };
+    /** Default spawn-time filesystem policy tightening for spawned subagents. */
+    fsPolicy?: FsToolsConfig;
+  };
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
   /** Sub-agent tool policy defaults (deny wins). */
-  subagents?: {
+  subagents?: { 
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
     tools?: {
