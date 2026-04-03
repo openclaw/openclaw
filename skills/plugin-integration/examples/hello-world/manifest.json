@@ -1,0 +1,8 @@
+{
+  "name": "hello-world",
+  "version": "1.0.0",
+  "description": "A simple plugin that logs 'Hello World' to the console.",
+  "author": "OpenClaw",
+  "main": "plugin.js",
+  "keywords": ["example", "hello-world"]
+}

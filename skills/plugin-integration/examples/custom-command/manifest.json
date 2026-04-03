@@ -1,0 +1,8 @@
+{
+  "name": "custom-command",
+  "version": "1.0.0",
+  "description": "A custom command that greets the user by name.",
+  "author": "OpenClaw",
+  "main": "command.js",
+  "keywords": ["example", "command", "greet"]
+}
