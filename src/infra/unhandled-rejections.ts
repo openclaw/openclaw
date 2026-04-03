@@ -376,3 +376,36 @@ export function installUnhandledRejectionHandler(): void {
     process.exit(1);
   });
 }
+
+export function handleUncaughtProcessError(
+  error: unknown,
+  deps: {
+    warn?: (message: string, ...args: unknown[]) => void;
+    fail?: (message: string, ...args: unknown[]) => void;
+    exit?: (code: number) => never | void;
+  } = {},
+): "suppressed" | "exited" {
+  const warn = deps.warn ?? console.warn;
+  const fail = deps.fail ?? console.error;
+  const exit = deps.exit ?? process.exit;
+
+  if (isAbortError(error)) {
+    warn("[openclaw] Suppressed AbortError:", formatUncaughtError(error));
+    return "suppressed";
+  }
+
+  if (isTransientNetworkError(error)) {
+    warn("[openclaw] Non-fatal uncaught exception (continuing):", formatUncaughtError(error));
+    return "suppressed";
+  }
+
+  fail("[openclaw] Uncaught exception:", formatUncaughtError(error));
+  exit(1);
+  return "exited";
+}
+
+export function installUncaughtExceptionHandler(): void {
+  process.on("uncaughtException", (error) => {
+    handleUncaughtProcessError(error);
+  });
+}

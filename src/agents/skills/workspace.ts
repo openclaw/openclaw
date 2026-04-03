@@ -38,11 +38,25 @@ const skillsLogger = createSubsystemLogger("skills");
 function compactSkillPaths(skills: Skill[]): Skill[] {
   const home = os.homedir();
   if (!home) return skills;
-  const prefix = home.endsWith(path.sep) ? home : home + path.sep;
-  return skills.map((s) => ({
-    ...s,
-    filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath,
-  }));
+  const prefixes = new Set<string>();
+  const addPrefix = (base: string, sep: string) => {
+    prefixes.add(base.endsWith(sep) ? base : `${base}${sep}`);
+  };
+  addPrefix(home, path.sep);
+  addPrefix(home, "/");
+  addPrefix(home, "\\");
+  addPrefix(home.replaceAll("\\", "/"), "/");
+  addPrefix(home.replaceAll("/", "\\"), "\\");
+  return skills.map((s) => {
+    const matchedPrefix = Array.from(prefixes).find((prefix) => s.filePath.startsWith(prefix));
+    if (!matchedPrefix) {
+      return s;
+    }
+    return {
+      ...s,
+      filePath: `~/${s.filePath.slice(matchedPrefix.length).replaceAll("\\", "/")}`,
+    };
+  });
 }
 
 function filterSkillEntries(

@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  handleUncaughtProcessError,
   isAbortError,
   isTransientNetworkError,
   isTransientSqliteError,
@@ -266,5 +267,42 @@ describe("isTransientUnhandledRejectionError", () => {
     });
 
     expect(isTransientUnhandledRejectionError(error)).toBe(true);
+  });
+});
+
+describe("handleUncaughtProcessError", () => {
+  it("suppresses abort errors", () => {
+    const warn = vi.fn();
+    const fail = vi.fn();
+    const exit = vi.fn();
+    const error = Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
+
+    expect(handleUncaughtProcessError(error, { warn, fail, exit })).toBe("suppressed");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(fail).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("suppresses transient network uncaught exceptions", () => {
+    const warn = vi.fn();
+    const fail = vi.fn();
+    const exit = vi.fn();
+    const error = Object.assign(new Error("connect ENETUNREACH"), { code: "ENETUNREACH" });
+
+    expect(handleUncaughtProcessError(error, { warn, fail, exit })).toBe("suppressed");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(fail).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("exits on regular uncaught exceptions", () => {
+    const warn = vi.fn();
+    const fail = vi.fn();
+    const exit = vi.fn();
+
+    expect(handleUncaughtProcessError(new Error("boom"), { warn, fail, exit })).toBe("exited");
+    expect(warn).not.toHaveBeenCalled();
+    expect(fail).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
   });
 });
