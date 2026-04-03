@@ -2881,6 +2881,10 @@ extension NodeAppModel {
         self.pendingExecApprovalPromptErrorText = nil
     }
 
+    func dismissPendingExecApprovalPrompt(approvalId: String) {
+        self.clearPendingExecApprovalPromptIfMatches(approvalId)
+    }
+
     func resolvePendingExecApprovalPrompt(decision: String) async {
         guard let prompt = self.pendingExecApprovalPrompt else { return }
         let normalizedDecision = decision.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2898,10 +2902,6 @@ extension NodeAppModel {
             self.pendingExecApprovalPromptResolving = false
             self.pendingExecApprovalPromptErrorText = message
         }
-    }
-
-    func handleExecApprovalNotificationAction(approvalId: String, decision: String) async {
-        _ = await self.resolveExecApprovalNotificationDecision(approvalId: approvalId, decision: decision)
     }
 
     private func resolveExecApprovalNotificationDecision(

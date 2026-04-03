@@ -104,32 +104,47 @@ private struct ExecApprovalPromptCard: View {
             }
 
             VStack(spacing: 10) {
-                Button("Allow Once") {
+                Button {
                     self.onAllowOnce()
+                } label: {
+                    Text("Allow Once")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(self.isResolving)
 
                 if self.prompt.allowsAllowAlways {
-                    Button("Allow Always") {
+                    Button {
                         self.onAllowAlways()
+                    } label: {
+                        Text("Allow Always")
+                            .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                     .disabled(self.isResolving)
                 }
 
-                Button("Deny", role: .destructive) {
-                    self.onDeny()
-                }
-                .buttonStyle(.bordered)
-                .disabled(self.isResolving)
+                HStack(spacing: 10) {
+                    Button(role: .destructive) {
+                        self.onDeny()
+                    } label: {
+                        Text("Deny")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.isResolving)
 
-                Button("Cancel", role: .cancel) {
-                    self.onCancel()
+                    Button(role: .cancel) {
+                        self.onCancel()
+                    } label: {
+                        Text("Cancel")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.isResolving)
                 }
-                .buttonStyle(.plain)
-                .disabled(self.isResolving)
             }
+            .controlSize(.large)
             .frame(maxWidth: .infinity)
         }
         .statusGlassCard(brighten: self.brighten, verticalPadding: 18, horizontalPadding: 18)

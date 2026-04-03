@@ -158,7 +158,7 @@ describe("push APNs send semantics", () => {
     expect(result.transport).toBe("direct");
   });
 
-  it("sends exec approval alert pushes with native action metadata", async () => {
+  it("sends exec approval alert pushes with generic modal-only metadata", async () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-approval-alert",
       environment: "sandbox",
@@ -173,15 +173,6 @@ describe("push APNs send semantics", () => {
       registration,
       nodeId: "ios-node-approval-alert",
       approvalId: "approval-123",
-      request: {
-        command: "echo ok",
-        commandPreview: "echo ok",
-        host: "gateway",
-        nodeId: "node-1",
-        agentId: "main",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
-      expiresAtMs: 123_456,
       auth,
       requestSender: send,
     });
@@ -196,21 +187,23 @@ describe("push APNs send semantics", () => {
           body: "Open OpenClaw to review this request.",
         },
         sound: "default",
-        category: "openclaw.exec-approval.allow-always",
       },
       openclaw: {
         kind: "exec.approval.requested",
         approvalId: "approval-123",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-        expiresAtMs: 123_456,
       },
     });
     expect(sent?.payload).not.toMatchObject({
+      aps: {
+        category: expect.anything(),
+      },
       openclaw: {
         host: expect.anything(),
         nodeId: expect.anything(),
         agentId: expect.anything(),
         commandText: expect.anything(),
+        allowedDecisions: expect.anything(),
+        expiresAtMs: expect.anything(),
       },
     });
     expect(result.ok).toBe(true);
@@ -435,7 +428,7 @@ describe("push APNs send semantics", () => {
     });
   });
 
-  it("sends relay exec approval alerts with the once-only category when allow-always is unavailable", async () => {
+  it("sends relay exec approval alerts with generic modal-only metadata", async () => {
     const { send, registration, relayConfig, gatewayIdentity } = createRelayApnsSendFixture({
       nodeId: "ios-node-relay-approval-alert",
       sendResult: {
@@ -450,13 +443,6 @@ describe("push APNs send semantics", () => {
       registration,
       nodeId: "ios-node-relay-approval-alert",
       approvalId: "approval-relay-1",
-      request: {
-        command: "npm test",
-        host: "node",
-        nodeId: "node-2",
-        allowedDecisions: ["allow-once", "deny"],
-      },
-      expiresAtMs: 456_789,
       relayConfig,
       relayGatewayIdentity: gatewayIdentity,
       relayRequestSender: send,
@@ -469,19 +455,22 @@ describe("push APNs send semantics", () => {
           title: "Exec approval required",
           body: "Open OpenClaw to review this request.",
         },
-        category: "openclaw.exec-approval.once-only",
       },
       openclaw: {
         kind: "exec.approval.requested",
         approvalId: "approval-relay-1",
-        allowedDecisions: ["allow-once", "deny"],
       },
     });
     expect(sent?.payload).not.toMatchObject({
+      aps: {
+        category: expect.anything(),
+      },
       openclaw: {
         commandText: expect.anything(),
         host: expect.anything(),
         nodeId: expect.anything(),
+        allowedDecisions: expect.anything(),
+        expiresAtMs: expect.anything(),
       },
     });
     expect(result).toMatchObject({

@@ -13,7 +13,6 @@ private struct PendingWatchPromptAction {
     var sessionKey: String?
 }
 
-private typealias PendingExecApprovalAction = ExecApprovalNotificationAction
 private typealias PendingExecApprovalPrompt = ExecApprovalNotificationPrompt
 
 @MainActor
@@ -24,7 +23,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private var backgroundWakeTask: Task<Bool, Never>?
     private var pendingAPNsDeviceToken: Data?
     private var pendingWatchPromptActions: [PendingWatchPromptAction] = []
-    private var pendingExecApprovalActions: [PendingExecApprovalAction] = []
     private var pendingExecApprovalPrompts: [PendingExecApprovalPrompt] = []
 
     weak var appModel: NodeAppModel? {
@@ -49,17 +47,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                     }
                 }
             }
-            if !self.pendingExecApprovalActions.isEmpty {
-                let pending = self.pendingExecApprovalActions
-                self.pendingExecApprovalActions.removeAll()
-                Task { @MainActor in
-                    for action in pending {
-                        await model.handleExecApprovalNotificationAction(
-                            approvalId: action.approvalId,
-                            decision: action.decision)
-                    }
-                }
-            }
             if !self.pendingExecApprovalPrompts.isEmpty {
                 let pending = self.pendingExecApprovalPrompts
                 self.pendingExecApprovalPrompts.removeAll()
@@ -79,7 +66,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     {
         self.registerBackgroundWakeRefreshTask()
         UNUserNotificationCenter.current().delegate = self
-        ExecApprovalNotificationBridge.registerNotificationCategories()
         application.registerForRemoteNotifications()
         return true
     }
@@ -111,6 +97,9 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 userInfo: userInfo,
                 notificationCenter: notificationCenter)
             {
+                if let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo) {
+                    self.appModel?.dismissPendingExecApprovalPrompt(approvalId: approvalId)
+                }
                 completionHandler(.newData)
                 return
             }
@@ -250,14 +239,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             sessionKey: sessionKey)
     }
 
-    private static func parseExecApprovalAction(
-        from response: UNNotificationResponse) -> PendingExecApprovalAction?
-    {
-        ExecApprovalNotificationBridge.parseAction(
-            actionIdentifier: response.actionIdentifier,
-            userInfo: response.notification.request.content.userInfo)
-    }
-
     private static func parseExecApprovalPrompt(
         from response: UNNotificationResponse) -> PendingExecApprovalPrompt?
     {
@@ -277,16 +258,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             actionLabel: action.actionLabel,
             sessionKey: action.sessionKey)
         _ = await appModel.handleBackgroundRefreshWake(trigger: "watch_prompt_action")
-    }
-
-    private func routeExecApprovalAction(_ action: PendingExecApprovalAction) async {
-        guard let appModel = self.appModel else {
-            self.pendingExecApprovalActions.append(action)
-            return
-        }
-        await appModel.handleExecApprovalNotificationAction(
-            approvalId: action.approvalId,
-            decision: action.decision)
     }
 
     private func routeExecApprovalPrompt(_ prompt: PendingExecApprovalPrompt) {
@@ -326,17 +297,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                     return
                 }
                 await self.routeWatchPromptAction(action)
-                completionHandler()
-            }
-            return
-        }
-        if let action = Self.parseExecApprovalAction(from: response) {
-            Task { @MainActor [weak self] in
-                guard let self else {
-                    completionHandler()
-                    return
-                }
-                await self.routeExecApprovalAction(action)
                 completionHandler()
             }
             return

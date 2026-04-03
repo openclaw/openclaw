@@ -36,29 +36,6 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
 }
 
 @Suite(.serialized) struct ExecApprovalNotificationBridgeTests {
-    @Test func parseActionMapsApprovalNotificationButtons() {
-        let userInfo: [AnyHashable: Any] = [
-            "openclaw": [
-                "kind": ExecApprovalNotificationBridge.requestedKind,
-                "approvalId": "approval-123",
-            ],
-        ]
-
-        let allowOnce = ExecApprovalNotificationBridge.parseAction(
-            actionIdentifier: ExecApprovalNotificationBridge.allowOnceActionIdentifier,
-            userInfo: userInfo)
-        let allowAlways = ExecApprovalNotificationBridge.parseAction(
-            actionIdentifier: ExecApprovalNotificationBridge.allowAlwaysActionIdentifier,
-            userInfo: userInfo)
-        let deny = ExecApprovalNotificationBridge.parseAction(
-            actionIdentifier: ExecApprovalNotificationBridge.denyActionIdentifier,
-            userInfo: userInfo)
-
-        #expect(allowOnce == ExecApprovalNotificationAction(approvalId: "approval-123", decision: "allow-once"))
-        #expect(allowAlways == ExecApprovalNotificationAction(approvalId: "approval-123", decision: "allow-always"))
-        #expect(deny == ExecApprovalNotificationAction(approvalId: "approval-123", decision: "deny"))
-    }
-
     @Test func parsePromptMapsDefaultNotificationTap() {
         let prompt = ExecApprovalNotificationBridge.parsePrompt(
             actionIdentifier: UNNotificationDefaultActionIdentifier,
@@ -66,17 +43,10 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
                 "openclaw": [
                     "kind": ExecApprovalNotificationBridge.requestedKind,
                     "approvalId": "approval-123",
-                    "allowedDecisions": ["allow-once", "allow-always", "deny"],
-                    "expiresAtMs": 12345,
                 ],
             ])
 
-        #expect(
-            prompt == ExecApprovalNotificationPrompt(
-                approvalId: "approval-123",
-                allowedDecisions: ["allow-once", "allow-always", "deny"],
-                expiresAtMs: 12345)
-        )
+        #expect(prompt == ExecApprovalNotificationPrompt(approvalId: "approval-123"))
     }
 
     @Test @MainActor func handleResolvedPushRemovesMatchingNotifications() async {

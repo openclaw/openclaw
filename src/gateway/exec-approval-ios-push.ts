@@ -180,16 +180,12 @@ async function sendRequestedPushes(params: {
               registration: target.registration,
               nodeId: target.nodeId,
               approvalId: params.request.id,
-              request: params.request.request,
-              expiresAtMs: params.request.expiresAtMs,
               auth: params.plan.directAuth!,
             })
           : await sendApnsExecApprovalAlert({
               registration: target.registration,
               nodeId: target.nodeId,
               approvalId: params.request.id,
-              request: params.request.request,
-              expiresAtMs: params.request.expiresAtMs,
               relayConfig: params.plan.relayConfig!,
             });
       await clearStaleApnsRegistrationIfNeeded({

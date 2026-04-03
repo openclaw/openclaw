@@ -4,7 +4,6 @@ import http2 from "node:http2";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
-import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "./exec-approvals.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 import {
   type ApnsRelayConfig,
@@ -66,8 +65,6 @@ export type ApnsPushResult = {
 export type ApnsPushAlertResult = ApnsPushResult;
 export type ApnsPushWakeResult = ApnsPushResult;
 
-const EXEC_APPROVAL_ALLOW_ALWAYS_CATEGORY_ID = "openclaw.exec-approval.allow-always";
-const EXEC_APPROVAL_ONCE_ONLY_CATEGORY_ID = "openclaw.exec-approval.once-only";
 const EXEC_APPROVAL_GENERIC_ALERT_BODY = "Open OpenClaw to review this request.";
 
 type ApnsPushType = "alert" | "background";
@@ -903,20 +900,7 @@ function resolveExecApprovalAlertBody(): string {
   return EXEC_APPROVAL_GENERIC_ALERT_BODY;
 }
 
-function resolveExecApprovalCategory(
-  allowedDecisions: readonly ExecApprovalDecision[] | undefined,
-): string {
-  return allowedDecisions?.includes("allow-always")
-    ? EXEC_APPROVAL_ALLOW_ALWAYS_CATEGORY_ID
-    : EXEC_APPROVAL_ONCE_ONLY_CATEGORY_ID;
-}
-
-function createExecApprovalAlertPayload(params: {
-  nodeId: string;
-  approvalId: string;
-  request: ExecApprovalRequestPayload;
-  expiresAtMs: number;
-}): object {
+function createExecApprovalAlertPayload(params: { nodeId: string; approvalId: string }): object {
   return {
     aps: {
       alert: {
@@ -924,13 +908,10 @@ function createExecApprovalAlertPayload(params: {
         body: resolveExecApprovalAlertBody(),
       },
       sound: "default",
-      category: resolveExecApprovalCategory(params.request.allowedDecisions),
     },
     openclaw: {
       kind: "exec.approval.requested",
       approvalId: params.approvalId,
-      allowedDecisions: params.request.allowedDecisions,
-      expiresAtMs: params.expiresAtMs,
       ts: Date.now(),
     },
   };
@@ -999,8 +980,6 @@ type RelayApnsBackgroundWakeParams = ApnsBackgroundWakeCommonParams & {
 type ApnsExecApprovalAlertCommonParams = {
   nodeId: string;
   approvalId: string;
-  request: ExecApprovalRequestPayload;
-  expiresAtMs: number;
   timeoutMs?: number;
 };
 
@@ -1115,8 +1094,6 @@ export async function sendApnsExecApprovalAlert(
   const payload = createExecApprovalAlertPayload({
     nodeId: params.nodeId,
     approvalId: params.approvalId,
-    request: params.request,
-    expiresAtMs: params.expiresAtMs,
   });
 
   if (params.registration.transport === "relay") {
