@@ -143,15 +143,21 @@ async function assertExplicitProxyAllowed(
   if (!["http:", "https:"].includes(parsedProxyUrl.protocol)) {
     throw new Error("Explicit proxy URL must use http or https");
   }
+  // Build a proxy-specific policy that drops the target-URL hostname allowlist.
+  // The `hostnameAllowlist` restricts which *target* hosts the fetch may reach
+  // (e.g. `["api.telegram.org"]`).  Applying it to the *proxy* hostname would
+  // incorrectly block any proxy whose hostname is not in that list — for example
+  // a private-IP proxy at `172.18.0.1` used to route Telegram traffic.
+  const { hostnameAllowlist: _stripTargetAllowlist, ...proxyPolicy } = policy ?? {};
   await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
     lookupFn,
     policy:
       dispatcherPolicy.allowPrivateProxy === true
         ? {
-            ...policy,
+            ...proxyPolicy,
             allowPrivateNetwork: true,
           }
-        : policy,
+        : proxyPolicy,
   });
 }
 

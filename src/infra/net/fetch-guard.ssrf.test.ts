@@ -461,6 +461,85 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("allows explicit private proxy when policy has hostnameAllowlist and allowPrivateProxy", async () => {
+    // Regression: hostnameAllowlist restricts *target* URLs (e.g. api.telegram.org),
+    // but was incorrectly applied to the *proxy* hostname (e.g. 172.18.0.1),
+    // blocking legitimate private proxies even when allowPrivateProxy was set.
+    const lookupFn = vi.fn(async (hostname: string) => [
+      {
+        address: hostname === "172.18.0.1" ? "172.18.0.1" : "93.184.216.34",
+        family: 4,
+      },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.telegram.org/file/bot123/documents/file.md",
+      fetchImpl,
+      lookupFn,
+      policy: { hostnameAllowlist: ["api.telegram.org"] },
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://172.18.0.1:18080",
+        allowPrivateProxy: true,
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
+  it("allows explicit public proxy when policy has hostnameAllowlist", async () => {
+    // A public proxy hostname should not be blocked by a target-URL allowlist.
+    const lookupFn = vi.fn(async (hostname: string) => [
+      {
+        address: hostname === "proxy.cdn.example.com" ? "93.184.215.14" : "93.184.216.34",
+        family: 4,
+      },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.telegram.org/file/bot123/documents/file.md",
+      fetchImpl,
+      lookupFn,
+      policy: { hostnameAllowlist: ["api.telegram.org"] },
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.cdn.example.com:8080",
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
+  it("still blocks explicit private proxy with hostnameAllowlist when allowPrivateProxy is not set", async () => {
+    // Security invariant: a private proxy must be explicitly opted in via allowPrivateProxy.
+    // The hostnameAllowlist fix must not weaken this check.
+    const lookupFn = vi.fn(async (hostname: string) => [
+      {
+        address: hostname === "172.18.0.1" ? "172.18.0.1" : "93.184.216.34",
+        family: 4,
+      },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.telegram.org/file/bot123/documents/file.md",
+        fetchImpl,
+        lookupFn,
+        policy: { hostnameAllowlist: ["api.telegram.org"] },
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://172.18.0.1:18080",
+        },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("blocks redirect chains that hop to private hosts", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = await expectRedirectFailure({
