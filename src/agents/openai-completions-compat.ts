@@ -4,6 +4,7 @@ type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
   endpointClass: ProviderEndpointClass;
   knownProviderFamily: string;
+  supportsNativeStreamingUsageCompat?: boolean;
   usesExplicitProxyLikeEndpoint?: boolean;
 };
 
@@ -22,7 +23,12 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
 export function resolveOpenAICompletionsCompatDefaults(
   input: OpenAICompletionsCompatDefaultsInput,
 ): OpenAICompletionsCompatDefaults {
-  const { endpointClass, knownProviderFamily, usesExplicitProxyLikeEndpoint = false } = input;
+  const {
+    endpointClass,
+    knownProviderFamily,
+    supportsNativeStreamingUsageCompat = false,
+    usesExplicitProxyLikeEndpoint = false,
+  } = input;
   const isDefaultRoute = endpointClass === "default";
   const usesConfiguredNonOpenAIEndpoint =
     endpointClass !== "default" && endpointClass !== "openai-public";
@@ -54,7 +60,8 @@ export function resolveOpenAICompletionsCompatDefaults(
       knownProviderFamily !== "mistral" &&
       endpointClass !== "xai-native" &&
       !usesExplicitProxyLikeEndpoint,
-    supportsUsageInStreaming: !isNonStandard && !usesConfiguredNonOpenAIEndpoint,
+    supportsUsageInStreaming:
+      !isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat),
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
   };
 }
@@ -62,7 +69,10 @@ export function resolveOpenAICompletionsCompatDefaults(
 export function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
   input: Pick<
     ProviderRequestCapabilities,
-    "endpointClass" | "knownProviderFamily" | "usesExplicitProxyLikeEndpoint"
+    | "endpointClass"
+    | "knownProviderFamily"
+    | "supportsNativeStreamingUsageCompat"
+    | "usesExplicitProxyLikeEndpoint"
   > & {
     provider?: string;
   },

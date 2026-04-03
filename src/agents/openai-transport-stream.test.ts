@@ -356,13 +356,13 @@ describe("openai transport stream", () => {
     expect(params.messages?.[0]).toMatchObject({ role: "system" });
   });
 
-  it("uses system role for ModelStudio-hosted completions providers", () => {
+  it("uses system role and streaming usage compat for native ModelStudio completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "qwen3.6-plus",
         name: "Qwen 3.6 Plus",
         api: "openai-completions",
-        provider: "custom-qwen",
+        provider: "modelstudio",
         baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         reasoning: true,
         input: ["text"],
@@ -376,9 +376,13 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { messages?: Array<{ role?: string }> };
+    ) as {
+      messages?: Array<{ role?: string }>;
+      stream_options?: { include_usage?: boolean };
+    };
 
     expect(params.messages?.[0]).toMatchObject({ role: "system" });
+    expect(params.stream_options).toMatchObject({ include_usage: true });
   });
 
   it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {
