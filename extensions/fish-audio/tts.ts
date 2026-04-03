@@ -89,8 +89,7 @@ export async function fishAudioTTS(params: {
       try {
         const errorBody = await response.text();
         // Cap at 500 chars to avoid log pollution from large error responses
-        const truncated =
-          errorBody.length > 500 ? `${errorBody.slice(0, 500)}…` : errorBody;
+        const truncated = errorBody.length > 500 ? `${errorBody.slice(0, 500)}…` : errorBody;
         errorDetail = truncated ? `: ${truncated}` : "";
       } catch {
         // Ignore error body read failure
@@ -121,23 +120,45 @@ export async function listFishAudioVoices(params: {
   // (1M+ entries) and filtering by undocumented author IDs would be fragile.
   // Users can browse and select voices at https://fish.audio and configure
   // their chosen voiceId directly.
-  const res = await fetch(`${base}/model?type=tts&self=true&page_size=100`, {
-    headers: { Authorization: `Bearer ${params.apiKey}` },
-  });
+  const PAGE_SIZE = 100;
+  const allItems: Array<{ _id?: string; title?: string }> = [];
+  let page = 1;
 
-  if (!res.ok) {
-    throw new Error(`Fish Audio voices API error (${res.status})`);
+  // Paginate through all results — the Fish Audio API returns `total` and
+  // supports `page_number` (1-indexed) + `page_size`.
+  while (true) {
+    const res = await fetch(
+      `${base}/model?type=tts&self=true&page_size=${PAGE_SIZE}&page_number=${page}`,
+      { headers: { Authorization: `Bearer ${params.apiKey}` } },
+    );
+
+    if (!res.ok) {
+      throw new Error(`Fish Audio voices API error (${res.status})`);
+    }
+
+    const json = (await res.json()) as {
+      total?: number;
+      items?: Array<{ _id?: string; title?: string }>;
+    };
+
+    if (!Array.isArray(json.items) || json.items.length === 0) {
+      break;
+    }
+
+    allItems.push(...json.items);
+
+    // Stop when we've collected all items or the page was not full.
+    if (
+      (typeof json.total === "number" && allItems.length >= json.total) ||
+      json.items.length < PAGE_SIZE
+    ) {
+      break;
+    }
+
+    page++;
   }
 
-  const json = (await res.json()) as {
-    items?: Array<{ _id?: string; title?: string }>;
-  };
-
-  if (!Array.isArray(json.items)) {
-    return [];
-  }
-
-  return json.items
+  return allItems
     .map((v) => ({
       id: v._id?.trim() ?? "",
       name: v.title?.trim() || v._id?.trim() || "",
