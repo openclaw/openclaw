@@ -104,8 +104,11 @@ export function readSessionMessages(
   // Fall back to the most recent reset archive when no primary transcript exists.
   // This ensures chat.history returns content after a daily or manual session reset
   // rather than an empty response (related: #42336, #56131, #57139).
-  if (!filePath && storePath && sessionId) {
-    filePath = findLatestResetArchive(sessionId, path.dirname(storePath));
+  // Derive search dirs from the same candidate paths so archive lookup mirrors
+  // primary transcript resolution (including legacy ~/.openclaw/sessions).
+  if (!filePath && sessionId) {
+    const searchDirs = Array.from(new Set(candidates.map((c) => path.dirname(c))));
+    filePath = findLatestResetArchive(sessionId, searchDirs);
   }
   if (!filePath) {
     return [];
