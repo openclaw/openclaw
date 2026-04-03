@@ -15,12 +15,13 @@ commands are allowed only when policy + allowlist + (optional) user approval all
 Exec approvals are **in addition** to tool policy and elevated gating (unless elevated is set to `full`, which skips approvals).
 Effective policy is the **stricter** of `tools.exec.*` and approvals defaults; if an approvals field is omitted, the `tools.exec` value is used.
 
-> **Important:** If `defaults` is `{}` (empty) or missing entirely, all omitted fields
-> fall back to their most restrictive values: `security` defaults to `"allowlist"`,
-> `ask` defaults to `"on-miss"`, and `askFallback` defaults to `"deny"`. This means
-> an empty `defaults` block does **not** grant passthrough execution — commands will
-> require allowlist matches or interactive approval. For unattended environments
-> (cron jobs, headless nodes), you must set `defaults` explicitly.
+> **Important:** If `defaults` is `{}` (empty) or missing entirely, omitted fields
+> inherit from `tools.exec.*` config values. The code-level fallbacks are
+> `security: "full"` and `ask: "off"`, but the **effective** policy is the stricter
+> of `tools.exec.*` and the approvals file — so the host approvals state, companion
+> app settings, or per-agent overrides can still restrict execution. For unattended
+> environments (cron jobs, headless nodes) where predictable behavior matters, set
+> `defaults` explicitly rather than relying on the fallback chain.
 
 Host exec also uses the local approvals state on that machine. A host-local
 `ask: "always"` in `~/.openclaw/exec-approvals.json` keeps prompting even if
@@ -602,7 +603,7 @@ stale results from a prior successful run.
 
 ## Troubleshooting
 
-### Commands denied with "allowlist miss" despite allowlist entries
+### Commands denied with allowlist miss despite allowlist entries
 
 Allowlist patterns match the **resolved executable path**, not the full command string. If your
 pattern includes arguments (for example `/usr/bin/python3 scripts/*.py`), it will never match.
