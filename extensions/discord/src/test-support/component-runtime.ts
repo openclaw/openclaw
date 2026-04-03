@@ -1,32 +1,51 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import { parsePluginBindingApprovalCustomId } from "../../../../src/plugins/conversation-binding.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../../src/security/dm-policy-shared.js";
 
-const runtimeMocks = vi.hoisted(() => ({
-  buildPluginBindingResolvedTextMock: vi.fn(),
-  dispatchPluginInteractiveHandlerMock: vi.fn(),
-  dispatchReplyMock: vi.fn(),
-  enqueueSystemEventMock: vi.fn(),
-  readAllowFromStoreMock: vi.fn(),
-  readSessionUpdatedAtMock: vi.fn(),
-  recordInboundSessionMock: vi.fn(),
-  resolveStorePathMock: vi.fn(),
-  resolvePluginConversationBindingApprovalMock: vi.fn(),
-  upsertPairingRequestMock: vi.fn(),
-}));
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 
-export const readAllowFromStoreMock = runtimeMocks.readAllowFromStoreMock;
-export const dispatchPluginInteractiveHandlerMock =
+type DiscordComponentRuntimeMocks = {
+  buildPluginBindingResolvedTextMock: UnknownMock;
+  dispatchPluginInteractiveHandlerMock: AsyncUnknownMock;
+  dispatchReplyMock: UnknownMock;
+  enqueueSystemEventMock: UnknownMock;
+  readAllowFromStoreMock: AsyncUnknownMock;
+  readSessionUpdatedAtMock: UnknownMock;
+  recordInboundSessionMock: AsyncUnknownMock;
+  resolveStorePathMock: UnknownMock;
+  resolvePluginConversationBindingApprovalMock: AsyncUnknownMock;
+  upsertPairingRequestMock: AsyncUnknownMock;
+};
+
+const runtimeMocks = vi.hoisted(
+  (): DiscordComponentRuntimeMocks => ({
+    buildPluginBindingResolvedTextMock: vi.fn(),
+    dispatchPluginInteractiveHandlerMock: vi.fn(),
+    dispatchReplyMock: vi.fn(),
+    enqueueSystemEventMock: vi.fn(),
+    readAllowFromStoreMock: vi.fn(),
+    readSessionUpdatedAtMock: vi.fn(),
+    recordInboundSessionMock: vi.fn(),
+    resolveStorePathMock: vi.fn(),
+    resolvePluginConversationBindingApprovalMock: vi.fn(),
+    upsertPairingRequestMock: vi.fn(),
+  }),
+);
+
+export const readAllowFromStoreMock: AsyncUnknownMock = runtimeMocks.readAllowFromStoreMock;
+export const dispatchPluginInteractiveHandlerMock: AsyncUnknownMock =
   runtimeMocks.dispatchPluginInteractiveHandlerMock;
-export const dispatchReplyMock = runtimeMocks.dispatchReplyMock;
-export const enqueueSystemEventMock = runtimeMocks.enqueueSystemEventMock;
-export const upsertPairingRequestMock = runtimeMocks.upsertPairingRequestMock;
-export const recordInboundSessionMock = runtimeMocks.recordInboundSessionMock;
-export const readSessionUpdatedAtMock = runtimeMocks.readSessionUpdatedAtMock;
-export const resolveStorePathMock = runtimeMocks.resolveStorePathMock;
-export const resolvePluginConversationBindingApprovalMock =
+export const dispatchReplyMock: UnknownMock = runtimeMocks.dispatchReplyMock;
+export const enqueueSystemEventMock: UnknownMock = runtimeMocks.enqueueSystemEventMock;
+export const upsertPairingRequestMock: AsyncUnknownMock = runtimeMocks.upsertPairingRequestMock;
+export const recordInboundSessionMock: AsyncUnknownMock = runtimeMocks.recordInboundSessionMock;
+export const readSessionUpdatedAtMock: UnknownMock = runtimeMocks.readSessionUpdatedAtMock;
+export const resolveStorePathMock: UnknownMock = runtimeMocks.resolveStorePathMock;
+export const resolvePluginConversationBindingApprovalMock: AsyncUnknownMock =
   runtimeMocks.resolvePluginConversationBindingApprovalMock;
-export const buildPluginBindingResolvedTextMock = runtimeMocks.buildPluginBindingResolvedTextMock;
+export const buildPluginBindingResolvedTextMock: UnknownMock =
+  runtimeMocks.buildPluginBindingResolvedTextMock;
 
 async function readStoreAllowFromForDmPolicy(params: {
   provider: string;

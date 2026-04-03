@@ -172,6 +172,7 @@ describe("plugins cli install", () => {
       ok: true,
       pluginId: "alpha",
       targetDir: cliInstallPath("alpha"),
+      extensions: ["index.js"],
       version: "1.2.3",
       marketplaceName: "Claude",
       marketplaceSource: "local/repo",

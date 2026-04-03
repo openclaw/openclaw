@@ -1,10 +1,12 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
-const hoisted = vi.hoisted(() => ({
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+
+const hoisted = vi.hoisted((): { recordInboundSessionMock: AsyncUnknownMock } => ({
   recordInboundSessionMock: vi.fn().mockResolvedValue(undefined),
 }));
 
-export const recordInboundSessionMock = hoisted.recordInboundSessionMock;
+export const recordInboundSessionMock: AsyncUnknownMock = hoisted.recordInboundSessionMock;
 
 vi.mock("./bot-message-context.session.runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bot-message-context.session.runtime.js")>();

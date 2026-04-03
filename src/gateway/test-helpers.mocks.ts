@@ -33,6 +33,9 @@ type GetReplyFromConfigFn = (
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
+type CronIsolatedRunFn = (...args: unknown[]) => Promise<{ status: string; summary: string }>;
+type AgentCommandFn = (...args: unknown[]) => Promise<void>;
+type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 
 const createStubOutboundAdapter = (channelId: ChannelPlugin["id"]): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
@@ -233,8 +236,8 @@ const hoisted = vi.hoisted(() => {
           reasoning?: boolean;
         }>;
       };
-      cronIsolatedRun: ReturnType<typeof vi.fn>;
-      agentCommand: ReturnType<typeof vi.fn>;
+      cronIsolatedRun: Mock<CronIsolatedRunFn>;
+      agentCommand: Mock<AgentCommandFn>;
       testIsNixMode: { value: boolean };
       sessionStoreSaveDelayMs: { value: number };
       embeddedRunMock: {
@@ -244,8 +247,8 @@ const hoisted = vi.hoisted(() => {
         waitResults: Map<string, boolean>;
       };
       testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
-      getReplyFromConfig: ReturnType<typeof vi.fn<GetReplyFromConfigFn>>;
-      sendWhatsAppMock: ReturnType<typeof vi.fn>;
+      getReplyFromConfig: Mock<GetReplyFromConfigFn>;
+      sendWhatsAppMock: Mock<SendWhatsAppFn>;
       testState: {
         agentConfig: Record<string, unknown> | undefined;
         agentsConfig: Record<string, unknown> | undefined;
@@ -346,13 +349,13 @@ export const setTestConfigRoot = (root: string) => {
 export const testTailnetIPv4 = hoisted.testTailnetIPv4;
 export const testTailscaleWhois = hoisted.testTailscaleWhois;
 export const piSdkMock = hoisted.piSdkMock;
-export const cronIsolatedRun = hoisted.cronIsolatedRun;
-export const agentCommand = hoisted.agentCommand;
+export const cronIsolatedRun: Mock<CronIsolatedRunFn> = hoisted.cronIsolatedRun;
+export const agentCommand: Mock<AgentCommandFn> = hoisted.agentCommand;
 export const getReplyFromConfig: Mock<GetReplyFromConfigFn> = hoisted.getReplyFromConfig;
 export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {
   getReplyFromConfig.mockImplementationOnce(impl);
 };
-export const sendWhatsAppMock = hoisted.sendWhatsAppMock;
+export const sendWhatsAppMock: Mock<SendWhatsAppFn> = hoisted.sendWhatsAppMock;
 
 export const testState = hoisted.testState;
 
