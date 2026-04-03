@@ -133,6 +133,20 @@ describe("detectCommandObfuscation", () => {
       expect(result.matchedPatterns).toContain("var-expansion-obfuscation");
     });
 
+    it("detects variable expansion obfuscation after && or ||", () => {
+      const andResult = detectCommandObfuscation("true && c=cat;p=/etc/passwd;$c $p");
+      expect(andResult.detected).toBe(true);
+      expect(andResult.matchedPatterns).toContain("var-expansion-obfuscation");
+
+      const orResult = detectCommandObfuscation("false || c=cat;p=/etc/passwd;$c $p");
+      expect(orResult.detected).toBe(true);
+      expect(orResult.matchedPatterns).toContain("var-expansion-obfuscation");
+
+      const pipeResult = detectCommandObfuscation("echo x | c=cat;p=/etc/passwd;$c $p");
+      expect(pipeResult.detected).toBe(true);
+      expect(pipeResult.matchedPatterns).toContain("var-expansion-obfuscation");
+    });
+
     it("does NOT flag multiline shell commands that include inline Python assignments and normal shell loop variables", () => {
       const result = detectCommandObfuscation(
         `HA_TOKEN=$(cat ~/.cache/openclaw/ha_token)
@@ -243,6 +257,51 @@ done`,
 
     it("flags oversized commands before regex scanning", () => {
       const result = detectCommandObfuscation(`a=${"x".repeat(9_999)};b=y;END`);
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("command-too-long");
+    });
+
+    it("does NOT flag oversized cat heredoc writing to a file", () => {
+      const yamlBody = "key: value\n".repeat(2_000);
+      const command = `cat > /tmp/config.yaml << 'EOF'\n${yamlBody}EOF`;
+      expect(command.length).toBeGreaterThan(10_000);
+      const result = detectCommandObfuscation(command);
+      expect(result.detected).toBe(false);
+      expect(result.matchedPatterns).not.toContain("command-too-long");
+    });
+
+    it("does NOT flag oversized tee heredoc writing to a file", () => {
+      const body = "line\n".repeat(3_000);
+      const command = `tee /tmp/output.txt << 'DELIM'\n${body}DELIM`;
+      expect(command.length).toBeGreaterThan(10_000);
+      const result = detectCommandObfuscation(command);
+      expect(result.detected).toBe(false);
+      expect(result.matchedPatterns).not.toContain("command-too-long");
+    });
+
+    it("does NOT flag oversized cat heredoc preceded by a shell comment", () => {
+      const yamlBody = "key: value\n".repeat(2_000);
+      const command = `# Write the config file\ncat > /tmp/config.yaml << 'EOF'\n${yamlBody}EOF`;
+      expect(command.length).toBeGreaterThan(10_000);
+      const result = detectCommandObfuscation(command);
+      expect(result.detected).toBe(false);
+      expect(result.matchedPatterns).not.toContain("command-too-long");
+    });
+
+    it("still flags oversized bash heredoc (executing, not writing)", () => {
+      const body = "echo line\n".repeat(2_000);
+      const command = `bash << 'EOF'\n${body}EOF`;
+      expect(command.length).toBeGreaterThan(10_000);
+      const result = detectCommandObfuscation(command);
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("command-too-long");
+    });
+
+    it("still flags oversized cat heredoc piped to shell", () => {
+      const body = "payload\n".repeat(2_000);
+      const command = `cat << 'EOF' | bash\n${body}EOF`;
+      expect(command.length).toBeGreaterThan(10_000);
+      const result = detectCommandObfuscation(command);
       expect(result.detected).toBe(true);
       expect(result.matchedPatterns).toContain("command-too-long");
     });

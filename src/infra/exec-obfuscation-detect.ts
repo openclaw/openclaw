@@ -166,7 +166,7 @@ const OBFUSCATION_PATTERNS: ObfuscationPattern[] = [
     id: "var-expansion-obfuscation",
     description: "Variable assignment chain with expansion (potential obfuscation)",
     regex:
-      /(?:^|[;\n\r])\s*(?:[a-zA-Z_]\w{0,2}=[^;\s]+\s*;\s*){2,}[^$]*\$(?:[a-zA-Z_]\w{0,2}\b|\{[a-zA-Z_]\w{0,2}\})/,
+      /(?:^|[;&|\n\r])\s*(?:[a-zA-Z_]\w{0,2}=[^;\s]+\s*;\s*){2,}[^$]*\$(?:[a-zA-Z_]\w{0,2}\b|\{[a-zA-Z_]\w{0,2}\})/,
   },
 ];
 
@@ -198,6 +198,44 @@ function pathMatchesSafePrefix(pathname: string, pathPrefix: string): boolean {
   return pathname === pathPrefix || pathname.startsWith(`${pathPrefix}/`);
 }
 
+/**
+ * Returns true when the command is a non-executing heredoc that writes
+ * content to a file (cat/tee redirect). These are exempt from the
+ * command-too-long threshold because the heredoc body is data, not code.
+ */
+function isFileWriteHeredoc(command: string): boolean {
+  // Find the first non-empty, non-comment line (the actual command)
+  const lines = command.split("\n");
+  let commandLine: string | undefined;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith("#")) {
+      commandLine = trimmed;
+      break;
+    }
+  }
+  if (!commandLine) {
+    return false;
+  }
+
+  // Must contain a heredoc operator
+  if (!/<<-?\s*['"]?[a-zA-Z_][\w-]*['"]?/.test(commandLine)) {
+    return false;
+  }
+
+  // Must start with a non-executing writer
+  if (!/^(?:cat|tee)\b/.test(commandLine)) {
+    return false;
+  }
+
+  // Must not pipe output to a shell interpreter
+  if (/\|\s*(?:sh|bash|zsh|dash|ksh|fish)\b/i.test(commandLine)) {
+    return false;
+  }
+
+  return true;
+}
+
 function shouldSuppressCurlPipeShell(command: string): boolean {
   const urls = extractHttpUrls(command);
   if (urls.length !== 1) {
@@ -221,14 +259,28 @@ export function detectCommandObfuscation(command: string): ObfuscationDetection 
     return { detected: false, reasons: [], matchedPatterns: [] };
   }
   if (command.length > MAX_COMMAND_CHARS) {
-    return {
-      detected: true,
-      reasons: ["Command too long; potential obfuscation"],
-      matchedPatterns: ["command-too-long"],
-    };
+    // Non-executing heredocs (cat/tee writing to a file) are exempt — the
+    // body is data, not code. Pattern checks still run on the command line.
+    if (!isFileWriteHeredoc(command)) {
+      return {
+        detected: true,
+        reasons: ["Command too long; potential obfuscation"],
+        matchedPatterns: ["command-too-long"],
+      };
+    }
   }
 
-  const normalizedCommand = stripInvisibleUnicode(command.normalize("NFKC"));
+  // For long file-write heredocs, scan only the command line (not the body)
+  // to keep regex cost bounded on large payloads.
+  let textToScan = command;
+  if (command.length > MAX_COMMAND_CHARS) {
+    const firstNewline = command.indexOf("\n");
+    if (firstNewline > 0) {
+      textToScan = command.substring(0, firstNewline);
+    }
+  }
+
+  const normalizedCommand = stripInvisibleUnicode(textToScan.normalize("NFKC"));
   const urlCount = (normalizedCommand.match(/https?:\/\/\S+/g) ?? []).length;
   const reasons: string[] = [];
   const matchedPatterns: string[] = [];
