@@ -872,6 +872,21 @@ describe("/approve command", () => {
     );
   });
 
+  it("returns a recovery hint when the approval id is stale", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock.mockRejectedValue(new Error("GatewayClientRequestError: unknown approval id"));
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval abc is no longer pending");
+    expect(result.reply?.text).toContain("fresh approval prompt");
+  });
+
   it("accepts bare approve text for Slack-style manual approvals", async () => {
     const cfg = {
       commands: { text: true },

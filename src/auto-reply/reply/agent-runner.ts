@@ -52,8 +52,9 @@ import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-r
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
-  enqueueFollowupRun,
+  enqueueFollowupRunDetailed,
   refreshQueuedFollowupSession,
+  type EnqueueFollowupRunResult,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
@@ -64,6 +65,34 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function pluralize(count: number, singular: string, plural: string): string {
+  return count === 1 ? singular : plural;
+}
+
+function buildQueuedAcknowledgement(result: EnqueueFollowupRunResult): ReplyPayload | undefined {
+  if (result.accepted) {
+    const queuedAhead = Math.max(0, result.queueDepth - 1);
+    const aheadLine =
+      queuedAhead > 0
+        ? ` There ${pluralize(queuedAhead, "is", "are")} ${queuedAhead} queued ${pluralize(
+            queuedAhead,
+            "message",
+            "messages",
+          )} ahead of it.`
+        : "";
+    return {
+      text: `Current turn is still running. I queued this message and will follow up here next.${aheadLine}`,
+    };
+  }
+  if (result.reason === "queue_full") {
+    return {
+      text: "Current backlog is full, so I could not queue this message. Please retry in a moment.",
+      isError: true,
+    };
+  }
+  return undefined;
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -235,7 +264,7 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(
+    const enqueueResult = enqueueFollowupRunDetailed(
       queueKey,
       followupRun,
       resolvedQueue,
@@ -245,12 +274,12 @@ export async function runReplyAgent(params: {
     );
     // Re-check liveness after enqueue so a stale active snapshot cannot leave
     // the followup queue idle if the original run already finished.
-    if (!isRunActive?.()) {
+    if (enqueueResult.accepted && !isRunActive?.()) {
       finalizeWithFollowup(undefined, queueKey, queuedRunFollowupTurn);
     }
     await touchActiveSessionEntry();
     typing.cleanup();
-    return undefined;
+    return buildQueuedAcknowledgement(enqueueResult);
   }
 
   await typingSignals.signalRunStart();

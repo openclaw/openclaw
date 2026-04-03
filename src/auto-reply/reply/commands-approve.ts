@@ -34,6 +34,10 @@ type ParsedApproveCommand =
 const APPROVE_USAGE_TEXT =
   "Usage: /approve <id> <decision> (see the pending approval message for available decisions)";
 
+function formatStaleApprovalResolveError(approvalId: string): string {
+  return `❌ Approval ${approvalId} is no longer pending. It may have expired or already been resolved. Ask OpenClaw for a fresh approval prompt, then retry with the newest ID.`;
+}
+
 function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
   if (FOREIGN_COMMAND_MENTION_REGEX.test(trimmed)) {
@@ -108,7 +112,7 @@ function isApprovalNotFoundError(err: unknown): boolean {
   }
 
   // Legacy server/client combinations may only include the message text.
-  return /unknown or expired approval id/i.test(err.message);
+  return /unknown (?:or expired )?approval id|approval expired or not found/i.test(err.message);
 }
 
 function formatApprovalSubmitError(error: unknown): string {
@@ -116,6 +120,13 @@ function formatApprovalSubmitError(error: unknown): string {
 }
 
 type ApprovalMethod = "exec.approval.resolve" | "plugin.approval.resolve";
+
+function canUseExecApprovalRecoveryHint(params: {
+  methods: ApprovalMethod[];
+  channel: string;
+}): boolean {
+  return params.channel !== "telegram" && params.methods.includes("exec.approval.resolve");
+}
 
 function resolveApprovalMethods(params: {
   approvalId: string;
@@ -250,6 +261,10 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
+  const useRecoveryHint = canUseExecApprovalRecoveryHint({
+    methods,
+    channel: params.command.channel,
+  });
   let lastError: unknown = null;
   for (const [index, method] of methods.entries()) {
     try {
@@ -259,10 +274,20 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     } catch (error) {
       lastError = error;
       const isLastMethod = index === methods.length - 1;
-      if (!isApprovalNotFoundError(error) || isLastMethod) {
+      if (!isApprovalNotFoundError(error)) {
         return {
           shouldContinue: false,
           reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(error)}` },
+        };
+      }
+      if (isLastMethod) {
+        return {
+          shouldContinue: false,
+          reply: {
+            text: useRecoveryHint
+              ? formatStaleApprovalResolveError(parsed.id)
+              : `❌ Failed to submit approval: ${formatApprovalSubmitError(error)}`,
+          },
         };
       }
     }
@@ -271,7 +296,12 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   if (lastError) {
     return {
       shouldContinue: false,
-      reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(lastError)}` },
+      reply: {
+        text:
+          isApprovalNotFoundError(lastError) && useRecoveryHint
+            ? formatStaleApprovalResolveError(parsed.id)
+            : `❌ Failed to submit approval: ${formatApprovalSubmitError(lastError)}`,
+      },
     };
   }
 

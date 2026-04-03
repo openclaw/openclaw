@@ -33,6 +33,18 @@ function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | u
   ]);
 }
 
+export type EnqueueFollowupRunResult =
+  | {
+      accepted: true;
+      reason: "enqueued";
+      queueDepth: number;
+    }
+  | {
+      accepted: false;
+      reason: "duplicate" | "queue_full";
+      queueDepth: number;
+    };
+
 function isRunAlreadyQueued(
   run: FollowupRun,
   items: FollowupRun[],
@@ -62,10 +74,32 @@ export function enqueueFollowupRun(
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
 ): boolean {
+  return enqueueFollowupRunDetailed(
+    key,
+    run,
+    settings,
+    dedupeMode,
+    runFollowup,
+    restartIfIdle,
+  ).accepted;
+}
+
+export function enqueueFollowupRunDetailed(
+  key: string,
+  run: FollowupRun,
+  settings: QueueSettings,
+  dedupeMode: QueueDedupeMode = "message-id",
+  runFollowup?: (run: FollowupRun) => Promise<void>,
+  restartIfIdle = true,
+): EnqueueFollowupRunResult {
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
   if (recentMessageIdKey && RECENT_QUEUE_MESSAGE_IDS.peek(recentMessageIdKey)) {
-    return false;
+    return {
+      accepted: false,
+      reason: "duplicate",
+      queueDepth: queue.items.length,
+    };
   }
 
   const dedupe =
@@ -76,7 +110,11 @@ export function enqueueFollowupRun(
 
   // Deduplicate: skip if the same message is already queued.
   if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
-    return false;
+    return {
+      accepted: false,
+      reason: "duplicate",
+      queueDepth: queue.items.length,
+    };
   }
 
   queue.lastEnqueuedAt = Date.now();
@@ -87,7 +125,11 @@ export function enqueueFollowupRun(
     summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
   });
   if (!shouldEnqueue) {
-    return false;
+    return {
+      accepted: false,
+      reason: "queue_full",
+      queueDepth: queue.items.length,
+    };
   }
 
   queue.items.push(run);
@@ -103,7 +145,11 @@ export function enqueueFollowupRun(
   if (restartIfIdle && !queue.draining) {
     kickFollowupDrainIfIdle(key);
   }
-  return true;
+  return {
+    accepted: true,
+    reason: "enqueued",
+    queueDepth: queue.items.length,
+  };
 }
 
 export function getFollowupQueueDepth(key: string): number {

@@ -9,8 +9,8 @@ import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
-  enqueueFollowupRun,
   refreshQueuedFollowupSession,
+  enqueueFollowupRunDetailed,
   scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
@@ -91,8 +91,8 @@ vi.mock("../../agents/cli-runner.js", () => ({
 }));
 
 vi.mock("./queue.js", () => ({
-  enqueueFollowupRun: vi.fn(),
   refreshQueuedFollowupSession: vi.fn(),
+  enqueueFollowupRunDetailed: vi.fn(),
   scheduleFollowupDrain: vi.fn(),
 }));
 
@@ -107,8 +107,8 @@ beforeEach(() => {
   state.compactEmbeddedPiSessionMock.mockClear();
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
-  vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(refreshQueuedFollowupSession).mockClear();
+  vi.mocked(enqueueFollowupRunDetailed).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
@@ -317,12 +317,17 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRunDetailed)).not.toHaveBeenCalled();
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("still enqueues non-heartbeat runs when another run is active", async () => {
+    vi.mocked(enqueueFollowupRunDetailed).mockReturnValue({
+      accepted: true,
+      reason: "enqueued",
+      queueDepth: 2,
+    });
     const { run } = createMinimalRun({
       opts: { isHeartbeat: false },
       isActive: true,
@@ -332,12 +337,41 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     const result = await run();
 
-    expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      text: "Current turn is still running. I queued this message and will follow up here next. There is 1 queued message ahead of it.",
+    });
+    expect(vi.mocked(enqueueFollowupRunDetailed)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("returns an explicit warning when the active-run backlog is full", async () => {
+    vi.mocked(enqueueFollowupRunDetailed).mockReturnValue({
+      accepted: false,
+      reason: "queue_full",
+      queueDepth: 20,
+    });
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    const result = await run();
+
+    expect(result).toMatchObject({
+      text: "Current backlog is full, so I could not queue this message. Please retry in a moment.",
+      isError: true,
+    });
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
   it("starts draining immediately when the active snapshot is already stale", async () => {
+    vi.mocked(enqueueFollowupRunDetailed).mockReturnValue({
+      accepted: true,
+      reason: "enqueued",
+      queueDepth: 1,
+    });
     const { run } = createMinimalRun({
       opts: { isHeartbeat: false },
       isActive: true,
@@ -348,8 +382,10 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     const result = await run();
 
-    expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      text: "Current turn is still running. I queued this message and will follow up here next.",
+    });
+    expect(vi.mocked(enqueueFollowupRunDetailed)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
