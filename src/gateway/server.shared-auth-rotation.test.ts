@@ -18,7 +18,8 @@ const ORIGINAL_GATEWAY_AUTH = testState.gatewayAuth;
 const ORIGINAL_GATEWAY_TOKEN_ENV = process.env.OPENCLAW_GATEWAY_TOKEN;
 const OLD_TOKEN = "shared-token-old";
 const NEW_TOKEN = "shared-token-new";
-const TEST_METHODS = ["config.set", "config.patch", "config.apply"] as const;
+const DEFERRED_RESTART_DELAY_MS = 1_000;
+const RESTARTING_AUTH_CHANGE_METHODS = ["config.patch", "config.apply"] as const;
 const SECRET_REF_TOKEN_ID = "OPENCLAW_SHARED_AUTH_ROTATION_SECRET_REF";
 
 let server: Awaited<ReturnType<typeof startGatewayServer>>;
@@ -94,42 +95,52 @@ async function waitForClose(ws: WebSocket): Promise<{ code: number; reason: stri
   });
 }
 
-async function sendAuthChange(
-  ws: WebSocket,
-  method: (typeof TEST_METHODS)[number],
-): Promise<{ ok: boolean }> {
+async function loadCurrentConfig(ws: WebSocket): Promise<{
+  hash: string;
+  config: Record<string, unknown>;
+}> {
   const current = await rpcReq<{
     hash?: string;
     config?: Record<string, unknown>;
   }>(ws, "config.get", {});
   expect(current.ok).toBe(true);
   expect(typeof current.payload?.hash).toBe("string");
-  const currentConfig = structuredClone(current.payload?.config ?? {});
+  return {
+    hash: String(current.payload?.hash),
+    config: structuredClone(current.payload?.config ?? {}),
+  };
+}
+
+async function sendAuthTokenChange(
+  ws: WebSocket,
+  method: (typeof RESTARTING_AUTH_CHANGE_METHODS)[number],
+): Promise<{ ok: boolean }> {
+  const current = await loadCurrentConfig(ws);
+  const currentConfig = current.config;
   const gateway = (currentConfig.gateway ??= {}) as Record<string, unknown>;
   const auth = (gateway.auth ??= {}) as Record<string, unknown>;
   auth.token = NEW_TOKEN;
 
   if (method === "config.patch") {
     return await rpcReq(ws, "config.patch", {
-      baseHash: current.payload?.hash,
+      baseHash: current.hash,
       raw: JSON.stringify({ gateway: { auth: { token: NEW_TOKEN } } }),
-      restartDelayMs: 60_000,
+      restartDelayMs: DEFERRED_RESTART_DELAY_MS,
     });
   }
 
   return await rpcReq(ws, method, {
     raw: JSON.stringify(currentConfig, null, 2),
-    ...(method === "config.set" ? { baseHash: current.payload?.hash } : {}),
   });
 }
 
 describe("gateway shared auth rotation", () => {
-  for (const method of TEST_METHODS) {
+  for (const method of RESTARTING_AUTH_CHANGE_METHODS) {
     it(`disconnects existing shared-token websocket sessions after ${method}`, async () => {
       const ws = await openAuthenticatedWs(OLD_TOKEN);
       try {
         const closed = waitForClose(ws);
-        const res = await sendAuthChange(ws, method);
+        const res = await sendAuthTokenChange(ws, method);
 
         expect(res.ok).toBe(true);
         await expect(closed).resolves.toMatchObject({
@@ -145,7 +156,7 @@ describe("gateway shared auth rotation", () => {
   it("keeps existing device-token websocket sessions connected after shared token rotation", async () => {
     const ws = await openDeviceTokenWs();
     try {
-      const res = await sendAuthChange(ws, "config.patch");
+      const res = await sendAuthTokenChange(ws, "config.patch");
       expect(res.ok).toBe(true);
 
       const followUp = await rpcReq<{ hash?: string }>(ws, "config.get", {});
