@@ -257,7 +257,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     hoisted.acquireSessionWriteLockMock.mockResolvedValue({
       release: releaseMock,
     });
-    hoisted.flushPendingToolResultsAfterIdleMock.mockRejectedValueOnce(new Error("flush failed"));
+    let flushCallCount = 0;
+    hoisted.flushPendingToolResultsAfterIdleMock.mockImplementation(async () => {
+      flushCallCount += 1;
+      if (flushCallCount >= 2) {
+        throw new Error("flush failed");
+      }
+    });
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: {
