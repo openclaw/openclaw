@@ -256,9 +256,23 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           if (config == null) {
             validationText =
               if (inputMode == ConnectInputMode.SetupCode) {
-                "Paste a valid setup code to connect."
+                val parsedSetup = decodeGatewaySetupCode(setupCode)
+                if (parsedSetup == null) {
+                  "Paste a valid setup code to connect."
+                } else {
+                  val parsedGateway = parseGatewayEndpointResult(parsedSetup.url)
+                  gatewayEndpointValidationMessage(
+                    parsedGateway.error ?: GatewayEndpointValidationError.INVALID_URL,
+                    GatewayEndpointInputSource.SETUP_CODE,
+                  )
+                }
               } else {
-                "Enter a valid manual host and port to connect."
+                val manualUrl = composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)
+                val parsedGateway = manualUrl?.let(::parseGatewayEndpointResult)
+                gatewayEndpointValidationMessage(
+                  parsedGateway?.error ?: GatewayEndpointValidationError.INVALID_URL,
+                  GatewayEndpointInputSource.MANUAL,
+                )
               }
             return@Button
           }
@@ -386,6 +400,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           Text("Run these on the gateway host:", style = mobileCallout, color = mobileTextSecondary)
           CommandBlock("openclaw qr --setup-code-only")
           CommandBlock("openclaw qr --json")
+          Text(
+            "Remote mobile nodes require wss:// or Tailscale Serve. ws:// is only for localhost or the Android emulator.",
+            style = mobileCaption1,
+            color = mobileTextSecondary,
+          )
 
           if (inputMode == ConnectInputMode.SetupCode) {
             Text("Setup Code", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
@@ -468,7 +487,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             ) {
               Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("Use TLS", style = mobileHeadline, color = mobileText)
-                Text("Switch to secure websocket (`wss`).", style = mobileCallout, color = mobileTextSecondary)
+                Text(
+                  "Required for remote hosts. Use Tailscale Serve or a wss:// gateway URL.",
+                  style = mobileCallout,
+                  color = mobileTextSecondary,
+                )
               }
               Switch(
                 checked = manualTlsInput,
