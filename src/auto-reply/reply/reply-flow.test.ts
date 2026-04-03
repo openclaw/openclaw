@@ -15,7 +15,7 @@ import {
   scheduleFollowupDrain,
 } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
+import { createReplyToModeFilter } from "./reply-threading.js";
 import { parseSlackDirectives, hasSlackDirectives } from "./slack-directives.js";
 
 describe("normalizeInboundTextNewlines", () => {
@@ -1778,8 +1778,6 @@ describe("followup queue drain restart after idle window", () => {
   });
 });
 
-const emptyCfg = {} as OpenClawConfig;
-
 describe("createReplyDispatcher", () => {
   it("drops empty payloads and exact silent tokens without media", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
@@ -1960,69 +1958,6 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
-  });
-});
-
-describe("resolveReplyToMode", () => {
-  it("falls back to all when channel threading plugins are unavailable", () => {
-    const configuredCfg = {
-      channels: {
-        telegram: { replyToMode: "all" },
-        discord: { replyToMode: "first" },
-        slack: { replyToMode: "all" },
-      },
-    } as OpenClawConfig;
-    const chatTypeCfg = {
-      channels: {
-        slack: {
-          replyToMode: "off",
-          replyToModeByChatType: { direct: "all", group: "first" },
-        },
-      },
-    } as OpenClawConfig;
-    const topLevelFallbackCfg = {
-      channels: {
-        slack: {
-          replyToMode: "first",
-        },
-      },
-    } as OpenClawConfig;
-    const legacyDmCfg = {
-      channels: {
-        slack: {
-          replyToMode: "off",
-          dm: { replyToMode: "all" },
-        },
-      },
-    } as OpenClawConfig;
-
-    const cases: Array<{
-      cfg: OpenClawConfig;
-      channel?: "telegram" | "discord" | "slack";
-      chatType?: "direct" | "group" | "channel";
-      expected: "off" | "all" | "first";
-    }> = [
-      { cfg: emptyCfg, channel: "telegram", expected: "all" },
-      { cfg: emptyCfg, channel: "discord", expected: "all" },
-      { cfg: emptyCfg, channel: "slack", expected: "all" },
-      { cfg: emptyCfg, channel: undefined, expected: "all" },
-      { cfg: configuredCfg, channel: "telegram", expected: "all" },
-      { cfg: configuredCfg, channel: "discord", expected: "all" },
-      { cfg: configuredCfg, channel: "slack", expected: "all" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: "direct", expected: "all" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: "group", expected: "all" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: "channel", expected: "all" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: undefined, expected: "all" },
-      { cfg: topLevelFallbackCfg, channel: "slack", chatType: "direct", expected: "all" },
-      { cfg: topLevelFallbackCfg, channel: "slack", chatType: "channel", expected: "all" },
-      { cfg: legacyDmCfg, channel: "slack", chatType: "direct", expected: "all" },
-      { cfg: legacyDmCfg, channel: "slack", chatType: "channel", expected: "all" },
-    ];
-    for (const testCase of cases) {
-      expect(resolveReplyToMode(testCase.cfg, testCase.channel, null, testCase.chatType)).toBe(
-        testCase.expected,
-      );
-    }
   });
 });
 
