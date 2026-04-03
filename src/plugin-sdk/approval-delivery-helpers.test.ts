@@ -106,7 +106,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         accountId: "disabled",
         action: "approve",
       }),
-    ).toEqual({ kind: "disabled" });
+    ).toEqual({ kind: "enabled" });
     expect(hasConfiguredDmRoute.hasConfiguredDmRoute({ cfg: {} as never })).toBe(true);
     expect(nativeCapabilities).toEqual({
       enabled: true,
@@ -115,6 +115,30 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       supportsApproverDmSurface: true,
       notifyOriginWhenDmOnly: false,
     });
+  });
+
+  it("reports enabled when approvers exist even if native delivery is off (#59620)", () => {
+    const adapter = createApproverRestrictedNativeApprovalAdapter({
+      channel: "telegram",
+      channelLabel: "Telegram",
+      listAccountIds: () => ["default"],
+      hasApprovers: () => true,
+      isExecAuthorizedSender: () => true,
+      isNativeDeliveryEnabled: () => false,
+      resolveNativeDeliveryMode: () => "both",
+    });
+    const getActionAvailabilityState = adapter.auth.getActionAvailabilityState;
+    if (!getActionAvailabilityState) {
+      throw new Error("approval availability helper unavailable");
+    }
+
+    expect(
+      getActionAvailabilityState({
+        cfg: {} as never,
+        accountId: "default",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "enabled" });
   });
 
   it("suppresses forwarding fallback only for matching native-delivery surfaces", () => {
@@ -141,6 +165,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     expect(
       shouldSuppressForwardingFallback({
         cfg: {} as never,
+        approvalKind: "exec",
         target: { channel: "telegram", to: "target-1" },
         request: {
           request: {
@@ -155,6 +180,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     expect(
       shouldSuppressForwardingFallback({
         cfg: {} as never,
+        approvalKind: "exec",
         target: { channel: "telegram", to: "target-1" },
         request: {
           request: {
@@ -169,6 +195,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     expect(
       shouldSuppressForwardingFallback({
         cfg: {} as never,
+        approvalKind: "exec",
         target: { channel: "slack", to: "target-1" },
         request: {
           request: {
@@ -184,6 +211,21 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       cfg: {} as never,
       accountId: "topic-1",
     });
+
+    expect(
+      shouldSuppressForwardingFallback({
+        cfg: {} as never,
+        approvalKind: "plugin",
+        target: { channel: "telegram", to: "target-1" },
+        request: {
+          request: {
+            command: "pwd",
+            turnSourceChannel: "telegram",
+            turnSourceAccountId: "topic-1",
+          },
+        } as never,
+      }),
+    ).toBe(true);
   });
 });
 

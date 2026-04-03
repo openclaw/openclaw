@@ -175,6 +175,70 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
   });
 
+  it("auto-isolates memory-heavy extension suites in CI", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const hotspotFile = bundledPluginFile("feishu", "src/bot.test.ts");
+    const hotspotUnit = plan.selectedUnits.find((unit) => unit.args.includes(hotspotFile));
+
+    expect(hotspotUnit).toBeTruthy();
+    expect(hotspotUnit?.isolate).toBe(true);
+    expect(hotspotUnit?.reasons).toContain("extensions-memory-heavy");
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("auto-isolates newly-seeded extension memory survivors in CI", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const hotspotFile = bundledPluginFile("bluebubbles", "src/send.test.ts");
+    const hotspotUnit = plan.selectedUnits.find((unit) => unit.args.includes(hotspotFile));
+
+    expect(hotspotUnit).toBeTruthy();
+    expect(hotspotUnit?.isolate).toBe(true);
+    expect(hotspotUnit?.reasons).toContain("extensions-memory-heavy");
+    artifacts.cleanupTempArtifacts();
+  });
+
   it("auto-isolates timed-heavy channel suites in CI", () => {
     const env = {
       CI: "true",

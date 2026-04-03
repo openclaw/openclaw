@@ -6,7 +6,7 @@ import {
   ResolvingThemes,
 } from "@pierre/diffs";
 import AjvPkg from "ajv";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
@@ -42,6 +42,15 @@ const FULL_DEFAULTS = {
   fileMaxWidth: 1280,
   mode: "file",
 } as const;
+
+function compileManifestConfigSchema() {
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as { configSchema: Record<string, unknown> };
+  const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
+  const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
+  return ajv.compile(manifest.configSchema);
+}
 
 describe("resolveDiffsPluginDefaults", () => {
   it("returns built-in defaults when config is missing", () => {
@@ -173,12 +182,7 @@ describe("resolveDiffsPluginDefaults", () => {
   });
 
   it("keeps loader-applied schema defaults from shadowing aliases and quality-derived defaults", () => {
-    const manifest = JSON.parse(
-      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
-    ) as { configSchema: Record<string, unknown> };
-    const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
-    const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
-    const validate = ajv.compile(manifest.configSchema);
+    const validate = compileManifestConfigSchema();
 
     const aliasOnly = {
       defaults: {
@@ -235,6 +239,15 @@ describe("resolveDiffsPluginViewerBaseUrl", () => {
 });
 
 describe("diffs plugin schema surfaces", () => {
+  it("rejects invalid viewerBaseUrl values at manifest-validation time too", () => {
+    const validate = compileManifestConfigSchema();
+
+    expect(validate({ viewerBaseUrl: "javascript:alert(1)" })).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw?x=1" })).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw#frag" })).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw/" })).toBe(true);
+  });
+
   it("preserves defaults and security for direct safeParse callers", () => {
     expect(
       diffsPluginConfigSchema.safeParse?.({
@@ -391,6 +404,10 @@ describe("diffs viewer URL helpers", () => {
 });
 
 describe("renderDiffDocument", () => {
+  afterEach(async () => {
+    await disposeHighlighter();
+  });
+
   it("renders before/after input into a complete viewer document", async () => {
     const rendered = await renderDiffDocument(
       {

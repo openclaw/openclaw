@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
@@ -35,15 +35,6 @@ let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
 let getExecApprovalApproverDmNoticeText: typeof import("../infra/exec-approval-reply.js").getExecApprovalApproverDmNoticeText;
 let sendMessage: typeof import("../infra/outbound/message.js").sendMessage;
-
-async function loadExecApprovalModules() {
-  vi.resetModules();
-  ({ callGatewayTool } = await import("./tools/gateway.js"));
-  ({ createExecTool } = await import("./bash-tools.exec.js"));
-  ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
-  ({ getExecApprovalApproverDmNoticeText } = await import("../infra/exec-approval-reply.js"));
-  ({ sendMessage } = await import("../infra/outbound/message.js"));
-}
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -94,6 +85,7 @@ function expectPendingApprovalText(
     nodeId?: string;
     interactive?: boolean;
     allowedDecisions?: string;
+    cwdText?: string;
   },
 ) {
   expect(result.details.status).toBe("approval-pending");
@@ -107,7 +99,7 @@ function expectPendingApprovalText(
   if (options.nodeId) {
     expect(pendingText).toContain(`Node: ${options.nodeId}`);
   }
-  expect(pendingText).toContain(`CWD: ${process.cwd()}`);
+  expect(pendingText).toContain(`CWD: ${options.cwdText ?? process.cwd()}`);
   expect(pendingText).toContain("Command:\n```sh\n");
   expect(pendingText).toContain(options.command);
   if (options.interactive) {
@@ -223,6 +215,14 @@ describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
 
+  beforeAll(async () => {
+    ({ callGatewayTool } = await import("./tools/gateway.js"));
+    ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
+    ({ getExecApprovalApproverDmNoticeText } = await import("../infra/exec-approval-reply.js"));
+    ({ sendMessage } = await import("../infra/outbound/message.js"));
+  });
+
   beforeEach(async () => {
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
@@ -230,7 +230,9 @@ describe("exec approvals", () => {
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
-    await loadExecApprovalModules();
+    vi.mocked(callGatewayTool).mockReset();
+    vi.mocked(detectCommandObfuscation).mockReset();
+    vi.mocked(sendMessage).mockReset();
   });
 
   afterEach(() => {
@@ -283,6 +285,7 @@ describe("exec approvals", () => {
       nodeId: "node-1",
       interactive: true,
       allowedDecisions: "allow-once|deny",
+      cwdText: "(node default)",
     });
     const approvalId = details.approvalId;
 
@@ -385,6 +388,43 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(prepareCwd).toBe(remoteWorkdir);
+  });
+
+  it("does not forward the gateway default cwd to node exec when workdir is omitted", async () => {
+    const gatewayWorkspace = "/gateway/workspace";
+    let prepareHasCwd = false;
+    let prepareCwd: string | undefined;
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string; params?: { cwd?: string } };
+        if (invoke.command === "system.run.prepare") {
+          prepareHasCwd = Object.hasOwn(invoke.params ?? {}, "cwd");
+          prepareCwd = invoke.params?.cwd;
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      cwd: gatewayWorkspace,
+    });
+
+    const result = await tool.execute("call-node-default-cwd", {
+      command: "/bin/pwd",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(prepareHasCwd).toBe(false);
+    expect(prepareCwd).toBeUndefined();
   });
 
   it("honors ask=off for elevated gateway exec without prompting", async () => {

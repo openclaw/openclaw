@@ -225,6 +225,63 @@ describe("redactConfigSnapshot", () => {
     );
   });
 
+  it("redacts media request auth and proxy transport secrets from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  tools: {
+    media: {
+      audio: {
+        request: {
+          auth: {
+            mode: "authorization-bearer",
+            token: "media-audio-secret-token",
+          },
+          proxy: {
+            mode: "explicit-proxy",
+            url: "http://alice:secret@proxy.example.internal:8080",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        tools: {
+          media: {
+            audio: {
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: "media-audio-secret-token",
+                },
+                proxy: {
+                  mode: "explicit-proxy",
+                  url: "http://alice:secret@proxy.example.internal:8080",
+                },
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.tools.media.audio.request.auth.token).toBe(REDACTED_SENTINEL);
+    expect(cfg.tools.media.audio.request.proxy.url).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("media-audio-secret-token");
+    expect(result.raw).not.toContain("alice:secret@");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.tools.media.audio.request.auth.token).toBe("media-audio-secret-token");
+    expect(restored.tools.media.audio.request.proxy.url).toBe(
+      "http://alice:secret@proxy.example.internal:8080",
+    );
+  });
+
   it("does not redact maxTokens-style fields", () => {
     const snapshot = makeSnapshot({
       maxTokens: 16384,

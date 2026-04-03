@@ -1,4 +1,4 @@
-# Illustrative Lobster authoring example for a ClawFlow-style inbox triage job.
+# Illustrative Lobster authoring example for a TaskFlow-style inbox triage job.
 # Swap the placeholder commands for your own tools or scripts.
 
 name: inbox-triage
