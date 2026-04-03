@@ -1,4 +1,4 @@
-﻿# Sense Runtime Tool
+# Sense Runtime Tool
 
 Formal runtime-plane entrypoints for the T550 control plane live in:
 
@@ -604,6 +604,17 @@ The executor is intentionally thin. It reads policy JSON and executes:
 - `manager_action` + `next_step`
 - then `secondary_action` + `secondary_next_step`
 
+Before running the secondary action, the executor now applies a small safety gate based on the main action result:
+
+- if `main_action.result.exit_code == 0`
+  - secondary execution may continue
+- if `main_action.result.exit_code != 0`
+  - secondary execution is skipped
+- if `main_action.result.error` is present
+  - secondary execution is skipped
+
+This keeps follow-up remediation from running after a failed primary remediation step.
+
 Current execution mapping is:
 
 - `configure_provider` -> `check_provider_config`
@@ -619,8 +630,18 @@ Execution report shape includes:
 - `executor_state`
 - `main_action`
 - `secondary_action`
+- `secondary_gate_decision`
+- `secondary_gate_reason`
+- `duration_sec`
+- `exit_summary`
 - `fallback_action`
 - `policy_trace`
+
+`exit_summary` currently includes:
+
+- `main_exit_code`
+- `secondary_executed`
+- `secondary_exit_code`
 
 If `confidence_gate_applied == true` or the plan resolves to a non-executing action such as `manual_review` or `stop_and_surface_diff`, the executor stops without calling runtime remediation.
 

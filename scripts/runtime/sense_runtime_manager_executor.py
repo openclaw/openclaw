@@ -5,6 +5,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -100,7 +101,40 @@ def execute_step(
     }
 
 
+def extract_step_exit_code(step_result: dict) -> int | None:
+    if not isinstance(step_result, dict):
+        return None
+    result = step_result.get('result')
+    if not isinstance(result, dict):
+        return None
+    exit_code = result.get('exit_code')
+    return exit_code if isinstance(exit_code, int) else None
+
+
+def build_secondary_placeholder(action: str | None, step: str | None) -> dict:
+    return {
+        'action': action,
+        'step': step,
+        'executed': False,
+        'result': None,
+    }
+
+
+def build_exit_summary(
+    main_result: dict | None,
+    secondary_result: dict | None,
+) -> dict:
+    return {
+        'main_exit_code': extract_step_exit_code(main_result or {}),
+        'secondary_executed': bool(
+            isinstance(secondary_result, dict) and secondary_result.get('executed')
+        ),
+        'secondary_exit_code': extract_step_exit_code(secondary_result or {}),
+    }
+
+
 def main() -> int:
+    started_at = time.monotonic()
     args = build_parser().parse_args()
     policy = load_policy(args)
     script_dir = Path(__file__).resolve().parent
@@ -113,59 +147,102 @@ def main() -> int:
     fallback_action = policy.get('fallback_action')
     confidence_gate_applied = policy.get('confidence_gate_applied') is True
 
+    secondary_placeholder = build_secondary_placeholder(
+        secondary_action, secondary_next_step
+    )
+
     if confidence_gate_applied or manager_action in NON_EXECUTING_ACTIONS:
+        main_placeholder = {
+            'action': manager_action,
+            'step': next_step,
+            'executed': False,
+            'result': None,
+        }
         output = {
             'executor_state': 'stopped',
             'stop_reason': 'confidence gate requested fallback handling' if confidence_gate_applied else f'manager action {manager_action} is non-executing',
-            'main_action': {
-                'action': manager_action,
-                'step': next_step,
-                'executed': False,
-                'result': None,
-            },
-            'secondary_action': {
-                'action': secondary_action,
-                'step': secondary_next_step,
-                'executed': False,
-                'result': None,
-            },
+            'secondary_gate_decision': 'stop_secondary',
+            'secondary_gate_reason': 'executor stopped before main execution',
+            'main_action': main_placeholder,
+            'secondary_action': secondary_placeholder,
             'fallback_action': fallback_action,
+            'duration_sec': round(time.monotonic() - started_at, 3),
+            'exit_summary': build_exit_summary(main_placeholder, secondary_placeholder),
             'policy_trace': policy.get('policy_trace', {}),
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
     main_result = execute_step(script_dir, manager_action, next_step, runtime_args)
-    if main_result.get('executed') and isinstance(main_result.get('result'), dict) and main_result['result'].get('error'):
+    main_exit_code = extract_step_exit_code(main_result)
+    main_error = (
+        main_result.get('executed')
+        and isinstance(main_result.get('result'), dict)
+        and main_result['result'].get('error')
+    )
+    if main_error:
         output = {
             'executor_state': 'failed',
+            'secondary_gate_decision': 'skip_secondary',
+            'secondary_gate_reason': 'main action returned an error payload',
             'main_action': main_result,
-            'secondary_action': {
-                'action': secondary_action,
-                'step': secondary_next_step,
-                'executed': False,
-                'result': None,
-            },
+            'secondary_action': secondary_placeholder,
             'fallback_action': fallback_action,
+            'duration_sec': round(time.monotonic() - started_at, 3),
+            'exit_summary': build_exit_summary(main_result, secondary_placeholder),
             'policy_trace': policy.get('policy_trace', {}),
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 1
 
-    secondary_result = {
-        'action': secondary_action,
-        'step': secondary_next_step,
-        'executed': False,
-        'result': None,
-    }
+    if main_exit_code is not None and main_exit_code != 0:
+        output = {
+            'executor_state': 'partial_failure',
+            'secondary_gate_decision': 'skip_secondary',
+            'secondary_gate_reason': 'main action failed with non-zero exit_code',
+            'main_action': main_result,
+            'secondary_action': secondary_placeholder,
+            'fallback_action': fallback_action,
+            'duration_sec': round(time.monotonic() - started_at, 3),
+            'exit_summary': build_exit_summary(main_result, secondary_placeholder),
+            'policy_trace': policy.get('policy_trace', {}),
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 1
+
+    secondary_result = secondary_placeholder
+    secondary_gate_decision = 'skip_secondary'
+    secondary_gate_reason = 'no secondary action planned'
     if secondary_action:
+        secondary_gate_decision = 'continue_secondary'
+        secondary_gate_reason = 'main action completed without an error payload or non-zero exit code'
         secondary_result = execute_step(script_dir, secondary_action, secondary_next_step, runtime_args)
         if secondary_result.get('executed') and isinstance(secondary_result.get('result'), dict) and secondary_result['result'].get('error'):
             output = {
                 'executor_state': 'failed',
+                'secondary_gate_decision': secondary_gate_decision,
+                'secondary_gate_reason': secondary_gate_reason,
                 'main_action': main_result,
                 'secondary_action': secondary_result,
                 'fallback_action': fallback_action,
+                'duration_sec': round(time.monotonic() - started_at, 3),
+                'exit_summary': build_exit_summary(main_result, secondary_result),
+                'policy_trace': policy.get('policy_trace', {}),
+            }
+            print(json.dumps(output, ensure_ascii=False, indent=2))
+            return 1
+
+        secondary_exit_code = extract_step_exit_code(secondary_result)
+        if secondary_exit_code is not None and secondary_exit_code != 0:
+            output = {
+                'executor_state': 'partial_failure',
+                'secondary_gate_decision': secondary_gate_decision,
+                'secondary_gate_reason': secondary_gate_reason,
+                'main_action': main_result,
+                'secondary_action': secondary_result,
+                'fallback_action': fallback_action,
+                'duration_sec': round(time.monotonic() - started_at, 3),
+                'exit_summary': build_exit_summary(main_result, secondary_result),
                 'policy_trace': policy.get('policy_trace', {}),
             }
             print(json.dumps(output, ensure_ascii=False, indent=2))
@@ -173,9 +250,13 @@ def main() -> int:
 
     output = {
         'executor_state': 'completed',
+        'secondary_gate_decision': secondary_gate_decision,
+        'secondary_gate_reason': secondary_gate_reason,
         'main_action': main_result,
         'secondary_action': secondary_result,
         'fallback_action': fallback_action,
+        'duration_sec': round(time.monotonic() - started_at, 3),
+        'exit_summary': build_exit_summary(main_result, secondary_result),
         'policy_trace': policy.get('policy_trace', {}),
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
