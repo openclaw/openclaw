@@ -19,7 +19,7 @@ describe("sessions_spawn fsPolicy defaults", () => {
           },
         },
       },
-    } as any);
+    } as unknown);
 
     const onSessionsPatch = vi.fn();
     const gateway = setupSessionsSpawnGatewayMock({ onSessionsPatch });
@@ -27,7 +27,7 @@ describe("sessions_spawn fsPolicy defaults", () => {
     const tool = createSessionsSpawnTool({
       cfg: (await import("../config/config.js")).loadConfig(),
       allowSubagents: true,
-    } as any);
+    } as unknown);
 
     const child = gateway.getChild();
 
@@ -37,7 +37,7 @@ describe("sessions_spawn fsPolicy defaults", () => {
       sandbox: "inherit",
       mode: "run",
       cleanup: "delete",
-    } as any);
+    } as unknown);
 
     // Ensure we patched the child session with an fs ceiling.
     expect(onSessionsPatch).toHaveBeenCalledWith(
