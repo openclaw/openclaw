@@ -60,6 +60,14 @@ export type AgentSummary = {
   name?: string;
 };
 
+export type QueuedMessageMode = "steer" | "followUp";
+
+export type QueuedMessage = {
+  runId: string;
+  text: string;
+  mode: QueuedMessageMode;
+};
+
 export type GatewayStatusSummary = {
   runtimeVersion?: string | null;
   linkChannel?: {
@@ -109,6 +117,7 @@ export type TuiStateAccess = {
   currentSessionId: string | null;
   activeChatRunId: string | null;
   pendingOptimisticUserMessage?: boolean;
+  queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;
   initialSessionApplied: boolean;
