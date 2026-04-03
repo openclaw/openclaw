@@ -178,10 +178,12 @@ export function shouldSwitchToLiveModel(params: {
     // Current model already matches the persisted selection — the switch has
     // effectively been applied.  Clear the stale flag so subsequent fallback
     // iterations don't re-evaluate it.
-    void clearLiveModelSwitchPending({
+    clearLiveModelSwitchPending({
       cfg,
       sessionKey,
       agentId: params.agentId,
+    }).catch(() => {
+      /* best-effort — fs/lock errors are non-fatal here */
     });
     return undefined;
   }
