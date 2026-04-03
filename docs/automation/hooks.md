@@ -168,6 +168,75 @@ openclaw hooks enable <hook-name>
 
 Extracts the last 15 user/assistant messages, generates a descriptive filename slug via LLM, and saves to `<workspace>/memory/YYYY-MM-DD-slug.md`. Requires `workspace.dir` to be configured.
 
+- **`tool_result_persist`**: transform tool results before they are written to the session transcript. Must be synchronous; return the updated tool result payload or `undefined` to keep it as-is. See [Agent Loop](/concepts/agent-loop).
+
+### Plugin Hook Events
+
+#### before_tool_call
+
+Runs before each tool call. Plugins can modify parameters, block the call, or request user approval.
+
+Return fields:
+
+- **`params`**: Override tool parameters (merged with original params)
+- **`block`**: Set to `true` to block the tool call
+- **`blockReason`**: Reason shown to the agent when blocked
+- **`requireApproval`**: Pause execution and wait for user approval via channels
+
+The `requireApproval` field triggers native platform approval (Telegram buttons, Discord components, `/approve` command) instead of relying on the agent to cooperate:
+
+```typescript
+{
+  requireApproval: {
+    title: "Sensitive operation",
+    description: "This tool call modifies production data",
+    severity: "warning",       // "info" | "warning" | "critical"
+    timeoutMs: 120000,         // default: 120s
+    timeoutBehavior: "deny",   // "allow" | "deny" (default)
+    onResolution: async (decision) => {
+      // Called after the user resolves: "allow-once", "allow-always", "deny", "timeout", or "cancelled"
+    },
+  }
+}
+```
+
+The `onResolution` callback is invoked with the final decision string after the approval resolves, times out, or is cancelled. It runs in-process within the plugin (not sent to the gateway). Use it to persist decisions, update caches, or perform cleanup.
+
+The `pluginId` field is stamped automatically by the hook runner from the plugin registration. When multiple plugins return `requireApproval`, the first one (highest priority) wins.
+
+`block` takes precedence over `requireApproval`: if the merged hook result has both `block: true` and a `requireApproval` field, the tool call is blocked immediately without triggering the approval flow. This ensures a higher-priority plugin's block cannot be overridden by a lower-priority plugin's approval request.
+
+If the gateway is unavailable or does not support plugin approvals, the tool call falls back to a soft block using the `description` as the block reason.
+
+#### before_install
+
+Runs after the built-in install security scan and before installation continues. OpenClaw fires this hook for interactive skill installs as well as plugin bundle, package, and single-file installs.
+
+Default behavior differs by target type:
+
+- Plugin install/update flows fail closed on built-in scan `critical` findings and scan errors unless the operator explicitly uses `openclaw plugins install --dangerously-force-unsafe-install` or `openclaw plugins update --dangerously-force-unsafe-install`.
+- Skill installs still surface built-in scan findings and scan errors as warnings and continue by default.
+
+Return fields:
+
+- **`findings`**: Additional scan findings to surface as warnings
+- **`block`**: Set to `true` to block the install
+- **`blockReason`**: Human-readable reason shown when blocked
+
+Event fields:
+
+- **`targetType`**: Install target category (`skill` or `plugin`)
+- **`targetName`**: Human-readable skill name or plugin id for the install target
+- **`sourcePath`**: Absolute path to the install target content being scanned
+- **`sourcePathKind`**: Whether the scanned content is a `file` or `directory`
+- **`origin`**: Normalized install origin when available (for example `openclaw-bundled`, `openclaw-workspace`, `plugin-bundle`, `plugin-package`, or `plugin-file`)
+- **`request`**: Provenance for the install request, including `kind`, `mode`, and optional `requestedSpecifier`
+- **`builtinScan`**: Structured result of the built-in scanner, including `status`, summary counts, findings, and optional `error`
+- **`skill`**: Skill install metadata when `targetType` is `skill`, including `installId` and the selected `installSpec`
+- **`plugin`**: Plugin install metadata when `targetType` is `plugin`, including the canonical `pluginId`, normalized `contentType`, optional `packageName` / `manifestId` / `version`, and `extensions`
+
+Example event (plugin package install):
+
 ### bootstrap-extra-files config
 
 ```json
