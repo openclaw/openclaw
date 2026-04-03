@@ -280,7 +280,18 @@ function createGatewayPlugin(params: {
   return new SafeGatewayPlugin();
 }
 
+// Stagger reconnect base delay by accountId to avoid thundering herd on multi-account setups.
+// Each account gets a deterministic 0-4999ms offset based on a hash of its id.
+function staggeredBaseDelay(accountId: string): number {
+  let hash = 0;
+  for (let i = 0; i < accountId.length; i++) {
+    hash = (hash * 31 + accountId.charCodeAt(i)) >>> 0;
+  }
+  return hash % 5000;
+}
+
 export function createDiscordGatewayPlugin(params: {
+  accountId?: string;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
   __testing?: {
@@ -296,8 +307,9 @@ export function createDiscordGatewayPlugin(params: {
 }): carbonGateway.GatewayPlugin {
   const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
   const proxy = params.discordConfig?.proxy?.trim();
+  const baseDelay = params.accountId ? staggeredBaseDelay(params.accountId) : 0;
   const options = {
-    reconnect: { maxAttempts: 50 },
+    reconnect: { maxAttempts: 50, baseDelay },
     intents,
     autoInteractions: true,
   };
