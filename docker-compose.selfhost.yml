@@ -13,6 +13,8 @@ services:
       - openclaw-data:/home/node/.openclaw
     expose:
       - "18789"
+    networks:
+      - dokploy-network
     init: true
     restart: unless-stopped
     command:
@@ -41,3 +43,7 @@ services:
 
 volumes:
   openclaw-data:
+
+networks:
+  dokploy-network:
+    external: true
