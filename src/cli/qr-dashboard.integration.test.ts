@@ -36,8 +36,18 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
-const { dashboardCommand } = await import("../commands/dashboard.js");
-const { registerQrCli } = await import("./qr-cli.js");
+let dashboardCommand: typeof import("../commands/dashboard.js").dashboardCommand;
+let registerQrCli: typeof import("./qr-cli.js").registerQrCli;
+
+const mockedModuleIds = ["../config/config.js", "../infra/clipboard.js", "../runtime.js"];
+
+const unmockedDependencyIds = [
+  "../commands/dashboard.js",
+  "../gateway/resolve-configured-secret-input-string.js",
+  "../pairing/setup-code.js",
+  "./command-secret-gateway.js",
+  "./qr-cli.js",
+] as const;
 
 function createGatewayTokenRefFixture() {
   return {
@@ -101,6 +111,15 @@ async function runCli(args: string[]): Promise<void> {
   await program.parseAsync(args, { from: "user" });
 }
 
+async function loadCliModules() {
+  vi.resetModules();
+  for (const id of unmockedDependencyIds) {
+    vi.doUnmock(id);
+  }
+  ({ dashboardCommand } = await import("../commands/dashboard.js"));
+  ({ registerQrCli } = await import("./qr-cli.js"));
+}
+
 describe("cli integration: qr + dashboard token SecretRef", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -110,6 +129,10 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
     ]);
+  });
+
+  beforeAll(async () => {
+    await loadCliModules();
   });
 
   beforeEach(() => {
@@ -181,5 +204,13 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
 
   afterAll(() => {
     envSnapshot.restore();
+    vi.restoreAllMocks();
+    for (const id of mockedModuleIds) {
+      vi.doUnmock(id);
+    }
+    for (const id of unmockedDependencyIds) {
+      vi.doUnmock(id);
+    }
+    vi.resetModules();
   });
 });
