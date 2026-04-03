@@ -275,6 +275,7 @@ class TalkModeManager(
   suspend fun speakAssistantReply(text: String) {
     if (!playbackEnabled) return
     val playbackToken = playbackGeneration.incrementAndGet()
+    cancelActivePlayback()
     ensureConfigLoaded()
     runPlaybackSession(playbackToken) {
       playAssistant(text, playbackToken)
@@ -681,8 +682,6 @@ class TalkModeManager(
     var shouldResumeAfterSpeak = false
     var previousJob: Job? = null
     try {
-      shouldResumeAfterSpeak = true
-      onBeforeSpeak()
       val claimedPlayback =
         synchronized(ttsJobLock) {
           if (!playbackEnabled || playbackToken != playbackGeneration.get()) {
@@ -699,6 +698,8 @@ class TalkModeManager(
       }
       previousJob?.takeIf { it !== currentJob }?.cancel()
       stopTextToSpeechPlayback()
+      shouldResumeAfterSpeak = true
+      onBeforeSpeak()
       ensurePlaybackActive(playbackToken)
       _isSpeaking.value = true
       _statusText.value = "Speaking…"
