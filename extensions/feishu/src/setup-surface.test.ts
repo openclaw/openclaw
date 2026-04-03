@@ -209,11 +209,17 @@ describe("feishu setup wizard", () => {
       note: vi.fn(async () => {}),
     });
 
+    const setupWizard = feishuPlugin.setupWizard;
+    if (
+      !setupWizard ||
+      !("finalize" in setupWizard) ||
+      typeof setupWizard.finalize !== "function"
+    ) {
+      throw new Error("Expected Feishu setup wizard finalize hook");
+    }
+
     const result = await runSetupWizardFinalize({
-      finalize:
-        feishuPlugin.setupWizard && "finalize" in feishuPlugin.setupWizard
-          ? feishuPlugin.setupWizard.finalize
-          : undefined,
+      finalize: setupWizard.finalize,
       cfg: {
         channels: {
           feishu: {
@@ -228,18 +234,21 @@ describe("feishu setup wizard", () => {
           },
         },
       } as never,
-      accountId: undefined as never,
+      accountId: "work",
+      credentialValues: {},
+      forceAllowFrom: false,
       prompter,
       runtime: createNonExitingTypedRuntimeEnv<FeishuConfigureRuntime>(),
       options: {},
     });
 
-    expect(result).toBeDefined();
-    expect(result?.cfg).toBeDefined();
-    const nextCfg = result!.cfg!;
-    expect(nextCfg.channels?.feishu?.appId).toBe("top-level-app");
-    expect(nextCfg.channels?.feishu?.appSecret).toBe("top-level-secret");
-    expect(nextCfg.channels?.feishu?.accounts?.work).toMatchObject({
+    expect(result && typeof result === "object" && "cfg" in result).toBe(true);
+    const nextCfg =
+      result && typeof result === "object" && "cfg" in result ? result.cfg : undefined;
+    expect(nextCfg?.channels?.feishu).toBeDefined();
+    expect(nextCfg?.channels?.feishu?.appId).toBe("top-level-app");
+    expect(nextCfg?.channels?.feishu?.appSecret).toBe("top-level-secret");
+    expect(nextCfg?.channels?.feishu?.accounts?.work).toMatchObject({
       enabled: true,
       appId: "work-app",
       appSecret: "work-secret",
