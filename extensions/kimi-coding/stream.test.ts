@@ -25,6 +25,8 @@ function createFakeStream(params: { events: unknown[]; resultMessage: unknown })
 
 const KIMI_TOOL_TEXT =
   ' <|tool_calls_section_begin|> <|tool_call_begin|> functions.read:0 <|tool_call_argument_begin|> {"file_path":"./package.json"} <|tool_call_end|> <|tool_calls_section_end|>';
+const KIMI_MULTI_TOOL_TEXT =
+  ' <|tool_calls_section_begin|> <|tool_call_begin|> functions.read:0 <|tool_call_argument_begin|> {"file_path":"./package.json"} <|tool_call_end|> <|tool_call_begin|> functions.write:1 <|tool_call_argument_begin|> {"file_path":"./out.txt","content":"done"} <|tool_call_end|> <|tool_calls_section_end|>';
 
 describe("kimi tool-call markup wrapper", () => {
   it("converts tagged Kimi tool-call text into structured tool calls", async () => {
@@ -162,6 +164,45 @@ describe("kimi tool-call markup wrapper", () => {
           id: "functions.read:0",
           name: "functions.read",
           arguments: { file_path: "./package.json" },
+        },
+      ],
+      stopReason: "toolUse",
+    });
+  });
+
+  it("parses multiple tagged tool calls in one section", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: KIMI_MULTI_TOOL_TEXT }],
+      stopReason: "stop",
+    };
+    const baseStreamFn: StreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }) as ReturnType<StreamFn>;
+
+    const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
+    const stream = wrapped(
+      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    ) as FakeStream;
+
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "functions.read:0",
+          name: "functions.read",
+          arguments: { file_path: "./package.json" },
+        },
+        {
+          type: "toolCall",
+          id: "functions.write:1",
+          name: "functions.write",
+          arguments: { file_path: "./out.txt", content: "done" },
         },
       ],
       stopReason: "toolUse",

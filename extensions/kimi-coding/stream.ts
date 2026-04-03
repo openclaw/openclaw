@@ -20,6 +20,7 @@ function stripTaggedToolCallCounter(value: string): string {
 
 function parseKimiTaggedToolCalls(text: string): KimiToolCallBlock[] | null {
   const trimmed = text.trim();
+  // Kimi emits tagged tool-call sections as standalone text blocks on this path.
   if (!trimmed.startsWith(TOOL_CALLS_SECTION_BEGIN) || !trimmed.endsWith(TOOL_CALLS_SECTION_END)) {
     return null;
   }
