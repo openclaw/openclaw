@@ -15,6 +15,12 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import {
+  createInternalHookEvent,
+  fireAndForgetHook,
+  toInternalMessageReceivedContext,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
+import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
@@ -29,6 +35,7 @@ import type {
 } from "./bot-message-context.types.js";
 import {
   buildSenderLabel,
+  buildSenderName,
   expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
@@ -70,8 +77,10 @@ export async function resolveTelegramInboundBody(params: {
   allMedia: TelegramMediaRef[];
   isGroup: boolean;
   chatId: number | string;
+  accountId?: string;
   senderId: string;
   senderUsername: string;
+  sessionKey?: string;
   resolvedThreadId?: number;
   routeAgentId?: string;
   effectiveGroupAllow: NormalizedAllowFrom;
@@ -91,8 +100,10 @@ export async function resolveTelegramInboundBody(params: {
     allMedia,
     isGroup,
     chatId,
+    accountId,
     senderId,
     senderUsername,
+    sessionKey,
     resolvedThreadId,
     routeAgentId,
     effectiveGroupAllow,
@@ -267,6 +278,41 @@ export async function resolveTelegramInboundBody(params: {
           }
         : null,
     });
+    if (
+      (topicConfig?.ingest ?? (groupConfig as TelegramGroupConfig | undefined)?.ingest) &&
+      sessionKey
+    ) {
+      fireAndForgetHook(
+        triggerInternalHook(
+          createInternalHookEvent(
+            "message",
+            "received",
+            sessionKey,
+            toInternalMessageReceivedContext({
+              from: `telegram:group:${historyKey ?? chatId}`,
+              to: `telegram:${chatId}`,
+              content: rawBody,
+              timestamp: msg.date ? msg.date * 1000 : undefined,
+              channelId: "telegram",
+              accountId,
+              conversationId: `telegram:${chatId}`,
+              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+              senderId: senderId || undefined,
+              senderName: buildSenderName(msg),
+              senderUsername: senderUsername || undefined,
+              provider: "telegram",
+              surface: "telegram",
+              threadId: resolvedThreadId,
+              originatingChannel: "telegram",
+              originatingTo: `telegram:${chatId}`,
+              isGroup: true,
+              groupId: `telegram:${chatId}`,
+            }),
+          ),
+        ),
+        "telegram: mention-skip message hook failed",
+      );
+    }
     return null;
   }
 
