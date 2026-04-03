@@ -352,6 +352,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
+          botToken: "tok",
           dmPolicy: "open",
           allowFrom: ["*"],
           capabilities: ["vision"],
@@ -755,12 +756,8 @@ describe("createTelegramBot", () => {
     const [chatId, messageId, text, params] = editMessageTextSpy.mock.calls[0] ?? [];
     expect(chatId).toBe(1234);
     expect(messageId).toBe(12);
-    expect(String(text)).toContain(`${INFO_EMOJI} Commands`);
-    expect(params).toEqual(
-      expect.objectContaining({
-        reply_markup: expect.any(Object),
-      }),
-    );
+    expect(String(text)).toContain(`${INFO_EMOJI} Slash commands`);
+    expect(params).toBeUndefined();
   });
 
   it("falls back to default agent for pagination callbacks without agent suffix", async () => {

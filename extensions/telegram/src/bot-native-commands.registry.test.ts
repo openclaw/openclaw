@@ -1,9 +1,14 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../../src/test-utils/channel-plugins.js";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let clearPluginCommands: typeof import("../../../src/plugins/commands.js").clearPluginCommands;
 let registerPluginCommand: typeof import("../../../src/plugins/commands.js").registerPluginCommand;
+let setActivePluginRegistry: typeof import("../../../src/plugins/runtime.js").setActivePluginRegistry;
 let createCommandBot: typeof import("./bot-native-commands.menu-test-support.js").createCommandBot;
 let createNativeCommandTestParams: typeof import("./bot-native-commands.menu-test-support.js").createNativeCommandTestParams;
 let createPrivateCommandContext: typeof import("./bot-native-commands.menu-test-support.js").createPrivateCommandContext;
@@ -56,6 +61,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   beforeAll(async () => {
     ({ clearPluginCommands, registerPluginCommand } =
       await import("../../../src/plugins/commands.js"));
+    ({ setActivePluginRegistry } = await import("../../../src/plugins/runtime.js"));
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
     ({
       createCommandBot,
@@ -69,6 +75,20 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   });
 
   beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+            commands: {
+              nativeCommandsAutoEnabled: true,
+            },
+          },
+        },
+      ]),
+    );
     clearPluginCommands();
     resetNativeCommandMenuMocks();
   });

@@ -39,6 +39,16 @@ const pluginRequest = {
 };
 
 function createHandler(cfg: OpenClawConfig, accountId = "default") {
+  const normalizedCfg = {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      telegram: {
+        ...cfg.channels?.telegram,
+        botToken: cfg.channels?.telegram?.botToken ?? "tg-token",
+      },
+    },
+  } as OpenClawConfig;
   const sendTyping = vi.fn().mockResolvedValue({ ok: true });
   const sendMessage = vi
     .fn()
@@ -49,7 +59,7 @@ function createHandler(cfg: OpenClawConfig, accountId = "default") {
     {
       token: "tg-token",
       accountId,
-      cfg,
+      cfg: normalizedCfg,
     },
     {
       nowMs: () => 1000,
