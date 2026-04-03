@@ -182,4 +182,71 @@ describe("discord group policy", () => {
       }),
     ).toEqual({ allow: ["message.guild"] });
   });
+
+  it("honors account-scoped guild and channel overrides", () => {
+    const discordCfg = {
+      channels: {
+        discord: {
+          token: "discord-test",
+          guilds: {
+            guild1: {
+              requireMention: true,
+              tools: { allow: ["message.root"] },
+            },
+          },
+          accounts: {
+            work: {
+              token: "discord-work",
+              guilds: {
+                guild1: {
+                  requireMention: false,
+                  tools: { allow: ["message.account"] },
+                  channels: {
+                    "123": {
+                      requireMention: true,
+                      tools: { allow: ["message.account-channel"] },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+
+    expect(
+      resolveDiscordGroupRequireMention({
+        cfg: discordCfg,
+        accountId: "work",
+        groupSpace: "guild1",
+        groupId: "missing",
+      }),
+    ).toBe(false);
+    expect(
+      resolveDiscordGroupRequireMention({
+        cfg: discordCfg,
+        accountId: "work",
+        groupSpace: "guild1",
+        groupId: "123",
+      }),
+    ).toBe(true);
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg: discordCfg,
+        accountId: "work",
+        groupSpace: "guild1",
+        groupId: "missing",
+      }),
+    ).toEqual({ allow: ["message.account"] });
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg: discordCfg,
+        accountId: "work",
+        groupSpace: "guild1",
+        groupId: "123",
+      }),
+    ).toEqual({ allow: ["message.account-channel"] });
+  });
 });
