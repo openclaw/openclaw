@@ -124,7 +124,7 @@ export async function executeSendAction(params: {
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   let message = params.message;
 
-  if (hasMessageSendingHooks) {
+  if (!params.ctx.dryRun && hasMessageSendingHooks) {
     try {
       const sendingResult = await hookRunner!.runMessageSending(
         {
@@ -141,7 +141,18 @@ export async function executeSendAction(params: {
         },
       );
       if (sendingResult?.cancel) {
-        return { handledBy: "core", payload: { cancelled: true }, cancelled: true };
+        return {
+          handledBy: "core",
+          payload: { cancelled: true },
+          cancelled: true,
+          sendResult: {
+            channel: params.ctx.channel,
+            to: params.to,
+            via: "direct",
+            mediaUrl: null,
+            cancelled: true,
+          },
+        };
       }
       if (sendingResult?.content != null) {
         message = sendingResult.content;

@@ -5,7 +5,7 @@
  * Branch B2 (gateway): hook runs before gateway call.
  * Broadcast: cancelled sends produce ok:false, cancelled:true result entries.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks
@@ -58,6 +58,10 @@ vi.mock("../../config/sessions.js", () => ({
 type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
 let executeSendAction: OutboundSendServiceModule["executeSendAction"];
 
+beforeAll(async () => {
+  ({ executeSendAction } = await import("./outbound-send-service.js"));
+});
+
 function makeCtx(overrides?: Record<string, unknown>) {
   return {
     cfg: {},
@@ -80,9 +84,7 @@ function pluginResult(messageId: string) {
   };
 }
 
-beforeEach(async () => {
-  vi.resetModules();
-  ({ executeSendAction } = await import("./outbound-send-service.js"));
+beforeEach(() => {
   dispatchChannelMessageActionMock.mockClear();
   sendMessageMock.mockClear();
   runMessageSendingMock.mockClear();

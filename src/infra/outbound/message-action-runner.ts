@@ -325,6 +325,7 @@ async function handleBroadcastAction(
     to: string;
     ok: boolean;
     error?: string;
+    cancelled?: true;
     result?: MessageSendResult;
   }> = [];
   const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
@@ -355,7 +356,9 @@ async function handleBroadcastAction(
           channel: targetChannel,
           to: resolved.target.to,
           ok: !wasCancelled,
-          ...(wasCancelled ? { cancelled: true as const } : {}),
+          ...(wasCancelled
+            ? { cancelled: true as const, error: "cancelled by message_sending hook" }
+            : {}),
           result: !wasCancelled && sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });
       } catch (err) {
