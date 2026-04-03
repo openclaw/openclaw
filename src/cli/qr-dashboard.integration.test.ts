@@ -41,9 +41,13 @@ vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
 }));
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: runtime,
-}));
+vi.mock("../runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
+  return {
+    ...actual,
+    defaultRuntime: runtime,
+  };
+});
 
 let dashboardCommand: typeof import("../commands/dashboard.js").dashboardCommand;
 let registerQrCli: typeof import("./qr-cli.js").registerQrCli;

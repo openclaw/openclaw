@@ -49,7 +49,13 @@ const mocks = vi.hoisted(() => ({
 }));
 const runtime = runtimeState.defaultRuntime;
 
-vi.mock("../runtime.js", () => ({ defaultRuntime: runtimeState.defaultRuntime }));
+vi.mock("../runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
+  return {
+    ...actual,
+    defaultRuntime: runtimeState.defaultRuntime,
+  };
+});
 vi.mock("../config/config.js", () => ({ loadConfig: mocks.loadConfig }));
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
 vi.mock("./command-secret-gateway.js", () => ({
