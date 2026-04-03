@@ -800,6 +800,52 @@ describe("tts", () => {
       });
     });
 
+    it("lets late talk-style overrides beat agent-level TTS layers", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-4o-mini" },
+            tts: {
+              provider: "openai",
+              providers: {
+                openai: {
+                  apiKey: "global-openai-key",
+                  voice: "agent-default-voice",
+                  model: "gpt-4o-mini-tts",
+                },
+              },
+            },
+          },
+        },
+      };
+      const baseTts = resolveTtsConfig(cfg).rawConfig ?? {};
+
+      const config = resolveTtsConfig({
+        cfg,
+        override: {
+          ...baseTts,
+          auto: "always",
+          provider: "openai",
+          providers: {
+            ...baseTts.providers,
+            openai: {
+              ...baseTts.providers?.openai,
+              voice: "talk-voice",
+              model: "tts-1",
+            },
+          },
+        },
+      });
+
+      expect(config.provider).toBe("openai");
+      expect(config.auto).toBe("always");
+      expect(config.providerConfigs.openai).toMatchObject({
+        apiKey: "global-openai-key",
+        voice: "talk-voice",
+        model: "tts-1",
+      });
+    });
+
     it("preserves provider fields when legacy and providers config styles are mixed across layers", () => {
       const config = resolveTtsConfig({
         agents: {

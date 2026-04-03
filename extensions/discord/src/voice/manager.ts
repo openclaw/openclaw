@@ -644,7 +644,9 @@ export class DiscordVoiceManager {
       ...this.params.cfg,
       messages: {
         ...this.params.cfg.messages,
-        tts: ttsConfig.rawConfig ?? mergeTtsConfig({}, this.params.discordConfig.voice?.tts),
+        tts:
+          ttsConfig.rawConfig ??
+          mergeTtsConfig({}, this.params.discordConfig.voice?.tts, this.params.cfg),
       },
     };
     const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides, {

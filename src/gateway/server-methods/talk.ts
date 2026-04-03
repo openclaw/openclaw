@@ -65,7 +65,7 @@ function resolveTalkVoiceId(
 function buildTalkTtsConfig(
   config: OpenClawConfig,
 ):
-  | { cfg: OpenClawConfig; provider: string; providerConfig: TalkProviderConfig }
+  | { provider: string; providerConfig: TalkProviderConfig; ttsConfig: TtsConfig }
   | { error: string } {
   const resolved = resolveActiveTalkProviderConfig(config.talk);
   const provider = canonicalizeSpeechProviderId(resolved?.provider, config);
@@ -102,13 +102,7 @@ function buildTalkTtsConfig(
   return {
     provider,
     providerConfig,
-    cfg: {
-      ...config,
-      messages: {
-        ...config.messages,
-        tts: talkTts,
-      },
-    },
+    ttsConfig: talkTts,
   };
 }
 
@@ -255,7 +249,8 @@ export const talkHandlers: GatewayRequestHandlers = {
       );
       const result = await synthesizeSpeech({
         text,
-        cfg: setup.cfg,
+        cfg: snapshot.config,
+        ttsConfigOverride: setup.ttsConfig,
         overrides,
         disableFallback: true,
       });

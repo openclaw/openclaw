@@ -337,8 +337,16 @@ function resolveRawTtsConfig(params: ResolveTtsConfigParams): TtsConfig {
   const agentConfig = stripScopedTtsConfigFields(
     resolveAgentConfig(params.cfg, resolveTtsContextAgentId(params))?.tts ?? {},
   );
-  const base = mergeTtsConfig(mergeTtsConfig(globalConfig, agentDefaults), agentConfig);
-  const merged = mergeTtsConfig(base, stripScopedTtsConfigFields(params.override ?? {}));
+  const base = mergeTtsConfig(
+    mergeTtsConfig(globalConfig, agentDefaults, params.cfg),
+    agentConfig,
+    params.cfg,
+  );
+  const merged = mergeTtsConfig(
+    base,
+    stripScopedTtsConfigFields(params.override ?? {}),
+    params.cfg,
+  );
   return {
     ...merged,
     prefsPath: globalConfig.prefsPath,

@@ -1,4 +1,5 @@
-import type { TtsConfig } from "../config/types.js";
+import type { OpenClawConfig, TtsConfig } from "../config/types.js";
+import { canonicalizeSpeechProviderId } from "./provider-registry.js";
 const RESERVED_TTS_CONFIG_KEYS = new Set([
   "auto",
   "enabled",
@@ -21,8 +22,11 @@ function asProviderConfig(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function normalizeProviderId(providerId: string): string {
+function normalizeProviderId(providerId: string, cfg?: OpenClawConfig): string {
   const normalized = providerId.trim().toLowerCase();
+  if (cfg) {
+    return canonicalizeSpeechProviderId(normalized, cfg) ?? normalized;
+  }
   return STATIC_TTS_PROVIDER_ALIASES.get(normalized) ?? normalized;
 }
 
@@ -36,16 +40,23 @@ function collectLegacyProviderKeys(raw: TtsConfig): string[] {
     });
 }
 
-function collectLegacyProviderIds(raw: TtsConfig): string[] {
-  return [...new Set(collectLegacyProviderKeys(raw).map(normalizeProviderId))];
+function collectLegacyProviderIds(raw: TtsConfig, cfg?: OpenClawConfig): string[] {
+  return [
+    ...new Set(
+      collectLegacyProviderKeys(raw).map((providerId) => normalizeProviderId(providerId, cfg)),
+    ),
+  ];
 }
 
-function collectProviderConfigs(raw: TtsConfig): Record<string, Record<string, unknown>> {
+function collectProviderConfigs(
+  raw: TtsConfig,
+  cfg?: OpenClawConfig,
+): Record<string, Record<string, unknown>> {
   const entries = raw as Record<string, unknown>;
   const merged: Record<string, Record<string, unknown>> = {};
 
   for (const providerKey of collectLegacyProviderKeys(raw)) {
-    const providerId = normalizeProviderId(providerKey);
+    const providerId = normalizeProviderId(providerKey, cfg);
     merged[providerId] = {
       ...merged[providerId],
       ...asProviderConfig(entries[providerKey]),
@@ -53,7 +64,7 @@ function collectProviderConfigs(raw: TtsConfig): Record<string, Record<string, u
   }
 
   for (const [providerKey, value] of Object.entries(raw.providers ?? {})) {
-    const providerId = normalizeProviderId(providerKey);
+    const providerId = normalizeProviderId(providerKey, cfg);
     merged[providerId] = {
       ...merged[providerId],
       ...asProviderConfig(value),
@@ -63,14 +74,18 @@ function collectProviderConfigs(raw: TtsConfig): Record<string, Record<string, u
   return merged;
 }
 
-export function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
+export function mergeTtsConfig(
+  base: TtsConfig,
+  override?: TtsConfig,
+  cfg?: OpenClawConfig,
+): TtsConfig {
   if (!override) {
     return base;
   }
 
   const mergedEntries = { ...base, ...override } as Record<string, unknown>;
-  const baseProviders = collectProviderConfigs(base);
-  const overrideProviders = collectProviderConfigs(override);
+  const baseProviders = collectProviderConfigs(base, cfg);
+  const overrideProviders = collectProviderConfigs(override, cfg);
   const mergedProviders = Object.fromEntries(
     [...new Set([...Object.keys(baseProviders), ...Object.keys(overrideProviders)])].map(
       (providerId) => [
@@ -83,7 +98,10 @@ export function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig
     ),
   );
   const legacyProviderIds = [
-    ...new Set([...collectLegacyProviderIds(base), ...collectLegacyProviderIds(override)]),
+    ...new Set([
+      ...collectLegacyProviderIds(base, cfg),
+      ...collectLegacyProviderIds(override, cfg),
+    ]),
   ];
   const legacyProviderKeys = [
     ...new Set([...collectLegacyProviderKeys(base), ...collectLegacyProviderKeys(override)]),
