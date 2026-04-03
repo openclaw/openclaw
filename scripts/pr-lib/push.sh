@@ -3,7 +3,7 @@ resolve_head_push_url() {
   source .local/pr-meta.env
 
   if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
-    printf 'git@github.com:%s/%s.git\n' "$PR_HEAD_OWNER" "$PR_HEAD_REPO_NAME"
+    printf 'https://github.com/%s/%s.git\n' "$PR_HEAD_OWNER" "$PR_HEAD_REPO_NAME"
     return 0
   fi
 
@@ -188,13 +188,13 @@ resolve_prhead_remote_sha() {
     local current_push_url
     current_push_url=$(git remote get-url prhead 2>/dev/null || true)
     if [ -n "$https_url" ] && [ "$https_url" != "$current_push_url" ]; then
-      echo "SSH remote failed; falling back to HTTPS..."
+      echo "SSH remote failed; falling back to HTTPS..." >&2
       git remote set-url prhead "$https_url"
       git remote set-url --push prhead "$https_url"
       remote_sha=$(git ls-remote prhead "refs/heads/$pr_head" 2>/dev/null | awk '{print $1}' || true)
     fi
     if [ -z "$remote_sha" ]; then
-      echo "Remote branch refs/heads/$pr_head not found on prhead"
+      echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
       exit 1
     fi
   fi
@@ -288,9 +288,10 @@ push_prep_head_to_pr_branch() {
     exit 1
   }
   git branch -D "pr-$pr-verify" 2>/dev/null || true
-  cat > "$result_env_path" <<EOF_ENV
-PUSH_PREP_HEAD_SHA=$prep_head_sha
-PUSHED_FROM_SHA=$pushed_from_sha
-PR_HEAD_SHA_AFTER_PUSH=$pr_head_sha_after
-EOF_ENV
+  # Security: shell-escape values to prevent command injection when sourced.
+  printf '%s=%q\n' \
+    PUSH_PREP_HEAD_SHA "$prep_head_sha" \
+    PUSHED_FROM_SHA "$pushed_from_sha" \
+    PR_HEAD_SHA_AFTER_PUSH "$pr_head_sha_after" \
+    > "$result_env_path"
 }

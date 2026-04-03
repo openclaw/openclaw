@@ -8,6 +8,7 @@ import type {
   OpenAIResponsesAssistantPhase,
   ResponseObject,
 } from "./openai-ws-connection.js";
+import { normalizeToolParameterSchema } from "./pi-tools.schema.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
 
 type AnyMessage = Message & { role: string; content: unknown };
@@ -276,12 +277,14 @@ export function convertTools(tools: Context["tools"]): FunctionToolDefinition[] 
   if (!tools || tools.length === 0) {
     return [];
   }
-  return tools.map((tool) => ({
-    type: "function" as const,
-    name: tool.name,
-    description: typeof tool.description === "string" ? tool.description : undefined,
-    parameters: (tool.parameters ?? {}) as Record<string, unknown>,
-  }));
+  return tools.map((tool) => {
+    return {
+      type: "function" as const,
+      name: tool.name,
+      description: typeof tool.description === "string" ? tool.description : undefined,
+      parameters: normalizeToolParameterSchema(tool.parameters ?? {}) as Record<string, unknown>,
+    };
+  });
 }
 
 export function planTurnInput(params: {

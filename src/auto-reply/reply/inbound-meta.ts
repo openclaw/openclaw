@@ -33,6 +33,32 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
   return channelValue;
 }
 
+function resolveInboundFormattingHints(ctx: TemplateContext):
+  | {
+      text_markup: "slack_mrkdwn";
+      rules: string[];
+    }
+  | undefined {
+  const channelValue = resolveInboundChannel(ctx);
+  const surface = safeTrim(ctx.Surface);
+  const provider = safeTrim(ctx.Provider);
+  const isSlack = channelValue === "slack" || surface === "slack" || provider === "slack";
+  if (!isSlack) {
+    return undefined;
+  }
+
+  return {
+    text_markup: "slack_mrkdwn",
+    rules: [
+      "Use Slack mrkdwn, not standard Markdown.",
+      "Bold uses *single asterisks*.",
+      "Links use <url|label>.",
+      "Code blocks use triple backticks without a language identifier.",
+      "Do not use markdown headings or pipe tables.",
+    ],
+  };
+}
+
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -56,6 +82,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
+    response_format: resolveInboundFormattingHints(ctx),
   };
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.

@@ -105,6 +105,7 @@ Auth profile refs are also supported for static credentials:
 
 - `api_key` credentials can use `keyRef: { source, provider, id }`
 - `token` credentials can use `tokenRef: { source, provider, id }`
+- OAuth-mode profiles do not support SecretRef credentials; if `auth.profiles.<id>.mode` is set to `"oauth"`, SecretRef-backed `keyRef`/`tokenRef` input for that profile is rejected.
 
 Automation-friendly check (exit `1` when expired/missing, `2` when expiring):
 
@@ -113,7 +114,7 @@ openclaw models status --check
 ```
 
 Optional ops scripts (systemd/Termux) are documented here:
-[/automation/auth-monitoring](/automation/auth-monitoring)
+[Auth monitoring scripts](/help/scripts#auth-monitoring-scripts)
 
 > `claude setup-token` requires an interactive TTY.
 

@@ -50,13 +50,12 @@ vi.mock("./attachments.js", () => ({
   }),
 }));
 
-vi.mock("./reactions.js", async () => {
-  const actual = await vi.importActual<typeof import("./reactions.js")>("./reactions.js");
-  return {
-    ...actual,
-    sendBlueBubblesReaction: vi.fn().mockResolvedValue(undefined),
-  };
-});
+vi.mock("./reactions.js", () => ({
+  normalizeBlueBubblesReactionInput: vi.fn((emoji: string, remove?: boolean) =>
+    remove ? `-${emoji}` : emoji,
+  ),
+  sendBlueBubblesReaction: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("./history.js", () => ({
   fetchBlueBubblesHistory: vi.fn().mockResolvedValue({ entries: [], resolved: true }),

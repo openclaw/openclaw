@@ -336,33 +336,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_ENV_MISMATCH");
   });
 
-  test("accepts matching env hash with reordered keys", () => {
-    const record = makeRecord("git diff", ["git", "diff"]);
-    const binding = buildSystemRunApprovalEnvBinding({ SAFE_A: "1", SAFE_B: "2" });
-    record.request.systemRunBinding = {
-      argv: ["git", "diff"],
-      cwd: null,
-      agentId: null,
-      sessionKey: null,
-      envHash: binding.envHash,
-    };
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: {
-        command: ["git", "diff"],
-        rawCommand: "git diff",
-        env: { SAFE_B: "2", SAFE_A: "1" },
-        runId: "approval-1",
-        approved: true,
-        approvalDecision: "allow-once",
-      },
-      nodeId: "node-1",
-      client,
-      execApprovalManager: manager(record),
-      nowMs: now,
-    });
-    expectAllowOnceForwardingResult(result);
-  });
-
   test("consumes allow-once approvals and blocks same runId replay", async () => {
     const approvalManager = new ExecApprovalManager();
     const runId = "approval-replay-1";

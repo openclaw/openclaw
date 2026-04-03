@@ -14,8 +14,8 @@ import {
   resolvePinnedMainDmOwnerFromAllowlist,
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   deriveLastRoutePolicy,
   resolveAgentIdFromSessionKey,

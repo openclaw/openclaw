@@ -1,4 +1,4 @@
-import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
+import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 
 export function createModelsProviderData(
   entries: Record<string, string[]>,

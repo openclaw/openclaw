@@ -114,15 +114,16 @@ prepare_gates() {
     fi
   fi
 
-  cat > .local/gates.env <<EOF_ENV
-PR_NUMBER=$pr
-DOCS_ONLY=$docs_only
-CHANGELOG_REQUIRED=$changelog_required
-GATES_MODE=$gates_mode
-LAST_VERIFIED_HEAD_SHA=$current_head
-FULL_GATES_HEAD_SHA=${previous_full_gates_head:-}
-GATES_PASSED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-EOF_ENV
+  # Security: shell-escape values to prevent command injection when sourced.
+  printf '%s=%q\n' \
+    PR_NUMBER "$pr" \
+    DOCS_ONLY "$docs_only" \
+    CHANGELOG_REQUIRED "$changelog_required" \
+    GATES_MODE "$gates_mode" \
+    LAST_VERIFIED_HEAD_SHA "$current_head" \
+    FULL_GATES_HEAD_SHA "${previous_full_gates_head:-}" \
+    GATES_PASSED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > .local/gates.env
 
   echo "docs_only=$docs_only"
   echo "changelog_required=$changelog_required"

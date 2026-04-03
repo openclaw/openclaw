@@ -17,7 +17,7 @@ describe("resolveTelegramAutoThreadId", () => {
   it("matches chats across Telegram target formats", () => {
     expect(
       resolveTelegramAutoThreadId({
-        to: "telegram:group:-100123:topic:77",
+        to: "telegram:group:-100123",
         toolContext: createToolContext(),
       }),
     ).toBe("thread-1");
@@ -33,6 +33,15 @@ describe("resolveTelegramAutoThreadId", () => {
       resolveTelegramAutoThreadId({
         to: "-100123",
         toolContext: createToolContext({ currentChannelId: undefined }),
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not override an explicit target topic", () => {
+    expect(
+      resolveTelegramAutoThreadId({
+        to: "telegram:group:-100123:topic:77",
+        toolContext: createToolContext(),
       }),
     ).toBeUndefined();
   });

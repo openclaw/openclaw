@@ -5,6 +5,16 @@ vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: vi.fn(),
 }));
 
+vi.mock("../config/config.js", () => ({
+  loadConfig: vi.fn(() => ({
+    gateway: {
+      controlUi: {
+        allowedOrigins: ["https://control.example.com"],
+      },
+    },
+  })),
+}));
+
 vi.mock("./http-common.js", () => ({
   sendGatewayAuthFailure: vi.fn(),
 }));
@@ -64,6 +74,39 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       authMethod: "trusted-proxy",
       trustDeclaredOperatorScopes: true,
     });
+  });
+
+  it("forwards browser-origin policy into HTTP auth", async () => {
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
+      ok: true,
+      method: "trusted-proxy",
+      user: "operator",
+    });
+
+    await authorizeGatewayHttpRequestOrReply({
+      req: createReq({
+        host: "gateway.example.com",
+        origin: "https://evil.example",
+      }),
+      res: {} as ServerResponse,
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: { userHeader: "x-user" },
+      },
+      trustedProxies: ["127.0.0.1"],
+    });
+
+    expect(vi.mocked(authorizeHttpGatewayConnect)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browserOriginPolicy: {
+          requestHost: "gateway.example.com",
+          origin: "https://evil.example",
+          allowedOrigins: ["https://control.example.com"],
+          allowHostHeaderOriginFallback: false,
+        },
+      }),
+    );
   });
 
   it("replies with auth failure and returns null when auth fails", async () => {

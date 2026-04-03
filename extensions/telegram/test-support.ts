@@ -1,34 +1,12 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createApproverRestrictedNativeApprovalAdapter } from "openclaw/plugin-sdk/approval-runtime";
+import { splitChannelApprovalCapability } from "openclaw/plugin-sdk/approval-runtime";
 import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/telegram-core";
 import type { ResolvedTelegramAccount } from "./src/accounts.js";
 import { resolveTelegramAccount } from "./src/accounts.js";
-import { listTelegramAccountIds } from "./src/accounts.js";
-import {
-  getTelegramExecApprovalApprovers,
-  isTelegramExecApprovalAuthorizedSender,
-  isTelegramExecApprovalApprover,
-  isTelegramExecApprovalClientEnabled,
-  resolveTelegramExecApprovalTarget,
-} from "./src/exec-approvals.js";
+import { telegramApprovalCapability } from "./src/approval-native.js";
 import { telegramConfigAdapter } from "./src/shared.js";
 
-const telegramNativeApprovalAdapter = createApproverRestrictedNativeApprovalAdapter({
-  channel: "telegram",
-  channelLabel: "Telegram",
-  listAccountIds: listTelegramAccountIds,
-  hasApprovers: ({ cfg, accountId }) =>
-    getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
-  isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
-    isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }),
-  isPluginAuthorizedSender: ({ cfg, accountId, senderId }) =>
-    isTelegramExecApprovalApprover({ cfg, accountId, senderId }),
-  isNativeDeliveryEnabled: ({ cfg, accountId }) =>
-    isTelegramExecApprovalClientEnabled({ cfg, accountId }),
-  resolveNativeDeliveryMode: ({ cfg, accountId }) =>
-    resolveTelegramExecApprovalTarget({ cfg, accountId }),
-  requireMatchingTurnSourceChannel: true,
-});
+const telegramNativeApprovalAdapter = splitChannelApprovalCapability(telegramApprovalCapability);
 
 export const telegramCommandTestPlugin = {
   id: "telegram",
@@ -44,6 +22,7 @@ export const telegramCommandTestPlugin = {
   },
   config: telegramConfigAdapter,
   auth: telegramNativeApprovalAdapter.auth,
+  approvalCapability: telegramApprovalCapability,
   pairing: {
     idLabel: "telegramUserId",
   },
@@ -59,5 +38,12 @@ export const telegramCommandTestPlugin = {
   }),
 } satisfies Pick<
   ChannelPlugin<ResolvedTelegramAccount>,
-  "id" | "meta" | "capabilities" | "config" | "auth" | "pairing" | "allowlist"
+  | "id"
+  | "meta"
+  | "capabilities"
+  | "config"
+  | "auth"
+  | "approvalCapability"
+  | "pairing"
+  | "allowlist"
 >;

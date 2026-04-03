@@ -145,6 +145,8 @@ describe("canvas host", () => {
       expect(html).toContain("Interactive test page");
       expect(html).toContain("openclawSendUserAction");
       expect(html).toContain(CANVAS_WS_PATH);
+      expect(html).toContain('document.createElement("span")');
+      expect(html).not.toContain("statusEl.innerHTML");
     } finally {
       await server.close();
     }

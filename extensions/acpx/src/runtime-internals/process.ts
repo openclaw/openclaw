@@ -88,6 +88,13 @@ function resolveExecutableFromPath(command: string, runtime: SpawnRuntime): stri
   return undefined;
 }
 
+function resolveNodeExecPath(runtime: SpawnRuntime): string {
+  if (runtime.execPath && isExecutableFile(runtime.execPath, runtime.platform)) {
+    return runtime.execPath;
+  }
+  return resolveExecutableFromPath("node", runtime) ?? runtime.execPath;
+}
+
 function resolveNodeShebangScriptPath(command: string, runtime: SpawnRuntime): string | undefined {
   const commandPath =
     path.isAbsolute(command) || command.includes(path.sep)
@@ -122,7 +129,7 @@ export function resolveSpawnCommand(
         resolution: "direct",
       });
       return {
-        command: runtime.execPath,
+        command: resolveNodeExecPath(runtime),
         args: [nodeShebangScript, ...params.args],
       };
     }

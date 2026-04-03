@@ -16,6 +16,7 @@ import {
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveThreadFlag,
+  type SessionFreshness,
 } from "../../config/sessions/reset.js";
 import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
@@ -31,6 +32,7 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookSessionEndReason } from "../../plugins/types.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -56,6 +58,33 @@ let sessionArchiveRuntimePromise: Promise<
 function loadSessionArchiveRuntime() {
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
   return sessionArchiveRuntimePromise;
+}
+
+function resolveExplicitSessionEndReason(
+  matchedResetTriggerLower?: string,
+): PluginHookSessionEndReason {
+  return matchedResetTriggerLower === "/reset" ? "reset" : "new";
+}
+
+function resolveStaleSessionEndReason(params: {
+  entry: SessionEntry | undefined;
+  freshness?: SessionFreshness;
+  now: number;
+}): PluginHookSessionEndReason | undefined {
+  if (!params.entry || !params.freshness) {
+    return undefined;
+  }
+  const staleDaily =
+    params.freshness.dailyResetAt != null && params.entry.updatedAt < params.freshness.dailyResetAt;
+  const staleIdle =
+    params.freshness.idleExpiresAt != null && params.now > params.freshness.idleExpiresAt;
+  if (staleIdle) {
+    return "idle";
+  }
+  if (staleDaily) {
+    return "daily";
+  }
+  return undefined;
 }
 
 export type SessionInitResult = {
@@ -304,6 +333,7 @@ export async function initSessionState(params: {
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
   const trimmedBodyLower = trimmedBody.toLowerCase();
   const strippedForResetLower = strippedForReset.toLowerCase();
+  let matchedResetTriggerLower: string | undefined;
 
   for (const trigger of resetTriggers) {
     if (!trigger) {
@@ -323,6 +353,7 @@ export async function initSessionState(params: {
       isNewSession = true;
       bodyStripped = "";
       resetTriggered = true;
+      matchedResetTriggerLower = triggerLower;
       break;
     }
     const triggerPrefixLower = `${triggerLower} `;
@@ -336,6 +367,7 @@ export async function initSessionState(params: {
       isNewSession = true;
       bodyStripped = strippedForReset.slice(trigger.length).trimStart();
       resetTriggered = true;
+      matchedResetTriggerLower = triggerLower;
       break;
     }
   }
@@ -383,14 +415,30 @@ export async function initSessionState(params: {
     resetType,
     resetOverride: channelReset,
   });
-  const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
-    : false;
+  // Heartbeat, cron-event, and exec-event runs should NEVER trigger session resets.
+  // These are automated system events, not user interactions that should affect
+  // session continuity. Forcing freshEntry=true prevents accidental data loss.
+  // See #58409 for details on silent session reset bug.
+  const isSystemEvent =
+    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+  const entryFreshness = entry
+    ? isSystemEvent
+      ? ({ fresh: true } satisfies SessionFreshness)
+      : evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
+    : undefined;
+  const freshEntry = entryFreshness?.fresh ?? false;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
   // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
   const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+  const previousSessionEndReason = resetTriggered
+    ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
+    : resolveStaleSessionEndReason({
+        entry,
+        freshness: entryFreshness,
+        now,
+      });
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,
     previousSessionId: previousSessionEntry?.sessionId,
@@ -632,14 +680,26 @@ export async function initSessionState(params: {
   );
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
+  let previousSessionTranscript: {
+    sessionFile?: string;
+    transcriptArchived?: boolean;
+  } = {};
   if (previousSessionEntry?.sessionId) {
-    const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
-    archiveSessionTranscripts({
+    const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
+      await loadSessionArchiveRuntime();
+    const archivedTranscripts = archiveSessionTranscriptsDetailed({
       sessionId: previousSessionEntry.sessionId,
       storePath,
       sessionFile: previousSessionEntry.sessionFile,
       agentId,
       reason: "reset",
+    });
+    previousSessionTranscript = resolveStableSessionEndTranscript({
+      sessionId: previousSessionEntry.sessionId,
+      storePath,
+      sessionFile: previousSessionEntry.sessionFile,
+      agentId,
+      archivedTranscripts,
     });
     await disposeSessionMcpRuntime(previousSessionEntry.sessionId).catch((error) => {
       log.warn(
@@ -680,6 +740,10 @@ export async function initSessionState(params: {
           sessionId: previousSessionEntry.sessionId,
           sessionKey,
           cfg,
+          reason: previousSessionEndReason,
+          sessionFile: previousSessionTranscript.sessionFile,
+          transcriptArchived: previousSessionTranscript.transcriptArchived,
+          nextSessionId: effectiveSessionId,
         });
         void hookRunner.runSessionEnd(payload.event, payload.context).catch(() => {});
       }

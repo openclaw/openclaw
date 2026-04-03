@@ -3,10 +3,11 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
-  addAllowlistEntry,
-  recordAllowlistUse,
+  addDurableCommandApproval,
+  hasDurableExecApproval,
+  persistAllowAlwaysPatterns,
+  recordAllowlistMatchesUse,
   resolveApprovalAuditCandidatePath,
-  resolveAllowAlwaysPatterns,
   resolveExecApprovals,
   type ExecAllowlistEntry,
   type ExecAsk,
@@ -96,6 +97,8 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   approvals: ResolvedExecApprovals;
   security: ExecSecurity;
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
+  durableApprovalSatisfied: boolean;
+  strictInlineEval: boolean;
   inlineEvalHit: ReturnType<typeof detectInterpreterInlineEvalArgv>;
   allowlistMatches: ExecAllowlistEntry[];
   analysisOk: boolean;
@@ -331,19 +334,20 @@ async function evaluateSystemRunPolicyPhase(
     onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  let { analysisOk, allowlistMatches, allowlistSatisfied, segments } = evaluateSystemRunAllowlist({
-    shellCommand: parsed.shellPayload,
-    argv: parsed.argv,
-    approvals,
-    security,
-    safeBins,
-    safeBinProfiles,
-    trustedSafeBinDirs,
-    cwd: parsed.cwd,
-    env: parsed.env,
-    skillBins: bins,
-    autoAllowSkills,
-  });
+  let { analysisOk, allowlistMatches, allowlistSatisfied, segments, segmentAllowlistEntries } =
+    evaluateSystemRunAllowlist({
+      shellCommand: parsed.shellPayload,
+      argv: parsed.argv,
+      approvals,
+      security,
+      safeBins,
+      safeBinProfiles,
+      trustedSafeBinDirs,
+      cwd: parsed.cwd,
+      env: parsed.env,
+      skillBins: bins,
+      autoAllowSkills,
+    });
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
   const inlineEvalHit = strictInlineEval
@@ -357,11 +361,21 @@ async function evaluateSystemRunPolicyPhase(
   const cmdInvocation = parsed.shellPayload
     ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
     : opts.isCmdExeInvocation(parsed.argv);
+  const durableApprovalSatisfied = hasDurableExecApproval({
+    analysisOk,
+    segmentAllowlistEntries,
+    allowlist: approvals.allowlist,
+    commandText: parsed.commandText,
+  });
+  const inlineEvalExecutableTrusted =
+    inlineEvalHit !== null &&
+    segmentAllowlistEntries.some((entry) => entry?.source === "allow-always");
   const policy = evaluateSystemRunPolicy({
     security,
     ask,
     analysisOk,
     allowlistSatisfied,
+    durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
     approvalDecision: parsed.approvalDecision,
     approved: parsed.approved,
     isWindows,
@@ -370,15 +384,11 @@ async function evaluateSystemRunPolicyPhase(
   });
   analysisOk = policy.analysisOk;
   allowlistSatisfied = policy.allowlistSatisfied;
-  if (!policy.allowed) {
-    await sendSystemRunDenied(opts, parsed.execution, {
-      reason: policy.eventReason,
-      message: policy.errorMessage,
-    });
-    return null;
-  }
-
-  if (inlineEvalHit && !policy.approvedByAsk) {
+  const strictInlineEvalRequiresApproval =
+    inlineEvalHit !== null &&
+    !policy.approvedByAsk &&
+    (policy.allowed ? true : policy.eventReason !== "security=deny");
+  if (strictInlineEvalRequiresApproval) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message:
@@ -388,8 +398,21 @@ async function evaluateSystemRunPolicyPhase(
     return null;
   }
 
+  if (!policy.allowed) {
+    await sendSystemRunDenied(opts, parsed.execution, {
+      reason: policy.eventReason,
+      message: policy.errorMessage,
+    });
+    return null;
+  }
+
   // Fail closed if policy/runtime drift re-allows unapproved shell wrappers.
-  if (security === "allowlist" && parsed.shellPayload && !policy.approvedByAsk) {
+  if (
+    security === "allowlist" &&
+    parsed.shellPayload &&
+    !policy.approvedByAsk &&
+    !durableApprovalSatisfied
+  ) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: "SYSTEM_RUN_DENIED: approval required",
@@ -439,6 +462,8 @@ async function evaluateSystemRunPolicyPhase(
     approvals,
     security,
     policy,
+    durableApprovalSatisfied,
+    strictInlineEval,
     inlineEvalHit,
     allowlistMatches,
     analysisOk,
@@ -544,42 +569,33 @@ async function executeSystemRunPhase(
     }
   }
 
-  if (
-    phase.policy.approvalDecision === "allow-always" &&
-    phase.security === "allowlist" &&
-    phase.inlineEvalHit === null
-  ) {
-    if (phase.policy.analysisOk) {
-      const patterns = resolveAllowAlwaysPatterns({
-        segments: phase.segments,
-        cwd: phase.cwd,
-        env: phase.env,
-        platform: process.platform,
-      });
-      for (const pattern of patterns) {
-        if (pattern) {
-          addAllowlistEntry(phase.approvals.file, phase.agentId, pattern);
-        }
-      }
+  if (phase.policy.approvalDecision === "allow-always" && phase.inlineEvalHit === null) {
+    const patterns = phase.policy.analysisOk
+      ? persistAllowAlwaysPatterns({
+          approvals: phase.approvals.file,
+          agentId: phase.agentId,
+          segments: phase.segments,
+          cwd: phase.cwd,
+          env: phase.env,
+          platform: process.platform,
+          strictInlineEval: phase.strictInlineEval,
+        })
+      : [];
+    if (patterns.length === 0) {
+      addDurableCommandApproval(phase.approvals.file, phase.agentId, phase.commandText);
     }
   }
 
-  if (phase.allowlistMatches.length > 0) {
-    const seen = new Set<string>();
-    for (const match of phase.allowlistMatches) {
-      if (!match?.pattern || seen.has(match.pattern)) {
-        continue;
-      }
-      seen.add(match.pattern);
-      recordAllowlistUse(
-        phase.approvals.file,
-        phase.agentId,
-        match,
-        phase.commandText,
-        resolveApprovalAuditCandidatePath(phase.segments[0]?.resolution ?? null, phase.cwd),
-      );
-    }
-  }
+  recordAllowlistMatchesUse({
+    approvals: phase.approvals.file,
+    agentId: phase.agentId,
+    matches: phase.allowlistMatches,
+    command: phase.commandText,
+    resolvedPath: resolveApprovalAuditCandidatePath(
+      phase.segments[0]?.resolution ?? null,
+      phase.cwd,
+    ),
+  });
 
   if (phase.needsScreenRecording) {
     await sendSystemRunDenied(opts, phase.execution, {

@@ -30,6 +30,7 @@ const clearPlannerShardEnv = (env) => {
   delete nextEnv.OPENCLAW_TEST_INCLUDE_EXTENSIONS;
   delete nextEnv.OPENCLAW_TEST_INCLUDE_CHANNELS;
   delete nextEnv.OPENCLAW_TEST_INCLUDE_GATEWAY;
+  delete nextEnv.OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS;
   return nextEnv;
 };
 
@@ -67,6 +68,11 @@ const targetedUnitProxyFiles = [
 ];
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
+const HIGH_MEMORY_LOCAL_PLANNER_ENV = {
+  RUNNER_OS: "macOS",
+  OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+  OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+} as const;
 
 function createPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
@@ -84,6 +90,13 @@ function createLocalPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proces
   });
 }
 
+function createHighMemoryLocalPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return createLocalPlannerEnv({
+    ...HIGH_MEMORY_LOCAL_PLANNER_ENV,
+    ...overrides,
+  });
+}
+
 function runPlannerPlan(args: string[], envOverrides: NodeJS.ProcessEnv = {}): string {
   return execFileSync("node", ["scripts/test-parallel.mjs", ...args], {
     cwd: REPO_ROOT,
@@ -96,11 +109,7 @@ function runPlannerPlan(args: string[], envOverrides: NodeJS.ProcessEnv = {}): s
 function runHighMemoryLocalMultiSurfacePlan(): string {
   return runPlannerPlan(
     ["--plan", "--surface", "unit", "--surface", "extensions", "--surface", "channels"],
-    createLocalPlannerEnv({
-      RUNNER_OS: "macOS",
-      OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-    }),
+    createHighMemoryLocalPlannerEnv(),
   );
 }
 
@@ -109,6 +118,18 @@ function getPlanLines(output: string, prefix: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith(prefix));
+}
+
+function getTargetedChannelPlanLines(output: string): string[] {
+  return output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line.startsWith("channels-") &&
+        line.includes("filters=") &&
+        line.includes("surface=channels"),
+    );
 }
 
 function parseNumericPlanField(line: string, key: string): number {
@@ -232,6 +253,34 @@ describe("scripts/test-parallel memory trace parsing", () => {
       ],
     });
   });
+
+  it("parses memory trace summaries from gh run job logs", () => {
+    const summaries = parseMemoryTraceSummaryLines(
+      [
+        "checks-fast-extensions-6\tRun extensions (node)\t2026-04-03T04:07:10.5924943Z [test-parallel][mem] summary extensions-batch-22-shard-6 files=15 peak=2.66GiB totalDelta=+470.5MiB peakAt=poll top=extensions/microsoft-foundry/index.test.ts:+1.35GiB, extensions/acpx/src/service.test.ts:+212.1MiB",
+      ].join("\n"),
+    );
+
+    expect(summaries).toEqual([
+      {
+        lane: "extensions-batch-22-shard-6",
+        files: 15,
+        peakRssKb: parseMemoryValueKb("2.66GiB"),
+        totalDeltaKb: parseMemoryValueKb("+470.5MiB"),
+        peakAt: "poll",
+        top: [
+          {
+            file: "extensions/microsoft-foundry/index.test.ts",
+            deltaKb: parseMemoryValueKb("+1.35GiB"),
+          },
+          {
+            file: "extensions/acpx/src/service.test.ts",
+            deltaKb: parseMemoryValueKb("+212.1MiB"),
+          },
+        ],
+      },
+    ]);
+  });
 });
 
 describe("scripts/test-parallel lane planning", () => {
@@ -284,11 +333,7 @@ describe("scripts/test-parallel lane planning", () => {
   it("uses higher shared extension worker counts on high-memory local hosts", () => {
     const highMemoryOutput = runPlannerPlan(
       ["--plan", "--surface", "extensions"],
-      createLocalPlannerEnv({
-        RUNNER_OS: "macOS",
-        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-      }),
+      createHighMemoryLocalPlannerEnv(),
     );
     const midMemoryOutput = runPlannerPlan(
       ["--plan", "--surface", "extensions"],
@@ -338,24 +383,24 @@ describe("scripts/test-parallel lane planning", () => {
         "channels",
         ...targetedChannelProxyFiles.flatMap((file) => ["--files", file]),
       ],
-      createLocalPlannerEnv({
-        RUNNER_OS: "macOS",
-        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-      }),
+      createHighMemoryLocalPlannerEnv(),
     );
 
     const channelBatchLines = getPlanLines(output, "channels-batch-");
     const channelBatchFilterCounts = channelBatchLines.map((line) =>
       parseNumericPlanField(line, "filters"),
     );
+    const targetedChannelPlanLines = getTargetedChannelPlanLines(output);
 
     expect(channelBatchLines.length).toBeGreaterThanOrEqual(4);
     expect(channelBatchLines.every((line) => line.includes("maxWorkers=5"))).toBe(true);
     expect(Math.max(...channelBatchFilterCounts)).toBeLessThan(30);
-    expect(channelBatchFilterCounts.reduce((sum, count) => sum + count, 0)).toBe(
-      sharedTargetedChannelProxyFiles.length,
-    );
+    expect(
+      targetedChannelPlanLines.reduce(
+        (sum, line) => sum + parseNumericPlanField(line, "filters"),
+        0,
+      ),
+    ).toBe(targetedChannelProxyFiles.length);
   });
 
   it("uses targeted unit batching on high-memory local hosts", () => {
@@ -366,11 +411,7 @@ describe("scripts/test-parallel lane planning", () => {
         "unit",
         ...targetedUnitProxyFiles.flatMap((file) => ["--files", file]),
       ],
-      createLocalPlannerEnv({
-        RUNNER_OS: "macOS",
-        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-      }),
+      createHighMemoryLocalPlannerEnv(),
     );
 
     const unitBatchLines = getPlanLines(output, "unit-batch-");
@@ -452,16 +493,6 @@ describe("scripts/test-parallel lane planning", () => {
     });
     expect(outputs).toContain("run_install_smoke=true");
     expect(outputs).not.toContain("run_checks=");
-  });
-
-  it("writes bun outputs in ci-bun mode", () => {
-    const outputs = runManifestOutputWriter("ci-bun", {
-      OPENCLAW_CI_DOCS_ONLY: "false",
-      OPENCLAW_CI_RUN_NODE: "true",
-    });
-    expect(outputs).toContain("run_bun_checks=true");
-    expect(outputs).toContain("bun_checks_matrix=");
-    expect(outputs).not.toContain("run_install_smoke=");
   });
 
   it("passes through vitest --mode values that are not wrapper runtime overrides", () => {

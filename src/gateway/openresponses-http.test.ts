@@ -56,6 +56,21 @@ async function startServer(port: number, opts?: { openResponsesEnabled?: boolean
   );
 }
 
+async function startTokenServer(port: number, opts?: { openResponsesEnabled?: boolean }) {
+  const { startGatewayServer } = await import("./server.js");
+  const serverOpts = {
+    host: "127.0.0.1",
+    auth: { mode: "token" as const, token: "secret" },
+    controlUiEnabled: false,
+  } as const;
+  return await startGatewayServer(
+    port,
+    opts?.openResponsesEnabled === undefined
+      ? { ...serverOpts, openResponsesEnabled: true }
+      : { ...serverOpts, openResponsesEnabled: opts.openResponsesEnabled },
+  );
+}
+
 async function writeGatewayConfig(config: Record<string, unknown>) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (!configPath) {
@@ -753,6 +768,37 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(streamingOpts?.senderIsOwner).toBe(false);
     const streamingEvents = parseSseEvents(await streamingResponse.text());
     expect(streamingEvents.some((event) => event.event === "response.completed")).toBe(true);
+  });
+
+  it("treats shared-secret bearer callers as owner operators", async () => {
+    const port = await getFreePort();
+    const server = await startTokenServer(port);
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+      const res = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+          "x-openclaw-scopes": "operator.approvals",
+        },
+        body: JSON.stringify({
+          model: "openclaw",
+          input: "hi",
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const firstCall = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { senderIsOwner?: boolean }
+        | undefined;
+      expect(firstCall?.senderIsOwner).toBe(true);
+      await ensureResponseConsumed(res);
+    } finally {
+      await server.close({ reason: "openresponses token auth owner test done" });
+    }
   });
 
   it("preserves assistant text alongside non-stream function_call output", async () => {

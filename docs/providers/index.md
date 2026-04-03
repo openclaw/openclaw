@@ -51,6 +51,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Qianfan](/providers/qianfan)
 - [Qwen / Model Studio (Alibaba Cloud)](/providers/qwen_modelstudio)
 - [SGLang (local models)](/providers/sglang)
+- [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
 - [Together AI](/providers/together)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)

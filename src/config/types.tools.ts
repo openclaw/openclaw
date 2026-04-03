@@ -1,6 +1,8 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
+import type { MemoryQmdIndexPath } from "./types.memory.js";
+import type { ConfiguredProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -43,6 +45,8 @@ type MediaProviderRequestConfig = {
   baseUrl?: string;
   /** Optional headers merged into provider requests. */
   headers?: Record<string, string>;
+  /** Optional request transport overrides for provider HTTP calls. */
+  request?: ConfiguredProviderRequest;
 };
 
 export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
@@ -326,6 +330,11 @@ export type MemorySearchConfig = {
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */
   extraPaths?: string[];
+  /** Optional QMD-specific extra collections for cross-agent search. */
+  qmd?: {
+    /** Additional QMD collections appended for this agent's search scope. */
+    extraCollections?: MemoryQmdIndexPath[];
+  };
   /** Optional multimodal file indexing for selected extra paths. */
   multimodal?: {
     /** Enable image/audio embeddings from extraPaths. */
@@ -455,31 +464,6 @@ export type MemorySearchConfig = {
   };
 };
 
-type WebSearchLegacyProviderConfig = {
-  apiKey?: SecretInput;
-  baseUrl?: string;
-  model?: string;
-  mode?: string;
-  inlineCitations?: boolean;
-};
-
-type XSearchToolConfig = {
-  /** Enable X search tool (default: true when an xAI API key is available). */
-  enabled?: boolean;
-  /** API key for xAI (defaults to XAI_API_KEY env var). Supports SecretRef. */
-  apiKey?: SecretInput;
-  /** Model id to use for X search. */
-  model?: string;
-  /** Keep inline citations in the xAI response payload when available. */
-  inlineCitations?: boolean;
-  /** Optional max search/tool turns for xAI to use internally. */
-  maxTurns?: number;
-  /** Timeout in seconds for X search requests. */
-  timeoutSeconds?: number;
-  /** Cache TTL in minutes for X search results. */
-  cacheTtlMinutes?: number;
-};
-
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -491,7 +475,7 @@ export type ToolsConfig = {
   byProvider?: Record<string, ToolPolicyConfig>;
   web?: {
     search?: {
-      /** Enable web search tool (default: true when API key is present). */
+      /** Enable managed web_search and optional Codex-native web search. */
       enabled?: boolean;
       /** Search provider id. */
       provider?: string;
@@ -503,24 +487,45 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
-      /** @deprecated Legacy Brave scoped config. */
-      brave?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Firecrawl scoped config. */
-      firecrawl?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Gemini scoped config. */
-      gemini?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Grok scoped config. */
-      grok?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Kimi scoped config. */
-      kimi?: WebSearchLegacyProviderConfig;
-      /** @deprecated Legacy Perplexity scoped config. */
-      perplexity?: WebSearchLegacyProviderConfig;
+      /** Optional native Codex web search for Codex-capable models. */
+      openaiCodex?: {
+        /** Enable native Codex web search for eligible models. */
+        enabled?: boolean;
+        /** Use cached or live external web access. Default: "cached". */
+        mode?: "cached" | "live";
+        /** Optional allowlist of domains passed to the native Codex tool. */
+        allowedDomains?: string[];
+        /** Optional Codex native search context size hint. */
+        contextSize?: "low" | "medium" | "high";
+        /** Optional approximate user location passed to the native Codex tool. */
+        userLocation?: {
+          country?: string;
+          region?: string;
+          city?: string;
+          timezone?: string;
+        };
+      };
     } & Record<string, unknown>;
     /** X (formerly Twitter) search tool configuration using xAI Grok. */
-    x_search?: XSearchToolConfig;
+    x_search?: {
+      /** Enable X search tool (default: true when xAI auth is available via plugin config or XAI_API_KEY). */
+      enabled?: boolean;
+      /** Model id to use for X search. */
+      model?: string;
+      /** Keep inline citations in the xAI response payload when available. */
+      inlineCitations?: boolean;
+      /** Optional max search/tool turns for xAI to use internally. */
+      maxTurns?: number;
+      /** Timeout in seconds for X search requests. */
+      timeoutSeconds?: number;
+      /** Cache TTL in minutes for X search results. */
+      cacheTtlMinutes?: number;
+    };
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
+      /** Web fetch fallback provider id. */
+      provider?: string;
       /** Max characters to return from fetched content. */
       maxChars?: number;
       /** Hard cap for maxChars (tool or config), defaults to 50000. */
@@ -537,20 +542,6 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
-      firecrawl?: {
-        /** Enable Firecrawl fallback (default: true when apiKey is set). */
-        enabled?: boolean;
-        /** Firecrawl API key (optional; defaults to FIRECRAWL_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Firecrawl base URL (default: https://api.firecrawl.dev). */
-        baseUrl?: string;
-        /** Whether to keep only main content (default: true). */
-        onlyMainContent?: boolean;
-        /** Max age (ms) for cached Firecrawl content. */
-        maxAgeMs?: number;
-        /** Timeout in seconds for Firecrawl requests. */
-        timeoutSeconds?: number;
-      };
     };
   };
   media?: MediaToolsConfig;

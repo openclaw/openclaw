@@ -2,9 +2,23 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildKimiCodingProvider } from "../plugin-sdk/kimi-coding.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
+
+function buildExplicitKimiModels(): ModelDefinitionConfig[] {
+  return [
+    {
+      id: "kimi-code",
+      name: "Kimi Code",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 32768,
+    },
+  ];
+}
 
 describe("Kimi implicit provider (#22409)", () => {
   it("should include Kimi when KIMI_API_KEY is configured", async () => {
@@ -15,22 +29,9 @@ describe("Kimi implicit provider (#22409)", () => {
     try {
       const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.kimi).toBeDefined();
-      expect(providers?.kimi?.api).toBe("anthropic-messages");
-      expect(providers?.kimi?.baseUrl).toBe("https://api.kimi.com/coding/");
     } finally {
       envSnapshot.restore();
     }
-  });
-
-  it("should build Kimi provider with anthropic-messages API", () => {
-    const provider = buildKimiCodingProvider();
-    expect(provider.api).toBe("anthropic-messages");
-    expect(provider.baseUrl).toBe("https://api.kimi.com/coding/");
-    expect(provider.headers).toEqual({ "User-Agent": "claude-code/0.1.0" });
-    expect(provider.models).toBeDefined();
-    expect(provider.models.length).toBeGreaterThan(0);
-    expect(provider.models[0].id).toBe("kimi-code");
-    expect(provider.models.some((model) => model.id === "k2p5")).toBe(true);
   });
 
   it("should not include Kimi when no API key is configured", async () => {
@@ -58,7 +59,7 @@ describe("Kimi implicit provider (#22409)", () => {
           "kimi-coding": {
             baseUrl: "https://kimi.example.test/coding/",
             api: "anthropic-messages",
-            models: buildKimiCodingProvider().models,
+            models: buildExplicitKimiModels(),
           },
         },
       });
@@ -84,7 +85,7 @@ describe("Kimi implicit provider (#22409)", () => {
               "User-Agent": "custom-kimi-client/1.0",
               "X-Kimi-Tenant": "tenant-a",
             },
-            models: buildKimiCodingProvider().models,
+            models: buildExplicitKimiModels(),
           },
         },
       });

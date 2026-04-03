@@ -4,9 +4,8 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
-import { MemoryIndexManager } from "./manager.js";
-import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
+import { openMemoryDatabaseAtPath } from "./manager-sync-ops.js";
+import { runMemorySyncWithReadonlyRecovery } from "./manager.js";
 
 type ReadonlyRecoveryHarness = {
   closed: boolean;
@@ -36,7 +35,6 @@ type ReadonlyRecoveryHarness = {
 describe("memory manager readonly recovery", () => {
   let workspaceDir = "";
   let indexPath = "";
-  let manager: MemoryIndexManager | null = null;
 
   function createMemoryConfig(): OpenClawConfig {
     return {
@@ -55,15 +53,6 @@ describe("memory manager readonly recovery", () => {
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
-  }
-
-  async function createRealManager() {
-    manager = await getRequiredMemoryIndexManager({
-      cfg: createMemoryConfig(),
-      agentId: "main",
-      purpose: "status",
-    });
-    return manager;
   }
 
   function createReadonlyRecoveryHarness() {
@@ -95,7 +84,6 @@ describe("memory manager readonly recovery", () => {
       ensureSchema: vi.fn(),
       readMeta: vi.fn(() => undefined),
     };
-    Object.setPrototypeOf(harness, MemoryIndexManager.prototype);
     return {
       harness,
       initialDb,
@@ -103,6 +91,16 @@ describe("memory manager readonly recovery", () => {
       reopenedDb,
       reopenedClose,
     };
+  }
+
+  async function runSyncWithReadonlyRecovery(
+    harness: ReadonlyRecoveryHarness,
+    params?: { reason?: string; force?: boolean; sessionFiles?: string[] },
+  ) {
+    return await runMemorySyncWithReadonlyRecovery(
+      harness as unknown as Parameters<typeof runMemorySyncWithReadonlyRecovery>[0],
+      params,
+    );
   }
 
   function expectReadonlyRecoveryStatus(
@@ -131,7 +129,7 @@ describe("memory manager readonly recovery", () => {
     const { harness, initialClose } = createReadonlyRecoveryHarness();
     harness.runSync.mockRejectedValueOnce(params.firstError).mockResolvedValueOnce(undefined);
 
-    await MemoryIndexManager.prototype.sync.call(harness as unknown as MemoryIndexManager, {
+    await runSyncWithReadonlyRecovery(harness, {
       reason: "test",
     });
 
@@ -142,7 +140,6 @@ describe("memory manager readonly recovery", () => {
   }
 
   beforeEach(async () => {
-    resetEmbeddingMocks();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-readonly-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
@@ -151,10 +148,6 @@ describe("memory manager readonly recovery", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    if (manager) {
-      await manager.close();
-      manager = null;
-    }
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
@@ -177,7 +170,7 @@ describe("memory manager readonly recovery", () => {
     harness.runSync.mockRejectedValueOnce(new Error("embedding timeout"));
 
     await expect(
-      MemoryIndexManager.prototype.sync.call(harness as unknown as MemoryIndexManager, {
+      runSyncWithReadonlyRecovery(harness, {
         reason: "test",
       }),
     ).rejects.toThrow("embedding timeout");
@@ -187,12 +180,12 @@ describe("memory manager readonly recovery", () => {
   });
 
   it("sets busy_timeout on memory sqlite connections", async () => {
-    const currentManager = await createRealManager();
-    const db = (currentManager as unknown as { db: DatabaseSync }).db;
+    const db = openMemoryDatabaseAtPath(indexPath, false);
     const row = db.prepare("PRAGMA busy_timeout").get() as
       | { busy_timeout?: number; timeout?: number }
       | undefined;
     const busyTimeout = row?.busy_timeout ?? row?.timeout;
     expect(busyTimeout).toBe(5000);
+    db.close();
   });
 });

@@ -75,7 +75,7 @@ Security notes:
 - Bonjour/mDNS TXT records are **unauthenticated**. Clients must treat TXT values as UX hints only.
 - Routing (host/port) should prefer the **resolved service endpoint** (SRV + A/AAAA) over TXT-provided `lanHost`, `tailnetDns`, or `gatewayPort`.
 - TLS pinning must never allow an advertised `gatewayTlsSha256` to override a previously stored pin.
-- iOS/Android nodes should treat discovery-based direct connects as **TLS-only** and require an explicit “trust this fingerprint” confirmation before storing a first-time pin (out-of-band verification).
+- iOS/Android nodes should require an explicit “trust this fingerprint” confirmation before storing a first-time pin (out-of-band verification) whenever the chosen route is secure/TLS-based.
 
 Disable/override:
 
@@ -93,6 +93,15 @@ For London/Vienna style setups, Bonjour won’t help. The recommended “direct�
 
 If the gateway can detect it is running under Tailscale, it publishes `tailnetDns` as an optional hint for clients (including wide-area beacons).
 
+The macOS app now prefers MagicDNS names over raw Tailscale IPs for gateway discovery. This improves reliability when tailnet IPs change (for example after node restarts or CGNAT reassignment), because MagicDNS names resolve to the current IP automatically.
+
+For mobile node pairing, discovery hints do not relax transport security on tailnet/public routes:
+
+- iOS/Android still require a secure first-time tailnet/public connect path (`wss://` or Tailscale Serve/Funnel).
+- A discovered raw tailnet IP is a routing hint, not permission to use plaintext remote `ws://`.
+- Private LAN direct-connect `ws://` remains supported.
+- If you want the simplest Tailscale path for mobile nodes, use Tailscale Serve so discovery and the setup code both resolve to the same secure MagicDNS endpoint.
+
 ### 3) Manual / SSH target
 
 When there is no direct route (or direct is disabled), clients can always connect via SSH by forwarding the loopback gateway port.
@@ -106,6 +115,7 @@ Recommended client behavior:
 1. If a paired direct endpoint is configured and reachable, use it.
 2. Else, if Bonjour finds a gateway on LAN, offer a one-tap “Use this gateway” choice and save it as the direct endpoint.
 3. Else, if a tailnet DNS/IP is configured, try direct.
+   For mobile nodes on tailnet/public routes, direct means a secure endpoint, not plaintext remote `ws://`.
 4. Else, fall back to SSH.
 
 ## Pairing + auth (direct transport)

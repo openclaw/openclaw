@@ -277,6 +277,38 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
+  test("omits sensitive gateway paths from low-privilege hello-ok snapshots", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin: originForPort(port) });
+      try {
+        const payload = (await connectOk(ws, {
+          token: "secret",
+          scopes: ["operator.read"],
+          device: null,
+        })) as {
+          type: "hello-ok";
+          snapshot?: {
+            configPath?: unknown;
+            stateDir?: unknown;
+            authMode?: unknown;
+          };
+        };
+        // connectReq scopes are evaluated after auth and unbound-scope clearing, so this assertion
+        // verifies the effective low-privilege session view rather than self-declared client scopes.
+        const snapshot = payload.snapshot as
+          | { configPath?: unknown; stateDir?: unknown; authMode?: unknown }
+          | undefined;
+        expect(snapshot).toBeDefined();
+        expect(snapshot?.configPath).toBeUndefined();
+        expect(snapshot?.stateDir).toBeUndefined();
+        expect(snapshot?.authMode).toBeUndefined();
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   test("does not silently auto-pair non-control-ui browser clients on loopback", async () => {
     const { listDevicePairing } = await import("../infra/device-pairing.js");
     testState.gatewayAuth = { mode: "token", token: "secret" };

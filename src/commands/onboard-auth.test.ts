@@ -134,7 +134,6 @@ function expectAliasPreserved(
 ) {
   expect(cfg.agents?.defaults?.models?.[key]?.alias).toBe(alias);
 }
-
 describe("writeOAuthCredentials", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
@@ -434,7 +433,6 @@ describe("applyAuthProfileConfig", () => {
     });
   });
 });
-
 describe("applyMinimaxApiConfig", () => {
   it("adds minimax provider with correct settings", () => {
     const cfg = applyMinimaxApiConfig({});

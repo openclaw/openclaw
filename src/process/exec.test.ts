@@ -1,11 +1,15 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import fs from "node:fs";
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
-import { resolveCommandEnv, runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
+import {
+  resolveCommandEnv,
+  resolveProcessExitCode,
+  runCommandWithTimeout,
+  shouldSpawnWithShell,
+} from "./exec.js";
 
 describe("runCommandWithTimeout", () => {
   beforeEach(() => {
@@ -53,6 +57,34 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.npm_config_fund).toBe("false");
   });
 
+  it("infers success for shimmed Windows commands when exit codes are missing", () => {
+    expect(
+      resolveProcessExitCode({
+        explicitCode: null,
+        childExitCode: null,
+        resolvedSignal: null,
+        usesWindowsExitCodeShim: true,
+        timedOut: false,
+        noOutputTimedOut: false,
+        killIssuedByTimeout: false,
+      }),
+    ).toBe(0);
+  });
+
+  it("does not infer success when this process already issued a timeout kill", () => {
+    expect(
+      resolveProcessExitCode({
+        explicitCode: null,
+        childExitCode: null,
+        resolvedSignal: null,
+        usesWindowsExitCodeShim: true,
+        timedOut: true,
+        noOutputTimedOut: false,
+        killIssuedByTimeout: true,
+      }),
+    ).toBeNull();
+  });
+
   it.runIf(process.platform !== "win32")(
     "kills command when no output timeout elapses",
     { timeout: 15_000 },
@@ -85,29 +117,6 @@ describe("runCommandWithTimeout", () => {
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);
       expect(result.code).not.toBe(0);
-    },
-  );
-
-  it.runIf(process.platform === "win32")(
-    "on Windows spawns node + npm-cli.js for npm argv to avoid spawn EINVAL",
-    async () => {
-      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 10_000 });
-      expect(result.code).toBe(0);
-      expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
-    },
-  );
-
-  it.runIf(process.platform === "win32")(
-    "falls back to npm.cmd when npm-cli.js is unavailable",
-    async () => {
-      const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
-      try {
-        const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 10_000 });
-        expect(result.code).toBe(0);
-        expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
-      } finally {
-        existsSpy.mockRestore();
-      }
     },
   );
 });

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import {
   GIGACHAT_BASE_URL,
   GIGACHAT_BASIC_BASE_URL,
@@ -7,7 +6,6 @@ import {
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   isOllamaCompatProvider,
-  resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
@@ -19,7 +17,6 @@ import {
   resolveGigachatInsecureTlsOverride,
 } from "../../gigachat-auth.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
-import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
   buildSessionsYieldContextMessage,
@@ -33,14 +30,11 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   stripSessionsYieldArtifacts,
-  shouldInjectHeartbeatPrompt,
   decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
-  resolveEmbeddedAgentStreamFn,
 } from "./attempt.js";
-import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 
 type FakeWrappedStream = {
   result: () => Promise<unknown>;
@@ -460,7 +454,6 @@ describe("sessions_yield helpers", () => {
     expect(rewriteFile).toHaveBeenCalledTimes(1);
   });
 });
-
 describe("composeSystemPromptWithHookContext", () => {
   it("returns undefined when no hook system context is provided", () => {
     expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
@@ -536,71 +529,6 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
-  });
-});
-
-describe("shouldInjectHeartbeatPrompt", () => {
-  it("uses trigger policy defaults for non-cron triggers", () => {
-    expect(shouldInjectHeartbeatPromptForTrigger("user")).toBe(true);
-    expect(shouldInjectHeartbeatPromptForTrigger("heartbeat")).toBe(true);
-    expect(shouldInjectHeartbeatPromptForTrigger("memory")).toBe(true);
-    expect(shouldInjectHeartbeatPromptForTrigger(undefined)).toBe(true);
-  });
-
-  it("uses trigger policy overrides for cron", () => {
-    expect(shouldInjectHeartbeatPromptForTrigger("cron")).toBe(false);
-  });
-
-  it("injects the heartbeat prompt for default-agent non-cron runs", () => {
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "user" })).toBe(true);
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "heartbeat" })).toBe(true);
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "memory" })).toBe(true);
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: undefined })).toBe(true);
-  });
-
-  it("suppresses the heartbeat prompt for cron-triggered runs", () => {
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "cron" })).toBe(false);
-  });
-
-  it("suppresses the heartbeat prompt for non-default agents", () => {
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: false, trigger: "user" })).toBe(false);
-  });
-
-  it("omits heartbeat prompt content for cron-triggered full-mode runs on non-cron session keys", () => {
-    const sessionKey = "agent:main:kos:thread:abc";
-    expect(resolvePromptModeForSession(sessionKey)).toBe("full");
-
-    const heartbeatPrompt = shouldInjectHeartbeatPrompt({
-      isDefaultAgent: true,
-      trigger: "cron",
-    })
-      ? resolveHeartbeatPrompt(undefined)
-      : undefined;
-
-    const prompt = buildEmbeddedSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      defaultThinkLevel: "off",
-      reasoningLevel: "off",
-      reasoningTagHint: false,
-      heartbeatPrompt,
-      promptMode: resolvePromptModeForSession(sessionKey),
-      runtimeInfo: {
-        host: "host",
-        os: "Darwin",
-        arch: "arm64",
-        node: "v22.0.0",
-        model: "openai/gpt-5.4",
-      },
-      tools: [],
-      modelAliasLines: [],
-      userTimezone: "UTC",
-      userTime: "00:00",
-      userTimeFormat: "24",
-    });
-
-    expect(prompt).not.toContain("## Heartbeats");
-    expect(prompt).not.toContain("HEARTBEAT_OK");
-    expect(prompt).not.toContain("Read HEARTBEAT.md");
   });
 });
 
@@ -2093,29 +2021,6 @@ describe("isOllamaCompatProvider", () => {
   });
 });
 
-describe("resolveOllamaBaseUrlForRun", () => {
-  it("prefers provider baseUrl over model baseUrl", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-        providerBaseUrl: "http://provider-host:11434",
-      }),
-    ).toBe("http://provider-host:11434");
-  });
-
-  it("falls back to model baseUrl when provider baseUrl is missing", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-      }),
-    ).toBe("http://model-host:11434");
-  });
-
-  it("falls back to native default when neither baseUrl is configured", () => {
-    expect(resolveOllamaBaseUrlForRun({})).toBe("http://127.0.0.1:11434");
-  });
-});
-
 describe("wrapOllamaCompatNumCtx", () => {
   it("injects num_ctx and preserves downstream onPayload hooks", () => {
     let payloadSeen: Record<string, unknown> | undefined;
@@ -2185,50 +2090,6 @@ describe("shouldInjectOllamaCompatNumCtx", () => {
         providerId: "ollama",
       }),
     ).toBe(false);
-  });
-});
-
-describe("resolveEmbeddedAgentStreamFn", () => {
-  it("keeps the session-managed HTTP stream when no override applies", () => {
-    const currentStreamFn = vi.fn();
-
-    const resolved = resolveEmbeddedAgentStreamFn({
-      currentStreamFn: currentStreamFn as never,
-      shouldUseWebSocketTransport: false,
-      sessionId: "session-1",
-      model: { provider: "xai" } as never,
-    });
-
-    expect(resolved).toBe(currentStreamFn);
-  });
-
-  it("keeps the session-managed HTTP stream when websocket auth is unavailable", () => {
-    const currentStreamFn = vi.fn();
-
-    const resolved = resolveEmbeddedAgentStreamFn({
-      currentStreamFn: currentStreamFn as never,
-      shouldUseWebSocketTransport: true,
-      wsApiKey: undefined,
-      sessionId: "session-1",
-      model: { provider: "xai" } as never,
-    });
-
-    expect(resolved).toBe(currentStreamFn);
-  });
-
-  it("prefers a provider-owned stream override when present", () => {
-    const currentStreamFn = vi.fn();
-    const providerStreamFn = vi.fn();
-
-    const resolved = resolveEmbeddedAgentStreamFn({
-      currentStreamFn: currentStreamFn as never,
-      providerStreamFn: providerStreamFn as never,
-      shouldUseWebSocketTransport: false,
-      sessionId: "session-1",
-      model: { provider: "xai" } as never,
-    });
-
-    expect(resolved).toBe(providerStreamFn);
   });
 });
 
@@ -2330,7 +2191,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
   });
 
-  it("passes primary model through even when compaction.model is set (override resolved in compactDirect)", () => {
+  it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -2360,11 +2221,14 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    // buildAfterTurnLegacyCompactionParams no longer resolves the override;
-    // compactEmbeddedPiSessionDirect does it centrally for both auto + manual paths.
+    // buildEmbeddedCompactionRuntimeContext now resolves the override eagerly
+    // so that context engines (including third-party ones) receive the correct
+    // compaction model in the runtime context.
     expect(legacy).toMatchObject({
-      provider: "openai-codex",
-      model: "gpt-5.4",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4-5",
+      // Auth profile dropped because provider changed from openai-codex to openrouter
+      authProfileId: undefined,
     });
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {

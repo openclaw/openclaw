@@ -7,6 +7,7 @@ import {
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
+import { nostrSetupWizard } from "./setup-surface.js";
 import {
   TEST_HEX_PRIVATE_KEY,
   TEST_SETUP_RELAY_URLS,
@@ -225,6 +226,21 @@ describe("nostr account helpers", () => {
       const cfg = createConfiguredNostrCfg({ defaultAccount: "work" });
       expect(listNostrAccountIds(cfg)).toEqual(["work"]);
     });
+
+    it("does not treat unresolved SecretRef privateKey as configured", () => {
+      const cfg = {
+        channels: {
+          nostr: {
+            privateKey: {
+              source: "env",
+              provider: "default",
+              id: "NOSTR_PRIVATE_KEY",
+            },
+          },
+        },
+      };
+      expect(listNostrAccountIds(cfg)).toEqual([]);
+    });
   });
 
   describe("resolveDefaultNostrAccountId", () => {
@@ -313,6 +329,27 @@ describe("nostr account helpers", () => {
       expect(account.publicKey).toBe("");
     });
 
+    it("does not treat unresolved SecretRef privateKey as configured", () => {
+      const secretRef = {
+        source: "env" as const,
+        provider: "default",
+        id: "NOSTR_PRIVATE_KEY",
+      };
+      const cfg = {
+        channels: {
+          nostr: {
+            privateKey: secretRef,
+          },
+        },
+      };
+      const account = resolveNostrAccount({ cfg });
+
+      expect(account.configured).toBe(false);
+      expect(account.privateKey).toBe("");
+      expect(account.publicKey).toBe("");
+      expect(account.config.privateKey).toEqual(secretRef);
+    });
+
     it("preserves all config options", () => {
       const cfg = createConfiguredNostrCfg({
         name: "Bot",
@@ -330,6 +367,34 @@ describe("nostr account helpers", () => {
         relays: ["wss://relay1", "wss://relay2"],
         dmPolicy: "allowlist",
         allowFrom: ["pubkey1", "pubkey2"],
+      });
+    });
+  });
+
+  describe("setup wizard", () => {
+    it("keeps unresolved SecretRef privateKey visible without marking the account configured", () => {
+      const secretRef = {
+        source: "env" as const,
+        provider: "default",
+        id: "NOSTR_PRIVATE_KEY",
+      };
+      const cfg = {
+        channels: {
+          nostr: {
+            privateKey: secretRef,
+          },
+        },
+      };
+      const credential = nostrSetupWizard.credentials?.[0];
+      if (!credential?.inspect) {
+        throw new Error("nostr setup credential inspect missing");
+      }
+
+      expect(credential.inspect({ cfg, accountId: "default" })).toEqual({
+        accountConfigured: false,
+        hasConfiguredValue: true,
+        resolvedValue: undefined,
+        envValue: undefined,
       });
     });
   });

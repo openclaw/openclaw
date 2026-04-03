@@ -108,17 +108,18 @@ vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
 const accountsActual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
 hoisted.resolveNextcloudTalkAccount.mockImplementation(accountsActual.resolveNextcloudTalkAccount);
 
-let resolveNextcloudTalkAccount: typeof import("./accounts.js").resolveNextcloudTalkAccount;
-let nextcloudTalkPlugin: typeof import("./channel.js").nextcloudTalkPlugin;
-let clearNextcloudTalkAccountFields: typeof import("./setup-core.js").clearNextcloudTalkAccountFields;
-let nextcloudTalkDmPolicy: typeof import("./setup-core.js").nextcloudTalkDmPolicy;
-let nextcloudTalkSetupAdapter: typeof import("./setup-core.js").nextcloudTalkSetupAdapter;
-let normalizeNextcloudTalkBaseUrl: typeof import("./setup-core.js").normalizeNextcloudTalkBaseUrl;
-let setNextcloudTalkAccountConfig: typeof import("./setup-core.js").setNextcloudTalkAccountConfig;
-let validateNextcloudTalkBaseUrl: typeof import("./setup-core.js").validateNextcloudTalkBaseUrl;
-let nextcloudTalkSetupWizard: typeof import("./setup-surface.js").nextcloudTalkSetupWizard;
-let sendMessageNextcloudTalk: typeof import("./send.js").sendMessageNextcloudTalk;
-let sendReactionNextcloudTalk: typeof import("./send.js").sendReactionNextcloudTalk;
+const { resolveNextcloudTalkAccount } = await import("./accounts.js");
+const { nextcloudTalkPlugin } = await import("./channel.js");
+const {
+  clearNextcloudTalkAccountFields,
+  nextcloudTalkDmPolicy,
+  nextcloudTalkSetupAdapter,
+  normalizeNextcloudTalkBaseUrl,
+  setNextcloudTalkAccountConfig,
+  validateNextcloudTalkBaseUrl,
+} = await import("./setup-core.js");
+const { nextcloudTalkSetupWizard } = await import("./setup-surface.js");
+const { sendMessageNextcloudTalk, sendReactionNextcloudTalk } = await import("./send.js");
 
 function buildAccount(): ResolvedNextcloudTalkAccount {
   return {
@@ -152,25 +153,6 @@ function startNextcloudAccount(abortSignal?: AbortSignal) {
 }
 
 describe("nextcloud talk setup", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveNextcloudTalkAccount } = await import("./accounts.js"));
-    ({ nextcloudTalkPlugin } = await import("./channel.js"));
-    ({
-      clearNextcloudTalkAccountFields,
-      nextcloudTalkDmPolicy,
-      nextcloudTalkSetupAdapter,
-      normalizeNextcloudTalkBaseUrl,
-      setNextcloudTalkAccountConfig,
-      validateNextcloudTalkBaseUrl,
-    } = await import("./setup-core.js"));
-    ({ nextcloudTalkSetupWizard } = await import("./setup-surface.js"));
-    ({ sendMessageNextcloudTalk, sendReactionNextcloudTalk } = await import("./send.js"));
-    hoisted.resolveNextcloudTalkAccount.mockImplementation(
-      accountsActual.resolveNextcloudTalkAccount,
-    );
-  });
-
   afterEach(() => {
     vi.clearAllMocks();
     hoisted.resolveNextcloudTalkAccount.mockImplementation(
@@ -481,9 +463,7 @@ describe("resolveNextcloudTalkAccount", () => {
 describe("nextcloud-talk send cfg threading", () => {
   const fetchMock = vi.fn<typeof fetch>();
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ sendMessageNextcloudTalk, sendReactionNextcloudTalk } = await import("./send.js"));
+  beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
     // Wire the SSRF guard mock to delegate to the global fetch mock
     hoisted.mockFetchGuard.mockImplementation(async (p: { url: string; init?: RequestInit }) => {

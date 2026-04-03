@@ -1,3 +1,4 @@
+import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import {
   getSessionBindingService,
   resolveAgentIdFromSessionKey,
@@ -57,6 +58,10 @@ export function resolveMatrixInboundRoute(params: {
         ...baseRoute,
         sessionKey: boundSessionKey,
         agentId: resolveAgentIdFromSessionKey(boundSessionKey) || baseRoute.agentId,
+        lastRoutePolicy: deriveLastRoutePolicy({
+          sessionKey: boundSessionKey,
+          mainSessionKey: baseRoute.mainSessionKey,
+        }),
         matchedBy: "binding.channel",
       },
       configuredBinding: null,
@@ -85,6 +90,10 @@ export function resolveMatrixInboundRoute(params: {
             resolveAgentIdFromSessionKey(configuredSessionKey) ||
             configuredBinding.spec.agentId ||
             baseRoute.agentId,
+          lastRoutePolicy: deriveLastRoutePolicy({
+            sessionKey: configuredSessionKey,
+            mainSessionKey: baseRoute.mainSessionKey,
+          }),
           matchedBy: "binding.channel" as const,
         }
       : baseRoute;
@@ -101,6 +110,10 @@ export function resolveMatrixInboundRoute(params: {
         ...effectiveRoute,
         sessionKey: threadKeys.sessionKey,
         mainSessionKey: threadKeys.parentSessionKey ?? effectiveRoute.sessionKey,
+        lastRoutePolicy: deriveLastRoutePolicy({
+          sessionKey: threadKeys.sessionKey,
+          mainSessionKey: threadKeys.parentSessionKey ?? effectiveRoute.sessionKey,
+        }),
       },
       configuredBinding,
       runtimeBindingId: null,

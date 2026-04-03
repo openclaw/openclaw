@@ -225,6 +225,63 @@ describe("redactConfigSnapshot", () => {
     );
   });
 
+  it("redacts media request auth and proxy transport secrets from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  tools: {
+    media: {
+      audio: {
+        request: {
+          auth: {
+            mode: "authorization-bearer",
+            token: "media-audio-secret-token",
+          },
+          proxy: {
+            mode: "explicit-proxy",
+            url: "http://alice:secret@proxy.example.internal:8080",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        tools: {
+          media: {
+            audio: {
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: "media-audio-secret-token",
+                },
+                proxy: {
+                  mode: "explicit-proxy",
+                  url: "http://alice:secret@proxy.example.internal:8080",
+                },
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.tools.media.audio.request.auth.token).toBe(REDACTED_SENTINEL);
+    expect(cfg.tools.media.audio.request.proxy.url).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("media-audio-secret-token");
+    expect(result.raw).not.toContain("alice:secret@");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.tools.media.audio.request.auth.token).toBe("media-audio-secret-token");
+    expect(restored.tools.media.audio.request.proxy.url).toBe(
+      "http://alice:secret@proxy.example.internal:8080",
+    );
+  });
+
   it("does not redact maxTokens-style fields", () => {
     const snapshot = makeSnapshot({
       maxTokens: 16384,
@@ -839,6 +896,30 @@ describe("redactConfigSnapshot", () => {
     });
     const result = redactConfigSnapshot(snapshot, hints);
     expectGatewayAuthFieldValue(result, "password", REDACTED_SENTINEL);
+  });
+
+  it("redacts privateKey paths even when absent from uiHints (defense in depth)", () => {
+    const hints: ConfigUiHints = {
+      "some.other.path": { sensitive: true },
+    };
+    const snapshot = makeSnapshot({
+      channels: {
+        nostr: {
+          privateKey: "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
+          relays: ["wss://relay.example.com"],
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.nostr.privateKey).toBe(REDACTED_SENTINEL);
+    expect(channels.nostr.relays).toEqual(["wss://relay.example.com"]);
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.channels.nostr.privateKey).toBe(
+      "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
+    );
   });
 
   it("redacts and restores dynamic env catchall secrets when uiHints miss the path", () => {

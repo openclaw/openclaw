@@ -8,7 +8,7 @@ title: "Tools Invoke API"
 
 # Tools Invoke (HTTP)
 
-OpenClaw’s Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled and uses Gateway auth plus tool policy, but callers that pass Gateway bearer auth are treated as trusted operators for that gateway.
+OpenClaw’s Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled and uses Gateway auth plus tool policy. Like the OpenAI-compatible `/v1/*` surface, shared-secret bearer auth is treated as trusted operator access for the whole gateway.
 
 - `POST /tools/invoke`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/tools/invoke`
@@ -26,7 +26,29 @@ Notes:
 - When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
 - When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
-- Treat this credential as a full-access operator secret for that gateway. It is not a scoped API token for a narrower `/tools/invoke` role.
+
+## Security boundary (important)
+
+Treat this endpoint as a **full operator-access** surface for the gateway instance.
+
+- HTTP bearer auth here is not a narrow per-user scope model.
+- A valid Gateway token/password for this endpoint should be treated like an owner/operator credential.
+- For shared-secret auth modes (`token` and `password`), the endpoint restores the normal full operator defaults even if the caller sends a narrower `x-openclaw-scopes` header.
+- Shared-secret auth also treats direct tool invokes on this endpoint as owner-sender turns.
+- Trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"` on a private ingress) still honor the declared operator scopes on the request.
+- Keep this endpoint on loopback/tailnet/private ingress only; do not expose it directly to the public internet.
+
+Auth matrix:
+
+- `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
+  - proves possession of the shared gateway operator secret
+  - ignores narrower `x-openclaw-scopes`
+  - restores the full default operator scope set
+  - treats direct tool invokes on this endpoint as owner-sender turns
+- trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
+  - authenticate some outer trusted identity or deployment boundary
+  - honor the declared `x-openclaw-scopes` header
+  - only get owner semantics when `operator.admin` is actually present in those declared scopes
 
 ## Request body
 
@@ -62,7 +84,6 @@ If a tool is not allowed by policy, the endpoint returns **404**.
 
 Important boundary notes:
 
-- `POST /tools/invoke` is in the same trusted-operator bucket as other Gateway HTTP APIs such as `/v1/chat/completions`, `/v1/responses`, and `/api/channels/*`.
 - Exec approvals are operator guardrails, not a separate authorization boundary for this HTTP endpoint. If a tool is reachable here via Gateway auth + tool policy, `/tools/invoke` does not add an extra per-call approval prompt.
 - Do not share Gateway bearer credentials with untrusted callers. If you need separation across trust boundaries, run separate gateways (and ideally separate OS users/hosts).
 
@@ -116,7 +137,7 @@ To help group policies resolve context, you can optionally set:
 
 ```bash
 curl -sS http://127.0.0.1:18789/tools/invoke \
-  -H 'Authorization: Bearer YOUR_TOKEN' \
+  -H 'Authorization: Bearer secret' \
   -H 'Content-Type: application/json' \
   -d '{
     "tool": "sessions_list",

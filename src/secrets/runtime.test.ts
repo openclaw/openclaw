@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
 type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
@@ -137,11 +139,10 @@ describe("secrets runtime snapshot", () => {
   });
 
   afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
     clearSecretsRuntimeSnapshot();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    resolveBundledPluginWebSearchProvidersMock.mockReset();
-    resolvePluginWebSearchProvidersMock.mockReset();
   });
 
   it("resolves env refs for config and auth profiles", async () => {
@@ -757,8 +758,16 @@ describe("secrets runtime snapshot", () => {
               enabled: true,
               provider: "brave",
               apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
-              grok: {
-                apiKey: { source: "env", provider: "default", id: "MISSING_GROK_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "MISSING_GROK_API_KEY" },
+                },
               },
             },
           },
@@ -772,7 +781,10 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.config.tools?.web?.search?.grok?.apiKey).toEqual({
+    const xaiWebSearchConfig = snapshot.config.plugins?.entries?.xai?.config as
+      | { webSearch?: { apiKey?: unknown } }
+      | undefined;
+    expect(xaiWebSearchConfig?.webSearch?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "MISSING_GROK_API_KEY",
@@ -795,8 +807,20 @@ describe("secrets runtime snapshot", () => {
             search: {
               enabled: true,
               apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
-              gemini: {
-                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
               },
             },
           },
@@ -811,7 +835,10 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toEqual({
+    const googleWebSearchConfig = snapshot.config.plugins?.entries?.google?.config as
+      | { webSearch?: { apiKey?: unknown } }
+      | undefined;
+    expect(googleWebSearchConfig?.webSearch?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "WEB_SEARCH_GEMINI_API_KEY",
@@ -835,9 +862,21 @@ describe("secrets runtime snapshot", () => {
             search: {
               enabled: true,
               provider: "gemini",
-              gemini: {
-                enabled: false,
-                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  enabled: false,
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
               },
             },
           },
@@ -849,8 +888,10 @@ describe("secrets runtime snapshot", () => {
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
-
-    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
+    const resolvedGoogleWebSearchConfig = snapshot.config.plugins?.entries?.google?.config as
+      | { webSearch?: { apiKey?: unknown } }
+      | undefined;
+    expect(resolvedGoogleWebSearchConfig?.webSearch?.apiKey).toBe("web-search-gemini-ref");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "plugins.entries.google.config.webSearch.apiKey",
     );
@@ -865,11 +906,19 @@ describe("secrets runtime snapshot", () => {
               search: {
                 enabled: true,
                 provider: "gemini",
-                gemini: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
+              },
+            },
+          },
+          plugins: {
+            entries: {
+              google: {
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
+                    },
                   },
                 },
               },
@@ -890,8 +939,20 @@ describe("secrets runtime snapshot", () => {
           web: {
             search: {
               provider: "gemini",
-              gemini: {
-                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
               },
             },
           },
@@ -1054,11 +1115,19 @@ describe("secrets runtime snapshot", () => {
           search: {
             enabled: false,
             apiKey: { source: "env", provider: "default", id: "DISABLED_WEB_SEARCH_API_KEY" },
-            gemini: {
-              apiKey: {
-                source: "env",
-                provider: "default",
-                id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          google: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
+                },
               },
             },
           },
@@ -1078,11 +1147,10 @@ describe("secrets runtime snapshot", () => {
       provider: "default",
       id: "DISABLED_TELEGRAM_BASE_TOKEN",
     });
-    expect(
-      snapshot.warnings.filter(
-        (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-      ),
-    ).toHaveLength(10);
+    const ignoredInactiveWarnings = snapshot.warnings.filter(
+      (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+    );
+    expect(ignoredInactiveWarnings).toHaveLength(10);
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
         "agents.defaults.memorySearch.remote.apiKey",
@@ -1091,6 +1159,10 @@ describe("secrets runtime snapshot", () => {
         "channels.telegram.accounts.disabled.botToken",
         "plugins.entries.brave.config.webSearch.apiKey",
         "plugins.entries.google.config.webSearch.apiKey",
+        "plugins.entries.xai.config.webSearch.apiKey",
+        "plugins.entries.moonshot.config.webSearch.apiKey",
+        "plugins.entries.perplexity.config.webSearch.apiKey",
+        "plugins.entries.firecrawl.config.webSearch.apiKey",
       ]),
     );
   });
@@ -1215,6 +1287,350 @@ describe("secrets runtime snapshot", () => {
         loadAuthStore: () => ({ version: 1, profiles: {} }),
       }),
     ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_REF/i);
+  });
+
+  it("resolves media request secret refs for provider headers, auth, and tls material", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4o-mini-transcribe",
+                capabilities: ["audio"],
+                request: {
+                  headers: {
+                    "X-Shared-Tenant": {
+                      source: "env",
+                      provider: "default",
+                      id: "MEDIA_SHARED_TENANT",
+                    },
+                  },
+                  auth: {
+                    mode: "header",
+                    headerName: "x-shared-key",
+                    value: {
+                      source: "env",
+                      provider: "default",
+                      id: "MEDIA_SHARED_MODEL_KEY",
+                    },
+                  },
+                },
+              },
+            ],
+            audio: {
+              enabled: true,
+              request: {
+                headers: {
+                  "X-Tenant": { source: "env", provider: "default", id: "MEDIA_AUDIO_TENANT" },
+                },
+                auth: {
+                  mode: "authorization-bearer",
+                  token: { source: "env", provider: "default", id: "MEDIA_AUDIO_TOKEN" },
+                },
+                tls: {
+                  cert: { source: "env", provider: "default", id: "MEDIA_AUDIO_CERT" },
+                },
+              },
+              models: [
+                {
+                  provider: "deepgram",
+                  request: {
+                    auth: {
+                      mode: "header",
+                      headerName: "x-api-key",
+                      value: { source: "env", provider: "default", id: "MEDIA_AUDIO_MODEL_KEY" },
+                    },
+                    proxy: {
+                      mode: "explicit-proxy",
+                      url: "http://proxy.example:8080",
+                      tls: {
+                        ca: { source: "env", provider: "default", id: "MEDIA_AUDIO_PROXY_CA" },
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+      env: {
+        MEDIA_SHARED_TENANT: "tenant-shared",
+        MEDIA_SHARED_MODEL_KEY: "shared-model-key", // pragma: allowlist secret
+        MEDIA_AUDIO_TENANT: "tenant-acme",
+        MEDIA_AUDIO_TOKEN: "audio-token", // pragma: allowlist secret
+        MEDIA_AUDIO_CERT: "client-cert",
+        MEDIA_AUDIO_MODEL_KEY: "model-key", // pragma: allowlist secret
+        MEDIA_AUDIO_PROXY_CA: "proxy-ca",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.audio?.request?.headers?.["X-Tenant"]).toBe("tenant-acme");
+    expect(snapshot.config.tools?.media?.audio?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: "audio-token",
+    });
+    expect(snapshot.config.tools?.media?.audio?.request?.tls).toEqual({
+      cert: "client-cert",
+    });
+    expect(snapshot.config.tools?.media?.models?.[0]?.request).toEqual({
+      headers: {
+        "X-Shared-Tenant": "tenant-shared",
+      },
+      auth: {
+        mode: "header",
+        headerName: "x-shared-key",
+        value: "shared-model-key",
+      },
+    });
+    expect(snapshot.config.tools?.media?.audio?.models?.[0]?.request).toEqual({
+      auth: {
+        mode: "header",
+        headerName: "x-api-key",
+        value: "model-key",
+      },
+      proxy: {
+        mode: "explicit-proxy",
+        url: "http://proxy.example:8080",
+        tls: {
+          ca: "proxy-ca",
+        },
+      },
+    });
+  });
+
+  it("resolves shared media model request refs when capability blocks are omitted", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4o-mini-transcribe",
+                capabilities: ["audio"],
+                request: {
+                  auth: {
+                    mode: "authorization-bearer",
+                    token: {
+                      source: "env",
+                      provider: "default",
+                      id: "MEDIA_SHARED_AUDIO_TOKEN",
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      }),
+      env: {
+        MEDIA_SHARED_AUDIO_TOKEN: "shared-audio-token", // pragma: allowlist secret
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: "shared-audio-token",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "tools.media.models.0.request.auth.token",
+    );
+  });
+
+  it("treats shared media model request refs as inactive when their capabilities are disabled", async () => {
+    const sharedTokenRef = {
+      source: "env" as const,
+      provider: "default" as const,
+      id: "MEDIA_DISABLED_AUDIO_TOKEN",
+    };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4o-mini-transcribe",
+                capabilities: ["audio"],
+                request: {
+                  auth: {
+                    mode: "authorization-bearer",
+                    token: sharedTokenRef,
+                  },
+                },
+              },
+            ],
+            audio: {
+              enabled: false,
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: sharedTokenRef,
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "tools.media.models.0.request.auth.token",
+    );
+  });
+
+  it("resolves shared media model request refs from inferred provider capabilities", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "deepgram",
+      pluginName: "Deepgram Plugin",
+      source: "test",
+      provider: {
+        id: "deepgram",
+        capabilities: ["audio"],
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "deepgram",
+                request: {
+                  auth: {
+                    mode: "authorization-bearer",
+                    token: {
+                      source: "env",
+                      provider: "default",
+                      id: "MEDIA_INFERRED_AUDIO_TOKEN",
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      }),
+      env: {
+        MEDIA_INFERRED_AUDIO_TOKEN: "inferred-audio-token", // pragma: allowlist secret
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: "inferred-audio-token",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "tools.media.models.0.request.auth.token",
+    );
+  });
+
+  it("treats shared media model request refs as inactive when inferred capabilities are disabled", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "deepgram",
+      pluginName: "Deepgram Plugin",
+      source: "test",
+      provider: {
+        id: "deepgram",
+        capabilities: ["audio"],
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
+    const inferredTokenRef = {
+      source: "env" as const,
+      provider: "default" as const,
+      id: "MEDIA_INFERRED_DISABLED_AUDIO_TOKEN",
+    };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "deepgram",
+                request: {
+                  auth: {
+                    mode: "authorization-bearer",
+                    token: inferredTokenRef,
+                  },
+                },
+              },
+            ],
+            audio: {
+              enabled: false,
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: inferredTokenRef,
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "tools.media.models.0.request.auth.token",
+    );
+  });
+
+  it("treats section media model request refs as inactive when model capabilities exclude the section", async () => {
+    const sectionTokenRef = {
+      source: "env" as const,
+      provider: "default" as const,
+      id: "MEDIA_AUDIO_SECTION_FILTERED_TOKEN",
+    };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [
+                {
+                  provider: "openai",
+                  capabilities: ["video"],
+                  request: {
+                    auth: {
+                      mode: "authorization-bearer",
+                      token: sectionTokenRef,
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.audio?.models?.[0]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: sectionTokenRef,
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "tools.media.audio.models.0.request.auth.token",
+    );
   });
 
   it("fails when an active exec ref id contains traversal segments", async () => {
@@ -2646,5 +3062,95 @@ describe("secrets runtime snapshot", () => {
       }
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("migrates legacy x_search SecretRefs into the xai plugin webSearch auth at runtime", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+              model: "grok-4-1-fast",
+            },
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_KEY_REF: "xai-runtime-key",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(snapshot.config.plugins?.entries?.xai?.config).toEqual({
+      webSearch: {
+        apiKey: "xai-runtime-key",
+      },
+    });
+  });
+
+  it("still migrates legacy x_search auth when general legacy migration returns an invalid config", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            groupMentionsOnly: true,
+            groups: [],
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_KEY_REF: "xai-runtime-key-invalid-config",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+    });
+    expect(snapshot.config.plugins?.entries?.xai?.config).toEqual({
+      webSearch: {
+        apiKey: "xai-runtime-key-invalid-config",
+      },
+    });
+  });
+
+  it("does not force-enable xai at runtime for knob-only x_search config", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              enabled: true,
+              model: "grok-4-1-fast",
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(snapshot.config.plugins?.entries?.xai).toBeUndefined();
   });
 });

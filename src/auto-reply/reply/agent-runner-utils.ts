@@ -93,7 +93,14 @@ export const formatBunFetchSocketError = (message: string) => {
 };
 
 export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
-  Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
+  Boolean(
+    run.enforceFinalTag ||
+    isReasoningTagProvider(provider, {
+      config: run.config,
+      workspaceDir: run.workspaceDir,
+      modelId: run.model,
+    }),
+  );
 
 function isFollowupRunObject(value: unknown): value is FollowupRun["run"] {
   return Boolean(value && typeof value === "object");

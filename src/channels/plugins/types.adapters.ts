@@ -9,6 +9,7 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
@@ -137,7 +138,9 @@ export type ChannelOutboundContext = {
   text: string;
   mediaUrl?: string;
   audioAsVoice?: boolean;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gifPlayback?: boolean;
   /** Send image as document to avoid Telegram compression. */
   forceDocument?: boolean;
@@ -509,6 +512,7 @@ export type ChannelApprovalDeliveryAdapter = {
   hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
   shouldSuppressForwardingFallback?: (params: {
     cfg: OpenClawConfig;
+    approvalKind: ChannelApprovalKind;
     target: ChannelApprovalForwardTarget;
     request: ExecApprovalRequest;
   }) => boolean;
@@ -583,6 +587,11 @@ export type ChannelApprovalRenderAdapter = {
       target: ChannelApprovalForwardTarget;
     }) => ReplyPayload | null;
   };
+};
+
+export type ChannelApprovalCapability = ChannelApprovalAdapter & {
+  authorizeActorAction?: ChannelAuthAdapter["authorizeActorAction"];
+  getActionAvailabilityState?: ChannelAuthAdapter["getActionAvailabilityState"];
 };
 
 export type ChannelApprovalAdapter = {

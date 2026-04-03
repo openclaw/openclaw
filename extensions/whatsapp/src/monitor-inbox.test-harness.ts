@@ -197,7 +197,10 @@ export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, c
   );
 }
 
-export async function startInboxMonitor(onMessage: InboxOnMessage) {
+export async function startInboxMonitor(
+  onMessage: InboxOnMessage,
+  options: { selfChatMode?: boolean } = {},
+) {
   if (!monitorWebInbox) {
     ({ monitorWebInbox } = await import("./inbound.js"));
   }
@@ -206,6 +209,7 @@ export async function startInboxMonitor(onMessage: InboxOnMessage) {
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
+    selfChatMode: options.selfChatMode,
   });
   return { listener, sock: getSock() };
 }

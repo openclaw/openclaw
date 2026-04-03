@@ -118,6 +118,22 @@ describe("createTelegramRetryRunner", () => {
         expectedError: "permission denied",
       },
       {
+        name: "retries grammY HttpError wrapping network error via .cause traversal",
+        runnerOptions: {
+          retry: { ...ZERO_DELAY_RETRY, attempts: 2 },
+        },
+        fnSteps: [
+          {
+            type: "reject" as const,
+            value: Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+              cause: new Error("ECONNRESET"),
+            }),
+          },
+        ],
+        expectedCalls: 2,
+        expectedError: "Network request",
+      },
+      {
         name: "keeps retrying retriable errors until attempts are exhausted",
         runnerOptions: {
           retry: ZERO_DELAY_RETRY,
