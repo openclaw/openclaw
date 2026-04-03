@@ -275,7 +275,7 @@ export const feishuSetupWizard: ChannelSetupWizard = {
   },
   credentials: [],
   finalize: async ({ cfg, accountId, prompter, options }) => {
-    const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+    const resolvedAccountId = accountId ?? resolveDefaultFeishuAccountId(cfg);
     const resolvedAccount = resolveFeishuAccount({ cfg, accountId: resolvedAccountId });
     const scopedConfig = getScopedFeishuConfig(cfg, resolvedAccountId);
     const resolved =

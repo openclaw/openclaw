@@ -151,6 +151,70 @@ describe("feishu setup wizard", () => {
       appSecret: "work-secret",
     });
   });
+
+  it("uses configured defaultAccount for omitted finalize writes", async () => {
+    const prompter = createTestWizardPrompter({
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Enter Feishu App Secret") {
+          return "work-secret"; // pragma: allowlist secret
+        }
+        if (message === "Enter Feishu App ID") {
+          return "work-app";
+        }
+        if (message === "Feishu webhook path") {
+          return "/feishu/events";
+        }
+        if (message === "Group chat allowlist (chat_ids)") {
+          return "";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+      select: vi.fn(
+        async ({ message, initialValue }: { message: string; initialValue?: string }) => {
+          if (message === "Feishu connection mode") {
+            return initialValue ?? "websocket";
+          }
+          if (message === "Which Feishu domain?") {
+            return initialValue ?? "feishu";
+          }
+          if (message === "Group chat policy") {
+            return "disabled";
+          }
+          return initialValue ?? "websocket";
+        },
+      ) as never,
+      note: vi.fn(async () => {}),
+    });
+
+    const result = await feishuPlugin.setupWizard?.finalize?.({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "top-level-app",
+            appSecret: "top-level-secret", // pragma: allowlist secret
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                appId: "",
+              },
+            },
+          },
+        },
+      } as never,
+      accountId: undefined as never,
+      prompter,
+      runtime: createNonExitingTypedRuntimeEnv<FeishuConfigureRuntime>(),
+      options: {},
+    });
+
+    expect(result?.cfg.channels?.feishu?.appId).toBe("top-level-app");
+    expect(result?.cfg.channels?.feishu?.appSecret).toBe("top-level-secret");
+    expect(result?.cfg.channels?.feishu?.accounts?.work).toMatchObject({
+      enabled: true,
+      appId: "work-app",
+      appSecret: "work-secret",
+    });
+  });
 });
 
 describe("feishu setup wizard status", () => {
