@@ -103,9 +103,9 @@ When multiple PRs address the same issue:
 1. **Prefer the first contributor's PR when feasible.** If it's directionally correct, guide the author to fix issues via review comments rather than closing and rewriting from scratch. The "teach someone to fish" approach grows the contributor pool and builds long-term project health.
 
 2. **If selecting a later or better contribution over the first**, credit everyone whose PRs you close:
-   - Add `Co-authored-by: Name <email>` to the merge commit.
+   - **Always** add `Co-authored-by: Name <email>` to the merge commit — this is the preferred method because it shows up in both `git log` and GitHub's contributor graph, ensuring the original author gets visible credit.
    - Mention the superseded PR(s) and author(s) in the PR description: "Based on the work in #XXXX by @author".
-   - Follow the `(thanks @handle)` convention in the commit message — e.g., `fix(slack): improve delivery (#1234) (thanks @original-author)`.
+   - Additionally, follow the `(thanks @handle)` convention in the commit message — e.g., `fix(slack): improve delivery (#1234) (thanks @original-author)` — for human-readable acknowledgment.
 
 3. **Explain why you're superseding** when closing a PR in favor of another. A sentence or two about _why_ the rewrite was necessary (vs. iterating on the original) helps the contributor learn and doesn't leave them guessing.
 
