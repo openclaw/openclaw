@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
   buildChannelKeyCandidates,
@@ -47,6 +48,20 @@ function resolveProviderEntry(
   );
 }
 
+function buildScopedParentFallbackCandidates(rawId: string | undefined): string[] {
+  const candidates: string[] = [];
+  let current = rawId?.trim();
+  while (current) {
+    const next = current.replace(/:(topic|sender|thread):[^:]+$/i, "").trim();
+    if (!next || next === current) {
+      break;
+    }
+    candidates.push(next);
+    current = next;
+  }
+  return candidates;
+}
+
 function buildChannelCandidates(
   params: Pick<
     ChannelModelOverrideParams,
@@ -57,6 +72,10 @@ function buildChannelCandidates(
     normalizeMessageChannel(params.channel ?? "") ?? params.channel?.trim().toLowerCase();
   const groupId = params.groupId?.trim();
   const sessionConversation = resolveSessionConversationRef(params.parentSessionKey);
+  const rawParentConversation = parseRawSessionConversationRef(params.parentSessionKey)?.rawId;
+  const fallbackParentCandidates = buildScopedParentFallbackCandidates(
+    sessionConversation?.rawId ?? rawParentConversation ?? groupId,
+  );
   const groupConversationKind =
     normalizeChatType(params.groupChatType ?? undefined) === "channel"
       ? "channel"
@@ -79,6 +98,7 @@ function buildChannelCandidates(
     keys: buildChannelKeyCandidates(
       groupId,
       sessionConversation?.rawId,
+      ...fallbackParentCandidates,
       ...(groupConversation?.parentConversationCandidates ?? []),
       ...(sessionConversation?.parentConversationCandidates ?? []),
     ),

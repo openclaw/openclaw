@@ -22,6 +22,9 @@ export default defineSingleProviderPluginEntry({
         promptMessage: "Enter GMI Cloud API key",
         defaultModel: GMICLOUD_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyGmicloudConfig(cfg),
+        wizard: {
+          groupLabel: "GMI Cloud",
+        },
       },
     ],
     catalog: {

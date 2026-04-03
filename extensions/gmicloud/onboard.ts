@@ -1,14 +1,14 @@
 import {
-  applyAgentDefaultModelPrimary,
-  createDefaultModelsPresetAppliers,
-  type ModelApi,
+  createModelCatalogPresetAppliers,
+  ensureModelAllowlistEntry,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
-  buildGmicloudProvider,
+  buildGmicloudModelDefinition,
   GMICLOUD_BASE_URL,
   GMICLOUD_DEFAULT_MODEL_ID,
-} from "./provider-catalog.js";
+  GMICLOUD_MODEL_CATALOG,
+} from "./models.js";
 
 export const GMICLOUD_DEFAULT_MODEL_REF = `gmicloud/${GMICLOUD_DEFAULT_MODEL_ID}`;
 export const GMICLOUD_SONNET_MODEL_REF = "gmicloud/anthropic/claude-sonnet-4.6";
@@ -30,66 +30,28 @@ const GMICLOUD_ONBOARD_MODEL_REFS = [
   ...GMICLOUD_GEMINI_MODEL_REFS,
 ] as const;
 
-function upsertModelAlias(
-  models: Record<string, { alias?: string }>,
-  modelRef: string,
-  alias: string,
-): void {
-  models[modelRef] = {
-    ...models[modelRef],
-    alias: models[modelRef]?.alias ?? alias,
-  };
-}
-
-function resolveGmicloudPreset(cfg: OpenClawConfig): {
-  api: ModelApi;
-  baseUrl: string;
-  defaultModels: NonNullable<ReturnType<typeof buildGmicloudProvider>["models"]>;
-} {
-  const defaultProvider = buildGmicloudProvider();
-  const existingProvider = cfg.models?.providers?.gmicloud as
-    | {
-        baseUrl?: unknown;
-        api?: unknown;
-      }
-    | undefined;
-  const existingBaseUrl =
-    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
-  const api =
-    typeof existingProvider?.api === "string"
-      ? (existingProvider.api as ModelApi)
-      : "openai-completions";
-
-  return {
-    api,
-    baseUrl: existingBaseUrl || GMICLOUD_BASE_URL,
-    defaultModels: defaultProvider.models ?? [],
-  };
-}
-
-const gmicloudPresetAppliers = createDefaultModelsPresetAppliers({
+const gmicloudPresetAppliers = createModelCatalogPresetAppliers({
   primaryModelRef: GMICLOUD_DEFAULT_MODEL_REF,
-  resolveParams: (cfg: OpenClawConfig) => {
-    const preset = resolveGmicloudPreset(cfg);
-    return {
-      providerId: "gmicloud",
-      api: preset.api,
-      baseUrl: preset.baseUrl,
-      defaultModels: preset.defaultModels,
-      defaultModelId: GMICLOUD_DEFAULT_MODEL_ID,
-      aliases: [{ modelRef: GMICLOUD_DEFAULT_MODEL_REF, alias: "GMI Cloud" }],
-    };
-  },
+  resolveParams: (_cfg: OpenClawConfig) => ({
+    providerId: "gmicloud",
+    api: "openai-completions",
+    baseUrl: GMICLOUD_BASE_URL,
+    catalogModels: GMICLOUD_MODEL_CATALOG.map(buildGmicloudModelDefinition),
+    aliases: [{ modelRef: GMICLOUD_DEFAULT_MODEL_REF, alias: "GMI Cloud" }],
+  }),
 });
 
-export function applyGmicloudProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = gmicloudPresetAppliers.applyProviderConfig(cfg);
-  const models = { ...next.agents?.defaults?.models } as Record<string, { alias?: string }>;
-  delete models[GMICLOUD_LEGACY_DEFAULT_MODEL_REF];
+function applyGmicloudPostConfig(cfg: OpenClawConfig): OpenClawConfig {
+  let next = cfg;
   for (const modelRef of GMICLOUD_ONBOARD_MODEL_REFS) {
-    models[modelRef] = { ...models[modelRef] };
+    next = ensureModelAllowlistEntry({
+      cfg: next,
+      modelRef,
+      defaultProvider: "gmicloud",
+    });
   }
-  upsertModelAlias(models, GMICLOUD_DEFAULT_MODEL_REF, "GMI Cloud");
+  const models = { ...next.agents?.defaults?.models };
+  delete models[GMICLOUD_LEGACY_DEFAULT_MODEL_REF];
   return {
     ...next,
     agents: {
@@ -102,9 +64,10 @@ export function applyGmicloudProviderConfig(cfg: OpenClawConfig): OpenClawConfig
   };
 }
 
+export function applyGmicloudProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return applyGmicloudPostConfig(gmicloudPresetAppliers.applyProviderConfig(cfg));
+}
+
 export function applyGmicloudConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(
-    applyGmicloudProviderConfig(cfg),
-    GMICLOUD_DEFAULT_MODEL_REF,
-  );
+  return applyGmicloudPostConfig(gmicloudPresetAppliers.applyConfig(cfg));
 }
