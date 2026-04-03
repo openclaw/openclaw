@@ -242,12 +242,48 @@ describe("OpenAIWebSocketManager", () => {
       expect(sock.options).toMatchObject({
         headers: expect.objectContaining({
           originator: "openclaw",
+          version: expect.any(String),
           "User-Agent": expect.stringMatching(/^openclaw\//),
         }),
       });
 
       sock.simulateOpen();
       await connectPromise;
+    });
+
+    it("does not add hidden attribution headers on custom websocket endpoints", async () => {
+      const manager = buildManager({
+        url: "wss://proxy.example.com/v1/responses",
+      });
+      const connectPromise = manager.connect("sk-test-key");
+
+      const sock = lastSocket();
+      expect(sock.options).toMatchObject({
+        headers: expect.objectContaining({
+          Authorization: "Bearer sk-test-key",
+          "OpenAI-Beta": "responses-websocket=v1",
+        }),
+      });
+      const headers = sock.options?.headers as Record<string, string>;
+      expect(headers.originator).toBeUndefined();
+      expect(headers.version).toBeUndefined();
+      expect(headers["User-Agent"]).toBeUndefined();
+
+      sock.simulateOpen();
+      await connectPromise;
+    });
+
+    it("rejects insecure websocket TLS overrides", async () => {
+      const manager = buildManager({
+        request: {
+          tls: {
+            insecureSkipVerify: true,
+          },
+        },
+      });
+
+      await expect(manager.connect("sk-test-key")).rejects.toThrow(/insecureskipverify/i);
+      expect(MockWebSocket.lastInstance).toBeNull();
     });
 
     it("resolves when the connection opens", async () => {

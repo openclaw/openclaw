@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
+import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { logVerbose } from "../globals.js";
 import type {
   PluginWebSearchProviderEntry,
@@ -72,6 +72,7 @@ function hasEntryCredential(
   provider: Pick<
     PluginWebSearchProviderEntry,
     | "credentialPath"
+    | "id"
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getCredentialValue"
@@ -83,15 +84,24 @@ function hasEntryCredential(
   if (!providerRequiresCredential(provider)) {
     return true;
   }
+  const configuredValue = provider.getConfiguredCredentialValue?.(config);
   const rawValue =
-    provider.getConfiguredCredentialValue?.(config) ??
-    provider.getCredentialValue(search as Record<string, unknown> | undefined);
-  const fromConfig = normalizeSecretInput(
-    normalizeResolvedSecretInputString({
-      value: rawValue,
-      path: provider.credentialPath,
-    }),
-  );
+    configuredValue ??
+    (provider.id === "brave"
+      ? provider.getCredentialValue(search as Record<string, unknown> | undefined)
+      : undefined);
+  const configuredRef = resolveSecretInputRef({
+    value: rawValue,
+  }).ref;
+  if (configuredRef && configuredRef.source !== "env") {
+    return true;
+  }
+  const fromConfig = normalizeSecretInput(normalizeSecretInputString(rawValue));
+  if (configuredRef?.source === "env") {
+    return Boolean(
+      normalizeSecretInput(process.env[configuredRef.id]) || readProviderEnvValue(provider.envVars),
+    );
+  }
   return Boolean(fromConfig || readProviderEnvValue(provider.envVars));
 }
 

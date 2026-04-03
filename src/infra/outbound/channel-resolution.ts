@@ -3,8 +3,11 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import { getActivePluginRegistry, getActivePluginRegistryKey } from "../../plugins/runtime.js";
+import { resolveRuntimePluginRegistry } from "../../plugins/loader.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginChannelRegistryVersion,
+} from "../../plugins/runtime.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -44,19 +47,20 @@ function maybeBootstrapChannelPlugin(params: {
     return;
   }
 
-  const registryKey = getActivePluginRegistryKey() ?? "<none>";
-  const attemptKey = `${registryKey}:${params.channel}`;
+  const attemptKey = `${getActivePluginChannelRegistryVersion()}:${params.channel}`;
   if (bootstrapAttempts.has(attemptKey)) {
     return;
   }
   bootstrapAttempts.add(attemptKey);
 
-  const autoEnabled = applyPluginAutoEnable({ config: cfg }).config;
-  const defaultAgentId = resolveDefaultAgentId(autoEnabled);
-  const workspaceDir = resolveAgentWorkspaceDir(autoEnabled, defaultAgentId);
+  const autoEnabled = applyPluginAutoEnable({ config: cfg });
+  const defaultAgentId = resolveDefaultAgentId(autoEnabled.config);
+  const workspaceDir = resolveAgentWorkspaceDir(autoEnabled.config, defaultAgentId);
   try {
-    loadOpenClawPlugins({
-      config: autoEnabled,
+    resolveRuntimePluginRegistry({
+      config: autoEnabled.config,
+      activationSourceConfig: cfg,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
       workspaceDir,
       runtimeOptions: {
         allowGatewaySubagentBinding: true,

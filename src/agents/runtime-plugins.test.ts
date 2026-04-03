@@ -1,29 +1,27 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
-  loadOpenClawPlugins: vi.fn(),
-  getActivePluginRegistryKey: vi.fn<() => string | null>(),
+  resolveRuntimePluginRegistry: vi.fn(),
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins: hoisted.loadOpenClawPlugins,
-}));
-
-vi.mock("../plugins/runtime.js", () => ({
-  getActivePluginRegistryKey: hoisted.getActivePluginRegistryKey,
+  resolveRuntimePluginRegistry: hoisted.resolveRuntimePluginRegistry,
 }));
 
 describe("ensureRuntimePluginsLoaded", () => {
+  let ensureRuntimePluginsLoaded: typeof import("./runtime-plugins.js").ensureRuntimePluginsLoaded;
+
+  beforeAll(async () => {
+    ({ ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js"));
+  });
+
   beforeEach(() => {
-    hoisted.loadOpenClawPlugins.mockReset();
-    hoisted.getActivePluginRegistryKey.mockReset();
-    hoisted.getActivePluginRegistryKey.mockReturnValue(null);
-    vi.resetModules();
+    hoisted.resolveRuntimePluginRegistry.mockReset();
+    hoisted.resolveRuntimePluginRegistry.mockReturnValue(undefined);
   });
 
   it("does not reactivate plugins when a process already has an active registry", async () => {
-    const { ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js");
-    hoisted.getActivePluginRegistryKey.mockReturnValue("gateway-registry");
+    hoisted.resolveRuntimePluginRegistry.mockReturnValue({});
 
     ensureRuntimePluginsLoaded({
       config: {} as never,
@@ -31,19 +29,17 @@ describe("ensureRuntimePluginsLoaded", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(hoisted.loadOpenClawPlugins).not.toHaveBeenCalled();
+    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
 
-  it("loads runtime plugins when no active registry exists", async () => {
-    const { ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js");
-
+  it("resolves runtime plugins through the shared runtime helper", async () => {
     ensureRuntimePluginsLoaded({
       config: {} as never,
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
 
-    expect(hoisted.loadOpenClawPlugins).toHaveBeenCalledWith({
+    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: {} as never,
       workspaceDir: "/tmp/workspace",
       runtimeOptions: {

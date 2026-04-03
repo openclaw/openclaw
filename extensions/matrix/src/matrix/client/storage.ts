@@ -1,16 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../../account-selection.js";
-import { maybeCreateMatrixMigrationSnapshot, normalizeAccountId } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   resolveMatrixAccountStorageRoot,
   resolveMatrixLegacyFlatStoragePaths,
 } from "../../storage-paths.js";
+import type { MatrixAuth } from "./types.js";
 import type { MatrixStoragePaths } from "./types.js";
 
 export const DEFAULT_ACCOUNT_KEY = "default";
@@ -293,6 +294,25 @@ export function resolveMatrixStoragePaths(params: {
   };
 }
 
+export function resolveMatrixStateFilePath(params: {
+  auth: MatrixAuth;
+  filename: string;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+}): string {
+  const storagePaths = resolveMatrixStoragePaths({
+    homeserver: params.auth.homeserver,
+    userId: params.auth.userId,
+    accessToken: params.auth.accessToken,
+    accountId: params.accountId ?? params.auth.accountId,
+    deviceId: params.auth.deviceId,
+    env: params.env,
+    stateDir: params.stateDir,
+  });
+  return path.join(storagePaths.rootDir, params.filename);
+}
+
 export async function maybeMigrateLegacyStorage(params: {
   storagePaths: MatrixStoragePaths;
   env?: NodeJS.ProcessEnv;
@@ -317,6 +337,7 @@ export async function maybeMigrateLegacyStorage(params: {
   });
 
   const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
+  const { maybeCreateMatrixMigrationSnapshot } = await import("./migration-snapshot.runtime.js");
   await maybeCreateMatrixMigrationSnapshot({
     trigger: "matrix-client-fallback",
     env: params.env,

@@ -44,7 +44,6 @@ async function addIsolatedAgentTurnJob(
   params: {
     name: string;
     wakeMode: "next-heartbeat" | "now";
-    payload?: { deliver?: boolean };
     delivery?: DeliveryOverride;
   },
 ) {
@@ -57,7 +56,6 @@ async function addIsolatedAgentTurnJob(
     payload: {
       kind: "agentTurn",
       message: "hello",
-      ...params.payload,
     } as unknown as { kind: "agentTurn"; message: string },
     ...(params.delivery
       ? {
@@ -72,12 +70,12 @@ async function addIsolatedAgentTurnJob(
 }
 
 describe("CronService delivery plan consistency", () => {
-  it("does not post isolated summary when legacy deliver=false", async () => {
+  it("does not post isolated summary when delivery.mode=none", async () => {
     await withCronService({}, async ({ cron, enqueueSystemEvent }) => {
       const job = await addIsolatedAgentTurnJob(cron, {
-        name: "legacy-off",
+        name: "delivery-off",
         wakeMode: "next-heartbeat",
-        payload: { deliver: false },
+        delivery: { mode: "none" },
       });
 
       const result = await cron.run(job.id, "force");

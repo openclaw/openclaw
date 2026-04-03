@@ -8,13 +8,16 @@
     "additionalProperties": false,
     "properties": {
       "command": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "expectedVersion": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "cwd": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "permissionMode": {
         "type": "string",
@@ -23,6 +26,9 @@
       "nonInteractivePermissions": {
         "type": "string",
         "enum": ["deny", "fail"]
+      },
+      "pluginToolsMcpBridge": {
+        "type": "boolean"
       },
       "strictWindowsCmdWrapper": {
         "type": "boolean"
@@ -42,6 +48,7 @@
           "properties": {
             "command": {
               "type": "string",
+              "minLength": 1,
               "description": "Command to run the MCP server"
             },
             "args": {
@@ -80,6 +87,11 @@
     "nonInteractivePermissions": {
       "label": "Non-Interactive Permission Policy",
       "help": "acpx policy when interactive permission prompts are unavailable."
+    },
+    "pluginToolsMcpBridge": {
+      "label": "Plugin Tools MCP Bridge",
+      "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into ACPX sessions so ACP agents can call plugin-registered tools.",
+      "advanced": true
     },
     "strictWindowsCmdWrapper": {
       "label": "Strict Windows cmd Wrapper",

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
@@ -15,14 +15,6 @@ vi.mock("../../plugins/manifest-registry.js", () => ({
 
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
 
-async function loadFreshPluginSkillsModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../../plugins/manifest-registry.js", () => ({
-    loadPluginManifestRegistry: (...args: unknown[]) => hoisted.loadPluginManifestRegistry(...args),
-  }));
-  ({ resolvePluginSkillDirs } = await import("./plugin-skills.js"));
-}
-
 const tempDirs = createTrackedTempDirs();
 
 function buildRegistry(params: { acpxRoot: string; helperRoot: string }): PluginManifestRegistry {
@@ -34,6 +26,7 @@ function buildRegistry(params: { acpxRoot: string; helperRoot: string }): Plugin
         name: "ACPX Runtime",
         channels: [],
         providers: [],
+        cliBackends: [],
         skills: ["./skills"],
         hooks: [],
         origin: "workspace",
@@ -46,6 +39,7 @@ function buildRegistry(params: { acpxRoot: string; helperRoot: string }): Plugin
         name: "Helper",
         channels: [],
         providers: [],
+        cliBackends: [],
         skills: ["./skills"],
         hooks: [],
         origin: "workspace",
@@ -71,6 +65,7 @@ function createSinglePluginRegistry(params: {
         format: params.format,
         channels: [],
         providers: [],
+        cliBackends: [],
         skills: params.skills,
         hooks: [],
         origin: "workspace",
@@ -106,8 +101,12 @@ afterEach(async () => {
 });
 
 describe("resolvePluginSkillDirs", () => {
-  beforeEach(async () => {
-    await loadFreshPluginSkillsModuleForTest();
+  beforeAll(async () => {
+    ({ resolvePluginSkillDirs } = await import("./plugin-skills.js"));
+  });
+
+  beforeEach(() => {
+    hoisted.loadPluginManifestRegistry.mockReset();
   });
 
   it.each([

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import JSON5 from "json5";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
@@ -8,13 +9,27 @@ import type { PluginConfigUiHint, PluginKind } from "./types.js";
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 
+export type PluginManifestChannelConfig = {
+  schema: Record<string, unknown>;
+  uiHints?: Record<string, PluginConfigUiHint>;
+  label?: string;
+  description?: string;
+  preferOver?: string[];
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: Record<string, unknown>;
   enabledByDefault?: boolean;
-  kind?: PluginKind;
+  /** Legacy plugin ids that should normalize to this plugin id. */
+  legacyPluginIds?: string[];
+  /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
+  autoEnableWhenConfiguredProviders?: string[];
+  kind?: PluginKind | PluginKind[];
   channels?: string[];
   providers?: string[];
+  /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
+  cliBackends?: string[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
   providerAuthEnvVars?: Record<string, string[]>;
   /**
@@ -27,6 +42,21 @@ export type PluginManifest = {
   description?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
+  /**
+   * Static capability ownership snapshot used for manifest-driven discovery,
+   * compat wiring, and contract coverage without importing plugin runtime.
+   */
+  contracts?: PluginManifestContracts;
+  channelConfigs?: Record<string, PluginManifestChannelConfig>;
+};
+
+export type PluginManifestContracts = {
+  speechProviders?: string[];
+  mediaUnderstandingProviders?: string[];
+  imageGenerationProviders?: string[];
+  webFetchProviders?: string[];
+  webSearchProviders?: string[];
+  tools?: string[];
 };
 
 export type PluginManifestProviderAuthChoice = {
@@ -39,6 +69,8 @@ export type PluginManifestProviderAuthChoice = {
   /** Optional user-facing choice label/hint for grouped onboarding UI. */
   choiceLabel?: string;
   choiceHint?: string;
+  /** Legacy choice ids that should point users at this replacement choice. */
+  deprecatedChoiceIds?: string[];
   /** Optional grouping metadata for auth-choice pickers. */
   groupId?: string;
   groupLabel?: string;
@@ -87,6 +119,29 @@ function normalizeStringListRecord(value: unknown): Record<string, string[]> | u
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeManifestContracts(value: unknown): PluginManifestContracts | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const speechProviders = normalizeStringList(value.speechProviders);
+  const mediaUnderstandingProviders = normalizeStringList(value.mediaUnderstandingProviders);
+  const imageGenerationProviders = normalizeStringList(value.imageGenerationProviders);
+  const webFetchProviders = normalizeStringList(value.webFetchProviders);
+  const webSearchProviders = normalizeStringList(value.webSearchProviders);
+  const tools = normalizeStringList(value.tools);
+  const contracts = {
+    ...(speechProviders.length > 0 ? { speechProviders } : {}),
+    ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
+    ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
+    ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
+    ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
+    ...(tools.length > 0 ? { tools } : {}),
+  } satisfies PluginManifestContracts;
+
+  return Object.keys(contracts).length > 0 ? contracts : undefined;
+}
+
 function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -106,6 +161,7 @@ function normalizeProviderAuthChoices(
     }
     const choiceLabel = typeof entry.choiceLabel === "string" ? entry.choiceLabel.trim() : "";
     const choiceHint = typeof entry.choiceHint === "string" ? entry.choiceHint.trim() : "";
+    const deprecatedChoiceIds = normalizeStringList(entry.deprecatedChoiceIds);
     const groupId = typeof entry.groupId === "string" ? entry.groupId.trim() : "";
     const groupLabel = typeof entry.groupLabel === "string" ? entry.groupLabel.trim() : "";
     const groupHint = typeof entry.groupHint === "string" ? entry.groupHint.trim() : "";
@@ -124,6 +180,7 @@ function normalizeProviderAuthChoices(
       choiceId,
       ...(choiceLabel ? { choiceLabel } : {}),
       ...(choiceHint ? { choiceHint } : {}),
+      ...(deprecatedChoiceIds.length > 0 ? { deprecatedChoiceIds } : {}),
       ...(groupId ? { groupId } : {}),
       ...(groupLabel ? { groupLabel } : {}),
       ...(groupHint ? { groupHint } : {}),
@@ -137,6 +194,39 @@ function normalizeProviderAuthChoices(
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeChannelConfigs(
+  value: unknown,
+): Record<string, PluginManifestChannelConfig> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestChannelConfig> = {};
+  for (const [key, rawEntry] of Object.entries(value)) {
+    const channelId = typeof key === "string" ? key.trim() : "";
+    if (!channelId || !isRecord(rawEntry)) {
+      continue;
+    }
+    const schema = isRecord(rawEntry.schema) ? rawEntry.schema : null;
+    if (!schema) {
+      continue;
+    }
+    const uiHints = isRecord(rawEntry.uiHints)
+      ? (rawEntry.uiHints as Record<string, PluginConfigUiHint>)
+      : undefined;
+    const label = typeof rawEntry.label === "string" ? rawEntry.label.trim() : "";
+    const description = typeof rawEntry.description === "string" ? rawEntry.description.trim() : "";
+    const preferOver = normalizeStringList(rawEntry.preferOver);
+    normalized[channelId] = {
+      schema,
+      ...(uiHints ? { uiHints } : {}),
+      ...(label ? { label } : {}),
+      ...(description ? { description } : {}),
+      ...(preferOver.length > 0 ? { preferOver } : {}),
+    };
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 export function resolvePluginManifestPath(rootDir: string): string {
   for (const filename of PLUGIN_MANIFEST_FILENAMES) {
     const candidate = path.join(rootDir, filename);
@@ -145,6 +235,16 @@ export function resolvePluginManifestPath(rootDir: string): string {
     }
   }
   return path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
+}
+
+function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
+  if (typeof raw === "string") {
+    return raw as PluginKind;
+  }
+  if (Array.isArray(raw) && raw.length > 0 && raw.every((k) => typeof k === "string")) {
+    return raw.length === 1 ? (raw[0] as PluginKind) : (raw as PluginKind[]);
+  }
+  return undefined;
 }
 
 export function loadPluginManifest(
@@ -174,7 +274,7 @@ export function loadPluginManifest(
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
+    raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
   } catch (err) {
     return {
       ok: false,
@@ -196,16 +296,23 @@ export function loadPluginManifest(
     return { ok: false, error: "plugin manifest requires configSchema", manifestPath };
   }
 
-  const kind = typeof raw.kind === "string" ? (raw.kind as PluginKind) : undefined;
+  const kind = parsePluginKind(raw.kind);
   const enabledByDefault = raw.enabledByDefault === true;
+  const legacyPluginIds = normalizeStringList(raw.legacyPluginIds);
+  const autoEnableWhenConfiguredProviders = normalizeStringList(
+    raw.autoEnableWhenConfiguredProviders,
+  );
   const name = typeof raw.name === "string" ? raw.name.trim() : undefined;
   const description = typeof raw.description === "string" ? raw.description.trim() : undefined;
   const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
+  const cliBackends = normalizeStringList(raw.cliBackends);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const skills = normalizeStringList(raw.skills);
+  const contracts = normalizeManifestContracts(raw.contracts);
+  const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
   if (isRecord(raw.uiHints)) {
@@ -218,9 +325,14 @@ export function loadPluginManifest(
       id,
       configSchema,
       ...(enabledByDefault ? { enabledByDefault } : {}),
+      ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
+      ...(autoEnableWhenConfiguredProviders.length > 0
+        ? { autoEnableWhenConfiguredProviders }
+        : {}),
       kind,
       channels,
       providers,
+      cliBackends,
       providerAuthEnvVars,
       providerAuthChoices,
       skills,
@@ -228,6 +340,8 @@ export function loadPluginManifest(
       description,
       version,
       uiHints,
+      contracts,
+      channelConfigs,
     },
     manifestPath,
   };
@@ -243,12 +357,13 @@ export type PluginPackageChannel = {
   docsLabel?: string;
   blurb?: string;
   order?: number;
-  aliases?: string[];
-  preferOver?: string[];
+  aliases?: readonly string[];
+  preferOver?: readonly string[];
   systemImage?: string;
   selectionDocsPrefix?: string;
   selectionDocsOmitLabel?: boolean;
-  selectionExtras?: string[];
+  selectionExtras?: readonly string[];
+  markdownCapable?: boolean;
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;

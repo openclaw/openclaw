@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
@@ -17,7 +17,7 @@ vi.mock("./graph-upload.js", async () => {
   };
 });
 
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   type MSTeamsAdapter,
   type MSTeamsRenderedMessage,
@@ -402,6 +402,100 @@ describe("msteams messenger", () => {
       expect(threadSent).toEqual(["one"]);
       expect(proactiveSent).toEqual(["two", "three"]);
       expect(ids).toEqual(["id:one", "id:two", "id:three"]);
+    });
+
+    it("reconstructs threaded conversation ID for channel revoke fallback", async () => {
+      const proactiveSent: string[] = [];
+      let capturedReference: unknown;
+
+      const channelRef: StoredConversationReference = {
+        activityId: "activity456",
+        user: { id: "user123", name: "User" },
+        agent: { id: "bot123", name: "Bot" },
+        conversation: {
+          id: "19:abc@thread.tacv2;messageid=deadbeef",
+          conversationType: "channel",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+      };
+
+      const ctx = createRevokedThreadContext();
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference;
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: channelRef,
+        context: ctx,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(proactiveSent).toEqual(["hello"]);
+      const ref = capturedReference as { conversation?: { id?: string }; activityId?: string };
+      // Conversation ID should include the thread suffix for channel messages
+      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=activity456");
+      expect(ref.activityId).toBeUndefined();
+    });
+
+    it("does not add thread suffix for group chat revoke fallback", async () => {
+      const proactiveSent: string[] = [];
+      let capturedReference: unknown;
+
+      const groupRef: StoredConversationReference = {
+        activityId: "activity789",
+        user: { id: "user123", name: "User" },
+        agent: { id: "bot123", name: "Bot" },
+        conversation: {
+          id: "19:group123@thread.v2",
+          conversationType: "groupChat",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+      };
+
+      const ctx = createRevokedThreadContext();
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference;
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: groupRef,
+        context: ctx,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(proactiveSent).toEqual(["hello"]);
+      const ref = capturedReference as { conversation?: { id?: string }; activityId?: string };
+      // Group chat should NOT have thread suffix — flat conversation
+      expect(ref.conversation?.id).toBe("19:group123@thread.v2");
+      expect(ref.activityId).toBeUndefined();
     });
 
     it("retries top-level sends on transient (5xx)", async () => {

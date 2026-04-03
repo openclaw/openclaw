@@ -2,10 +2,10 @@ import path from "node:path";
 import {
   normalizeDeviceBootstrapProfile,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  sameDeviceBootstrapProfile,
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolvePairingPaths } from "./pairing-files.js";
 import {
   createAsyncLock,
@@ -58,6 +58,21 @@ function resolveIssuedBootstrapProfile(params: {
     });
   }
   return PAIRING_SETUP_BOOTSTRAP_PROFILE;
+}
+
+function bootstrapProfileAllowsRequest(params: {
+  allowedProfile: DeviceBootstrapProfile;
+  requestedRole: string;
+  requestedScopes: readonly string[];
+}): boolean {
+  return (
+    params.allowedProfile.roles.includes(params.requestedRole) &&
+    roleScopesAllow({
+      role: params.requestedRole,
+      requestedScopes: params.requestedScopes,
+      allowedScopes: params.allowedProfile.scopes,
+    })
+  );
 }
 
 async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
@@ -182,23 +197,44 @@ export async function verifyDeviceBootstrapToken(params: {
     if (!deviceId || !publicKey || !role) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
-    const requestedProfile = normalizeDeviceBootstrapProfile({
-      roles: [role],
-      scopes: params.scopes,
-    });
     const allowedProfile = resolvePersistedBootstrapProfile(record);
-    // Fail closed for unbound legacy setup codes and for any attempt to redeem
-    // the token outside the exact role/scope profile it was issued for.
+    // Fail closed for any attempt to redeem the token outside the issued
+    // role/scope allowlist before binding it to a concrete device identity.
     if (
       allowedProfile.roles.length === 0 ||
-      !sameDeviceBootstrapProfile(requestedProfile, allowedProfile)
+      !bootstrapProfileAllowsRequest({
+        allowedProfile,
+        requestedRole: role,
+        requestedScopes: params.scopes,
+      })
     ) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
 
-    // Bootstrap setup codes are single-use. Consume the record before returning
-    // success so the same token cannot be replayed to mutate a pending request.
-    delete state[tokenKey];
+    const boundDeviceId = record.deviceId?.trim();
+    const boundPublicKey = record.publicKey?.trim();
+    if (boundDeviceId || boundPublicKey) {
+      if (boundDeviceId !== deviceId || boundPublicKey !== publicKey) {
+        return { ok: false, reason: "bootstrap_token_invalid" };
+      }
+      state[tokenKey] = {
+        ...record,
+        profile: allowedProfile,
+        deviceId,
+        publicKey,
+        lastUsedAtMs: Date.now(),
+      };
+      await persistState(state, params.baseDir);
+      return { ok: true };
+    }
+
+    state[tokenKey] = {
+      ...record,
+      profile: allowedProfile,
+      deviceId,
+      publicKey,
+      lastUsedAtMs: Date.now(),
+    };
     await persistState(state, params.baseDir);
     return { ok: true };
   });

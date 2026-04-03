@@ -74,8 +74,17 @@ openclaw models auth paste-token
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
 
+Examples:
+
+```bash
+openclaw models auth login --provider anthropic --method cli --set-default
+openclaw models auth login --provider openai-codex --set-default
+```
+
 Notes:
 
+- `login --provider anthropic --method cli --set-default` reuses a local Claude
+  CLI login and rewrites the main Anthropic default-model path to `claude-cli/...`.
 - `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).
 - `paste-token` accepts a token string generated elsewhere or from automation.
 - Anthropic policy note: setup-token support is technical compatibility. Anthropic has blocked some subscription usage outside Claude Code in the past, so verify current terms before using it broadly.

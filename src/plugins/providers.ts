@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { hasExplicitPluginConfig } from "./config-state.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { withBundledPluginVitestCompat } from "./bundled-compat.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
@@ -9,27 +9,7 @@ export function withBundledProviderVitestCompat(params: {
   pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
 }): PluginLoadOptions["config"] {
-  const env = params.env ?? process.env;
-  if (
-    !env.VITEST ||
-    hasExplicitPluginConfig(params.config?.plugins) ||
-    params.pluginIds.length === 0
-  ) {
-    return params.config;
-  }
-
-  return {
-    ...params.config,
-    plugins: {
-      ...params.config?.plugins,
-      enabled: true,
-      allow: [...params.pluginIds],
-      slots: {
-        ...params.config?.plugins?.slots,
-        memory: "none",
-      },
-    },
-  };
+  return withBundledPluginVitestCompat(params);
 }
 
 export function resolveBundledProviderCompatPluginIds(params: {
@@ -55,7 +35,37 @@ export function resolveBundledProviderCompatPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export function resolveEnabledProviderPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: string[];
+}): string[] {
+  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return registry.plugins
+    .filter(
+      (plugin) =>
+        plugin.providers.length > 0 &&
+        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
+        resolveEffectivePluginActivationState({
+          id: plugin.id,
+          origin: plugin.origin,
+          config: normalizedConfig,
+          rootConfig: params.config,
+        }).activated,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export const __testing = {
+  resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
   withBundledProviderVitestCompat,
 } as const;
@@ -101,13 +111,42 @@ export function resolveNonBundledProviderPluginIds(params: {
       (plugin) =>
         plugin.origin !== "bundled" &&
         plugin.providers.length > 0 &&
-        resolveEffectiveEnableState({
+        resolveEffectivePluginActivationState({
           id: plugin.id,
           origin: plugin.origin,
           config: normalizedConfig,
           rootConfig: params.config,
-        }).enabled,
+        }).activated,
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resolveCatalogHookProviderPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): string[] {
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const enabledProviderPluginIds = registry.plugins
+    .filter(
+      (plugin) =>
+        plugin.providers.length > 0 &&
+        resolveEffectivePluginActivationState({
+          id: plugin.id,
+          origin: plugin.origin,
+          config: normalizedConfig,
+          rootConfig: params.config,
+        }).activated,
+    )
+    .map((plugin) => plugin.id);
+  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds(params);
+  return [...new Set([...enabledProviderPluginIds, ...bundledCompatPluginIds])].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
 }

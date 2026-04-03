@@ -8,10 +8,19 @@ import {
   normalizeSystemRunApprovalPlan,
 } from "./system-run-approval-binding.js";
 
+function expectOk<T extends { ok: boolean }>(result: T): T & { ok: true } {
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error("unreachable");
+  }
+  return result as T & { ok: true };
+}
+
 describe("normalizeSystemRunApprovalPlan", () => {
-  it("accepts commandText and normalized mutable file operands", () => {
-    expect(
-      normalizeSystemRunApprovalPlan({
+  it.each([
+    {
+      name: "accepts commandText and normalized mutable file operands",
+      input: {
         argv: ["bash", "-lc", "echo hi"],
         commandText: 'bash -lc "echo hi"',
         commandPreview: "echo hi",
@@ -23,38 +32,42 @@ describe("normalizeSystemRunApprovalPlan", () => {
           path: " /tmp/payload.txt ",
           sha256: " abc123 ",
         },
-      }),
-    ).toEqual({
-      argv: ["bash", "-lc", "echo hi"],
-      commandText: 'bash -lc "echo hi"',
-      commandPreview: "echo hi",
-      cwd: "/tmp",
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      mutableFileOperand: {
-        argvIndex: 2,
-        path: "/tmp/payload.txt",
-        sha256: "abc123",
       },
-    });
-  });
-
-  it("falls back to rawCommand and rejects invalid file operands", () => {
-    expect(
-      normalizeSystemRunApprovalPlan({
+      expected: {
+        argv: ["bash", "-lc", "echo hi"],
+        commandText: 'bash -lc "echo hi"',
+        commandPreview: "echo hi",
+        cwd: "/tmp",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        mutableFileOperand: {
+          argvIndex: 2,
+          path: "/tmp/payload.txt",
+          sha256: "abc123",
+        },
+      },
+    },
+    {
+      name: "falls back to rawCommand",
+      input: {
         argv: ["bash", "-lc", "echo hi"],
         rawCommand: 'bash -lc "echo hi"',
-      }),
-    ).toEqual({
-      argv: ["bash", "-lc", "echo hi"],
-      commandText: 'bash -lc "echo hi"',
-      commandPreview: null,
-      cwd: null,
-      agentId: null,
-      sessionKey: null,
-      mutableFileOperand: undefined,
-    });
+      },
+      expected: {
+        argv: ["bash", "-lc", "echo hi"],
+        commandText: 'bash -lc "echo hi"',
+        commandPreview: null,
+        cwd: null,
+        agentId: null,
+        sessionKey: null,
+        mutableFileOperand: undefined,
+      },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(normalizeSystemRunApprovalPlan(input)).toEqual(expected);
+  });
 
+  it("rejects invalid file operands", () => {
     expect(
       normalizeSystemRunApprovalPlan({
         argv: ["bash", "-lc", "echo hi"],
@@ -104,6 +117,19 @@ describe("buildSystemRunApprovalEnvBinding", () => {
       envKeys: [],
     });
   });
+
+  it("includes Windows-compatible override keys in env binding", () => {
+    const base = buildSystemRunApprovalEnvBinding({
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    });
+    const changed = buildSystemRunApprovalEnvBinding({
+      "ProgramFiles(x86)": "D:\\SDKs",
+    });
+
+    expect(base.envKeys).toEqual(["ProgramFiles(x86)"]);
+    expect(base.envHash).toBeTypeOf("string");
+    expect(base.envHash).not.toEqual(changed.envHash);
+  });
 });
 
 describe("buildSystemRunApprovalBinding", () => {
@@ -138,44 +164,64 @@ describe("buildSystemRunApprovalBinding", () => {
 });
 
 describe("matchSystemRunApprovalEnvHash", () => {
-  it("handles matching, missing, and mismatched env bindings", () => {
-    expect(
-      matchSystemRunApprovalEnvHash({
+  it.each([
+    {
+      name: "accepts matching empty env bindings",
+      params: {
         expectedEnvHash: null,
         actualEnvHash: null,
         actualEnvKeys: [],
-      }),
-    ).toEqual({ ok: true });
-
-    expect(
-      matchSystemRunApprovalEnvHash({
+      },
+      expected: { ok: true },
+    },
+    {
+      name: "reports missing approval env binding",
+      params: {
         expectedEnvHash: null,
         actualEnvHash: "abc",
         actualEnvKeys: ["ALPHA"],
-      }),
-    ).toEqual({
-      ok: false,
-      code: "APPROVAL_ENV_BINDING_MISSING",
-      message: "approval id missing env binding for requested env overrides",
-      details: { envKeys: ["ALPHA"] },
-    });
-
-    expect(
-      matchSystemRunApprovalEnvHash({
+      },
+      expected: {
+        ok: false,
+        code: "APPROVAL_ENV_BINDING_MISSING",
+        message: "approval id missing env binding for requested env overrides",
+        details: { envKeys: ["ALPHA"] },
+      },
+    },
+    {
+      name: "reports missing approval env binding when actual env keys are present without hashes",
+      params: {
+        expectedEnvHash: null,
+        actualEnvHash: null,
+        actualEnvKeys: ["ProgramFiles(x86)"],
+      },
+      expected: {
+        ok: false,
+        code: "APPROVAL_ENV_BINDING_MISSING",
+        message: "approval id missing env binding for requested env overrides",
+        details: { envKeys: ["ProgramFiles(x86)"] },
+      },
+    },
+    {
+      name: "reports env hash mismatches",
+      params: {
         expectedEnvHash: "abc",
         actualEnvHash: "def",
         actualEnvKeys: ["ALPHA"],
-      }),
-    ).toEqual({
-      ok: false,
-      code: "APPROVAL_ENV_MISMATCH",
-      message: "approval id env binding mismatch",
-      details: {
-        envKeys: ["ALPHA"],
-        expectedEnvHash: "abc",
-        actualEnvHash: "def",
       },
-    });
+      expected: {
+        ok: false,
+        code: "APPROVAL_ENV_MISMATCH",
+        message: "approval id env binding mismatch",
+        details: {
+          envKeys: ["ALPHA"],
+          expectedEnvHash: "abc",
+          actualEnvHash: "def",
+        },
+      },
+    },
+  ])("$name", ({ params, expected }) => {
+    expect(matchSystemRunApprovalEnvHash(params)).toEqual(expected);
   });
 });
 
@@ -189,13 +235,13 @@ describe("matchSystemRunApprovalBinding", () => {
   };
 
   it("accepts exact matches", () => {
-    expect(
+    expectOk(
       matchSystemRunApprovalBinding({
         expected,
         actual: { ...expected },
         actualEnvKeys: ["ALPHA"],
       }),
-    ).toEqual({ ok: true });
+    );
   });
 
   it.each([

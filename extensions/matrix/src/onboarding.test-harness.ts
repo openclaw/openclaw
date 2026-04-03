@@ -1,8 +1,12 @@
 import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { afterEach, vi } from "vitest";
 import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
-import { matrixOnboardingAdapter } from "./onboarding.js";
 import type { CoreConfig } from "./types.js";
+
+type MatrixInteractiveOptions = Parameters<
+  NonNullable<ChannelSetupWizardAdapter["configureInteractive"]>
+>[0]["options"];
 
 const MATRIX_ENV_KEYS = [
   "MATRIX_HOMESERVER",
@@ -89,12 +93,13 @@ export function createMatrixWizardPrompter(params: {
 export async function runMatrixInteractiveConfigure(params: {
   cfg: CoreConfig;
   prompter: WizardPrompter;
-  options?: unknown;
+  options?: MatrixInteractiveOptions;
   accountOverrides?: Record<string, string>;
   shouldPromptAccountIds?: boolean;
   forceAllowFrom?: boolean;
   configured?: boolean;
 }) {
+  const { matrixOnboardingAdapter } = await import("./onboarding.js");
   return await matrixOnboardingAdapter.configureInteractive!({
     cfg: params.cfg,
     runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),

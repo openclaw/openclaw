@@ -6,6 +6,7 @@ import {
 } from "./zod-schema.channels.js";
 import {
   BlockStreamingCoalesceSchema,
+  ContextVisibilityModeSchema,
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
@@ -48,6 +49,7 @@ const WhatsAppSharedSchema = z.object({
   defaultTo: z.string().optional(),
   groupAllowFrom: z.array(z.string()).optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -57,6 +59,7 @@ const WhatsAppSharedSchema = z.object({
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   groups: WhatsAppGroupsSchema,
   ackReaction: WhatsAppAckReactionSchema,
+  reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
   debounceMs: z.number().int().nonnegative().optional().default(0),
   heartbeat: ChannelHeartbeatVisibilitySchema,
   healthMonitor: ChannelHealthMonitorSchema,

@@ -327,7 +327,7 @@ When validation fails:
     ```
 
     - `every`: duration string (`30m`, `2h`). Set `0m` to disable.
-    - `target`: `last` | `whatsapp` | `telegram` | `discord` | `none`
+    - `target`: `last` | `none` | `<channel-id>` (for example `discord`, `matrix`, `telegram`, or `whatsapp`)
     - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
 

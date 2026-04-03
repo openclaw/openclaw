@@ -7,6 +7,7 @@ import type { ContextEngine } from "../../../context-engine/types.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
 import type { BundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
+import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
 
@@ -49,13 +50,7 @@ export type EmbeddedRunAttemptResult = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: {
-    toolName: string;
-    meta?: string;
-    error?: string;
-    mutatingAction?: boolean;
-    actionFingerprint?: string;
-  };
+  lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];

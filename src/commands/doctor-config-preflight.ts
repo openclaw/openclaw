@@ -23,10 +23,7 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
     // missing config
   }
 
-  const legacyCandidates = [
-    path.join(home, ".clawdbot", "clawdbot.json"),
-    path.join(home, ".moldbot", "moldbot.json"),
-  ];
+  const legacyCandidates = [path.join(home, ".clawdbot", "clawdbot.json")];
 
   let legacyPath: string | null = null;
   for (const candidate of legacyCandidates) {
@@ -103,6 +100,6 @@ export async function runDoctorConfigPreflight(
 
   return {
     snapshot,
-    baseConfig: snapshot.config ?? {},
+    baseConfig: snapshot.sourceConfig ?? snapshot.config ?? {},
   };
 }
