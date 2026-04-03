@@ -3,6 +3,8 @@ import {
   type ProviderAuthContext,
   type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
+  type ProviderReplayPolicy,
+  type ProviderReplayPolicyContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -27,6 +29,33 @@ import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from ".
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
+
+function buildZaiReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy | undefined {
+  if (
+    ctx.modelApi !== "openai-completions" &&
+    ctx.modelApi !== "openai-responses" &&
+    ctx.modelApi !== "openai-codex-responses" &&
+    ctx.modelApi !== "azure-openai-responses"
+  ) {
+    return undefined;
+  }
+
+  return {
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict",
+    ...(ctx.modelApi === "openai-completions"
+      ? {
+          applyAssistantFirstOrderingFix: true,
+          validateGeminiTurns: true,
+          validateAnthropicTurns: true,
+        }
+      : {
+          applyAssistantFirstOrderingFix: false,
+          validateGeminiTurns: false,
+          validateAnthropicTurns: false,
+        }),
+  };
+}
 
 function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
@@ -264,6 +293,7 @@ export default definePluginEntry({
         }),
       ],
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+      buildReplayPolicy: (ctx) => buildZaiReplayPolicy(ctx),
       prepareExtraParams: (ctx) => {
         if (ctx.extraParams?.tool_stream !== undefined) {
           return ctx.extraParams;
