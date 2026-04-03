@@ -140,7 +140,6 @@ Docs: https://docs.openclaw.ai
 - Exec/node hosts: stop forwarding the gateway workspace cwd to remote node exec when no workdir was explicitly requested, so cross-platform node approvals fall back to the node default cwd instead of failing with `SYSTEM_RUN_DENIED`. (#58977) Thanks @Starhappysh.
 - Exec approvals/channels: decouple initiating-surface approval availability from native delivery enablement so Telegram, Slack, and Discord still expose approvals when approvers exist and native target routing is configured separately. (#59776) Thanks @joelnishanth.
 - Plugins/runtime: reuse compatible active registries for `web_search` and `web_fetch` provider snapshot resolution so repeated runtime reads do not re-import the same bundled plugin set on each agent message. Related #48380.
-<<<<<<< HEAD
 - Plugins/OpenAI: enable reference-image edits for `gpt-image-1` by routing edit calls to `/images/edits` with multipart image uploads, and update image-generation capability/docs metadata accordingly.
 - Android/assistant: keep queued App Actions prompts pending when auto-send enqueue is rejected, so transient chat-health drops do not silently lose the assistant request. Thanks @obviyus.
 - Agents/tools: include value-shape hints in missing-parameter tool errors so dropped, empty-string, and wrong-type write payloads are easier to diagnose from logs. (#55317) Thanks @priyansh19.
@@ -156,9 +155,7 @@ Docs: https://docs.openclaw.ai
 - Exec/Windows: include Windows-compatible env override keys like `ProgramFiles(x86)` in system-run approval binding so changed approved values are rejected instead of silently passing unbound. (#59182) Thanks @pgondhi987.
 - ACP/Windows spawn: fail closed on unresolved `.cmd` and `.bat` OpenClaw wrappers unless a caller explicitly opts into shell fallback, so Windows ACP launches do not silently drop into shell-mediated execution when wrapper unwrapping fails. (#58436) Thanks @eleqtrizit.
 - Exec/Windows: prefer strict-inline-eval denial over generic allowlist prompts for interpreter carriers, while keeping persisted Windows allow-always approvals argv-bound. (#59780) Thanks @luoyanglang.
-=======
 - Agents/tool policy: stop `tools.profile` warnings from flagging runtime-gated baseline core tools as unknown when the coding profile is missing tools like `code_execution`, `x_search`, `image`, or `image_generate`, while still warning on explicit extra allowlist entries. Thanks @vincentkoc.
->>>>>>> 30337a5142 (fix(agents): suppress profile allowlist warnings)
 
 ## 2026.4.1
 
