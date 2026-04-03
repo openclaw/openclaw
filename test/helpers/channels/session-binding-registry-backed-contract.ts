@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe } from "vitest";
 import { sessionBindingContractChannelIds } from "../../../src/channels/plugins/contracts/manifest.js";
-import { sessionBindingContractRegistry } from "../../../src/channels/plugins/contracts/registry-session-binding.js";
+import { getSessionBindingContractRegistry } from "../../../src/channels/plugins/contracts/registry-session-binding.js";
 import { installSessionBindingContractSuite } from "../../../src/channels/plugins/contracts/suites.js";
 import { setChannelPluginRegistryForTests } from "../../../src/commands/channel-test-registry.js";
 import {
@@ -68,7 +68,7 @@ function resolveSessionBindingContractRuntimeConfig(id: string) {
 }
 
 export function describeSessionBindingRegistryBackedContract(id: string) {
-  const entry = sessionBindingContractRegistry.find((item) => item.id === id);
+  const entry = getSessionBindingContractRegistry().find((item) => item.id === id);
   if (!entry) {
     throw new Error(`missing session binding contract entry for ${id}`);
   }

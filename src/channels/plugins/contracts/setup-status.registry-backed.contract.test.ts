@@ -1,5 +1,5 @@
 import { describe } from "vitest";
-import { getSetupContractRegistry, getStatusContractRegistry } from "./registry.js";
+import { getSetupContractRegistry, getStatusContractRegistry } from "./registry-setup-status.js";
 import { installChannelSetupContractSuite, installChannelStatusContractSuite } from "./suites.js";
 
 for (const entry of getSetupContractRegistry()) {

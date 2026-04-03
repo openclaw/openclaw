@@ -1,6 +1,6 @@
 import { describeSessionBindingRegistryBackedContract } from "../../../../test/helpers/channels/session-binding-registry-backed-contract.js";
-import { sessionBindingContractRegistry } from "./registry-session-binding.js";
+import { getSessionBindingContractRegistry } from "./registry-session-binding.js";
 
-for (const entry of sessionBindingContractRegistry) {
+for (const entry of getSessionBindingContractRegistry()) {
   describeSessionBindingRegistryBackedContract(entry.id);
 }
