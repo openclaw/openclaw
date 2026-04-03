@@ -211,7 +211,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
   });
 
-  it("uses operator.admin to approve exec-capable node pair requests", async () => {
+  it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {
     gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
       if (method === "node.pair.list") {
         return {
@@ -247,11 +247,11 @@ describe("createNodesTool screen_record duration guardrails", () => {
       "node.pair.approve",
       {},
       { requestId: "req-1" },
-      { scopes: ["operator.admin"] },
+      { scopes: ["operator.pairing", "operator.admin"] },
     );
   });
 
-  it("uses operator.write to approve non-exec node pair requests", async () => {
+  it("uses operator.pairing plus operator.write to approve non-exec node pair requests", async () => {
     gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
       if (method === "node.pair.list") {
         return {
@@ -287,11 +287,11 @@ describe("createNodesTool screen_record duration guardrails", () => {
       "node.pair.approve",
       {},
       { requestId: "req-1" },
-      { scopes: ["operator.write"] },
+      { scopes: ["operator.pairing", "operator.write"] },
     );
   });
 
-  it("uses operator.write for commandless node pair requests", async () => {
+  it("uses operator.pairing for commandless node pair requests", async () => {
     gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
       if (method === "node.pair.list") {
         return {
@@ -319,7 +319,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
       "node.pair.approve",
       {},
       { requestId: "req-1" },
-      { scopes: ["operator.write"] },
+      { scopes: ["operator.pairing"] },
     );
   });
 

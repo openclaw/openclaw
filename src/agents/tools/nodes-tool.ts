@@ -49,12 +49,12 @@ function resolveApproveScopes(commands: unknown): OperatorScope[] {
   if (
     normalized.some((command) => NODE_SYSTEM_RUN_COMMANDS.some((allowed) => allowed === command))
   ) {
-    return ["operator.admin"];
+    return ["operator.pairing", "operator.admin"];
   }
   if (normalized.length > 0) {
-    return ["operator.write"];
+    return ["operator.pairing", "operator.write"];
   }
-  return ["operator.write"];
+  return ["operator.pairing"];
 }
 
 async function resolveNodePairApproveScopes(

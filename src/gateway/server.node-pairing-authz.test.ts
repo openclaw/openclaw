@@ -40,7 +40,7 @@ async function connectNodeClient(params: {
 }
 
 describe("gateway node pairing authorization", () => {
-  test("requires operator.write before node pairing approvals", async () => {
+  test("requires operator.admin for exec-capable node pairing approvals", async () => {
     const started = await startServerWithClient("secret");
     const approver = await issueOperatorToken({
       name: "node-pair-approve-pairing-only",
@@ -70,7 +70,7 @@ describe("gateway node pairing authorization", () => {
         requestId: request.request.requestId,
       });
       expect(approve.ok).toBe(false);
-      expect(approve.error?.message).toBe("missing scope: operator.write");
+      expect(approve.error?.message).toBe("missing scope: operator.admin");
 
       await expect(
         import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
@@ -83,7 +83,7 @@ describe("gateway node pairing authorization", () => {
     }
   });
 
-  test("rejects approving exec-capable node commands above the caller session scopes", async () => {
+  test("requires operator.pairing before node pairing approvals", async () => {
     const started = await startServerWithClient("secret");
     const approver = await issueOperatorToken({
       name: "node-pair-approve-attacker",
@@ -113,7 +113,7 @@ describe("gateway node pairing authorization", () => {
         requestId: request.request.requestId,
       });
       expect(approve.ok).toBe(false);
-      expect(approve.error?.message).toBe("missing scope: operator.admin");
+      expect(approve.error?.message).toBe("missing scope: operator.pairing");
 
       await expect(
         import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),

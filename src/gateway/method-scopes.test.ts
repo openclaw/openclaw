@@ -22,7 +22,7 @@ describe("method scope resolution", () => {
     ["sessions.abort", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
-    ["node.pair.approve", ["operator.write"]],
+    ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
     ["config.patch", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
@@ -67,9 +67,15 @@ describe("operator scope authorization", () => {
       allowed: false,
       missingScope: "operator.write",
     });
+  });
+
+  it("requires pairing scope for node pairing approvals", () => {
     expect(authorizeOperatorScopesForMethod("node.pair.approve", ["operator.pairing"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("node.pair.approve", ["operator.write"])).toEqual({
       allowed: false,
-      missingScope: "operator.write",
+      missingScope: "operator.pairing",
     });
   });
 
