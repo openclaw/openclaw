@@ -2,12 +2,21 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
 const MOCK_USERNAME = "MockUser";
+const userInfoMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    username: MOCK_USERNAME,
+    uid: -1,
+    gid: -1,
+    shell: "C:\\Windows\\System32\\cmd.exe",
+    homedir: "C:\\Users\\MockUser",
+  })),
+);
 
 vi.mock("node:os", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:os")>("node:os"),
-    { userInfo: () => ({ username: MOCK_USERNAME }) },
+    { userInfo: userInfoMock as unknown as typeof import("node:os").userInfo },
     { mirrorToDefault: true },
   );
 });
