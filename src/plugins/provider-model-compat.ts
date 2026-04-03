@@ -1,4 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "../agents/openai-completions-compat.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 
@@ -92,21 +93,30 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   }
 
   const compat = model.compat ?? undefined;
-  const needsForce = baseUrl
-    ? resolveProviderRequestCapabilities({
+  const detectedCompatDefaults = baseUrl
+    ? resolveOpenAICompletionsCompatDefaultsFromCapabilities({
         provider: typeof model.provider === "string" ? model.provider : undefined,
-        api: model.api,
-        baseUrl,
-        capability: "llm",
-        transport: "stream",
-      }).endpointClass !== "openai-public"
-    : false;
+        ...resolveProviderRequestCapabilities({
+          provider: typeof model.provider === "string" ? model.provider : undefined,
+          api: model.api,
+          baseUrl,
+          capability: "llm",
+          transport: "stream",
+        }),
+      })
+    : undefined;
+  const needsForce = Boolean(
+    detectedCompatDefaults &&
+    (!detectedCompatDefaults.supportsDeveloperRole ||
+      !detectedCompatDefaults.supportsUsageInStreaming ||
+      !detectedCompatDefaults.supportsStrictMode),
+  );
   if (!needsForce) {
     return model;
   }
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
   const hasStreamingUsageOverride = compat?.supportsUsageInStreaming !== undefined;
-  const targetStrictMode = compat?.supportsStrictMode ?? false;
+  const targetStrictMode = compat?.supportsStrictMode ?? detectedCompatDefaults?.supportsStrictMode;
   if (
     compat?.supportsDeveloperRole !== undefined &&
     hasStreamingUsageOverride &&
@@ -121,13 +131,17 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
       ? {
           ...compat,
           supportsDeveloperRole: forcedDeveloperRole || false,
-          ...(hasStreamingUsageOverride ? {} : { supportsUsageInStreaming: false }),
+          ...(hasStreamingUsageOverride
+            ? {}
+            : {
+                supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
+              }),
           supportsStrictMode: targetStrictMode,
         }
       : {
           supportsDeveloperRole: false,
-          supportsUsageInStreaming: false,
-          supportsStrictMode: false,
+          supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
+          supportsStrictMode: detectedCompatDefaults?.supportsStrictMode ?? false,
         },
   } as typeof model;
 }

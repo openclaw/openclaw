@@ -19,6 +19,7 @@ import type {
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "./openai-completions-compat.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import {
   buildProviderRequestDispatcherPolicy,
@@ -1341,30 +1342,13 @@ function detectCompat(model: OpenAIModeModel) {
   });
   const endpointClass = capabilities.endpointClass;
   const isDefaultRoute = endpointClass === "default";
-  const usesConfiguredNonOpenAIEndpoint =
-    endpointClass !== "default" && endpointClass !== "openai-public";
+  const compatDefaults = resolveOpenAICompletionsCompatDefaultsFromCapabilities({
+    provider,
+    ...capabilities,
+  });
   const isMistral =
     capabilities.knownProviderFamily === "mistral" || endpointClass === "mistral-public";
-  const isMoonshotLike =
-    capabilities.knownProviderFamily === "moonshot" ||
-    capabilities.knownProviderFamily === "modelstudio" ||
-    endpointClass === "moonshot-native" ||
-    endpointClass === "modelstudio-native";
   const isZai = endpointClass === "zai-native" || (isDefaultRoute && provider === "zai");
-  const isNonStandard =
-    endpointClass === "cerebras-native" ||
-    endpointClass === "chutes-native" ||
-    endpointClass === "deepseek-native" ||
-    isMistral ||
-    endpointClass === "opencode-native" ||
-    endpointClass === "xai-native" ||
-    isZai ||
-    (isDefaultRoute &&
-      (provider === "cerebras" ||
-        provider === "chutes" ||
-        provider === "deepseek" ||
-        provider === "opencode" ||
-        provider === "xai"));
   const useMaxTokens =
     endpointClass === "chutes-native" || (isDefaultRoute && provider === "chutes") || isMistral;
   const isGrok = endpointClass === "xai-native" || (isDefaultRoute && provider === "xai");
@@ -1380,11 +1364,26 @@ function detectCompat(model: OpenAIModeModel) {
         }
       : {};
   return {
-    supportsStore: !isNonStandard,
-    supportsDeveloperRole: !isNonStandard && !isMoonshotLike && !usesConfiguredNonOpenAIEndpoint,
+    supportsStore:
+      endpointClass !== "cerebras-native" &&
+      endpointClass !== "chutes-native" &&
+      endpointClass !== "deepseek-native" &&
+      !isMistral &&
+      endpointClass !== "opencode-native" &&
+      endpointClass !== "xai-native" &&
+      !isZai &&
+      !(
+        isDefaultRoute &&
+        (provider === "cerebras" ||
+          provider === "chutes" ||
+          provider === "deepseek" ||
+          provider === "opencode" ||
+          provider === "xai")
+      ),
+    supportsDeveloperRole: compatDefaults.supportsDeveloperRole,
     supportsReasoningEffort: !isGrok && !isMistral && !isZai,
     reasoningEffortMap,
-    supportsUsageInStreaming: !isNonStandard && !usesConfiguredNonOpenAIEndpoint,
+    supportsUsageInStreaming: compatDefaults.supportsUsageInStreaming,
     maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
     requiresToolResultName: false,
     requiresAssistantAfterToolResult: false,
@@ -1398,7 +1397,7 @@ function detectCompat(model: OpenAIModeModel) {
         : "openai",
     openRouterRouting: {},
     vercelGatewayRouting: {},
-    supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
+    supportsStrictMode: compatDefaults.supportsStrictMode,
   };
 }
 
