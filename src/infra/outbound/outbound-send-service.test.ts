@@ -62,8 +62,10 @@ vi.mock("../../media/read-capability.js", () => ({
   resolveAgentScopedOutboundMediaAccess: mocks.resolveAgentScopedOutboundMediaAccess,
 }));
 
-vi.mock("../../media/local-roots.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../media/local-roots.js")>();
+vi.mock("../../media/local-roots.js", async () => {
+  const actual = await vi.importActual<typeof import("../../media/local-roots.js")>(
+    "../../media/local-roots.js",
+  );
   return {
     ...actual,
     getDefaultMediaLocalRoots: mocks.getDefaultMediaLocalRoots,

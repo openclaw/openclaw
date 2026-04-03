@@ -13,32 +13,35 @@ const listTelegramAccountIdsMock = vi.hoisted(() => vi.fn());
 const inspectTelegramAccountMock = vi.hoisted(() => vi.fn());
 const lookupTelegramChatIdMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime")>();
+vi.mock("openclaw/plugin-sdk/runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime")>(
+    "openclaw/plugin-sdk/runtime",
+  );
   return {
     ...actual,
     resolveCommandSecretRefsViaGateway: resolveCommandSecretRefsViaGatewayMock,
   };
 });
 
-vi.mock("./accounts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./accounts.js")>();
+vi.mock("./accounts.js", async () => {
+  const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
   return {
     ...actual,
     listTelegramAccountIds: listTelegramAccountIdsMock,
   };
 });
 
-vi.mock("./account-inspect.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./account-inspect.js")>();
+vi.mock("./account-inspect.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./account-inspect.js")>("./account-inspect.js");
   return {
     ...actual,
     inspectTelegramAccount: inspectTelegramAccountMock,
   };
 });
 
-vi.mock("./api-fetch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api-fetch.js")>();
+vi.mock("./api-fetch.js", async () => {
+  const actual = await vi.importActual<typeof import("./api-fetch.js")>("./api-fetch.js");
   return {
     ...actual,
     lookupTelegramChatId: lookupTelegramChatIdMock,

@@ -157,6 +157,27 @@ describe("probeSignal", () => {
 
     expect(status.statusLines).toContain("signal-cli: missing (/tmp/work-signal-cli)");
   });
+
+  it("setup status uses configured defaultAccount for omitted cliPath lookup", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            cliPath: "/tmp/root-signal-cli",
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                cliPath: "/tmp/work-signal-cli",
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.statusLines).toContain("signal-cli: missing (/tmp/work-signal-cli)");
+  });
 });
 
 describe("signal outbound", () => {

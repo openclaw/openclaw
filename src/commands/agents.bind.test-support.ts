@@ -1,3 +1,4 @@
+import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
@@ -7,9 +8,11 @@ type ReplaceConfigFileResult = Awaited<
   ReturnType<(typeof import("../config/config.js"))["replaceConfigFile"]>
 >;
 
-export const readConfigFileSnapshotMock = vi.fn();
-export const writeConfigFileMock = vi.fn().mockResolvedValue(undefined);
-export const replaceConfigFileMock = vi.fn(
+export const readConfigFileSnapshotMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi.fn();
+export const writeConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi
+  .fn()
+  .mockResolvedValue(undefined);
+export const replaceConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi.fn(
   async (params: { nextConfig: OpenClawConfig }): Promise<ReplaceConfigFileResult> => {
     await writeConfigFileMock(params.nextConfig);
     return {
@@ -19,17 +22,18 @@ export const replaceConfigFileMock = vi.fn(
       nextConfig: params.nextConfig,
     };
   },
-);
+) as Mock<(...args: unknown[]) => Promise<unknown>>;
 
 vi.mock("../config/config.js", async (importOriginal) => {
-  return await mergeMockedModule(
-    await importOriginal<typeof import("../config/config.js")>(),
-    () => ({
-      readConfigFileSnapshot: readConfigFileSnapshotMock,
-      writeConfigFile: writeConfigFileMock,
-      replaceConfigFile: replaceConfigFileMock,
-    }),
-  );
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return await mergeMockedModule(actual, () => ({
+    readConfigFileSnapshot: (...args: Parameters<typeof actual.readConfigFileSnapshot>) =>
+      readConfigFileSnapshotMock(...args) as ReturnType<typeof actual.readConfigFileSnapshot>,
+    writeConfigFile: (...args: Parameters<typeof actual.writeConfigFile>) =>
+      writeConfigFileMock(...args) as ReturnType<typeof actual.writeConfigFile>,
+    replaceConfigFile: (...args: Parameters<typeof actual.replaceConfigFile>) =>
+      replaceConfigFileMock(...args) as ReturnType<typeof actual.replaceConfigFile>,
+  }));
 });
 
 export const runtime = createTestRuntime();

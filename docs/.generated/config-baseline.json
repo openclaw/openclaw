@@ -12278,7 +12278,7 @@
         "advanced"
       ],
       "label": "Internal Hooks Enabled",
-      "help": "Enables processing for internal hook handlers and configured entries in the internal hook runtime. Keep disabled unless internal hook handlers are intentionally configured.",
+      "help": "Enables processing for internal hooks and configured entries in the internal hook runtime. Keep disabled unless internal hooks are intentionally configured.",
       "hasChildren": false
     },
     {
@@ -12342,72 +12342,6 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.handlers",
-      "kind": "core",
-      "type": "array",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Handlers",
-      "help": "List of internal event handlers mapping event names to modules and optional exports. Keep handler definitions explicit so event-to-code routing is auditable.",
-      "hasChildren": true
-    },
-    {
-      "path": "hooks.internal.handlers.*",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "hooks.internal.handlers.*.event",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Event",
-      "help": "Internal event name that triggers this handler module when emitted by the runtime. Use stable event naming conventions to avoid accidental overlap across handlers.",
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.handlers.*.export",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Export",
-      "help": "Optional named export for the internal hook handler function when module default export is not used. Set this when one module ships multiple handler entrypoints.",
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.handlers.*.module",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Module",
-      "help": "Safe relative module path for the internal hook handler implementation loaded at runtime. Keep module files in reviewed directories and avoid dynamic path composition.",
       "hasChildren": false
     },
     {

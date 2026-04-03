@@ -1,21 +1,30 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, expect, vi } from "vitest";
+import { beforeEach, expect, vi, type Mock } from "vitest";
 
-let actualOpenBoundaryFile:
-  | ((
-      ...args: Parameters<typeof import("../../infra/boundary-file-read.js").openBoundaryFile>
-    ) => ReturnType<typeof import("../../infra/boundary-file-read.js").openBoundaryFile>)
-  | undefined;
+type ExecDockerRawFn = typeof import("./docker.js").execDockerRaw;
+type OpenBoundaryFileFn = typeof import("../../infra/boundary-file-read.js").openBoundaryFile;
+type ExecDockerArgs = Parameters<ExecDockerRawFn>[0];
+type ExecDockerRawMock = Mock<ExecDockerRawFn>;
+type OpenBoundaryFileMock = Mock<OpenBoundaryFileFn>;
+type FsBridgeHoisted = {
+  execDockerRaw: ExecDockerRawMock;
+  openBoundaryFile: OpenBoundaryFileMock;
+};
 
-const hoisted = vi.hoisted(() => ({
-  execDockerRaw: vi.fn(),
-  openBoundaryFile: vi.fn(),
-}));
+let actualOpenBoundaryFile: OpenBoundaryFileFn | undefined;
+
+const hoisted = vi.hoisted(
+  (): FsBridgeHoisted => ({
+    execDockerRaw: vi.fn(),
+    openBoundaryFile: vi.fn(),
+  }),
+);
 
 vi.mock("./docker.js", () => ({
-  execDockerRaw: (...args: unknown[]) => hoisted.execDockerRaw(...args),
+  execDockerRaw: (args: ExecDockerArgs, opts?: Parameters<ExecDockerRawFn>[1]) =>
+    hoisted.execDockerRaw(args, opts),
 }));
 
 vi.mock("../../infra/boundary-file-read.js", async (importOriginal) => {
@@ -23,7 +32,8 @@ vi.mock("../../infra/boundary-file-read.js", async (importOriginal) => {
   actualOpenBoundaryFile = actual.openBoundaryFile;
   return {
     ...actual,
-    openBoundaryFile: (...args: unknown[]) => hoisted.openBoundaryFile(...args),
+    openBoundaryFile: (params: Parameters<OpenBoundaryFileFn>[0]) =>
+      hoisted.openBoundaryFile(params),
   };
 });
 
@@ -35,14 +45,16 @@ let createSandboxFsBridgeImpl: typeof import("./fs-bridge.js").createSandboxFsBr
 async function loadFreshFsBridgeModuleForTest() {
   vi.resetModules();
   vi.doMock("./docker.js", () => ({
-    execDockerRaw: (...args: unknown[]) => hoisted.execDockerRaw(...args),
+    execDockerRaw: (args: ExecDockerArgs, opts?: Parameters<ExecDockerRawFn>[1]) =>
+      hoisted.execDockerRaw(args, opts),
   }));
   vi.doMock("../../infra/boundary-file-read.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../../infra/boundary-file-read.js")>();
     actualOpenBoundaryFile = actual.openBoundaryFile;
     return {
       ...actual,
-      openBoundaryFile: (...args: unknown[]) => hoisted.openBoundaryFile(...args),
+      openBoundaryFile: (params: Parameters<OpenBoundaryFileFn>[0]) =>
+        hoisted.openBoundaryFile(params),
     };
   });
   ({ createSandboxFsBridge: createSandboxFsBridgeImpl } = await import("./fs-bridge.js"));
@@ -57,8 +69,8 @@ export function createSandboxFsBridge(
   return createSandboxFsBridgeImpl(...args);
 }
 
-export const mockedExecDockerRaw = hoisted.execDockerRaw;
-export const mockedOpenBoundaryFile = hoisted.openBoundaryFile;
+export const mockedExecDockerRaw: ExecDockerRawMock = hoisted.execDockerRaw;
+export const mockedOpenBoundaryFile: OpenBoundaryFileMock = hoisted.openBoundaryFile;
 const DOCKER_SCRIPT_INDEX = 5;
 const DOCKER_FIRST_SCRIPT_ARG_INDEX = 7;
 

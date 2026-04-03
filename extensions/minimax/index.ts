@@ -13,6 +13,10 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import {
+  buildOpenAICompatibleReplayPolicy,
+  buildStrictAnthropicReplayPolicy,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { createMinimaxFastModeWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
@@ -46,29 +50,12 @@ function buildMinimaxReplayPolicy(
 ): ProviderReplayPolicy | undefined {
   if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
     const modelId = ctx.modelId?.toLowerCase() ?? "";
-    return {
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      preserveSignatures: true,
-      repairToolUseResultPairing: true,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-      ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
-    };
+    return buildStrictAnthropicReplayPolicy({
+      dropThinkingBlocks: modelId.includes("claude"),
+    });
   }
 
-  if (ctx.modelApi === "openai-completions") {
-    return {
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      applyAssistantFirstOrderingFix: true,
-      validateGeminiTurns: true,
-      validateAnthropicTurns: true,
-    };
-  }
-
-  return undefined;
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
 }
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {

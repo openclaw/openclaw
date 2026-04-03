@@ -1,88 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import { whatsappAccessControlTesting } from "../../../../extensions/whatsapp/api.js";
+import { resolveZaloRuntimeGroupPolicy } from "../../../../extensions/zalo/api.js";
 import {
-  evaluateZaloGroupAccess,
-  resolveZaloRuntimeGroupPolicy,
-} from "../../../../extensions/zalo/api.js";
+  expectResolvedGroupPolicyCase,
+  installChannelRuntimeGroupPolicyFallbackSuite,
+} from "../../../../test/helpers/channels/group-policy-contract-suites.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../../config/runtime-group-policy.js";
 
-type RuntimeGroupPolicyResolver = (
-  params: Parameters<typeof resolveOpenProviderRuntimeGroupPolicy>[0],
-) => ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;
+type ResolvedGroupPolicy = ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;
 
-function installChannelRuntimeGroupPolicyFallbackSuite(params: {
-  configuredLabel: string;
-  defaultGroupPolicyUnderTest: "allowlist" | "disabled" | "open";
-  missingConfigLabel: string;
-  missingDefaultLabel: string;
-  resolve: RuntimeGroupPolicyResolver;
+function expectResolvedDiscordGroupPolicyCase(params: {
+  providerConfigPresent: Parameters<
+    typeof resolveOpenProviderRuntimeGroupPolicy
+  >[0]["providerConfigPresent"];
+  groupPolicy: Parameters<typeof resolveOpenProviderRuntimeGroupPolicy>[0]["groupPolicy"];
+  expected: Pick<ResolvedGroupPolicy, "groupPolicy" | "providerMissingFallbackApplied">;
 }) {
-  it(params.missingConfigLabel, () => {
-    const resolved = params.resolve({
-      providerConfigPresent: false,
-    });
-    expect(resolved.groupPolicy).toBe("allowlist");
-    expect(resolved.providerMissingFallbackApplied).toBe(true);
-  });
-
-  it(params.configuredLabel, () => {
-    const resolved = params.resolve({
-      providerConfigPresent: true,
-    });
-    expect(resolved.groupPolicy).toBe("open");
-    expect(resolved.providerMissingFallbackApplied).toBe(false);
-  });
-
-  it(params.missingDefaultLabel, () => {
-    const resolved = params.resolve({
-      providerConfigPresent: false,
-      defaultGroupPolicy: params.defaultGroupPolicyUnderTest,
-    });
-    expect(resolved.groupPolicy).toBe("allowlist");
-    expect(resolved.providerMissingFallbackApplied).toBe(true);
-  });
+  expectResolvedGroupPolicyCase(resolveOpenProviderRuntimeGroupPolicy(params), params.expected);
 }
 
-describe("channel runtime group policy contract", () => {
-  type ResolvedGroupPolicy = ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;
-
-  function expectResolvedGroupPolicyCase(
-    resolved: Pick<ResolvedGroupPolicy, "groupPolicy" | "providerMissingFallbackApplied">,
-    expected: Pick<ResolvedGroupPolicy, "groupPolicy" | "providerMissingFallbackApplied">,
-  ) {
-    expect(resolved.groupPolicy).toBe(expected.groupPolicy);
-    expect(resolved.providerMissingFallbackApplied).toBe(expected.providerMissingFallbackApplied);
-  }
-
-  function expectAllowedZaloGroupAccess(params: Parameters<typeof evaluateZaloGroupAccess>[0]) {
-    expect(evaluateZaloGroupAccess(params)).toMatchObject({
-      allowed: true,
-      groupPolicy: "allowlist",
-      reason: "allowed",
-    });
-  }
-
-  function expectResolvedDiscordGroupPolicyCase(params: {
-    providerConfigPresent: Parameters<
-      typeof resolveOpenProviderRuntimeGroupPolicy
-    >[0]["providerConfigPresent"];
-    groupPolicy: Parameters<typeof resolveOpenProviderRuntimeGroupPolicy>[0]["groupPolicy"];
-    expected: Pick<ResolvedGroupPolicy, "groupPolicy" | "providerMissingFallbackApplied">;
-  }) {
-    expectResolvedGroupPolicyCase(resolveOpenProviderRuntimeGroupPolicy(params), params.expected);
-  }
-
-  function expectAllowedZaloGroupAccessCase(
-    params: Omit<Parameters<typeof evaluateZaloGroupAccess>[0], "groupAllowFrom"> & {
-      groupAllowFrom: readonly string[];
-    },
-  ) {
-    expectAllowedZaloGroupAccess({
-      ...params,
-      groupAllowFrom: [...params.groupAllowFrom],
-    });
-  }
-
+describe("channel runtime group policy fallback contract", () => {
   describe("slack", () => {
     installChannelRuntimeGroupPolicyFallbackSuite({
       resolve: resolveOpenProviderRuntimeGroupPolicy,
@@ -153,18 +90,6 @@ describe("channel runtime group policy contract", () => {
       defaultGroupPolicyUnderTest: "open",
       missingConfigLabel: "fails closed when channels.zalo is missing and no defaults are set",
       missingDefaultLabel: "ignores explicit global defaults when provider config is missing",
-    });
-
-    it.each([
-      {
-        providerConfigPresent: true,
-        configuredGroupPolicy: "allowlist",
-        defaultGroupPolicy: "open",
-        groupAllowFrom: ["zl:12345"],
-        senderId: "12345",
-      },
-    ] as const)("keeps provider-owned group access evaluation %#", (testCase) => {
-      expectAllowedZaloGroupAccessCase(testCase);
     });
   });
 });
