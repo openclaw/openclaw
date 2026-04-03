@@ -38,6 +38,20 @@ const RATE_LIMIT_MESSAGE_RE =
 const asFiniteNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
+const asNumericString = (value: unknown): number | undefined => {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const asStatusCode = (value: unknown): number | undefined => asFiniteNumber(value) ?? asNumericString(value);
+
 const clampNumber = (value: unknown, fallback: number, min?: number, max?: number) => {
   const next = asFiniteNumber(value);
   if (next === undefined) {
@@ -172,18 +186,18 @@ const extractRetryAfterMsFromError = (err: unknown): number | undefined => {
 };
 
 const isRateLimitLikeError = (err: unknown): boolean => {
-  const responseStatus = asFiniteNumber(
+  const responseStatus = asStatusCode(
     (err as { response?: { status?: unknown; statusCode?: unknown } } | null | undefined)?.response
       ?.status,
   );
-  const responseStatusCode = asFiniteNumber(
+  const responseStatusCode = asStatusCode(
     (err as { response?: { status?: unknown; statusCode?: unknown } } | null | undefined)?.response
       ?.statusCode,
   );
   const status =
-    asFiniteNumber((err as { status?: unknown } | null | undefined)?.status) ??
-    asFiniteNumber((err as { statusCode?: unknown } | null | undefined)?.statusCode) ??
-    asFiniteNumber((err as { code?: unknown } | null | undefined)?.code) ??
+    asStatusCode((err as { status?: unknown } | null | undefined)?.status) ??
+    asStatusCode((err as { statusCode?: unknown } | null | undefined)?.statusCode) ??
+    asStatusCode((err as { code?: unknown } | null | undefined)?.code) ??
     responseStatus ??
     responseStatusCode;
   if (status === 429) {

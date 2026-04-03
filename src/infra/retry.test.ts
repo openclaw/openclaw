@@ -254,6 +254,14 @@ describe("retryAsync", () => {
     expect(delays[0]).toBe(2000);
   });
 
+  it("honors retry-after when nested response status is a numeric string", async () => {
+    const err = Object.assign(new Error("request failed"), {
+      response: { status: "429", headers: { "retry-after": "2" } },
+    });
+    const delays = await runRetryAfterCase({ minDelayMs: 0, maxDelayMs: 5000, error: err });
+    expect(delays[0]).toBe(2000);
+  });
+
   it("honors retry after hints in rate-limit style messages", async () => {
     const delays = await runRetryAfterCase({
       minDelayMs: 0,
