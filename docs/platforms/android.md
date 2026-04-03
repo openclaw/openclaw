@@ -159,10 +159,59 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
 - Voice wake/talk-mode toggles are currently removed from Android UX/runtime.
 - Additional Android command families (availability depends on device + permissions):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
-  - `notifications.list`, `notifications.actions`
+  - `notifications.list`, `notifications.actions` (see [Notification forwarding](#notification-forwarding) below)
   - `photos.latest`
   - `contacts.search`, `contacts.add`
   - `calendar.events`, `calendar.add`
   - `callLog.search`
   - `sms.search`
   - `motion.activity`, `motion.pedometer`
+
+## Assistant entrypoints
+
+Android supports launching OpenClaw from the system assistant trigger (Google
+Assistant). When configured, holding the home button or saying "Hey Google, ask
+OpenClaw..." opens the app and hands the prompt into the chat composer.
+
+This uses Android **App Actions** metadata declared in the app manifest. No
+extra configuration is needed on the gateway side -- the assistant intent is
+handled entirely by the Android app and forwarded as a normal chat message.
+
+<Note>
+App Actions availability depends on the device, Google Play Services version,
+and whether the user has set OpenClaw as the default assistant app.
+</Note>
+
+## Notification forwarding
+
+Android can forward device notifications to the gateway as events. Several controls let you scope which notifications are forwarded and when.
+
+| Key                              | Type           | Description                                                                                       |
+| -------------------------------- | -------------- | ------------------------------------------------------------------------------------------------- |
+| `notifications.allowPackages`    | string[]       | Only forward notifications from these package names. If set, all other packages are ignored.      |
+| `notifications.denyPackages`     | string[]       | Never forward notifications from these package names. Applied after `allowPackages`.              |
+| `notifications.quietHours.start` | string (HH:mm) | Start of quiet hours window (local device time). Notifications are suppressed during this window. |
+| `notifications.quietHours.end`   | string (HH:mm) | End of quiet hours window.                                                                        |
+| `notifications.rateLimit`        | number         | Maximum forwarded notifications per package per minute. Excess notifications are dropped.         |
+
+The notification picker also uses safer behavior for forwarded notification events, preventing accidental forwarding of sensitive system notifications.
+
+Example configuration:
+
+```json5
+{
+  notifications: {
+    allowPackages: ["com.slack", "com.whatsapp"],
+    denyPackages: ["com.android.systemui"],
+    quietHours: {
+      start: "22:00",
+      end: "07:00",
+    },
+    rateLimit: 5,
+  },
+}
+```
+
+<Note>
+Notification forwarding requires the Android Notification Listener permission. The app prompts for this during setup.
+</Note>

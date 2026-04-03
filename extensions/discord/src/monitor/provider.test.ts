@@ -39,6 +39,7 @@ const {
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
 let providerTesting: typeof import("./provider.js").__testing;
+let runtimeEnvModule: typeof import("openclaw/plugin-sdk/runtime-env");
 
 function createCompatRateLimitError(
   response: Response,
@@ -149,11 +150,13 @@ describe("monitorDiscordProvider", () => {
     vi.doMock("../token.js", () => ({
       normalizeDiscordToken: (value?: string) => value,
     }));
+    runtimeEnvModule = await import("openclaw/plugin-sdk/runtime-env");
     ({ monitorDiscordProvider, __testing: providerTesting } = await import("./provider.js"));
   });
 
   beforeEach(() => {
     resetDiscordProviderMonitorMocks();
+    vi.mocked(runtimeEnvModule.logVerbose).mockClear();
     providerTesting.setFetchDiscordApplicationId(async () => "app-1");
     providerTesting.setCreateDiscordNativeCommand(((
       ...args: Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0] extends
@@ -613,8 +616,8 @@ describe("monitorDiscordProvider", () => {
     expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("native commands using Carbon reconcile path"),
+    expect(runtimeEnvModule.logVerbose).toHaveBeenCalledWith(
+      "discord: native commands using Carbon reconcile path",
     );
   });
 
@@ -703,7 +706,7 @@ describe("monitorDiscordProvider", () => {
       name === "gateway" ? gateway : undefined,
     );
     clientFetchUserMock.mockImplementationOnce(async () => {
-      emitter.emit("debug", "WebSocket connection opened");
+      emitter.emit("debug", "Gateway websocket opened");
       return { id: "bot-1", username: "Molty" };
     });
     isVerboseMock.mockReturnValue(true);
@@ -722,7 +725,7 @@ describe("monitorDiscordProvider", () => {
     expect(messages.some((msg) => msg.includes("fetch-bot-identity:done"))).toBe(true);
     expect(
       messages.some(
-        (msg) => msg.includes("gateway-debug") && msg.includes("WebSocket connection opened"),
+        (msg) => msg.includes("gateway-debug") && msg.includes("Gateway websocket opened"),
       ),
     ).toBe(true);
   });

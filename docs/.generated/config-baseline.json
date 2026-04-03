@@ -1097,6 +1097,20 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.compaction.notifyUser",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Compaction Notify User",
+      "help": "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.compaction.postCompactionSections",
       "kind": "core",
       "type": "array",
@@ -10209,10 +10223,7 @@
     {
       "path": "channels.discord.accounts.*.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10462,10 +10473,7 @@
     {
       "path": "channels.discord.accounts.*.dm.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10495,10 +10503,7 @@
     {
       "path": "channels.discord.accounts.*.dm.groupChannels.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10720,10 +10725,7 @@
     {
       "path": "channels.discord.accounts.*.execApprovals.approvers.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -10947,10 +10949,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.channels.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -11150,10 +11149,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.channels.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -11209,10 +11205,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -11392,10 +11385,7 @@
     {
       "path": "channels.discord.accounts.*.guilds.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -12635,10 +12625,7 @@
     {
       "path": "channels.discord.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -12946,10 +12933,7 @@
     {
       "path": "channels.discord.dm.allowFrom.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -12979,10 +12963,7 @@
     {
       "path": "channels.discord.dm.groupChannels.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13250,10 +13231,7 @@
     {
       "path": "channels.discord.execApprovals.approvers.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13477,10 +13455,7 @@
     {
       "path": "channels.discord.guilds.*.channels.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13680,10 +13655,7 @@
     {
       "path": "channels.discord.guilds.*.channels.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13739,10 +13711,7 @@
     {
       "path": "channels.discord.guilds.*.roles.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13922,10 +13891,7 @@
     {
       "path": "channels.discord.guilds.*.users.*",
       "kind": "channel",
-      "type": [
-        "number",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -22298,6 +22264,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.blockStreaming",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.chunkMode",
       "kind": "channel",
       "type": "string",
@@ -22492,6 +22468,16 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.groups.*.account",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "channels.matrix.groups.*.allow",
@@ -22861,6 +22847,16 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.rooms.*.account",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "channels.matrix.rooms.*.allow",
@@ -31514,7 +31510,7 @@
         "network"
       ],
       "label": "Slack Exec Approvals",
-      "help": "Slack-native exec approval routing and approver authorization. Enable this only when Slack should act as an explicit exec-approval client for the selected workspace account.",
+      "help": "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this workspace account.",
       "hasChildren": true
     },
     {
@@ -31582,7 +31578,7 @@
         "network"
       ],
       "label": "Slack Exec Approvals Enabled",
-      "help": "Enable Slack exec approvals for this account. When false or unset, Slack messages/buttons cannot approve exec requests.",
+      "help": "Controls Slack native exec approvals for this account: unset or \"auto\" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.",
       "hasChildren": false
     },
     {
@@ -32802,6 +32798,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.direct.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.direct.*.requireTopic",
       "kind": "channel",
       "type": "boolean",
@@ -33065,6 +33086,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.direct.*.topics.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.direct.*.topics.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.direct.*.topics.*.groupPolicy",
       "kind": "channel",
       "type": "string",
@@ -33221,6 +33267,31 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -33421,6 +33492,31 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.groups.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.groups.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -33699,6 +33795,31 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.groups.*.topics.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.groups.*.topics.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -34839,6 +34960,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.direct.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.direct.*.requireTopic",
       "kind": "channel",
       "type": "boolean",
@@ -35102,6 +35248,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.direct.*.topics.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.direct.*.topics.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.direct.*.topics.*.groupPolicy",
       "kind": "channel",
       "type": "string",
@@ -35270,6 +35441,31 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.execApprovals",
       "kind": "channel",
       "type": "object",
@@ -35281,7 +35477,7 @@
         "network"
       ],
       "label": "Telegram Exec Approvals",
-      "help": "Telegram-native exec approval routing and approver authorization. Enable this only when Telegram should act as an explicit exec-approval client for the selected bot account.",
+      "help": "Telegram-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for the selected bot account.",
       "hasChildren": true
     },
     {
@@ -35349,7 +35545,7 @@
         "network"
       ],
       "label": "Telegram Exec Approvals Enabled",
-      "help": "Enable Telegram exec approvals for this account. When false or unset, Telegram messages/buttons cannot approve exec requests.",
+      "help": "Controls Telegram native exec approvals for this account: unset or \"auto\" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.",
       "hasChildren": false
     },
     {
@@ -35495,6 +35691,31 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.groups.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.groups.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -35773,6 +35994,31 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.groups.*.topics.*.errorCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.groups.*.topics.*.errorPolicy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "always",
+        "once",
+        "silent"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -49703,6 +49949,20 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.diffs.config.viewerBaseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Viewer Base URL",
+      "help": "Persistent gateway base URL used for returned viewer links when a tool call does not pass baseUrl.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.diffs.enabled",
       "kind": "plugin",
       "type": "boolean",
@@ -50619,6 +50879,79 @@
       "label": "@openclaw/firecrawl-plugin Config",
       "help": "Plugin-defined config payload for firecrawl.",
       "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.apiKey",
+      "kind": "plugin",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security"
+      ],
+      "label": "Firecrawl Fetch API Key",
+      "help": "Firecrawl API key for web fetch fallback (fallback: FIRECRAWL_API_KEY env var).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
+      "label": "Firecrawl Fetch Base URL",
+      "help": "Firecrawl Fetch base URL override.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.maxAgeMs",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.onlyMainContent",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.config.webFetch.timeoutSeconds",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "plugins.entries.firecrawl.config.webSearch",
@@ -56947,6 +57280,127 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.stepfun",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/stepfun-provider",
+      "help": "OpenClaw StepFun provider plugin (plugin: stepfun)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.stepfun.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/stepfun-provider Config",
+      "help": "Plugin-defined config payload for stepfun.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.stepfun.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/stepfun-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.stepfun.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.stepfun.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.stepfun.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.stepfun.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.stepfun.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.stepfun.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.synology-chat",
       "kind": "plugin",
       "type": "object",
@@ -60618,6 +61072,101 @@
       ],
       "label": "Grok Search Model",
       "help": "Grok model override for web search.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.cacheTtlMinutes",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "storage"
+      ],
+      "label": "X Search Cache TTL",
+      "help": "Cache TTL in minutes for x_search results.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable X Search",
+      "help": "Enable the x_search tool for searching X posts with xAI.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.inlineCitations",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "X Search Inline Citations",
+      "help": "Keep inline markdown citations from xAI in x_search responses when available.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.maxTurns",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "X Search Max Turns",
+      "help": "Optional max internal tool turns xAI may use per x_search request.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "X Search Model",
+      "help": "xAI model override for x_search.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.xSearch.timeoutSeconds",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "X Search Timeout",
+      "help": "Timeout in seconds for x_search requests.",
       "hasChildren": false
     },
     {
@@ -67418,8 +67967,6 @@
         "security",
         "tools"
       ],
-      "label": "Firecrawl API Key",
-      "help": "Firecrawl API key (fallback: FIRECRAWL_API_KEY env var).",
       "hasChildren": true
     },
     {
@@ -67463,8 +68010,6 @@
         "tools",
         "url-secret"
       ],
-      "label": "Firecrawl Base URL",
-      "help": "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
       "hasChildren": false
     },
     {
@@ -67474,11 +68019,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Enable Firecrawl Fallback",
-      "help": "Enable Firecrawl fallback for web_fetch (if configured).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -67488,12 +68029,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "Firecrawl Cache Max Age (ms)",
-      "help": "Firecrawl maxAge (ms) for cached results when supported by the API.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -67503,11 +68039,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Firecrawl Main Content Only",
-      "help": "When true, Firecrawl returns only the main content (default: true).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -67517,12 +68049,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "Firecrawl Timeout (sec)",
-      "help": "Timeout in seconds for Firecrawl requests.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -67584,6 +68111,20 @@
       ],
       "label": "Web Fetch Max Download Size (bytes)",
       "help": "Max download size before truncation.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.provider",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Web Fetch Provider",
+      "help": "Web fetch fallback provider id.",
       "hasChildren": false
     },
     {
@@ -68336,68 +68877,13 @@
       "hasChildren": true
     },
     {
-      "path": "tools.web.x_search.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "security",
-        "tools"
-      ],
-      "label": "xAI API Key",
-      "help": "xAI API key for X search (fallback: XAI_API_KEY env var).",
-      "hasChildren": true
-    },
-    {
-      "path": "tools.web.x_search.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.x_search.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "tools.web.x_search.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "tools.web.x_search.cacheTtlMinutes",
       "kind": "core",
       "type": "number",
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "performance",
-        "storage",
-        "tools"
-      ],
-      "label": "X Search Cache TTL (min)",
-      "help": "Cache TTL in minutes for x_search results.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -68407,11 +68893,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "Enable X Search Tool",
-      "help": "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -68421,11 +68903,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "tools"
-      ],
-      "label": "X Search Inline Citations",
-      "help": "Keep inline citations from xAI in x_search responses when available (default: false).",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -68435,12 +68913,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "X Search Max Turns",
-      "help": "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -68450,12 +68923,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "models",
-        "tools"
-      ],
-      "label": "X Search Model",
-      "help": "Model to use for X search (default: \"grok-4-1-fast-non-reasoning\").",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -68465,12 +68933,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "performance",
-        "tools"
-      ],
-      "label": "X Search Timeout (sec)",
-      "help": "Timeout in seconds for x_search requests.",
+      "tags": [],
       "hasChildren": false
     },
     {

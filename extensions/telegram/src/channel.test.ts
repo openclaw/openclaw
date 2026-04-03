@@ -220,6 +220,102 @@ describe("telegramPlugin messaging", () => {
   });
 });
 
+describe("telegramPlugin threading", () => {
+  it("keeps topic thread state in plugin-owned tool context", () => {
+    expect(
+      telegramPlugin.threading?.buildToolContext?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "default",
+        context: {
+          To: "telegram:-1001:topic:77",
+          MessageThreadId: 77,
+          CurrentMessageId: "msg-1",
+        },
+        hasRepliedRef: { value: false },
+      }),
+    ).toMatchObject({
+      currentChannelId: "telegram:-1001:topic:77",
+      currentThreadTs: "77",
+    });
+  });
+
+  it("parses topic thread state from target grammar when MessageThreadId is absent", () => {
+    expect(
+      telegramPlugin.threading?.buildToolContext?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "default",
+        context: {
+          To: "telegram:-1001:topic:77",
+          CurrentMessageId: "msg-1",
+        },
+      }),
+    ).toMatchObject({
+      currentChannelId: "telegram:-1001:topic:77",
+      currentThreadTs: "77",
+    });
+  });
+
+  it("keeps current DM topic threadId even when replyToId is present", () => {
+    const resolved = telegramPlugin.threading?.resolveAutoThreadId?.({
+      cfg: createCfg(),
+      to: "telegram:1234",
+      replyToId: "4103",
+      toolContext: {
+        currentChannelId: "telegram:1234",
+        currentThreadTs: "533274",
+      },
+    });
+
+    expect(resolved).toBe("533274");
+  });
+
+  it("does not override an explicit target topic when replyToId is present", () => {
+    const resolved = telegramPlugin.threading?.resolveAutoThreadId?.({
+      cfg: createCfg(),
+      to: "telegram:-1001:topic:99",
+      replyToId: "4103",
+      toolContext: {
+        currentChannelId: "telegram:-1001:topic:77",
+        currentThreadTs: "77",
+      },
+    });
+
+    expect(resolved).toBeUndefined();
+  });
+});
+
+describe("telegramPlugin bindings", () => {
+  it("preserves topic and direct command conversation routing", () => {
+    expect(
+      telegramPlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        threadId: "77",
+        originatingTo: "-1001",
+      }),
+    ).toEqual({
+      conversationId: "-1001:topic:77",
+      parentConversationId: "-1001",
+    });
+
+    expect(
+      telegramPlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        originatingTo: "12345",
+      }),
+    ).toEqual({
+      conversationId: "12345",
+      parentConversationId: "12345",
+    });
+
+    expect(
+      telegramPlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        originatingTo: "-1001",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("telegramPlugin duplicate token guard", () => {
   it("marks secondary account as not configured when token is shared", async () => {
     const cfg = createCfg();

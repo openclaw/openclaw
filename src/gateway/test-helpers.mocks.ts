@@ -175,6 +175,7 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   ],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
+  webFetchProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],

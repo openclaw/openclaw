@@ -33,6 +33,8 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   qianfan: ["QIANFAN_API_KEY"],
   qveris: ["QVERIS_API_KEY"],
   sglang: ["SGLANG_API_KEY"],
+  stepfun: ["STEPFUN_API_KEY"],
+  "stepfun-plan": ["STEPFUN_API_KEY"],
   synthetic: ["SYNTHETIC_API_KEY"],
   tavily: ["TAVILY_API_KEY"],
   together: ["TOGETHER_API_KEY"],

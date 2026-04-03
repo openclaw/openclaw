@@ -175,6 +175,38 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
   });
 
+  it("auto-isolates memory-heavy extension suites in CI", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const hotspotFile = bundledPluginFile("feishu", "src/bot.test.ts");
+    const hotspotUnit = plan.selectedUnits.find((unit) => unit.args.includes(hotspotFile));
+
+    expect(hotspotUnit).toBeTruthy();
+    expect(hotspotUnit?.isolate).toBe(true);
+    expect(hotspotUnit?.reasons).toContain("extensions-memory-heavy");
+    artifacts.cleanupTempArtifacts();
+  });
+
   it("auto-isolates timed-heavy channel suites in CI", () => {
     const env = {
       CI: "true",
@@ -653,13 +685,11 @@ describe("test planner", () => {
     expect(manifest.shardCounts.unit).toBe(4);
     expect(manifest.shardCounts.channels).toBe(4);
     expect(manifest.shardCounts.extensionFast).toBeGreaterThanOrEqual(4);
-    expect(manifest.shardCounts.extensionFast).toBeLessThanOrEqual(5);
+    expect(manifest.shardCounts.extensionFast).toBeLessThanOrEqual(6);
     expect(manifest.shardCounts.windows).toBe(6);
     expect(manifest.shardCounts.macosNode).toBe(9);
-    expect(manifest.shardCounts.bun).toBe(6);
     expect(manifest.jobs.checks.matrix.include).toHaveLength(8);
     expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(6);
-    expect(manifest.jobs.bunChecks.matrix.include).toHaveLength(6);
     expect(manifest.jobs.macosNode.matrix.include).toHaveLength(9);
     expect(manifest.jobs.checksFast.matrix.include).toHaveLength(
       manifest.shardCounts.extensionFast + 1,

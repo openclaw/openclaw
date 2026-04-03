@@ -330,6 +330,14 @@ describe("cdp", () => {
     expect(normalized).toBe("wss://user:pass@example.com/devtools/browser/ABC?token=abc");
   });
 
+  it("rewrites localhost absolute-form websocket URLs for remote CDP hosts", () => {
+    const normalized = normalizeCdpWsUrl(
+      "ws://localhost.:9222/devtools/browser/ABC",
+      "https://user:pass@example.com?token=abc",
+    );
+    expect(normalized).toBe("wss://user:pass@example.com/devtools/browser/ABC?token=abc");
+  });
+
   it("rewrites 0.0.0.0 wildcard bind address to remote CDP host", () => {
     const normalized = normalizeCdpWsUrl(
       "ws://0.0.0.0:3000/devtools/browser/ABC",

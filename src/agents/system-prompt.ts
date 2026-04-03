@@ -306,7 +306,7 @@ function buildExecApprovalPromptGuidance(params: { runtimeChannel?: string }) {
   ) {
     return "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
   }
-  return "When exec returns approval-pending, include the concrete /approve command from tool output (with allow-once|allow-always|deny) as plain chat text for the user, and do not ask for a different or rotated code.";
+  return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code.";
 }
 
 export function buildAgentSystemPrompt(params: {

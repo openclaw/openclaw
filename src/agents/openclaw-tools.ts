@@ -175,7 +175,7 @@ export function createOpenClawTools(
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
-    runtimeFirecrawl: runtimeWebTools?.fetch.firecrawl,
+    runtimeWebFetch: runtimeWebTools?.fetch,
   });
   const qverisTools = createQverisTools({
     config: options?.config,

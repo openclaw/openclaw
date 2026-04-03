@@ -44,6 +44,20 @@ function loadStageSandboxMediaRuntime() {
   return stageSandboxMediaRuntimePromise;
 }
 
+let hookRunnerGlobalPromise: Promise<typeof import("../../plugins/hook-runner-global.js")> | null =
+  null;
+let originRoutingPromise: Promise<typeof import("./origin-routing.js")> | null = null;
+
+function loadHookRunnerGlobal() {
+  hookRunnerGlobalPromise ??= import("../../plugins/hook-runner-global.js");
+  return hookRunnerGlobalPromise;
+}
+
+function loadOriginRouting() {
+  originRoutingPromise ??= import("./origin-routing.js");
+  return originRoutingPromise;
+}
+
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
     if (!Array.isArray(list)) {
@@ -419,6 +433,32 @@ export async function getReplyFromConfig(
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+
+  // Allow plugins to intercept and return a synthetic reply before the LLM runs.
+  const { getGlobalHookRunner } = await loadHookRunnerGlobal();
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_agent_reply")) {
+    const { resolveOriginMessageProvider } = await loadOriginRouting();
+    const hookMessageProvider = resolveOriginMessageProvider({
+      originatingChannel: sessionCtx.OriginatingChannel,
+      provider: sessionCtx.Provider,
+    });
+    const hookResult = await hookRunner.runBeforeAgentReply(
+      { cleanedBody },
+      {
+        agentId,
+        sessionKey: agentSessionKey,
+        sessionId,
+        workspaceDir,
+        messageProvider: hookMessageProvider,
+        trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+        channelId: hookMessageProvider,
+      },
+    );
+    if (hookResult?.handled) {
+      return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+    }
+  }
 
   if (sessionKey && hasInboundMedia(ctx)) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();

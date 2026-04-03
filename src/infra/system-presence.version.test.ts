@@ -1,5 +1,6 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveUsableRuntimeVersion } from "../version.js";
 
@@ -17,8 +18,10 @@ async function withPresenceModule<T>(
       ...env,
     },
     async () => {
-      vi.resetModules();
-      const module = await import("./system-presence.js");
+      const module = await importFreshModule<typeof import("./system-presence.js")>(
+        import.meta.url,
+        `./system-presence.js?scope=${JSON.stringify(env)}`,
+      );
       return await run(module);
     },
   );
@@ -113,8 +116,10 @@ describe("system-presence version fallback", () => {
       vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
         throw new Error("uv_interface_addresses failed");
       });
-      vi.resetModules();
-      const module = await import("./system-presence.js");
+      const module = await importFreshModule<typeof import("./system-presence.js")>(
+        import.meta.url,
+        "./system-presence.js?scope=hostname-fallback",
+      );
       const selfEntry = module.listSystemPresence().find((entry) => entry.reason === "self");
       expect(selfEntry?.host).toBe("test-host");
       expect(selfEntry?.ip).toBe("test-host");
