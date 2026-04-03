@@ -394,11 +394,47 @@ function shouldTreatAsOrphanSelfLock(params: {
   if (pid !== process.pid) {
     return false;
   }
-  const hasValidStarttime = isValidLockNumber(params.payload?.starttime);
-  if (hasValidStarttime) {
+  // If the lock is actively held in-memory, it is not an orphan.
+  if (HELD_LOCKS.has(params.normalizedSessionFile)) {
     return false;
   }
-  return !HELD_LOCKS.has(params.normalizedSessionFile);
+  // Lock belongs to our PID but is not tracked in HELD_LOCKS.
+  // When starttime is absent or invalid, treat as orphan for backward
+  // compatibility with old-format lock files.
+  const hasValidStarttime = isValidLockNumber(params.payload?.starttime);
+  if (!hasValidStarttime) {
+    return true;
+  }
+  // When starttime is present, verify it matches the current process to
+  // confirm the lock was created by this exact process instance (not a
+  // recycled PID).  If it matches, the lock is an in-process orphan left
+  // behind by a crashed or timed-out run whose finally block never called
+  // release().  If it does not match, the PID was recycled and normal
+  // stale-detection (recycled-pid reason) will handle it.
+  const currentStarttime = getProcessStartTime(process.pid);
+  // If we cannot read our own starttime (non-Linux), be conservative and
+  // fall back to the legacy behavior (not orphan) to avoid false reclaims.
+  if (currentStarttime === null) {
+    return false;
+  }
+  if (currentStarttime !== params.payload!.starttime) {
+    return false;
+  }
+  // Guard against a narrow race with a concurrent acquireSessionWriteLock
+  // call in the same process: the other call may have already created and
+  // written the .lock file but not yet inserted into HELD_LOCKS.  A very
+  // recent createdAt timestamp indicates the lock is likely still being
+  // set up rather than orphaned, so we conservatively skip reclaim.
+  const ORPHAN_MIN_AGE_MS = 5_000;
+  const createdAtStr =
+    typeof params.payload?.createdAt === "string" ? params.payload.createdAt : null;
+  if (createdAtStr !== null) {
+    const createdAtMs = Date.parse(createdAtStr);
+    if (Number.isFinite(createdAtMs) && Date.now() - createdAtMs < ORPHAN_MIN_AGE_MS) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export async function cleanStaleLockFiles(params: {

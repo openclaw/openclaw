@@ -1970,15 +1970,39 @@ export async function runEmbeddedAttempt(
       // flushPendingToolResults() fires while tools are still executing, inserting
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
+      //
+      // BUGFIX(#59983): Each cleanup step is individually guarded so that an
+      // exception in any one of them cannot prevent sessionLock.release() from
+      // executing.  A leaked lock file leaves the channel permanently dead
+      // because subsequent acquireSessionWriteLock calls for the same session
+      // will time out.
       removeToolResultContextGuard?.();
-      await flushPendingToolResultsAfterIdle({
-        agent: session?.agent,
-        sessionManager,
-        clearPendingOnTimeout: true,
-      });
-      session?.dispose();
+      try {
+        await flushPendingToolResultsAfterIdle({
+          agent: session?.agent,
+          sessionManager,
+          clearPendingOnTimeout: true,
+        });
+      } catch (flushErr) {
+        log.warn(
+          `flush pending tool results failed during cleanup: runId=${params.runId} ${String(flushErr)}`,
+        );
+      }
+      try {
+        session?.dispose();
+      } catch (disposeErr) {
+        log.warn(
+          `session dispose failed during cleanup: runId=${params.runId} ${String(disposeErr)}`,
+        );
+      }
       releaseWsSession(params.sessionId);
-      await bundleLspRuntime?.dispose();
+      try {
+        await bundleLspRuntime?.dispose();
+      } catch (lspErr) {
+        log.warn(
+          `bundleLspRuntime dispose failed during cleanup: runId=${params.runId} ${String(lspErr)}`,
+        );
+      }
       await sessionLock.release();
     }
   } finally {

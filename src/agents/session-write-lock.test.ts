@@ -370,12 +370,66 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("reclaims orphan lock files with valid starttime when PID matches current process", async () => {
+    if (process.platform !== "linux") {
+      // starttime detection requires /proc; skip on non-Linux.
+      return;
+    }
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      // Simulate a lock left behind by a timed-out run in the same process:
+      // PID matches, starttime matches (FAKE_STARTTIME from mock), but the
+      // lock is NOT tracked in HELD_LOCKS.  Before the fix, this lock was
+      // incorrectly treated as non-orphan because shouldTreatAsOrphanSelfLock
+      // returned false whenever starttime was present.
+      // Use a createdAt timestamp older than ORPHAN_MIN_AGE_MS (5 s) so the
+      // age guard in shouldTreatAsOrphanSelfLock does not reject the reclaim.
+      const staleCreatedAt = new Date(Date.now() - 10_000).toISOString();
+      await writeCurrentProcessLock(lockPath, {
+        starttime: FAKE_STARTTIME,
+        createdAt: staleCreatedAt,
+      });
+
+      await expectCurrentPidOwnsLock({ sessionFile, timeoutMs: 500 });
+    });
+  });
+
   it("does not reclaim active in-process lock files without starttime", async () => {
     await expectActiveInProcessLockIsNotReclaimed();
   });
 
   it("does not reclaim active in-process lock files with malformed starttime", async () => {
     await expectActiveInProcessLockIsNotReclaimed({ legacyStarttime: 123.5 });
+  });
+
+  it("does not reclaim active in-process lock files with valid starttime", async () => {
+    if (process.platform !== "linux") {
+      return;
+    }
+    // Ensure that an actively held lock with a matching starttime is NOT
+    // reclaimed.  This is the counterpart to the orphan-with-starttime test:
+    // when the lock IS in HELD_LOCKS, it must remain protected.
+    await expectActiveInProcessLockIsNotReclaimed({ legacyStarttime: FAKE_STARTTIME });
+  });
+
+  it("does not reclaim a recently-created same-process lock not yet in HELD_LOCKS", async () => {
+    if (process.platform !== "linux") {
+      return;
+    }
+    // Regression test for the race condition identified in code review:
+    // a concurrent acquireSessionWriteLock call may have created the .lock
+    // file but not yet inserted into HELD_LOCKS.  The createdAt age guard
+    // (ORPHAN_MIN_AGE_MS) must prevent the lock from being misidentified
+    // as an orphan and deleted out from under the creating call.
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      // Write a lock with matching pid/starttime but a very recent createdAt.
+      await writeCurrentProcessLock(lockPath, { starttime: FAKE_STARTTIME });
+
+      // The lock should NOT be reclaimed (treated as in-flight, not orphan),
+      // so acquireSessionWriteLock should time out.
+      await expect(acquireSessionWriteLock({ sessionFile, timeoutMs: 200 })).rejects.toThrow(
+        /session file locked/,
+      );
+    });
   });
 
   it("registers cleanup for SIGQUIT and SIGABRT", () => {
