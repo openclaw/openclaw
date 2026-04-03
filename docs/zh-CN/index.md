@@ -16,13 +16,13 @@ x-i18n:
 
 <p align="center">
     <img
-        src="/assets/openclaw-logo-text-dark.png"
+        src="../assets/openclaw-logo-text-dark.png"
         alt="OpenClaw"
         width="500"
         class="dark:hidden"
     />
     <img
-        src="/assets/openclaw-logo-text.png"
+        src="../assets/openclaw-logo-text.png"
         alt="OpenClaw"
         width="500"
         class="hidden dark:block"
