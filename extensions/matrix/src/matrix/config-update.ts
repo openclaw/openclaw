@@ -30,6 +30,7 @@ export type MatrixAccountPatch = {
   encryption?: boolean | null;
   initialSyncLimit?: number | null;
   allowBots?: MatrixConfig["allowBots"] | null;
+  semanticBotLoopTermination?: boolean | null;
   dm?: MatrixConfig["dm"] | null;
   groupPolicy?: MatrixConfig["groupPolicy"] | null;
   groupAllowFrom?: MatrixConfig["groupAllowFrom"] | null;
@@ -194,6 +195,13 @@ export function updateMatrixAccountConfig(
       delete nextAccount.allowBots;
     } else {
       nextAccount.allowBots = patch.allowBots;
+    }
+  }
+  if (patch.semanticBotLoopTermination !== undefined) {
+    if (patch.semanticBotLoopTermination === null) {
+      delete nextAccount.semanticBotLoopTermination;
+    } else {
+      nextAccount.semanticBotLoopTermination = patch.semanticBotLoopTermination;
     }
   }
   if (patch.dm !== undefined) {

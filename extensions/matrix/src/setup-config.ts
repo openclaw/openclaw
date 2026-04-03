@@ -39,6 +39,7 @@ const MATRIX_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "encryption",
   "allowlistOnly",
   "allowBots",
+  "semanticBotLoopTermination",
   "blockStreaming",
   "replyToMode",
   "threadReplies",

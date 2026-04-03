@@ -229,6 +229,34 @@ Use `allowBots` when you intentionally want inter-agent Matrix traffic:
 
 Use strict room allowlists and mention requirements when enabling bot-to-bot traffic in shared rooms.
 
+`allowBots` only decides whether configured Matrix bot senders are allowed through the normal room gates. It does not stop two configured bots from continuing a low-value loop.
+
+Use `semanticBotLoopTermination` when you want Matrix to stop no-progress configured-bot reply chains after they stop adding meaningful new information:
+
+```json5
+{
+  channels: {
+    matrix: {
+      allowBots: "mentions",
+      semanticBotLoopTermination: true,
+      groups: {
+        "!roomid:example.org": {
+          requireMention: true,
+          semanticBotLoopTermination: true,
+        },
+      },
+    },
+  },
+}
+```
+
+- Default: `false`. Leaving it unset keeps current Matrix bot-to-bot behavior.
+- Scope: room messages from configured Matrix bot senders that already passed `allowBots`, room allowlists, and mention gates.
+- Behavior: OpenClaw runs an extra semantic judge call before later bot turns in the same bot chain and stops the chain when it becomes a no-progress loop.
+- Recovery: a later committed non-bot message in the room can reopen a terminated chain.
+- `groups.<room>.semanticBotLoopTermination` overrides the account-level setting for one room.
+- Cost: this adds an extra model call for eligible configured-bot room turns after the first turn in a chain. Enable it only where you want that safety tradeoff.
+
 Enable encryption:
 
 ```json5
@@ -796,6 +824,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `encryption`: enable E2EE.
 - `allowlistOnly`: force allowlist-only behavior for DMs and rooms.
 - `allowBots`: allow messages from other configured OpenClaw Matrix accounts (`true` or `"mentions"`).
+- `semanticBotLoopTermination`: opt in to semantic no-progress loop termination for configured Matrix bot chains. Default: `false`.
 - `groupPolicy`: `open`, `allowlist`, or `disabled`.
 - `contextVisibility`: supplemental room-context visibility mode (`all`, `allowlist`, `allowlist_quote`).
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
@@ -828,6 +857,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `groups`: per-room policy map. Prefer room IDs or aliases; unresolved room names are ignored at runtime. Session/group identity uses the stable room ID after resolution, while human-readable labels still come from room names.
 - `groups.<room>.account`: restrict one inherited room entry to a specific Matrix account in multi-account setups.
 - `groups.<room>.allowBots`: room-level override for configured-bot senders (`true` or `"mentions"`).
+- `groups.<room>.semanticBotLoopTermination`: room-level override for semantic no-progress loop termination on configured bot chains.
 - `groups.<room>.users`: per-room sender allowlist.
 - `groups.<room>.tools`: per-room tool allow/deny overrides.
 - `groups.<room>.autoReply`: room-level mention-gating override. `true` disables mention requirements for that room; `false` forces them back on.

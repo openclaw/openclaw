@@ -38,6 +38,137 @@
       "hasChildren": true
     },
     {
+      "path": "channels.bluebubbles.accounts.*.actions",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.addParticipant",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.edit",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.leaveGroup",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.reactions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.removeParticipant",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.renameGroup",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.reply",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.sendAttachment",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.sendWithEffect",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.setGroupIcon",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.unsend",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.bluebubbles.accounts.*.allowFrom",
       "kind": "channel",
       "type": "array",
@@ -13784,6 +13915,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.groups.*.semanticBotLoopTermination",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.groups.*.skills",
       "kind": "channel",
       "type": "array",
@@ -14163,6 +14304,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.rooms.*.semanticBotLoopTermination",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.rooms.*.skills",
       "kind": "channel",
       "type": "array",
@@ -14279,6 +14430,16 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.semanticBotLoopTermination",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,

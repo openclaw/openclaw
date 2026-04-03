@@ -91,6 +91,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
   const allowlistOnly = accountConfig.allowlistOnly === true;
   const accountAllowBots = accountConfig.allowBots;
+  const accountSemanticBotLoopTermination = accountConfig.semanticBotLoopTermination === true;
   let allowFrom: string[] = (accountConfig.dm?.allowFrom ?? []).map(String);
   let groupAllowFrom: string[] = (accountConfig.groupAllowFrom ?? []).map(String);
   let roomsConfig = accountConfig.groups ?? accountConfig.rooms;
@@ -266,6 +267,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     groupAllowFrom,
     roomsConfig,
     accountAllowBots,
+    accountSemanticBotLoopTermination,
     configuredBotUserIds,
     groupPolicy,
     replyToMode,

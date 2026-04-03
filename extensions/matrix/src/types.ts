@@ -34,6 +34,11 @@ export type MatrixRoomConfig = {
    * true accepts all configured bot senders; "mentions" requires they mention this bot.
    */
   allowBots?: boolean | "mentions";
+  /**
+   * Enable semantic no-progress loop termination for configured Matrix bot chains in this room.
+   * Default: false.
+   */
+  semanticBotLoopTermination?: boolean;
   /** Optional tool policy overrides for this room. */
   tools?: { allow?: string[]; deny?: string[] };
   /** If true, reply without mention requirements. */
@@ -120,6 +125,11 @@ export type MatrixConfig = {
    * true accepts all configured bot senders; "mentions" requires they mention this bot.
    */
   allowBots?: boolean | "mentions";
+  /**
+   * Enable semantic no-progress loop termination for configured Matrix bot chains.
+   * Default: false.
+   */
+  semanticBotLoopTermination?: boolean;
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */

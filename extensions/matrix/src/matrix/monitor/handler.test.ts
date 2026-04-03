@@ -1280,6 +1280,44 @@ describe("matrix monitor handler pairing account scope", () => {
 });
 
 describe("matrix monitor handler semantic bot loop termination", () => {
+  it("keeps current behavior by default and does not run the semantic judge", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { final: 1, block: 0, tool: 0 },
+    }));
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountAllowBots: true,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      dispatchReplyFromConfig,
+      getMemberDisplayName: async () => "ops-bot",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-default-off-1",
+        sender: "@ops:example.org",
+        body: "@bot opening turn",
+      }),
+    );
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-default-off-2",
+        sender: "@ops:example.org",
+        body: "@bot still repeating",
+      }),
+    );
+
+    expect(runMatrixSemanticLoopJudgeMock).not.toHaveBeenCalled();
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(2);
+  });
+
   it("skips the semantic judge for the first configured bot turn in a chain", async () => {
     const dispatchReplyFromConfig = vi.fn(async () => ({
       queuedFinal: true,
@@ -1288,6 +1326,7 @@ describe("matrix monitor handler semantic bot loop termination", () => {
     const { handler } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountSemanticBotLoopTermination: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
         "!room:example.org": { requireMention: false },
@@ -1317,6 +1356,7 @@ describe("matrix monitor handler semantic bot loop termination", () => {
     const { handler } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountSemanticBotLoopTermination: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
         "!room:example.org": { requireMention: false },
@@ -1361,6 +1401,7 @@ describe("matrix monitor handler semantic bot loop termination", () => {
     const { handler } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountSemanticBotLoopTermination: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
         "!room:example.org": { requireMention: false },
@@ -1423,6 +1464,7 @@ describe("matrix monitor handler semantic bot loop termination", () => {
     const { handler } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountSemanticBotLoopTermination: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
         "!room:example.org": { requireMention: true },
@@ -1493,6 +1535,7 @@ describe("matrix monitor handler semantic bot loop termination", () => {
     const { handler } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountSemanticBotLoopTermination: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
         "!room:example.org": { requireMention: false },
@@ -1544,6 +1587,7 @@ describe("matrix monitor handler semantic bot loop termination", () => {
     const { handler } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountSemanticBotLoopTermination: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
         "!room:example.org": { requireMention: false },
@@ -1587,6 +1631,7 @@ describe("matrix monitor handler semantic bot loop termination", () => {
     const { handler } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountSemanticBotLoopTermination: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
         "!room:example.org": { requireMention: false },
@@ -1664,6 +1709,7 @@ describe("matrix monitor handler semantic bot loop termination", () => {
     const { handler } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountSemanticBotLoopTermination: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
         "!room:example.org": { requireMention: false },
@@ -1735,6 +1781,7 @@ describe("matrix monitor handler semantic bot loop termination", () => {
     const { handler } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountSemanticBotLoopTermination: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
         "!room:example.org": { requireMention: false },
@@ -1818,6 +1865,7 @@ describe("matrix monitor handler semantic bot loop termination", () => {
     const { handler } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountSemanticBotLoopTermination: true,
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
         "!room:example.org": { requireMention: false },

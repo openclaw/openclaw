@@ -26,6 +26,69 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           },
           additionalProperties: false,
         },
+        actions: {
+          type: "object",
+          properties: {
+            reactions: {
+              default: true,
+              type: "boolean",
+            },
+            edit: {
+              default: true,
+              type: "boolean",
+            },
+            unsend: {
+              default: true,
+              type: "boolean",
+            },
+            reply: {
+              default: true,
+              type: "boolean",
+            },
+            sendWithEffect: {
+              default: true,
+              type: "boolean",
+            },
+            renameGroup: {
+              default: true,
+              type: "boolean",
+            },
+            setGroupIcon: {
+              default: true,
+              type: "boolean",
+            },
+            addParticipant: {
+              default: true,
+              type: "boolean",
+            },
+            removeParticipant: {
+              default: true,
+              type: "boolean",
+            },
+            leaveGroup: {
+              default: true,
+              type: "boolean",
+            },
+            sendAttachment: {
+              default: true,
+              type: "boolean",
+            },
+          },
+          required: [
+            "reactions",
+            "edit",
+            "unsend",
+            "reply",
+            "sendWithEffect",
+            "renameGroup",
+            "setGroupIcon",
+            "addParticipant",
+            "removeParticipant",
+            "leaveGroup",
+            "sendAttachment",
+          ],
+          additionalProperties: false,
+        },
         serverUrl: {
           type: "string",
         },
@@ -234,6 +297,69 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
                 additionalProperties: false,
               },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  edit: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  unsend: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  reply: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  sendWithEffect: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  renameGroup: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  setGroupIcon: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  addParticipant: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  removeParticipant: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  leaveGroup: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  sendAttachment: {
+                    default: true,
+                    type: "boolean",
+                  },
+                },
+                required: [
+                  "reactions",
+                  "edit",
+                  "unsend",
+                  "reply",
+                  "sendWithEffect",
+                  "renameGroup",
+                  "setGroupIcon",
+                  "addParticipant",
+                  "removeParticipant",
+                  "leaveGroup",
+                  "sendAttachment",
+                ],
+                additionalProperties: false,
+              },
               serverUrl: {
                 type: "string",
               },
@@ -427,69 +553,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         defaultAccount: {
           type: "string",
-        },
-        actions: {
-          type: "object",
-          properties: {
-            reactions: {
-              default: true,
-              type: "boolean",
-            },
-            edit: {
-              default: true,
-              type: "boolean",
-            },
-            unsend: {
-              default: true,
-              type: "boolean",
-            },
-            reply: {
-              default: true,
-              type: "boolean",
-            },
-            sendWithEffect: {
-              default: true,
-              type: "boolean",
-            },
-            renameGroup: {
-              default: true,
-              type: "boolean",
-            },
-            setGroupIcon: {
-              default: true,
-              type: "boolean",
-            },
-            addParticipant: {
-              default: true,
-              type: "boolean",
-            },
-            removeParticipant: {
-              default: true,
-              type: "boolean",
-            },
-            leaveGroup: {
-              default: true,
-              type: "boolean",
-            },
-            sendAttachment: {
-              default: true,
-              type: "boolean",
-            },
-          },
-          required: [
-            "reactions",
-            "edit",
-            "unsend",
-            "reply",
-            "sendWithEffect",
-            "renameGroup",
-            "setGroupIcon",
-            "addParticipant",
-            "removeParticipant",
-            "leaveGroup",
-            "sendAttachment",
-          ],
-          additionalProperties: false,
         },
       },
       required: ["enrichGroupParticipantsFromContacts"],
@@ -6606,6 +6669,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
+        semanticBotLoopTermination: {
+          type: "boolean",
+        },
         groupPolicy: {
           type: "string",
           enum: ["open", "disabled", "allowlist"],
@@ -6822,6 +6888,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
+              semanticBotLoopTermination: {
+                type: "boolean",
+              },
               tools: {
                 type: "object",
                 properties: {
@@ -6903,6 +6972,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     const: "mentions",
                   },
                 ],
+              },
+              semanticBotLoopTermination: {
+                type: "boolean",
               },
               tools: {
                 type: "object",

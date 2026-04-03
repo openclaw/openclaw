@@ -38,7 +38,7 @@ Docs: https://docs.openclaw.ai
 - Channels/passive hooks: emit passive message hooks for mention-skipped Telegram and Signal group messages when `ingest` is enabled, including wildcard/default fallback and per-group override handling. (#60018) Thanks @obviyus.
 - Plugins/manifest registry: stop warning when an explicit manifest `id` intentionally differs from the discovery hint. (#59185) Thanks @samzong.
 - WhatsApp/streaming: honor `channels.whatsapp.blockStreaming` again for inbound auto-replies so progressive block replies can be enabled explicitly instead of being forced to final-only delivery. Thanks @mcaxtr.
-- Matrix/bots: stop no-progress configured-bot reply loops in Matrix rooms with a semantic chain guard that reopens after committed non-bot context. (#57505) Thanks @jszhang98.
+- Matrix/bots: add opt-in `semanticBotLoopTermination` for configured Matrix bot rooms so no-progress bot reply loops can be stopped without changing the default bot-to-bot behavior. (#57505) Thanks @jszhang98.
 - Auth/failover: shorten `auth_permanent` lockouts, add dedicated config knobs for permanent-auth backoff, and downgrade ambiguous auth-ish upstream incidents to retryable auth failures so providers recover automatically after transient outages. (#60404) Thanks @extrasmall0.
 - Providers/GitHub Copilot: route Claude models through Anthropic Messages with Copilot-compatible headers and Anthropic prompt-cache markers instead of forcing the OpenAI Responses transport.
 - Plugins/runtime: reuse compatible active registries for `web_search` and `web_fetch` provider snapshot resolution so repeated runtime reads do not re-import the same bundled plugin set on each agent message. Related #48380.

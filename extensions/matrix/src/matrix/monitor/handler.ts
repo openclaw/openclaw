@@ -96,6 +96,7 @@ export type MatrixMonitorHandlerParams = {
   groupAllowFrom?: string[];
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
+  accountSemanticBotLoopTermination?: boolean;
   configuredBotUserIds?: ReadonlySet<string>;
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
@@ -215,6 +216,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     groupAllowFrom = [],
     roomsConfig,
     accountAllowBots,
+    accountSemanticBotLoopTermination,
     configuredBotUserIds = new Set<string>(),
     groupPolicy,
     replyToMode,
@@ -602,6 +604,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           : undefined;
         const roomConfig = roomConfigInfo?.config;
         const allowBotsMode = resolveMatrixAllowBotsMode(roomConfig?.allowBots ?? accountAllowBots);
+        const semanticBotLoopTermination =
+          (roomConfig?.semanticBotLoopTermination ?? accountSemanticBotLoopTermination) === true;
         const isConfiguredBotSender = configuredBotUserIds.has(senderId);
         const roomMatchMeta = roomConfigInfo
           ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
@@ -838,7 +842,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const botChainRouteKey = `${roomId}|${_route.sessionKey}`;
         const botChainKey = `${botChainRouteKey}|${senderId}`;
         let activeBotChainState: MatrixBotChainState | undefined;
-        if (isRoom && isConfiguredBotSender) {
+        if (isRoom && isConfiguredBotSender && semanticBotLoopTermination) {
           releaseBotChainLock = await acquireBotChainLock(botChainKey);
           activeBotChainState = upsertBotChainState(botChainKey);
           maybeReopenBotChainState(activeBotChainState, botChainRouteKey);

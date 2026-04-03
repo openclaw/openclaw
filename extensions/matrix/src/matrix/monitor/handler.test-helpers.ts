@@ -25,6 +25,7 @@ type MatrixHandlerTestHarnessOptions = {
   groupAllowFrom?: string[];
   roomsConfig?: Record<string, MatrixRoomConfig>;
   accountAllowBots?: boolean | "mentions";
+  accountSemanticBotLoopTermination?: boolean;
   configuredBotUserIds?: Set<string>;
   mentionRegexes?: RegExp[];
   groupPolicy?: "open" | "allowlist" | "disabled";
@@ -209,6 +210,7 @@ export function createMatrixHandlerTestHarness(
     groupAllowFrom: options.groupAllowFrom ?? [],
     roomsConfig: options.roomsConfig,
     accountAllowBots: options.accountAllowBots,
+    accountSemanticBotLoopTermination: options.accountSemanticBotLoopTermination,
     configuredBotUserIds: options.configuredBotUserIds,
     groupPolicy: options.groupPolicy ?? "open",
     replyToMode: options.replyToMode ?? "off",
