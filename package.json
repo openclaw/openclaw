@@ -151,6 +151,10 @@
       "types": "./dist/plugin-sdk/runtime-group-policy.d.ts",
       "default": "./dist/plugin-sdk/runtime-group-policy.js"
     },
+    "./plugin-sdk/ssrf-policy": {
+      "types": "./dist/plugin-sdk/ssrf-policy.d.ts",
+      "default": "./dist/plugin-sdk/ssrf-policy.js"
+    },
     "./plugin-sdk/ssrf-runtime": {
       "types": "./dist/plugin-sdk/ssrf-runtime.d.ts",
       "default": "./dist/plugin-sdk/ssrf-runtime.js"

@@ -27,6 +27,7 @@
   "infra-runtime",
   "runtime-config-snapshot",
   "runtime-group-policy",
+  "ssrf-policy",
   "ssrf-runtime",
   "media-runtime",
   "media-understanding-runtime",
