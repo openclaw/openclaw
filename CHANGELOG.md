@@ -88,6 +88,7 @@ Docs: https://docs.openclaw.ai
 - Matrix/Telegram exec approvals: recover stored same-channel account bindings even when session reply state drifted to another channel, so foreign-channel approvals route to the bound account instead of fanning out or being rejected as ambiguous. (#60417) thanks @gumadeiras.
 - Slack/app manifest: set `bot_user.always_online` to `true` in the onboarding and example Slack app manifest so the Slack app appears ready to respond.
 - Gateway/websocket auth: refresh auth on new websocket connects after secrets reload so rotated gateway tokens take effect immediately without requiring a restart. (#60323) Thanks @mappel-nv.
+- Onboarding/plugins: keep non-interactive auth-choice inference scoped to bundled and already-trusted plugins so untrusted workspace manifests cannot hijack built-in provider API-key flows. (#59120) Thanks @eleqtrizit.
 - Agents/workspace: respect `agents.defaults.workspace` for non-default agents by resolving them under the configured base path instead of falling back to `workspace-<id>`. (#59858) Thanks @joelnishanth.
 - Config/All Settings: keep the raw config view intact when sensitive fields are blank instead of corrupting or dropping the snapshot during redaction. (#28214) thanks @solodmd.
 - Plugins/runtime: honor explicit capability allowlists during fallback speech, media-understanding, and image-generation provider loading so bundled capability plugins do not bypass restrictive `plugins.allow` config. (#52262) Thanks @PerfectPan.

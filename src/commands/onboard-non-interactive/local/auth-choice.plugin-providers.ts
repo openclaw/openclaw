@@ -90,6 +90,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       choice: params.authChoice,
       config: params.nextConfig,
       workspaceDir,
+      includeUntrustedWorkspacePlugins: false,
     }));
   const { resolveOwningPluginIdsForProvider, resolveProviderPluginChoice, resolvePluginProviders } =
     await loadAuthChoicePluginProvidersRuntime();

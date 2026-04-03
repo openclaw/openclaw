@@ -51,6 +51,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     });
 
     expect(resolveOwningPluginIdsForProvider).toHaveBeenCalledOnce();
+    expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
     expect(resolveOwningPluginIdsForProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "vllm",
@@ -105,5 +106,27 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     );
     expect(runNonInteractive).toHaveBeenCalledOnce();
     expect(result).toEqual({ plugins: { allow: ["demo-plugin"] } });
+  });
+
+  it("filters untrusted workspace manifest choices when resolving inferred auth choices", async () => {
+    const runtime = createRuntime();
+    resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
+
+    await applyNonInteractivePluginProviderChoice({
+      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      authChoice: "openai-api-key",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      resolveApiKey: vi.fn(),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(resolvePreferredProviderForAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        choice: "openai-api-key",
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
   });
 });

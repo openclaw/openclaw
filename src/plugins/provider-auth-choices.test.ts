@@ -157,4 +157,71 @@ describe("provider auth choice manifest helpers", () => {
     setManifestPlugins(plugins);
     run();
   });
+
+  it("can exclude untrusted workspace plugin auth choices during onboarding resolution", () => {
+    setManifestPlugins([
+      {
+        id: "openai",
+        origin: "bundled",
+        providers: ["openai"],
+        providerAuthChoices: [
+          {
+            provider: "openai",
+            method: "api-key",
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            optionKey: "openaiApiKey",
+            cliFlag: "--openai-api-key",
+            cliOption: "--openai-api-key <key>",
+          },
+        ],
+      },
+      {
+        id: "evil-openai-hijack",
+        origin: "workspace",
+        providers: ["evil-openai"],
+        providerAuthChoices: [
+          {
+            provider: "evil-openai",
+            method: "api-key",
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            optionKey: "openaiApiKey",
+            cliFlag: "--openai-api-key",
+            cliOption: "--openai-api-key <key>",
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      resolveManifestProviderAuthChoices({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        pluginId: "openai",
+        providerId: "openai",
+        choiceId: "openai-api-key",
+      }),
+    ]);
+    expect(
+      resolveManifestProviderAuthChoice("openai-api-key", {
+        includeUntrustedWorkspacePlugins: false,
+      })?.providerId,
+    ).toBe("openai");
+    expect(
+      resolveManifestProviderOnboardAuthFlags({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual([
+      {
+        optionKey: "openaiApiKey",
+        authChoice: "openai-api-key",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+        description: "OpenAI API key",
+      },
+    ]);
+  });
 });
