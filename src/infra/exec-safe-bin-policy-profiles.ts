@@ -216,6 +216,46 @@ export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = 
     maxPositional: 0,
     deniedFlags: ["--files0-from"],
   },
+  // Common read-only bins.  Profiles are intentionally conservative: they only
+  // allow safe-literal positional arguments (no absolute paths, traversals, or
+  // globs) and omit boolean flags (the profile system only models value-consuming
+  // flags).  Users who need flag support (e.g. `ls -la`, `df -h`) should add
+  // custom `tools.exec.safeBinProfiles` entries or explicit allowlist entries.
+  echo: {
+    // echo prints its arguments verbatim; no filesystem interaction.
+  },
+  date: {
+    // date with an optional format positional (e.g. +%Y-%m-%d).
+    maxPositional: 1,
+    deniedFlags: ["--set", "-s"],
+  },
+  which: {
+    // which <binary ...>; read-only PATH inspection.
+    maxPositional: 10,
+  },
+  uptime: {
+    maxPositional: 0,
+  },
+  ls: {
+    // Bare ls or ls <name ...>.  Absolute and traversal paths are rejected
+    // by the safe-literal token validator.
+    maxPositional: 10,
+  },
+  cat: {
+    // cat <file ...>; restricted to safe-literal filenames (no absolute
+    // paths, no traversals, no globs).
+    maxPositional: 10,
+  },
+  ps: {
+    // ps alone or ps <style> (e.g. "aux").
+    maxPositional: 1,
+  },
+  df: {
+    maxPositional: 0,
+  },
+  du: {
+    maxPositional: 0,
+  },
 };
 
 export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> =
