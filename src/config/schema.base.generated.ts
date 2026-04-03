@@ -5342,72 +5342,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   enabled: {
                     type: "boolean",
                   },
-                  apiKey: {
-                    anyOf: [
-                      {
-                        type: "string",
-                      },
-                      {
-                        oneOf: [
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "env",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "file",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "exec",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                        ],
-                      },
-                    ],
-                  },
                   model: {
                     type: "string",
                   },
@@ -14950,6 +14884,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: 'Default group policy across channels: "open", "disabled", or "allowlist". Keep "allowlist" for safer production setups unless broad group participation is intentional.',
       tags: ["access", "network", "channels"],
     },
+    "channels.defaults.contextVisibility": {
+      label: "Default Context Visibility",
+      help: 'Default supplemental context visibility for fetched quote/thread/history content: "all" (keep all context), "allowlist" (only allowlisted senders), or "allowlist_quote" (allowlist + keep explicit quotes).',
+      tags: ["network", "channels"],
+    },
     "channels.defaults.heartbeat": {
       label: "Default Heartbeat Visibility",
       help: "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
@@ -15221,10 +15160,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
-    "tools.web.x_search.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
     "mcp.servers.*.headers.*": {
       sensitive: true,
       tags: ["security"],
@@ -15264,6 +15199,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.2",
+  version: "2026.4.3",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

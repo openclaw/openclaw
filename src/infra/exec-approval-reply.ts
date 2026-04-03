@@ -67,7 +67,7 @@ export function buildExecApprovalCommandText(params: {
   approvalCommandId: string;
   decision: ExecApprovalReplyDecision;
 }): string {
-  return `/approve ${params.approvalCommandId} ${params.decision === "allow-always" ? "always" : params.decision}`;
+  return `/approve ${params.approvalCommandId} ${params.decision}`;
 }
 
 export function buildExecApprovalActionDescriptors(params: {
@@ -324,21 +324,21 @@ export function buildExecApprovalUnavailableReplyPayload(
       `Exec approval is required, but chat exec approvals are not enabled on ${params.channelLabel ?? "this platform"}.`,
     );
     lines.push(
-      "Approve it from the Web UI or terminal UI, or enable Discord, Slack, or Telegram exec approvals. If those accounts already know your owner ID via allowFrom, OpenClaw can infer approvers automatically.",
+      "Approve it from the Web UI or terminal UI, or enable a native chat approval client such as Discord, Slack, or Telegram. If those accounts already know your owner ID via allowFrom or owner config, OpenClaw can often infer approvers automatically.",
     );
   } else if (params.reason === "initiating-platform-unsupported") {
     lines.push(
       `Exec approval is required, but ${params.channelLabel ?? "this platform"} does not support chat exec approvals.`,
     );
     lines.push(
-      "Approve it from the Web UI or terminal UI, or enable Discord, Slack, or Telegram exec approvals. If those accounts already know your owner ID via allowFrom, OpenClaw can infer approvers automatically.",
+      "Approve it from the Web UI or terminal UI, or enable a native chat approval client such as Discord, Slack, or Telegram. If those accounts already know your owner ID via allowFrom or owner config, OpenClaw can often infer approvers automatically.",
     );
   } else {
     lines.push(
       "Exec approval is required, but no interactive approval client is currently available.",
     );
     lines.push(
-      "Open the Web UI or terminal UI, or enable Discord, Slack, or Telegram exec approvals, then retry the command. If those accounts already know your owner ID via allowFrom, you can usually leave execApprovals.approvers unset.",
+      "Open the Web UI or terminal UI, or enable a native chat approval client such as Discord, Slack, or Telegram, then retry the command. If those accounts already know your owner ID via allowFrom or owner config, you can usually leave execApprovals.approvers unset.",
     );
   }
 

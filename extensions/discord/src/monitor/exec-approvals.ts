@@ -34,7 +34,10 @@ import {
   createDiscordApprovalCapability,
   shouldHandleDiscordApprovalRequest,
 } from "../approval-native.js";
-import { getDiscordExecApprovalApprovers } from "../exec-approvals.js";
+import {
+  getDiscordExecApprovalApprovers,
+  isDiscordExecApprovalClientEnabled,
+} from "../exec-approvals.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
@@ -484,7 +487,12 @@ export class DiscordExecApprovalHandler {
       gatewayUrl: this.opts.gatewayUrl,
       eventKinds: ["exec", "plugin"],
       nativeAdapter: createDiscordApprovalCapability(this.opts.config).native,
-      isConfigured: () => Boolean(this.opts.config.enabled && this.getApprovers().length > 0),
+      isConfigured: () =>
+        isDiscordExecApprovalClientEnabled({
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+          configOverride: this.opts.config,
+        }),
       shouldHandle: (request) => this.shouldHandle(request),
       buildPendingContent: ({ request }) => {
         const actionRow = createApprovalActionRow(request);

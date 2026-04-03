@@ -1,5 +1,11 @@
-import type { DmPolicy, GroupPolicy, OpenClawConfig, SecretInput } from "./runtime-api.js";
-export type { DmPolicy, GroupPolicy };
+import type {
+  ContextVisibilityMode,
+  DmPolicy,
+  GroupPolicy,
+  OpenClawConfig,
+  SecretInput,
+} from "./runtime-api.js";
+export type { ContextVisibilityMode, DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all";
 
@@ -101,6 +107,8 @@ export type MatrixConfig = {
   allowBots?: boolean | "mentions";
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /**
    * Enable shared block-streaming replies for Matrix.
    *
@@ -172,6 +180,7 @@ export type CoreConfig = {
     matrix?: MatrixConfig;
     defaults?: {
       groupPolicy?: "open" | "allowlist" | "disabled";
+      contextVisibility?: ContextVisibilityMode;
     };
   };
   commands?: {

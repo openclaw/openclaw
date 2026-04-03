@@ -1,5 +1,26 @@
-import { describe, expect, it } from "vitest";
-import { resolveProviderHttpRequestConfig } from "./shared.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+}));
+
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  };
+});
+
+import {
+  fetchWithTimeoutGuarded,
+  readErrorResponse,
+  resolveProviderHttpRequestConfig,
+} from "./shared.js";
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("resolveProviderHttpRequestConfig", () => {
   it("preserves explicit caller headers but protects attribution headers", () => {
@@ -106,5 +127,69 @@ describe("resolveProviderHttpRequestConfig", () => {
         defaultBaseUrl: "   ",
       }),
     ).toThrow("Missing baseUrl");
+  });
+});
+
+describe("readErrorResponse", () => {
+  it("caps streamed error bodies instead of buffering the whole response", async () => {
+    const encoder = new TextEncoder();
+    let reads = 0;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          reads += 1;
+          controller.enqueue(encoder.encode("a".repeat(2048)));
+          if (reads >= 10) {
+            controller.close();
+          }
+        },
+      }),
+      {
+        status: 500,
+      },
+    );
+
+    const detail = await readErrorResponse(response);
+
+    expect(detail).toBe(`${"a".repeat(300)}…`);
+    expect(reads).toBe(2);
+  });
+});
+
+describe("fetchWithTimeoutGuarded", () => {
+  it("applies a default timeout when callers omit one", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await fetchWithTimeoutGuarded("https://example.com", {}, undefined, fetch);
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.com",
+        timeoutMs: 60_000,
+      }),
+    );
+  });
+
+  it("sanitizes auditContext before passing it to the SSRF guard", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await fetchWithTimeoutGuarded("https://example.com", {}, 5000, fetch, {
+      auditContext: "provider-http\r\nfal\timage\u001btest",
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auditContext: "provider-http fal image test",
+        timeoutMs: 5000,
+      }),
+    );
   });
 });

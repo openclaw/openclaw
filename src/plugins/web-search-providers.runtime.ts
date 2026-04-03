@@ -6,7 +6,11 @@ import {
   resolvePluginSnapshotCacheTtlMs,
   shouldUsePluginSnapshotCache,
 } from "./cache-controls.js";
-import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "./loader.js";
+import {
+  loadOpenClawPlugins,
+  resolveCompatibleRuntimePluginRegistry,
+  resolveRuntimePluginRegistry,
+} from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
@@ -172,8 +176,11 @@ export function resolvePluginWebSearchProviders(params: {
     }
   }
   const loadOptions = resolveWebSearchLoadOptions(params);
+  // Prefer the compatible active registry so repeated runtime reads do not
+  // re-import the same plugin set through the snapshot path.
   const resolved = mapRegistryWebSearchProviders({
-    registry: loadOpenClawPlugins(loadOptions),
+    registry:
+      resolveCompatibleRuntimePluginRegistry(loadOptions) ?? loadOpenClawPlugins(loadOptions),
   });
   if (cacheOwnerConfig && shouldMemoizeSnapshot) {
     const ttlMs = resolvePluginSnapshotCacheTtlMs(env);

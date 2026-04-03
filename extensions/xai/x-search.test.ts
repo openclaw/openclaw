@@ -231,6 +231,44 @@ describe("xai x_search tool", () => {
     );
   });
 
+  it("uses migrated runtime auth when the source config still carries legacy x_search apiKey", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: "legacy-x-search-key", // pragma: allowlist secret
+              enabled: true,
+            } as Record<string, unknown>,
+          },
+        },
+      },
+      runtimeConfig: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "migrated-runtime-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:migrated-runtime-key", {
+      query: "migrated runtime auth",
+    });
+
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+      "Bearer migrated-runtime-key",
+    );
+  });
+
   it("rejects invalid date ordering before calling xAI", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({

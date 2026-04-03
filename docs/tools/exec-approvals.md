@@ -104,6 +104,12 @@ This is now the default host behavior unless you tighten it explicitly:
 - `tools.exec.ask`: `off`
 - host `askFallback`: `full`
 
+Important distinction:
+
+- `tools.exec.host=auto` chooses where exec runs: sandbox when available, otherwise gateway.
+- YOLO chooses how host exec is approved: `security=full` plus `ask=off`.
+- `auto` does not let a tool call override a sandboxed session to `gateway` or `node`. If you want a different host, set `tools.exec.host` or use `/exec host=...` explicitly.
+
 If you want a more conservative setup, tighten either layer back to `allowlist` / `on-miss`
 or `deny`.
 
@@ -485,24 +491,46 @@ resolved approver list for authorization even when native approval delivery is d
 
 ### Native approval delivery
 
-Discord, Slack, and Telegram can also act as native approval-delivery adapters with channel-specific config.
+Some channels can also act as native approval clients. Native clients add approver DMs, origin-chat
+fanout, and channel-specific interactive approval UX on top of the shared same-chat `/approve`
+flow.
+
+Generic model:
+
+- host exec policy still decides whether exec approval is required
+- `approvals.exec` controls forwarding approval prompts to other chat destinations
+- `channels.<channel>.execApprovals` controls whether that channel acts as a native approval client
+
+Native approval clients auto-enable DM-first delivery when all of these are true:
+
+- the channel supports native approval delivery
+- approvers can be resolved from explicit `execApprovals.approvers` or existing owner config
+- `channels.<channel>.execApprovals.enabled` is unset or `"auto"`
+
+Set `enabled: false` to disable a native approval client explicitly. Set `enabled: true` to force
+it on when approvers resolve. Public origin-chat delivery stays explicit through
+`channels.<channel>.execApprovals.target`.
+
+FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq#why-are-there-two-exec-approval-configs-for-chat-approvals)
 
 - Discord: `channels.discord.execApprovals.*`
-- Slack: uses shared `approvals.exec.targets` with `channel: "slack"` and renders Block Kit approval buttons when interactivity is enabled
+- Slack: `channels.slack.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
 
-These native delivery adapters are opt-in. They add DM routing and channel fanout on top of the
-shared same-chat `/approve` flow and the shared approval buttons.
+These native approval clients add DM routing and optional channel fanout on top of the shared
+same-chat `/approve` flow and shared approval buttons.
 
 Shared behavior:
 
 - Slack, Matrix, Microsoft Teams, and similar deliverable chats use the normal channel auth model
   for same-chat `/approve`
+- when a native approval client auto-enables, the default native delivery target is approver DMs
 - for Discord and Telegram, only resolved approvers can approve or deny
 - Discord and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
+- Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
-- when channel delivery is enabled, approval prompts include the command text
+- when native `target` enables origin-chat delivery, approval prompts include the command text
 - pending exec approvals expire after 30 minutes by default
 - if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
 
