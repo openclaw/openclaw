@@ -382,6 +382,37 @@ Retry policy is intentionally conservative:
 - if runtime still does not expose a selected model
   - orchestration stops with `selected_model_not_ready`
 
+Routing loop now acts as a state evaluator, not a final decision owner:
+
+- it evaluates readiness, remediation, and retry metadata
+- it returns `policy_input`
+- it does not execute manager-owned next steps such as retry / stop / follow-up action
+
+Manager policy table:
+
+- `scripts/runtime/sense_runtime_manager_policy.py`
+- `scripts/runtime/sense-runtime-manager-policy.sh`
+
+The manager policy table consumes:
+
+- `final_state`
+- `next_step`
+- `retry.retry_decision`
+- `retry.retry_allowed`
+
+and decides:
+
+- whether to retry
+- whether to stop
+- what next manager action to run
+
+Recommended separation:
+
+- `sense_runtime_routing_loop.py`
+  - evaluates runtime state and emits `policy_input`
+- `sense_runtime_manager_policy.py`
+  - owns retry / stop / next-step decisions
+
 Routing loop can now stop more specifically as:
 
 - `default_model_missing`

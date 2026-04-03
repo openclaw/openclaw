@@ -10,7 +10,7 @@ MAX_ATTEMPTS_DEFAULT = 3
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description='Minimal routing loop for Sense runtime readiness, remediation, and next-step execution.'
+        description='State evaluation loop for Sense runtime readiness, remediation, and manager policy input.'
     )
     parser.add_argument('--token', required=True)
     parser.add_argument('--sandbox-name', required=True)
@@ -45,21 +45,6 @@ def base_args(args: argparse.Namespace) -> list[str]:
     if args.input:
         result.extend(['--input', args.input])
     return result
-
-
-def manager_cmd(script_dir: Path, args: argparse.Namespace, intent: str) -> list[str]:
-    cmd = [str(script_dir / 'sense-runtime-manager-tool.sh'), '--intent', intent, '--token', args.token]
-    if intent == 'sense sandbox status':
-        cmd.extend(['--sandbox-name', args.sandbox_name])
-    if args.timeout is not None:
-        cmd.extend(['--timeout', str(args.timeout)])
-    if args.wait_timeout is not None:
-        cmd.extend(['--wait-timeout', str(args.wait_timeout)])
-    if args.poll_interval is not None:
-        cmd.extend(['--poll-interval', str(args.poll_interval)])
-    if args.input:
-        cmd.extend(['--input', args.input])
-    return cmd
 
 
 def default_retry_state() -> dict:
@@ -278,9 +263,9 @@ def main() -> int:
                 retry.update({
                     'retry_decision': 'recheck_runtime_status_once' if model_status.get('selected_model_runtime_source') == 'start-result' else 'runtime_model_unconfirmed',
                     'retry_reason': 'selected model is configured but runtime has not confirmed it yet',
-                    'retry_attempted': model_status.get('selected_model_runtime_source') == 'start-result',
-                    'retry_allowed': False,
-                    'retry_count': 1 if model_status.get('selected_model_runtime_source') == 'start-result' else 0,
+                    'retry_attempted': False,
+                    'retry_allowed': model_status.get('selected_model_runtime_source') == 'start-result',
+                    'retry_count': 0,
                     'runtime_model_confirmation_source': model_status.get('runtime_model_confirmation_source'),
                     'previous_selected_model_runtime': model_status.get('selected_model_runtime'),
                     'current_selected_model_runtime': model_status.get('selected_model_runtime'),
@@ -292,9 +277,9 @@ def main() -> int:
                 retry.update({
                     'retry_decision': 'skip_restart_repeated_mismatch' if model_status.get('runtime_model_confirmation_source') in {'start-result+runtime', 'runtime'} else 'recheck_runtime_status_once',
                     'retry_reason': 'runtime selected model differs from configured selected model',
-                    'retry_attempted': model_status.get('runtime_model_confirmation_source') not in {None, 'start-result'},
-                    'retry_allowed': False,
-                    'retry_count': 1 if model_status.get('runtime_model_confirmation_source') else 0,
+                    'retry_attempted': False,
+                    'retry_allowed': model_status.get('runtime_model_confirmation_source') not in {'start-result+runtime', 'runtime'},
+                    'retry_count': 0,
                     'runtime_model_confirmation_source': model_status.get('runtime_model_confirmation_source'),
                     'previous_selected_model_runtime': model_status.get('selected_model_expected'),
                     'current_selected_model_runtime': model_status.get('selected_model_runtime'),
@@ -305,9 +290,9 @@ def main() -> int:
                     retry.update({
                         'retry_decision': 'runtime_model_confirmed',
                         'retry_reason': 'runtime status confirmed the selected model',
-                        'retry_attempted': model_status.get('runtime_model_confirmation_source') in {'start-result+runtime', 'runtime'},
+                        'retry_attempted': False,
                         'retry_allowed': False,
-                        'retry_count': 1 if model_status.get('runtime_model_confirmation_source') in {'start-result+runtime', 'runtime'} else 0,
+                        'retry_count': 0,
                         'runtime_model_confirmation_source': model_status.get('runtime_model_confirmation_source'),
                         'previous_selected_model_runtime': model_status.get('selected_model_expected'),
                         'current_selected_model_runtime': model_status.get('selected_model_runtime'),
@@ -404,17 +389,11 @@ def main() -> int:
             next_step = 'start_nim_runtime'
             break
 
-        if next_step == 'sense_runtime_start':
-            runtime_result = run_json(manager_cmd(script_dir, args, 'sense runtime start'))
-            executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'sense_runtime_start', 'result': runtime_result})
-        elif next_step == 'sense_runtime_status':
-            runtime_result = run_json(manager_cmd(script_dir, args, 'sense runtime status'))
-            executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'sense_runtime_status', 'result': runtime_result})
-        elif next_step == 'inspect_gpu_runtime':
-            runtime_result = run_json(manager_cmd(script_dir, args, 'sense sandbox status'))
-            executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'inspect_gpu_runtime', 'result': runtime_result})
-        elif next_step == 'run_runtime_task':
+        if next_step == 'run_runtime_task':
             final_state = 'ready_for_runtime_task'
+            break
+        elif next_step in {'sense_runtime_start', 'sense_runtime_status', 'inspect_gpu_runtime'}:
+            final_state = 'manager_action_required'
             break
         else:
             final_state = 'stopped_unmapped_next_step'
@@ -429,6 +408,11 @@ def main() -> int:
         'last_remediation': last_remediation,
         'next_step': next_step,
         'retry': retry,
+        'policy_input': {
+            'final_state': final_state,
+            'next_step': next_step,
+            'retry': retry,
+        },
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
