@@ -7,7 +7,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { lookupCachedContextTokens } from "../../agents/context-cache.js";
+import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
@@ -722,7 +722,7 @@ export async function runCronIsolatedAgentTurn(params: {
       finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? liveSelection.provider;
     const contextTokens =
       resolvePositiveContextTokens(agentCfg?.contextTokens) ??
-      lookupCachedContextTokens(modelUsed) ??
+      lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??
       resolvePositiveContextTokens(cronSession.sessionEntry.contextTokens) ??
       DEFAULT_CONTEXT_TOKENS;
 

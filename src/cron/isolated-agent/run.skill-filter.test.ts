@@ -8,7 +8,7 @@ import {
   buildWorkspaceSkillSnapshotMock,
   getCliSessionIdMock,
   isCliProviderMock,
-  lookupCachedContextTokensMock,
+  lookupContextTokensMock,
   loadRunCronIsolatedAgentTurn,
   logWarnMock,
   makeCronSession,
@@ -325,14 +325,14 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   });
 
   describe("context token fallback", () => {
-    it("preserves existing session contextTokens when no cached model window is loaded", async () => {
+    it("preserves existing session contextTokens when no configured or cached model window is loaded", async () => {
       const session = makeCronSession({
         sessionEntry: makeCronSessionEntry({
           contextTokens: 222_000,
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      lookupCachedContextTokensMock.mockReturnValue(undefined);
+      lookupContextTokensMock.mockReturnValue(undefined);
 
       const result = await runSkillFilterCase();
 
@@ -340,19 +340,22 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       expect(session.sessionEntry.contextTokens).toBe(222_000);
     });
 
-    it("prefers cached model contextTokens over the previous session value", async () => {
+    it("prefers sync-configured model contextTokens over the previous session value", async () => {
       const session = makeCronSession({
         sessionEntry: makeCronSessionEntry({
           contextTokens: 222_000,
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      lookupCachedContextTokensMock.mockReturnValue(512_000);
+      lookupContextTokensMock.mockReturnValue(512_000);
 
       const result = await runSkillFilterCase();
 
       expect(result.status).toBe("ok");
       expect(session.sessionEntry.contextTokens).toBe(512_000);
+      expect(lookupContextTokensMock).toHaveBeenCalledWith("gpt-4", {
+        allowAsyncLoad: false,
+      });
     });
   });
 });

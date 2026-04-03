@@ -48,7 +48,7 @@ export const resolveThinkingDefaultMock = createMock();
 export const runWithModelFallbackMock = createMock();
 export const runEmbeddedPiAgentMock = createMock();
 export const runCliAgentMock = createMock();
-export const lookupCachedContextTokensMock = createMock();
+export const lookupContextTokensMock = createMock();
 export const getCliSessionIdMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
@@ -117,9 +117,13 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
 }));
 
-vi.mock("../../agents/context-cache.js", () => ({
-  lookupCachedContextTokens: lookupCachedContextTokensMock,
-}));
+vi.mock("../../agents/context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/context.js")>();
+  return {
+    ...actual,
+    lookupContextTokens: lookupContextTokensMock,
+  };
+});
 
 vi.mock("../../agents/date-time.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/date-time.js")>();
@@ -352,8 +356,8 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   runEmbeddedPiAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
 
   runCliAgentMock.mockReset();
-  lookupCachedContextTokensMock.mockReset();
-  lookupCachedContextTokensMock.mockReturnValue(undefined);
+  lookupContextTokensMock.mockReset();
+  lookupContextTokensMock.mockReturnValue(undefined);
   getCliSessionIdMock.mockReturnValue(undefined);
 
   updateSessionStoreMock.mockReset();
