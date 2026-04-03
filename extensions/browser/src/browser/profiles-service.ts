@@ -127,7 +127,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
         await assertCdpEndpointAllowed(parsed.normalized, state.resolved.ssrfPolicy);
       } catch (err) {
-        throw new BrowserValidationError(String(err));
+        throw new BrowserValidationError(err instanceof Error ? err.message : String(err));
       }
       if (driver === "existing-session") {
         throw new BrowserValidationError(
