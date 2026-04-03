@@ -1056,7 +1056,7 @@ private fun GatewayStep(
 
   StepShell(title = "Gateway Connection") {
     Text(
-      "Run `openclaw qr` on your gateway host, then scan the code with this device. Remote mobile nodes require wss:// or Tailscale Serve.",
+      "Run `openclaw qr` on your gateway host, then scan the code with this device. For Tailscale or public hosts, use wss:// or Tailscale Serve.",
       style = onboardingCalloutStyle,
       color = onboardingTextSecondary,
     )
@@ -1088,7 +1088,7 @@ private fun GatewayStep(
       ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
           Text("Advanced setup", style = onboardingHeadlineStyle, color = onboardingText)
-          Text("Paste setup code or enter host/port manually. ws:// is only for localhost or the Android emulator.", style = onboardingCaption1Style, color = onboardingTextSecondary)
+          Text("Paste setup code or enter host/port manually. Private LAN ws:// is supported; Tailscale/public hosts need wss://.", style = onboardingCaption1Style, color = onboardingTextSecondary)
         }
         Icon(
           imageVector = if (advancedOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -1170,7 +1170,7 @@ private fun GatewayStep(
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
               Text("Use TLS", style = onboardingHeadlineStyle, color = onboardingText)
               Text(
-                "Required for remote hosts. Use Tailscale Serve or a wss:// gateway URL.",
+                "Turn this on for Tailscale or public hosts. Private LAN ws:// remains supported.",
                 style = onboardingCalloutStyle.copy(lineHeight = 18.sp),
                 color = onboardingTextSecondary,
               )

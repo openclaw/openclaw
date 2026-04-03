@@ -894,9 +894,9 @@ class NodeRuntime(
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String {
     return when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
-        "Failed: remote mobile nodes require wss:// or Tailscale Serve. No TLS endpoint detected for this host."
+        "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
       GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
-        "Failed: couldn't reach a secure gateway endpoint. Remote mobile nodes require wss:// or Tailscale Serve."
+        "Failed: couldn't reach the secure gateway endpoint for this host."
     }
   }
 

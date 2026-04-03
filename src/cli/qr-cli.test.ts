@@ -217,7 +217,7 @@ describe("registerQrCli", () => {
     loadConfig.mockReturnValue({
       gateway: {
         bind: "custom",
-        customBindHost: "gateway.local",
+        customBindHost: "gateway.example",
         auth: { mode: "token", token: "tok" },
       },
     });
@@ -225,8 +225,22 @@ describe("registerQrCli", () => {
     await expectQrExit(["--setup-code-only"]);
 
     const output = runtime.error.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("Mobile pairing requires a secure remote gateway URL");
+    expect(output).toContain("Tailscale and public mobile pairing require a secure gateway URL");
     expect(output).toContain("gateway.tailscale.mode=serve");
+  });
+
+  it("allows lan mdns cleartext setup urls", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "gateway.local",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await runQr(["--setup-code-only"]);
+
+    expectLoggedSetupCode("ws://gateway.local:18789");
   });
 
   it("allows android emulator cleartext override urls", async () => {
