@@ -125,10 +125,9 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
   return parseGatewayEndpointResult(rawInput).config
 }
 
-internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseResult {
+  internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseResult {
   val raw = rawInput.trim()
   if (raw.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
-  if (raw.contains('%')) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
 
   val normalized = if (raw.contains("://")) raw else "https://$raw"
   val uri =

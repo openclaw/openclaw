@@ -163,10 +163,23 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointRejectsLinkLocalIpv6ZoneCleartextWsUrls() {
+  fun parseGatewayEndpointAllowsLinkLocalIpv6ZoneCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://[fe80::1%25eth0]")
 
-    assertNull(parsed)
+    assertEquals("fe80::1%25eth0", parsed?.host)
+    assertEquals(18789, parsed?.port)
+    assertEquals(false, parsed?.tls)
+    assertEquals("http://[fe80::1%25eth0]:18789", parsed?.displayUrl)
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsSecureIpv6ZoneUrls() {
+    val parsed = parseGatewayEndpoint("wss://[fe80::1%25wlan0]:443")
+
+    assertEquals("fe80::1%25wlan0", parsed?.host)
+    assertEquals(443, parsed?.port)
+    assertEquals(true, parsed?.tls)
+    assertEquals("https://[fe80::1%25wlan0]", parsed?.displayUrl)
   }
 
   @Test
