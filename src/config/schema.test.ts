@@ -329,7 +329,12 @@ describe("config schema", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
     expect(lookup?.path).toBe("agents.list.0.runtime");
     expect(lookup?.hintPath).toBe("agents.list[].runtime");
-    expect(lookup?.schema).toEqual({});
+    // The schema carries a `description` from FIELD_HELP/FIELD_LABELS but
+    // should not contain nested composition keywords (allOf, oneOf, etc.).
+    expect(lookup?.schema).not.toHaveProperty("allOf");
+    expect(lookup?.schema).not.toHaveProperty("oneOf");
+    expect(lookup?.schema).not.toHaveProperty("anyOf");
+    expect(lookup?.schema).toHaveProperty("description");
   });
 
   it("matches wildcard ui hints for concrete lookup paths", () => {
