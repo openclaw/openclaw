@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import {
   createMatrixHandlerTestHarness,
   createMatrixRoomMessageEvent,
@@ -217,9 +218,7 @@ describe("createMatrixRoomMessageHandler media failures", () => {
   });
 
   it("shows a too-large marker when the download is rejected due to size limit", async () => {
-    downloadMatrixMediaMock.mockRejectedValue(
-      new Error("Matrix media exceeds configured size limit"),
-    );
+    downloadMatrixMediaMock.mockRejectedValue(new MatrixMediaSizeLimitError());
     const { handler, recordInboundSession } = createMediaFailureHarness();
 
     await handler(
@@ -243,9 +242,7 @@ describe("createMatrixRoomMessageHandler media failures", () => {
   });
 
   it("preserves a real caption while marking the attachment too large on size limit error", async () => {
-    downloadMatrixMediaMock.mockRejectedValue(
-      new Error("Matrix media exceeds configured size limit (10485760 bytes > 5242880 bytes)"),
-    );
+    downloadMatrixMediaMock.mockRejectedValue(new MatrixMediaSizeLimitError());
     const { handler, recordInboundSession } = createMediaFailureHarness();
 
     await handler(

@@ -1,4 +1,5 @@
 import { getMatrixRuntime } from "../../runtime.js";
+import { MatrixMediaSizeLimitError, isMatrixMediaSizeLimitError } from "../media-errors.js";
 import type { MatrixClient } from "../sdk.js";
 
 // Type for encrypted file info
@@ -30,6 +31,9 @@ async function fetchMatrixMediaBuffer(params: {
     });
     return { buffer };
   } catch (err) {
+    if (isMatrixMediaSizeLimitError(err)) {
+      throw err;
+    }
     throw new Error(`Matrix media download failed: ${String(err)}`, { cause: err });
   }
 }
@@ -56,19 +60,10 @@ async function fetchEncryptedMediaBuffer(params: {
   );
 
   if (decrypted.byteLength > params.maxBytes) {
-    throw new Error("Matrix media exceeds configured size limit");
+    throw new MatrixMediaSizeLimitError();
   }
 
   return { buffer: decrypted };
-}
-
-/**
- * Returns true if the error is a Matrix media size limit error (pre-download
- * metadata check or streaming cap). Used to distinguish oversized media from
- * transient network failures so the handler can surface a clear user message.
- */
-export function isMatrixMediaSizeLimitError(err: unknown): boolean {
-  return String(err).includes("exceeds configured size limit");
 }
 
 export async function downloadMatrixMedia(params: {
@@ -86,7 +81,7 @@ export async function downloadMatrixMedia(params: {
 } | null> {
   let fetched: { buffer: Buffer; headerType?: string } | null;
   if (typeof params.sizeBytes === "number" && params.sizeBytes > params.maxBytes) {
-    throw new Error("Matrix media exceeds configured size limit");
+    throw new MatrixMediaSizeLimitError();
   }
 
   if (params.file) {

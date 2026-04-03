@@ -4,6 +4,7 @@ import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runti
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { createMatrixDraftStream } from "../draft-stream.js";
+import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
   formatMatrixMediaTooLargeText,
   formatMatrixMediaUnavailableText,
@@ -31,7 +32,7 @@ import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixAllowListMatch } from "./allowlist.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
-import { downloadMatrixMedia, isMatrixMediaSizeLimitError } from "./media.js";
+import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions } from "./mentions.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
 import { deliverMatrixReplies } from "./replies.js";
