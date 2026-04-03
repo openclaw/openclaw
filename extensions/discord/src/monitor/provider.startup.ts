@@ -88,6 +88,7 @@ export function createDiscordMonitorClient(params: {
   let autoPresenceController: DiscordAutoPresenceController | null = null;
   const clientPlugins: Plugin[] = [
     params.createGatewayPlugin({
+      accountId: params.accountId,
       discordConfig: params.discordConfig,
       runtime: params.runtime,
     }),
