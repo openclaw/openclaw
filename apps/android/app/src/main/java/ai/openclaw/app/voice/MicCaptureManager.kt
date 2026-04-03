@@ -109,10 +109,16 @@ class MicCaptureManager(
     if (_micEnabled.value == enabled) return
     _micEnabled.value = enabled
     if (enabled) {
-      if (isPausedForTts()) {
+      val pausedForTts =
         synchronized(ttsPauseLock) {
-          resumeMicAfterTts = true
+          if (ttsPauseDepth > 0) {
+            resumeMicAfterTts = true
+            true
+          } else {
+            false
+          }
         }
+      if (pausedForTts) {
         _statusText.value = if (_isSending.value) "Speaking · waiting for reply" else "Speaking…"
         return
       }
@@ -274,9 +280,6 @@ class MicCaptureManager(
       }
     }
   }
-
-  private fun isPausedForTts(): Boolean =
-    synchronized(ttsPauseLock) { ttsPauseDepth > 0 }
 
   private fun stop() {
     stopRequested = true

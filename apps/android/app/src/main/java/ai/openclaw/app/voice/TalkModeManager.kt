@@ -668,9 +668,6 @@ class TalkModeManager(
       }
       _statusText.value = "Speak failed: ${err.message ?: err::class.simpleName}"
       Log.w(tag, "system tts failed: ${err.message ?: err::class.simpleName}")
-    } finally {
-
-      _isSpeaking.value = false
     }
   }
 
