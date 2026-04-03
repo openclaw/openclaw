@@ -2,31 +2,39 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { formatLogTimestamp, registerLogsCli } from "./logs-cli.js";
 
-const mocks = vi.hoisted(() => ({
-  callGatewayFromCli: vi.fn(),
-  readConfiguredLogTail: vi.fn(),
-  buildGatewayConnectionDetails: vi.fn(() => ({
+const callGatewayFromCli = vi.fn();
+const readConfiguredLogTail = vi.fn();
+const buildGatewayConnectionDetails = vi.fn(
+  (_options?: {
+    configPath?: string;
+    config?: unknown;
+    url?: string;
+    urlSource?: "cli" | "env";
+  }) => ({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
     message: "",
-  })),
-}));
-
-const { callGatewayFromCli, readConfiguredLogTail, buildGatewayConnectionDetails } = mocks;
+  }),
+);
 
 vi.mock("../gateway/call.js", () => ({
-  buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+  buildGatewayConnectionDetails: (
+    ...args: Parameters<typeof import("../gateway/call.js").buildGatewayConnectionDetails>
+  ) => buildGatewayConnectionDetails(...args),
 }));
 
 vi.mock("../logging/log-tail.js", () => ({
-  readConfiguredLogTail: mocks.readConfiguredLogTail,
+  readConfiguredLogTail: (
+    ...args: Parameters<typeof import("../logging/log-tail.js").readConfiguredLogTail>
+  ) => readConfiguredLogTail(...args),
 }));
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
-    callGatewayFromCli: mocks.callGatewayFromCli,
+    callGatewayFromCli: (...args: Parameters<typeof actual.callGatewayFromCli>) =>
+      callGatewayFromCli(...args),
   };
 });
 
