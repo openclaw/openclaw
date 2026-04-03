@@ -207,7 +207,7 @@ describe("gateway run option collisions", () => {
     );
   });
 
-  it("defaults to local when snapshot is valid but has no gateway.mode", async () => {
+  it("blocks startup when the observed snapshot loses gateway.mode even if loadConfig still says local", async () => {
     configState.cfg = {
       gateway: {
         mode: "local",
@@ -224,10 +224,12 @@ describe("gateway run option collisions", () => {
       },
     };
 
-    // Should NOT block — gateway.mode defaults to "local" when unset (#54801)
-    await runGatewayCli(["gateway", "run"]);
+    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:1");
 
-    expect(startGatewayServer).toHaveBeenCalled();
+    expect(runtimeErrors).toContain(
+      "Gateway start blocked: set gateway.mode=local (current: unset) or pass --allow-unconfigured.",
+    );
+    expect(startGatewayServer).not.toHaveBeenCalled();
   });
 
   it.each(["none", "trusted-proxy"] as const)("accepts --auth %s override", async (mode) => {
