@@ -67,7 +67,7 @@ describe("fetchDiscord", () => {
       "/users/@me/guilds",
       "test",
       fetcher,
-      { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 } },
+      { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 } },
     );
 
     expect(result).toHaveLength(1);
