@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../runtime-api.js";
 import { zaloPlugin } from "./channel.js";
 import { zaloDmPolicy } from "./setup-core.js";
+import { zaloSetupWizard } from "./setup-surface.js";
 
 const zaloConfigure = createPluginSetupWizardConfigure(zaloPlugin);
 
@@ -119,5 +120,28 @@ describe("zalo setup wizard", () => {
     expect(next.channels?.zalo?.dmPolicy).toBeUndefined();
     expect(next.channels?.zalo?.accounts?.work?.dmPolicy).toBe("open");
     expect(next.channels?.zalo?.accounts?.work?.allowFrom).toEqual(["123456789", "*"]);
+  });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const configured = await zaloSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          zalo: {
+            defaultAccount: "work",
+            botToken: "root-token",
+            accounts: {
+              alerts: {
+                botToken: "alerts-token",
+              },
+              work: {
+                botToken: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
   });
 });
