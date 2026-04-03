@@ -341,7 +341,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
   });
 
-  it("uses env proxy only when dangerous proxy bypass is explicitly enabled", async () => {
+  it("routes through env proxy when trusted proxy mode is explicitly enabled", async () => {
     await runProxyModeDispatcherTest({
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       expectEnvProxy: true,

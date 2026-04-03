@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   buildAllowedModelSet,
-  isCliProvider,
   modelKey,
   parseModelRef,
   resolveDefaultModelForAgent,
@@ -11,6 +10,14 @@ import {
 import { loadConfig } from "../config/config.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import {
+  authorizeHttpGatewayConnect,
+  type GatewayAuthResult,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
+import { sendGatewayAuthFailure } from "./http-common.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
@@ -34,6 +41,98 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
   }
   const token = raw.slice(7).trim();
   return token || undefined;
+}
+
+type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
+export type AuthorizedGatewayHttpRequest = {
+  authMethod?: GatewayAuthResult["method"];
+  trustDeclaredOperatorScopes: boolean;
+};
+
+function usesSharedSecretHttpAuth(auth: SharedSecretGatewayAuth | undefined): boolean {
+  return auth?.mode === "token" || auth?.mode === "password";
+}
+
+function usesSharedSecretGatewayMethod(method: GatewayAuthResult["method"] | undefined): boolean {
+  return method === "token" || method === "password";
+}
+
+function shouldTrustDeclaredHttpOperatorScopes(
+  req: IncomingMessage,
+  authOrRequest:
+    | SharedSecretGatewayAuth
+    | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">
+    | undefined,
+): boolean {
+  if (authOrRequest && "trustDeclaredOperatorScopes" in authOrRequest) {
+    return authOrRequest.trustDeclaredOperatorScopes;
+  }
+  return !isGatewayBearerHttpRequest(req, authOrRequest);
+}
+
+export async function authorizeGatewayHttpRequestOrReply(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  auth: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+}): Promise<AuthorizedGatewayHttpRequest | null> {
+  const token = getBearerToken(params.req);
+  const authResult = await authorizeHttpGatewayConnect({
+    auth: params.auth,
+    connectAuth: token ? { token, password: token } : null,
+    req: params.req,
+    trustedProxies: params.trustedProxies,
+    allowRealIpFallback: params.allowRealIpFallback,
+    rateLimiter: params.rateLimiter,
+  });
+  if (!authResult.ok) {
+    sendGatewayAuthFailure(params.res, authResult);
+    return null;
+  }
+  return {
+    authMethod: authResult.method,
+    trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
+  };
+}
+
+export function isGatewayBearerHttpRequest(
+  req: IncomingMessage,
+  auth?: SharedSecretGatewayAuth,
+): boolean {
+  return usesSharedSecretHttpAuth(auth) && Boolean(getBearerToken(req));
+}
+
+export function resolveTrustedHttpOperatorScopes(
+  req: IncomingMessage,
+  authOrRequest?:
+    | SharedSecretGatewayAuth
+    | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">,
+): string[] {
+  if (!shouldTrustDeclaredHttpOperatorScopes(req, authOrRequest)) {
+    // Gateway bearer auth only proves possession of the shared secret. Do not
+    // let HTTP clients self-assert operator scopes through request headers.
+    return [];
+  }
+
+  const raw = getHeader(req, "x-openclaw-scopes")?.trim();
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0);
+}
+
+export function resolveHttpSenderIsOwner(
+  req: IncomingMessage,
+  authOrRequest?:
+    | SharedSecretGatewayAuth
+    | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">,
+): boolean {
+  return resolveTrustedHttpOperatorScopes(req, authOrRequest).includes(ADMIN_SCOPE);
 }
 
 export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
@@ -103,11 +202,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
     agentId: params.agentId,
   });
   const normalized = modelKey(parsed.provider, parsed.model);
-  if (
-    !isCliProvider(parsed.provider, cfg) &&
-    !allowed.allowAny &&
-    !allowed.allowedKeys.has(normalized)
-  ) {
+  if (!allowed.allowAny && !allowed.allowedKeys.has(normalized)) {
     return {
       errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
     };

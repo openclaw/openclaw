@@ -24,6 +24,7 @@ import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { isDirectiveOnly } from "./directive-handling.parse.js";
+import { extractExplicitGroupId } from "./group-id.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
@@ -226,6 +227,8 @@ export async function handleInlineActions(params: {
         agentAccountId: (ctx as { AccountId?: string }).AccountId,
         agentTo: ctx.OriginatingTo ?? ctx.To,
         agentThreadId: ctx.MessageThreadId ?? undefined,
+        agentGroupId: extractExplicitGroupId(ctx.From),
+        requesterAgentIdOverride: agentId,
         agentDir,
         workspaceDir,
         config: cfg,

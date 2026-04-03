@@ -1,32 +1,65 @@
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
+  buildExecApprovalActionDescriptors,
+  buildExecApprovalCommandText,
+  buildExecApprovalInteractiveReply,
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
   getExecApprovalApproverDmNoticeText,
   getExecApprovalReplyMetadata,
+  parseExecApprovalCommandText,
 } from "./exec-approval-reply.js";
 
 describe("exec approval reply helpers", () => {
+  const invalidReplyMetadataCases = [
+    { name: "empty object", payload: {} },
+    { name: "null channelData", payload: { channelData: null } },
+    { name: "array channelData", payload: { channelData: [] } },
+    { name: "null execApproval", payload: { channelData: { execApproval: null } } },
+    { name: "array execApproval", payload: { channelData: { execApproval: [] } } },
+    {
+      name: "blank approval slug",
+      payload: { channelData: { execApproval: { approvalId: "req-1", approvalSlug: "  " } } },
+    },
+    {
+      name: "blank approval id",
+      payload: { channelData: { execApproval: { approvalId: "  ", approvalSlug: "slug-1" } } },
+    },
+  ] as const;
+
+  const unavailableReasonCases = [
+    {
+      reason: "initiating-platform-disabled" as const,
+      channelLabel: "Slack",
+      expected: "Exec approval is required, but chat exec approvals are not enabled on Slack.",
+    },
+    {
+      reason: "initiating-platform-unsupported" as const,
+      channelLabel: undefined,
+      expected:
+        "Exec approval is required, but this platform does not support chat exec approvals.",
+    },
+    {
+      reason: "no-approval-route" as const,
+      channelLabel: undefined,
+      expected:
+        "Exec approval is required, but no interactive approval client is currently available.",
+    },
+  ] as const;
+
   it("returns the approver DM notice text", () => {
     expect(getExecApprovalApproverDmNoticeText()).toBe(
-      "Approval required. I sent the allowed approvers DMs.",
+      "Approval required. I sent approval DMs to the approvers for this account.",
     );
   });
 
-  it("returns null for invalid reply metadata payloads", () => {
-    for (const payload of [
-      {},
-      { channelData: null },
-      { channelData: [] },
-      { channelData: { execApproval: null } },
-      { channelData: { execApproval: [] } },
-      { channelData: { execApproval: { approvalId: "req-1", approvalSlug: "  " } } },
-      { channelData: { execApproval: { approvalId: "  ", approvalSlug: "slug-1" } } },
-    ] as unknown[]) {
+  it.each(invalidReplyMetadataCases)(
+    "returns null for invalid reply metadata payload: $name",
+    ({ payload }) => {
       expect(getExecApprovalReplyMetadata(payload as ReplyPayload)).toBeNull();
-    }
-  });
+    },
+  );
 
   it("normalizes reply metadata and filters invalid decisions", () => {
     expect(
@@ -66,6 +99,30 @@ describe("exec approval reply helpers", () => {
         allowedDecisions: ["allow-once", "allow-always", "deny"],
       },
     });
+    expect(payload.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              value: "/approve req-1 allow-once",
+              style: "success",
+            },
+            {
+              label: "Allow Always",
+              value: "/approve req-1 always",
+              style: "primary",
+            },
+            {
+              label: "Deny",
+              value: "/approve req-1 deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
     expect(payload.text).toContain("Heads up.");
     expect(payload.text).toContain("```txt\n/approve slug-1 allow-once\n```");
     expect(payload.text).toContain("```sh\necho ok\n```");
@@ -100,7 +157,91 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("Expires in: 0s");
   });
 
-  it("builds unavailable payloads for approver DMs and each fallback reason", () => {
+  it("formats longer approval windows in minutes", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-30m",
+      approvalSlug: "slug-30m",
+      command: "echo later",
+      host: "gateway",
+      expiresAtMs: 1_801_000,
+      nowMs: 1_000,
+    });
+
+    expect(payload.text).toContain("Expires in: 30m");
+  });
+
+  it("builds shared exec approval action descriptors and interactive replies", () => {
+    expect(
+      buildExecApprovalActionDescriptors({
+        approvalCommandId: "req-1",
+      }),
+    ).toEqual([
+      {
+        decision: "allow-once",
+        label: "Allow Once",
+        style: "success",
+        command: "/approve req-1 allow-once",
+      },
+      {
+        decision: "allow-always",
+        label: "Allow Always",
+        style: "primary",
+        command: "/approve req-1 always",
+      },
+      {
+        decision: "deny",
+        label: "Deny",
+        style: "danger",
+        command: "/approve req-1 deny",
+      },
+    ]);
+
+    expect(
+      buildExecApprovalInteractiveReply({
+        approvalCommandId: "req-1",
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Allow Once", value: "/approve req-1 allow-once", style: "success" },
+            { label: "Allow Always", value: "/approve req-1 always", style: "primary" },
+            { label: "Deny", value: "/approve req-1 deny", style: "danger" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("builds and parses shared exec approval command text", () => {
+    expect(
+      buildExecApprovalCommandText({
+        approvalCommandId: "req-1",
+        decision: "allow-always",
+      }),
+    ).toBe("/approve req-1 always");
+
+    expect(parseExecApprovalCommandText("/approve req-1 deny")).toEqual({
+      approvalId: "req-1",
+      decision: "deny",
+    });
+    expect(parseExecApprovalCommandText("/approve@clover req-1 allow-once")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-once",
+    });
+    expect(parseExecApprovalCommandText("  /approve req-1 always")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-always",
+    });
+    expect(parseExecApprovalCommandText("/approve req-1 allow-always")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-always",
+    });
+    expect(parseExecApprovalCommandText("/approve req-1 maybe")).toBeNull();
+  });
+
+  it("builds unavailable payloads for approver DMs", () => {
     expect(
       buildExecApprovalUnavailableReplyPayload({
         warningText: "  Careful.  ",
@@ -108,36 +249,19 @@ describe("exec approval reply helpers", () => {
         sentApproverDms: true,
       }),
     ).toEqual({
-      text: "Careful.\n\nApproval required. I sent the allowed approvers DMs.",
+      text: "Careful.\n\nApproval required. I sent approval DMs to the approvers for this account.",
     });
+  });
 
-    const cases = [
-      {
-        reason: "initiating-platform-disabled" as const,
-        channelLabel: "Slack",
-        expected: "Exec approval is required, but chat exec approvals are not enabled on Slack.",
-      },
-      {
-        reason: "initiating-platform-unsupported" as const,
-        channelLabel: undefined,
-        expected:
-          "Exec approval is required, but this platform does not support chat exec approvals.",
-      },
-      {
-        reason: "no-approval-route" as const,
-        channelLabel: undefined,
-        expected:
-          "Exec approval is required, but no interactive approval client is currently available.",
-      },
-    ];
-
-    for (const testCase of cases) {
+  it.each(unavailableReasonCases)(
+    "builds unavailable payload for reason $reason",
+    ({ reason, channelLabel, expected }) => {
       expect(
         buildExecApprovalUnavailableReplyPayload({
-          reason: testCase.reason,
-          channelLabel: testCase.channelLabel,
+          reason,
+          channelLabel,
         }).text,
-      ).toContain(testCase.expected);
-    }
-  });
+      ).toContain(expected);
+    },
+  );
 });

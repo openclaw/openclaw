@@ -59,6 +59,8 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
   - `_openclaw-gw._tcp` (gateway transport beacon)
 - TXT keys (non-secret):
   - `role=gateway`
+  - `transport=gateway`
+  - `displayName=<friendly name>` (operator-configured display name)
   - `lanHost=<hostname>.local`
   - `sshPort=22` (or whatever is advertised)
   - `gatewayPort=18789` (Gateway WS + HTTP)

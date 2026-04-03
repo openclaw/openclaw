@@ -1,9 +1,10 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   listConfiguredAccountIds,
   resolveNormalizedAccountEntry,
 } from "openclaw/plugin-sdk/account-resolution";
-import { DEFAULT_ACCOUNT_ID } from "../runtime-api.js";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { CoreConfig, MatrixAccountConfig, MatrixConfig } from "../types.js";
 
 export function resolveMatrixBaseConfig(cfg: CoreConfig): MatrixConfig {
@@ -50,8 +51,8 @@ export function hasExplicitMatrixAccountConfig(cfg: CoreConfig, accountId: strin
     typeof matrix.name === "string" ||
     typeof matrix.homeserver === "string" ||
     typeof matrix.userId === "string" ||
-    typeof matrix.accessToken === "string" ||
-    typeof matrix.password === "string" ||
+    hasConfiguredSecretInput(matrix.accessToken) ||
+    hasConfiguredSecretInput(matrix.password) ||
     typeof matrix.deviceId === "string" ||
     typeof matrix.deviceName === "string" ||
     typeof matrix.avatarUrl === "string"

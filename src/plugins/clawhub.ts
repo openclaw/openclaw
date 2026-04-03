@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import {
   ClawHubRequestError,
   downloadClawHubPackageArchive,
@@ -14,7 +12,7 @@ import {
   type ClawHubPackageDetail,
   type ClawHubPackageFamily,
 } from "../infra/clawhub.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
 
 export const CLAWHUB_INSTALL_ERROR_CODE = {
@@ -274,7 +272,7 @@ export async function installPluginFromClawHub(params: {
   if (!versionState.ok) {
     return versionState;
   }
-  const runtimeVersion = resolveRuntimeServiceVersion();
+  const runtimeVersion = resolveCompatibilityHostVersion();
   const validationFailure = validateClawHubPluginPackage({
     detail,
     compatibility: versionState.compatibility,
@@ -343,9 +341,6 @@ export async function installPluginFromClawHub(params: {
       },
     };
   } finally {
-    await fs.rm(archive.archivePath, { force: true }).catch(() => undefined);
-    await fs
-      .rm(path.dirname(archive.archivePath), { recursive: true, force: true })
-      .catch(() => undefined);
+    await archive.cleanup().catch(() => undefined);
   }
 }

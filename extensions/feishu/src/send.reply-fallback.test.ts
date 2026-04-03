@@ -9,6 +9,7 @@ vi.mock("./send-target.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  setFeishuRuntime: vi.fn(),
   getFeishuRuntime: () => ({
     channel: {
       text: {
@@ -19,6 +20,10 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
 let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 

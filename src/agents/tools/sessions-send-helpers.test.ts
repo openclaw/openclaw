@@ -52,6 +52,28 @@ describe("resolveAnnounceTargetFromKey", () => {
           },
         },
         {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            id: "matrix",
+            meta: {
+              id: "matrix",
+              label: "Matrix",
+              selectionLabel: "Matrix",
+              docsPath: "/channels/matrix",
+              blurb: "Matrix test stub.",
+            },
+            capabilities: { chatTypes: ["direct", "channel", "thread"] },
+            messaging: {
+              resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
+            },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+            },
+          },
+        },
+        {
           pluginId: "telegram",
           source: "test",
           plugin: {
@@ -95,6 +117,28 @@ describe("resolveAnnounceTargetFromKey", () => {
       channel: "telegram",
       to: "-100123",
       threadId: "99",
+    });
+  });
+
+  it("preserves decimal thread ids for Slack-style session keys", () => {
+    expect(
+      resolveAnnounceTargetFromKey("agent:main:slack:channel:general:thread:1699999999.0001"),
+    ).toEqual({
+      channel: "slack",
+      to: "channel:general",
+      threadId: "1699999999.0001",
+    });
+  });
+
+  it("preserves colon-delimited matrix ids for channel and thread targets", () => {
+    expect(
+      resolveAnnounceTargetFromKey(
+        "agent:main:matrix:channel:!room:example.org:thread:$AbC123:example.org",
+      ),
+    ).toEqual({
+      channel: "matrix",
+      to: "channel:!room:example.org",
+      threadId: "$AbC123:example.org",
     });
   });
 });

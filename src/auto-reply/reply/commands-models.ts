@@ -1,10 +1,3 @@
-import {
-  buildModelsKeyboard,
-  buildProviderKeyboard,
-  calculateTotalPages,
-  getModelsPageSize,
-  type ProviderInfo,
-} from "../../../extensions/telegram/api.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -19,6 +12,13 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
+import {
+  buildModelsKeyboard,
+  buildProviderKeyboard,
+  calculateTotalPages,
+  getModelsPageSize,
+  type ProviderInfo,
+} from "./commands-models.telegram.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const PAGE_SIZE_DEFAULT = 20;
@@ -28,6 +28,8 @@ export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
   providers: string[];
   resolvedDefault: { provider: string; model: string };
+  /** Map from provider/model to human-readable display name (when different from model ID). */
+  modelNames: Map<string, string>;
 };
 
 function addProviderModel(byProvider: Map<string, Set<string>>, provider: string, model: string) {
@@ -110,7 +112,7 @@ export function buildConfiguredModelsProviderData(
     resolvedDefault,
   });
   const providers = [...byProvider.keys()].toSorted();
-  return { byProvider, providers, resolvedDefault };
+  return { byProvider, providers, resolvedDefault, modelNames: new Map<string, string>() };
 }
 
 /**
@@ -142,7 +144,16 @@ export async function buildModelsProviderData(
 
   const providers = [...byProvider.keys()].toSorted();
 
-  return { byProvider, providers, resolvedDefault };
+  // Build a provider-scoped model display-name map so surfaces can show
+  // human-readable names without colliding across providers that share IDs.
+  const modelNames = new Map<string, string>();
+  for (const entry of catalog) {
+    if (entry.name && entry.name !== entry.id) {
+      modelNames.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, entry.name);
+    }
+  }
+
+  return { byProvider, providers, resolvedDefault, modelNames };
 }
 
 function formatProviderLine(params: { provider: string; count: number }): string {
@@ -257,7 +268,10 @@ export async function resolveModelsCommandReply(params: {
   const argText = body.replace(/^\/models\b/i, "").trim();
   const { provider, page, pageSize, all } = parseModelsArgs(argText);
 
-  const { byProvider, providers } = await buildModelsProviderData(params.cfg, params.agentId);
+  const { byProvider, providers, modelNames } = await buildModelsProviderData(
+    params.cfg,
+    params.agentId,
+  );
   const isTelegram = params.surface === "telegram";
 
   // Provider list (no provider specified)
@@ -333,6 +347,7 @@ export async function resolveModelsCommandReply(params: {
       currentPage: safePage,
       totalPages,
       pageSize: telegramPageSize,
+      modelNames,
     });
 
     const text = formatModelsAvailableHeader({

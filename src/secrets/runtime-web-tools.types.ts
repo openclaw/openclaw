@@ -3,6 +3,8 @@ export type RuntimeWebDiagnosticCode =
   | "WEB_SEARCH_AUTODETECT_SELECTED"
   | "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED"
   | "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK"
+  | "WEB_X_SEARCH_KEY_UNRESOLVED_FALLBACK_USED"
+  | "WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK"
   | "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_FALLBACK_USED"
   | "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK";
 
@@ -27,8 +29,15 @@ export type RuntimeWebFetchFirecrawlMetadata = {
   diagnostics: RuntimeWebDiagnostic[];
 };
 
+export type RuntimeWebXSearchMetadata = {
+  active: boolean;
+  apiKeySource: "config" | "secretRef" | "env" | "missing";
+  diagnostics: RuntimeWebDiagnostic[];
+};
+
 export type RuntimeWebToolsMetadata = {
   search: RuntimeWebSearchMetadata;
+  xSearch: RuntimeWebXSearchMetadata;
   fetch: {
     firecrawl: RuntimeWebFetchFirecrawlMetadata;
   };

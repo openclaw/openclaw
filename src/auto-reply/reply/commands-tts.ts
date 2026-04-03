@@ -1,13 +1,17 @@
 import { logVerbose } from "../../globals.js";
-import { getSpeechProvider, normalizeSpeechProviderId } from "../../tts/provider-registry.js";
 import {
+  canonicalizeSpeechProviderId,
+  getSpeechProvider,
+  listSpeechProviders,
+} from "../../tts/provider-registry.js";
+import {
+  getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
   getTtsMaxLength,
   getTtsProvider,
   isSummarizationEnabled,
   isTtsEnabled,
   isTtsProviderConfigured,
-  resolveTtsApiKey,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setLastTtsAttempt,
@@ -25,6 +29,10 @@ type ParsedTtsCommand = {
   args: string;
 };
 
+type TtsAttemptDetail = NonNullable<
+  NonNullable<ReturnType<typeof getLastTtsAttempt>>["attempts"]
+>[number];
+
 function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
   // Accept `/tts` and `/tts <action> [args]` as a single control surface.
   if (normalized === "/tts") {
@@ -41,6 +49,19 @@ function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
   return { action: action.toLowerCase(), args: tail.join(" ").trim() };
 }
 
+function formatAttemptDetails(attempts: TtsAttemptDetail[] | undefined): string | undefined {
+  if (!attempts || attempts.length === 0) {
+    return undefined;
+  }
+  return attempts
+    .map((attempt) => {
+      const reason = attempt.reasonCode === "success" ? "ok" : attempt.reasonCode;
+      const latency = Number.isFinite(attempt.latencyMs) ? ` ${attempt.latencyMs}ms` : "";
+      return `${attempt.provider}:${attempt.outcome}(${reason})${latency}`;
+    })
+    .join(", ");
+}
+
 function ttsUsage(): ReplyPayload {
   // Keep usage in one place so help/validation stays consistent.
   return {
@@ -55,15 +76,13 @@ function ttsUsage(): ReplyPayload {
       `• /tts summary [on|off] — View/change auto-summary\n` +
       `• /tts audio <text> — Generate audio from text\n\n` +
       `**Providers:**\n` +
-      `• microsoft — Microsoft Edge-backed speech (default fallback)\n` +
-      `• openai — High quality (requires API key)\n` +
-      `• elevenlabs — Premium voices (requires API key)\n\n` +
+      `Use /tts provider to list the registered speech providers and their status.\n\n` +
       `**Text Limit (default: 1500, max: 4096):**\n` +
       `When text exceeds the limit:\n` +
       `• Summary ON: AI summarizes, then generates audio\n` +
       `• Summary OFF: Truncates text, then generates audio\n\n` +
       `**Examples:**\n` +
-      `/tts provider microsoft\n` +
+      `/tts provider <id>\n` +
       `/tts limit 2000\n` +
       `/tts audio Hello, this is a test!`,
   };
@@ -133,6 +152,9 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
         textLength: args.length,
         summarized: false,
         provider: result.provider,
+        fallbackFrom: result.fallbackFrom,
+        attemptedProviders: result.attemptedProviders,
+        attempts: result.attempts,
         latencyMs: result.latencyMs,
       });
       const payload: ReplyPayload = {
@@ -148,6 +170,8 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       success: false,
       textLength: args.length,
       summarized: false,
+      attemptedProviders: result.attemptedProviders,
+      attempts: result.attempts,
       error: result.error,
       latencyMs: Date.now() - start,
     });
@@ -160,30 +184,44 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
     if (!args.trim()) {
-      const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
-      const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
-      const hasMicrosoft = isTtsProviderConfigured(config, "microsoft", params.cfg);
+      const providers = listSpeechProviders(params.cfg);
       return {
         shouldContinue: false,
         reply: {
           text:
             `🎙️ TTS provider\n` +
             `Primary: ${currentProvider}\n` +
-            `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
-            `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
-            `Microsoft enabled: ${hasMicrosoft ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | microsoft`,
+            providers
+              .map(
+                (provider) =>
+                  `${provider.label}: ${
+                    provider.isConfigured({
+                      cfg: params.cfg,
+                      providerConfig: getResolvedSpeechProviderConfig(
+                        config,
+                        provider.id,
+                        params.cfg,
+                      ),
+                      timeoutMs: config.timeoutMs,
+                    })
+                      ? "✅"
+                      : "❌"
+                  }`,
+              )
+              .join("\n") +
+            `\nUsage: /tts provider <id>`,
         },
       };
     }
 
     const requested = args.trim().toLowerCase();
-    if (requested !== "edge" && !getSpeechProvider(requested, params.cfg)) {
+    const resolvedProvider = getSpeechProvider(requested, params.cfg);
+    if (!resolvedProvider) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 
-    const nextProvider = normalizeSpeechProviderId(requested) ?? requested;
-    setTtsProvider(prefsPath, requested);
+    const nextProvider = canonicalizeSpeechProviderId(requested, params.cfg) ?? resolvedProvider.id;
+    setTtsProvider(prefsPath, nextProvider);
     return {
       shouldContinue: false,
       reply: { text: `✅ TTS provider set to ${nextProvider}.` },
@@ -269,9 +307,26 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       lines.push(`Text: ${last.textLength} chars${last.summarized ? " (summarized)" : ""}`);
       if (last.success) {
         lines.push(`Provider: ${last.provider ?? "unknown"}`);
+        if (last.fallbackFrom && last.provider && last.fallbackFrom !== last.provider) {
+          lines.push(`Fallback: ${last.fallbackFrom} -> ${last.provider}`);
+        }
+        if (last.attemptedProviders && last.attemptedProviders.length > 1) {
+          lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
+        }
+        const details = formatAttemptDetails(last.attempts);
+        if (details) {
+          lines.push(`Attempt details: ${details}`);
+        }
         lines.push(`Latency: ${last.latencyMs ?? 0}ms`);
       } else if (last.error) {
         lines.push(`Error: ${last.error}`);
+        if (last.attemptedProviders && last.attemptedProviders.length > 0) {
+          lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
+        }
+        const details = formatAttemptDetails(last.attempts);
+        if (details) {
+          lines.push(`Attempt details: ${details}`);
+        }
       }
     }
     return { shouldContinue: false, reply: { text: lines.join("\n") } };

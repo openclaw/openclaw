@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const evaluateSenderGroupAccessForPolicy = vi.hoisted(() => vi.fn());
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
@@ -6,8 +6,8 @@ const resolveAllowlistMatchSimple = vi.hoisted(() => vi.fn());
 const resolveControlCommandGate = vi.hoisted(() => vi.fn());
 const resolveEffectiveAllowFromLists = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
+vi.mock("./runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
   return {
     ...actual,
     evaluateSenderGroupAccessForPolicy,
@@ -19,9 +19,18 @@ vi.mock("../runtime-api.js", async () => {
 });
 
 describe("mattermost monitor auth", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    evaluateSenderGroupAccessForPolicy.mockReset();
+    isDangerousNameMatchingEnabled.mockReset();
+    resolveAllowlistMatchSimple.mockReset();
+    resolveControlCommandGate.mockReset();
+    resolveEffectiveAllowFromLists.mockReset();
+  });
+
   it("normalizes allowlist entries and resolves effective lists", async () => {
     resolveEffectiveAllowFromLists.mockReturnValue({
-      effectiveAllowFrom: ["alice"],
+      effectiveAllowFrom: ["alice", "store"],
       effectiveGroupAllowFrom: ["team"],
     });
 
@@ -46,7 +55,7 @@ describe("mattermost monitor auth", () => {
         dmPolicy: "pairing",
       }),
     ).toEqual({
-      effectiveAllowFrom: ["alice"],
+      effectiveAllowFrom: ["alice", "store"],
       effectiveGroupAllowFrom: ["team"],
     });
     expect(resolveEffectiveAllowFromLists).toHaveBeenCalledWith({

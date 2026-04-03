@@ -11,6 +11,7 @@ import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identit
 import { parseVcard } from "../vcard.js";
 
 const MESSAGE_WRAPPER_KEYS = [
+  "botInvokeMessage",
   "ephemeralMessage",
   "viewOnceMessage",
   "viewOnceMessageV2",
@@ -214,8 +215,6 @@ export function extractMentionedJids(rawMessage: proto.IMessage | undefined): st
 
   const candidates: Array<string[] | null | undefined> = [
     message.extendedTextMessage?.contextInfo?.mentionedJid,
-    message.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.contextInfo
-      ?.mentionedJid,
     message.imageMessage?.contextInfo?.mentionedJid,
     message.videoMessage?.contextInfo?.mentionedJid,
     message.documentMessage?.contextInfo?.mentionedJid,

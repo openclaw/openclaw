@@ -1,7 +1,7 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
 import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -530,6 +530,20 @@ export async function monitorWebInbox(options: {
     "connection.update",
     handleConnectionUpdate as unknown as (...args: unknown[]) => void,
   );
+
+  void (async () => {
+    try {
+      const groups = await sock.groupFetchAllParticipating();
+      if (shouldLogVerbose()) {
+        logVerbose(`Hydrated ${Object.keys(groups ?? {}).length} participating groups on connect`);
+      }
+    } catch (err) {
+      const error = String(err);
+      inboundLogger.warn({ error }, "failed hydrating participating groups on connect");
+      inboundConsoleLog.warn(`Failed hydrating participating groups on connect: ${error}`);
+      logVerbose(`Failed to hydrate participating groups on connect: ${error}`);
+    }
+  })();
 
   const sendApi = createWebSendApi({
     sock: {

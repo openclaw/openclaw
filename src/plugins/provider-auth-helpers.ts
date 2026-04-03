@@ -135,10 +135,16 @@ export function applyAuthProfileConfig(
     .filter(([, profile]) => normalizeProviderIdForAuth(profile.provider) === normalizedProvider)
     .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
 
-  // Maintain `auth.order` when it already exists. Additionally, if another
-  // profile for the same provider is already configured, keep the newly
-  // selected profile first even when the auth modes match.
-  const existingProviderOrder = cfg.auth?.order?.[params.provider];
+  // Maintain `auth.order` when it already exists. Additionally, if we detect
+  // another profile for the same provider, keep the newly selected profile first
+  // even when the auth modes match.
+  const matchingProviderOrderEntries = Object.entries(cfg.auth?.order ?? {}).filter(
+    ([providerId]) => normalizeProviderIdForAuth(providerId) === normalizedProvider,
+  );
+  const existingProviderOrder =
+    matchingProviderOrderEntries.length > 0
+      ? [...new Set(matchingProviderOrderEntries.flatMap(([, order]) => order))]
+      : undefined;
   const preferProfileFirst = params.preferProfileFirst ?? true;
   const reorderedProviderOrder =
     existingProviderOrder && preferProfileFirst
@@ -159,20 +165,28 @@ export function applyAuthProfileConfig(
             .filter((profileId) => profileId !== params.profileId),
         ]
       : undefined;
+  const baseOrder =
+    matchingProviderOrderEntries.length > 0
+      ? Object.fromEntries(
+          Object.entries(cfg.auth?.order ?? {}).filter(
+            ([providerId]) => normalizeProviderIdForAuth(providerId) !== normalizedProvider,
+          ),
+        )
+      : cfg.auth?.order;
   const order =
     existingProviderOrder !== undefined
       ? {
-          ...cfg.auth?.order,
-          [params.provider]: reorderedProviderOrder?.includes(params.profileId)
+          ...baseOrder,
+          [normalizedProvider]: reorderedProviderOrder?.includes(params.profileId)
             ? reorderedProviderOrder
             : [...(reorderedProviderOrder ?? []), params.profileId],
         }
       : derivedProviderOrder
         ? {
-            ...cfg.auth?.order,
-            [params.provider]: derivedProviderOrder,
+            ...baseOrder,
+            [normalizedProvider]: derivedProviderOrder,
           }
-        : cfg.auth?.order;
+        : baseOrder;
   return {
     ...cfg,
     auth: {

@@ -9,9 +9,6 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "opencode-go-auth") {
     return "opencode-go";
   }
-  if (normalized === "qwen") {
-    return "qwen-portal";
-  }
   if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
     return "kimi";
   }
@@ -28,6 +25,11 @@ export function normalizeProviderId(provider: string): string {
 /** Normalize provider ID for auth lookup. Coding-plan variants share auth with base. */
 export function normalizeProviderIdForAuth(provider: string): string {
   const normalized = normalizeProviderId(provider);
+  // Legacy Qwen portal auth profiles should still participate in the same
+  // provider order as the old `qwen:*` credentials during migration.
+  if (normalized === "qwen" || normalized === "qwen-portal") {
+    return "qwen-portal";
+  }
   if (normalized === "volcengine-plan") {
     return "volcengine";
   }

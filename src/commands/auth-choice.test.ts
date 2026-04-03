@@ -9,6 +9,7 @@ import huggingfacePlugin from "../../extensions/huggingface/index.js";
 import kimiCodingPlugin from "../../extensions/kimi-coding/index.js";
 import minimaxPlugin from "../../extensions/minimax/index.js";
 import mistralPlugin from "../../extensions/mistral/index.js";
+import modelstudioPlugin from "../../extensions/modelstudio/index.js";
 import moonshotPlugin from "../../extensions/moonshot/index.js";
 import ollamaPlugin from "../../extensions/ollama/index.js";
 import openAIPlugin from "../../extensions/openai/index.js";
@@ -16,7 +17,6 @@ import opencodeGoPlugin from "../../extensions/opencode-go/index.js";
 import opencodePlugin from "../../extensions/opencode/index.js";
 import openrouterPlugin from "../../extensions/openrouter/index.js";
 import qianfanPlugin from "../../extensions/qianfan/index.js";
-import qwenPortalAuthPlugin from "../../extensions/qwen-portal-auth/index.js";
 import syntheticPlugin from "../../extensions/synthetic/index.js";
 import togetherPlugin from "../../extensions/together/index.js";
 import venicePlugin from "../../extensions/venice/index.js";
@@ -98,6 +98,7 @@ function createDefaultProviderPlugins() {
     kimiCodingPlugin,
     minimaxPlugin,
     mistralPlugin,
+    modelstudioPlugin,
     moonshotPlugin,
     ollamaPlugin,
     openAIPlugin,
@@ -105,7 +106,6 @@ function createDefaultProviderPlugins() {
     opencodePlugin,
     openrouterPlugin,
     qianfanPlugin,
-    qwenPortalAuthPlugin,
     syntheticPlugin,
     togetherPlugin,
     venicePlugin,
@@ -2037,7 +2037,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
   it("maps known and unknown auth choices", async () => {
     const scenarios = [
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
-      { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
+      { authChoice: "modelstudio-api-key" as const, expectedProvider: "modelstudio" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
       { authChoice: "ollama" as const, expectedProvider: "ollama" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },

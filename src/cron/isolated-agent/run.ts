@@ -14,6 +14,7 @@ import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveNestedAgentLane } from "../../agents/lanes.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider, resolveThinkingDefault } from "../../agents/model-selection.js";
@@ -222,7 +223,12 @@ export async function runCronIsolatedAgentTurn(params: {
   };
 
   const baseSessionKey = (params.sessionKey?.trim() || `cron:${params.job.id}`).trim();
-  const agentSessionKey = resolveCronAgentSessionKey({ sessionKey: baseSessionKey, agentId });
+  const agentSessionKey = resolveCronAgentSessionKey({
+    sessionKey: baseSessionKey,
+    agentId,
+    mainKey: params.cfg.session?.mainKey,
+    cfg: params.cfg,
+  });
   const payloadHookExternalContentSource =
     params.job.payload.kind === "agentTurn" ? params.job.payload.externalContentSource : undefined;
   const hookExternalContentSource =
@@ -421,11 +427,36 @@ export async function runCronIsolatedAgentTurn(params: {
     storePath: cronSession.storePath,
     isNewSession: cronSession.isNewSession,
   });
-  const authProfileIdSource = cronSession.sessionEntry.authProfileOverrideSource;
+  let liveSelection = {
+    provider,
+    model,
+    authProfileId,
+    authProfileIdSource: authProfileId
+      ? cronSession.sessionEntry.authProfileOverrideSource
+      : undefined,
+  };
+  const syncSessionEntryLiveSelection = () => {
+    cronSession.sessionEntry.modelProvider = liveSelection.provider;
+    cronSession.sessionEntry.model = liveSelection.model;
+    if (liveSelection.authProfileId) {
+      cronSession.sessionEntry.authProfileOverride = liveSelection.authProfileId;
+      cronSession.sessionEntry.authProfileOverrideSource = liveSelection.authProfileIdSource;
+      if (liveSelection.authProfileIdSource === "auto") {
+        cronSession.sessionEntry.authProfileOverrideCompactionCount =
+          cronSession.sessionEntry.compactionCount ?? 0;
+      } else {
+        delete cronSession.sessionEntry.authProfileOverrideCompactionCount;
+      }
+      return;
+    }
+    delete cronSession.sessionEntry.authProfileOverride;
+    delete cronSession.sessionEntry.authProfileOverrideSource;
+    delete cronSession.sessionEntry.authProfileOverrideCompactionCount;
+  };
 
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>> | undefined;
-  let fallbackProvider = provider;
-  let fallbackModel = model;
+  let fallbackProvider = liveSelection.provider;
+  let fallbackModel = liveSelection.model;
   const runStartedAt = Date.now();
   let runEndedAt = runStartedAt;
   try {
@@ -451,8 +482,8 @@ export async function runCronIsolatedAgentTurn(params: {
     const runPrompt = async (promptText: string) => {
       const fallbackResult = await runWithModelFallback({
         cfg: cfgWithAgentDefaults,
-        provider,
-        model,
+        provider: liveSelection.provider,
+        model: liveSelection.model,
         runId: cronSession.sessionEntry.sessionId,
         agentDir,
         fallbacksOverride:
@@ -516,8 +547,10 @@ export async function runCronIsolatedAgentTurn(params: {
             lane: resolveNestedAgentLane(params.lane),
             provider: providerOverride,
             model: modelOverride,
-            authProfileId,
-            authProfileIdSource,
+            authProfileId: liveSelection.authProfileId,
+            authProfileIdSource: liveSelection.authProfileId
+              ? liveSelection.authProfileIdSource
+              : undefined,
             thinkLevel,
             fastMode: resolveFastModeState({
               cfg: cfgWithAgentDefaults,
@@ -547,12 +580,46 @@ export async function runCronIsolatedAgentTurn(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
-      provider = fallbackResult.provider;
-      model = fallbackResult.model;
+      liveSelection.provider = fallbackResult.provider;
+      liveSelection.model = fallbackResult.model;
       runEndedAt = Date.now();
     };
 
-    await runPrompt(commandBody);
+    // Retry loop: if the isolated session starts with the wrong model (e.g. the
+    // gateway default) and the runner detects a LiveSessionModelSwitchError, we
+    // restart with the model requested by the error — mirroring the retry logic
+    // in the main agent runner (agent-runner-execution.ts). Without this, cron
+    // jobs that specify a model different from the agent primary always fail.
+    // See: https://github.com/openclaw/openclaw/issues/57206
+    while (true) {
+      try {
+        await runPrompt(commandBody);
+        break;
+      } catch (err) {
+        if (err instanceof LiveSessionModelSwitchError) {
+          liveSelection = {
+            provider: err.provider,
+            model: err.model,
+            authProfileId: err.authProfileId,
+            authProfileIdSource: err.authProfileId ? err.authProfileIdSource : undefined,
+          };
+          fallbackProvider = err.provider;
+          fallbackModel = err.model;
+          syncSessionEntryLiveSelection();
+          // Persist the corrected model before retrying so sessions_list
+          // reflects the real model even if the retry also fails.
+          try {
+            await persistSessionEntry();
+          } catch (persistErr) {
+            logWarn(
+              `[cron:${params.job.id}] Failed to persist model switch session entry: ${String(persistErr)}`,
+            );
+          }
+          continue;
+        }
+        throw err;
+      }
+    }
     if (!runResult) {
       throw new Error("cron isolated run returned no result");
     }
@@ -619,8 +686,9 @@ export async function runCronIsolatedAgentTurn(params: {
     }
     const usage = finalRunResult.meta?.agentMeta?.usage;
     const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
-    const modelUsed = finalRunResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
-    const providerUsed = finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
+    const modelUsed = finalRunResult.meta?.agentMeta?.model ?? fallbackModel ?? liveSelection.model;
+    const providerUsed =
+      finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? liveSelection.provider;
     const contextTokens =
       agentCfg?.contextTokens ??
       lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??

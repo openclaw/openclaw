@@ -1,5 +1,5 @@
 // Private helper surface for the bundled msteams plugin.
-// Keep this list additive and scoped to symbols used under extensions/msteams.
+// Keep this list additive and scoped to the bundled Teams surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
@@ -44,6 +44,7 @@ export {
 } from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export { resolveOutboundMediaUrls, resolveSendableOutboundReplyParts } from "./reply-payload.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export type {
   BaseProbeResult,
   ChannelDirectoryEntry,
@@ -100,7 +101,7 @@ export { formatDocsLink } from "../terminal/links.js";
 export { sleep } from "../utils.js";
 export { loadWebMedia } from "./web-media.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { keepHttpServerTaskAlive } from "./channel-lifecycle.js";
+export { keepHttpServerTaskAlive } from "./channel-lifecycle.core.js";
 export { withFileLock } from "./file-lock.js";
 export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";

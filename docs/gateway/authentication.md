@@ -6,7 +6,11 @@ read_when:
 title: "Authentication"
 ---
 
-# Authentication
+# Authentication (Model Providers)
+
+<Note>
+This page covers **model provider** authentication (API keys, OAuth, setup tokens). For **gateway connection** authentication (token, password, trusted-proxy), see [Configuration](/gateway/configuration) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
+</Note>
 
 OpenClaw supports OAuth and API keys for model providers. For always-on gateway
 hosts, API keys are usually the most predictable option. Subscription/OAuth
@@ -112,6 +116,26 @@ Optional ops scripts (systemd/Termux) are documented here:
 [/automation/auth-monitoring](/automation/auth-monitoring)
 
 > `claude setup-token` requires an interactive TTY.
+
+## Anthropic: Claude CLI migration
+
+If Claude CLI is already installed and signed in on the gateway host, you can
+switch an existing Anthropic setup over to the CLI backend instead of pasting a
+setup-token:
+
+```bash
+openclaw models auth login --provider anthropic --method cli --set-default
+```
+
+This keeps your existing Anthropic auth profiles for rollback, but changes the
+default model selection to `claude-cli/...` and adds matching Claude CLI
+allowlist entries under `agents.defaults.models`.
+
+Onboarding shortcut:
+
+```bash
+openclaw onboard --auth-choice anthropic-cli
+```
 
 ## Checking model auth status
 

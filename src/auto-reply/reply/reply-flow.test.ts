@@ -719,6 +719,58 @@ describe("parseSlackDirectives", () => {
     ]);
   });
 
+  it("parses optional Slack button styles without truncating callback values", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_buttons: Approve:pluginbind:approval-123:o:primary, Reject:deny:danger, Skip:skip:secondary]]",
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Approve",
+            value: "pluginbind:approval-123:o",
+            style: "primary",
+          },
+          {
+            label: "Reject",
+            value: "deny",
+            style: "danger",
+          },
+          {
+            label: "Skip",
+            value: "skip",
+            style: "secondary",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("preserves slack_select values that end in style-like suffixes", () => {
+    const result = parseSlackDirectives({
+      text: "[[slack_select: Choose one | Queue:queue:danger, Archive:archive:primary]]",
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "select",
+        placeholder: "Choose one",
+        options: [
+          {
+            label: "Queue",
+            value: "queue:danger",
+          },
+          {
+            label: "Archive",
+            value: "archive:primary",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("keeps existing interactive blocks when compiling additional Slack directives", () => {
     const result = parseSlackDirectives({
       text: "Choose [[slack_buttons: Retry:retry]]",
@@ -1928,7 +1980,6 @@ describe("createReplyDispatcher", () => {
 
   it("delays block replies after the first when humanDelay is natural", async () => {
     vi.useFakeTimers();
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({
       deliver,
@@ -1943,14 +1994,12 @@ describe("createReplyDispatcher", () => {
     await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(799);
+    await vi.advanceTimersByTimeAsync(2499);
     expect(deliver).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
     await dispatcher.waitForIdle();
     expect(deliver).toHaveBeenCalledTimes(2);
-
-    randomSpy.mockRestore();
     vi.useRealTimers();
   });
 

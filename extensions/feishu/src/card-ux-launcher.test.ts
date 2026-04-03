@@ -1,4 +1,6 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -20,6 +22,8 @@ describe("feishu quick-action launcher", () => {
       maybeHandleFeishuQuickActionMenu,
     } = await import("./card-ux-launcher.js"));
   });
+
+  const cfg: ClawdbotConfig = {};
 
   it("recognizes the quick-actions bot menu key", () => {
     expect(isFeishuQuickActionMenuEventKey("quick-actions")).toBe(true);
@@ -52,7 +56,7 @@ describe("feishu quick-action launcher", () => {
     sendCardFeishuMock.mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
     const handled = await maybeHandleFeishuQuickActionMenu({
-      cfg: {} as any,
+      cfg,
       eventKey: "quick-actions",
       operatorOpenId: "u123",
       accountId: "main",
@@ -88,13 +92,14 @@ describe("feishu quick-action launcher", () => {
 
   it("falls back to legacy menu handling when launcher send fails", async () => {
     sendCardFeishuMock.mockRejectedValueOnce(new Error("network"));
+    const runtime: RuntimeEnv = createRuntimeEnv();
 
     const handled = await maybeHandleFeishuQuickActionMenu({
-      cfg: {} as any,
+      cfg,
       eventKey: "quick-actions",
       operatorOpenId: "u123",
       accountId: "main",
-      runtime: { log: vi.fn() } as any,
+      runtime,
       now: 100,
     });
 

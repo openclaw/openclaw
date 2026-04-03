@@ -5,29 +5,33 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { discoverBedrockModels } from "../plugin-sdk/amazon-bedrock.js";
 import {
   buildAnthropicVertexProvider,
-  buildKimiCodingProvider,
-  buildKilocodeProvider,
+  hasAnthropicVertexAvailableAuth,
+} from "../plugin-sdk/anthropic-vertex.js";
+import { buildKilocodeProvider } from "../plugin-sdk/kilocode.js";
+import { buildKimiCodingProvider } from "../plugin-sdk/kimi-coding.js";
+import {
   buildModelStudioProvider,
-  buildNvidiaProvider,
+  MODELSTUDIO_BASE_URL,
+  MODELSTUDIO_DEFAULT_MODEL_ID,
+} from "../plugin-sdk/modelstudio.js";
+import { buildNvidiaProvider } from "../plugin-sdk/nvidia.js";
+import { resolveOllamaApiBase } from "../plugin-sdk/ollama-surface.js";
+import {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
   buildQianfanProvider,
-  MODELSTUDIO_BASE_URL,
-  MODELSTUDIO_DEFAULT_MODEL_ID,
-  XIAOMI_DEFAULT_MODEL_ID,
-  buildXiaomiProvider,
-} from "../plugin-sdk/provider-catalog.js";
+} from "../plugin-sdk/qianfan.js";
+import { XIAOMI_DEFAULT_MODEL_ID, buildXiaomiProvider } from "../plugin-sdk/xiaomi.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import {
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   resolveImplicitGigachatBaseUrl,
   resolveGigachatAuthProfileMetadata,
@@ -37,26 +41,27 @@ import {
   shouldNormalizeGoogleGenerativeAiProviderConfig,
 } from "./google-generative-ai.js";
 import { normalizeGoogleModelId, normalizeXaiModelId } from "./model-id-normalization.js";
-import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 export {
-  buildKimiCodingProvider,
-  buildKilocodeProvider,
   MODELSTUDIO_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_ID,
   buildModelStudioProvider,
-  buildNvidiaProvider,
+} from "../plugin-sdk/modelstudio.js";
+export { buildKimiCodingProvider } from "../plugin-sdk/kimi-coding.js";
+export { buildKilocodeProvider } from "../plugin-sdk/kilocode.js";
+export { buildNvidiaProvider } from "../plugin-sdk/nvidia.js";
+export { hasAnthropicVertexAvailableAuth } from "../plugin-sdk/anthropic-vertex.js";
+export {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
   buildQianfanProvider,
-  XIAOMI_DEFAULT_MODEL_ID,
-  buildXiaomiProvider,
-} from "../plugin-sdk/provider-catalog.js";
+} from "../plugin-sdk/qianfan.js";
+export { XIAOMI_DEFAULT_MODEL_ID, buildXiaomiProvider } from "../plugin-sdk/xiaomi.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
-  resolvePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
+import { resolvePluginDiscoveryProvidersRuntime } from "../plugins/provider-discovery.runtime.js";
 import {
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
@@ -64,7 +69,7 @@ import {
   resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
-export { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
+export { resolveOllamaApiBase } from "../plugin-sdk/ollama-surface.js";
 export { normalizeGoogleModelId, normalizeXaiModelId };
 export { resolveImplicitGigachatBaseUrl } from "./gigachat-auth.js";
 
@@ -787,7 +792,7 @@ async function resolvePluginImplicitProviders(
   order: import("../plugins/types.js").ProviderDiscoveryOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
   const onlyPluginIds = resolveLiveProviderDiscoveryFilter(ctx.env);
-  const providers = resolvePluginDiscoveryProviders({
+  const providers = resolvePluginDiscoveryProvidersRuntime({
     config: ctx.config,
     workspaceDir: ctx.workspaceDir,
     env: ctx.env,

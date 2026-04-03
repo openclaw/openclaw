@@ -14,7 +14,7 @@ import { KILOCODE_DEFAULT_MODEL_REF } from "../plugins/provider-model-kilocode.j
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./onboard-types.js";
-export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
+export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../plugin-sdk/cloudflare-ai-gateway.js";
 export {
   GIGACHAT_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
