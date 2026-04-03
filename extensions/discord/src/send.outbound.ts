@@ -365,14 +365,14 @@ export async function sendWebhookMessageDiscord(
     throw new Error("Discord webhook id/token are required");
   }
 
-  const rewrittenText = rewriteDiscordKnownMentions(text, {
-    accountId: opts.accountId,
-  });
   const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const { account, proxyFetch } = resolveDiscordClientAccountContext({
     cfg: opts.cfg,
     accountId: opts.accountId,
+  });
+  const rewrittenText = rewriteDiscordKnownMentions(text, {
+    accountId: account.accountId,
   });
 
   const response = await (proxyFetch ?? fetch)(
@@ -430,11 +430,16 @@ export async function sendStickerDiscord(
   stickerIds: string[],
   opts: DiscordSendOpts & { content?: string } = {},
 ): Promise<DiscordSendResult> {
+  const cfg = opts.cfg ?? loadConfig();
+  const accountInfo = resolveDiscordAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
   const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
   const content = opts.content?.trim();
   const rewrittenContent = content
     ? rewriteDiscordKnownMentions(content, {
-        accountId: opts.accountId,
+        accountId: accountInfo.accountId,
       })
     : undefined;
   const stickers = normalizeStickerIds(stickerIds);
@@ -456,11 +461,16 @@ export async function sendPollDiscord(
   poll: PollInput,
   opts: DiscordSendOpts & { content?: string } = {},
 ): Promise<DiscordSendResult> {
+  const cfg = opts.cfg ?? loadConfig();
+  const accountInfo = resolveDiscordAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
   const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
   const content = opts.content?.trim();
   const rewrittenContent = content
     ? rewriteDiscordKnownMentions(content, {
-        accountId: opts.accountId,
+        accountId: accountInfo.accountId,
       })
     : undefined;
   if (poll.durationSeconds !== undefined) {

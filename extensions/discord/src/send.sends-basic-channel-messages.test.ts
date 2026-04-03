@@ -126,6 +126,40 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("uses configured defaultAccount for cached mention rewriting when accountId is omitted", async () => {
+    rememberDiscordDirectoryUser({
+      accountId: "work",
+      userId: "222333444555666777",
+      handles: ["Alice"],
+    });
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({
+      id: "msg1",
+      channel_id: "789",
+    });
+    await sendMessageDiscord("channel:789", "ping @Alice", {
+      rest,
+      token: "t",
+      cfg: {
+        channels: {
+          discord: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                token: "Bot work-token", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      } as never,
+    });
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.channelMessages("789"),
+      expect.objectContaining({ body: { content: "ping <@222333444555666777>" } }),
+    );
+  });
+
   it("auto-creates a forum thread when target is a Forum channel", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     // Channel type lookup returns a Forum channel.
