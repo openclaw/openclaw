@@ -114,7 +114,9 @@ function normalizeSources(
   sessionMemoryEnabled: boolean,
 ): Array<"memory" | "sessions"> {
   const normalized = new Set<"memory" | "sessions">();
-  const input = sources?.length ? sources : DEFAULT_SOURCES;
+  // Use explicit undefined check so that sources: [] (empty array) is respected
+  // as an intentional signal rather than being treated as DEFAULT_SOURCES.
+  const input = sources !== undefined ? sources : DEFAULT_SOURCES;
   for (const source of input) {
     if (source === "memory") {
       normalized.add("memory");
@@ -123,6 +125,8 @@ function normalizeSources(
       normalized.add("sessions");
     }
   }
+  // If input was an empty array (or only contained "sessions" when disabled),
+  // fall back to memory so that we never return an empty source set.
   if (normalized.size === 0) {
     normalized.add("memory");
   }
