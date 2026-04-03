@@ -800,6 +800,11 @@ async function executeGatewayRequestWithScopes<T>(params: {
 }): Promise<T> {
   const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
     params;
+  // Yield to the event loop before starting the WebSocket connection.
+  // On Windows with large dist bundles, heavy synchronous module loading
+  // can starve the event loop, preventing timely processing of the
+  // connect.challenge frame and causing handshake timeouts (#48736).
+  await new Promise<void>((r) => setImmediate(r));
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
