@@ -7,8 +7,10 @@ import {
   installFromNpmSpecArchiveWithInstaller,
 } from "./npm-pack-install.js";
 
-vi.mock("./install-source-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./install-source-utils.js")>();
+vi.mock("./install-source-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("./install-source-utils.js")>(
+    "./install-source-utils.js",
+  );
   return {
     ...actual,
     withTempDir: vi.fn(async (_prefix: string, fn: (tmpDir: string) => Promise<unknown>) => {

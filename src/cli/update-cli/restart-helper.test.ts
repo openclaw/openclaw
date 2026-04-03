@@ -3,11 +3,14 @@ import fs from "node:fs/promises";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
-vi.mock("node:child_process", async (importOriginal) => {
+vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("../../../test/helpers/node-builtin-mocks.js");
-  return mockNodeBuiltinModule(importOriginal, {
-    spawn: vi.fn(),
-  });
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawn: vi.fn(),
+    },
+  );
 });
 
 describe("restart-helper", () => {
