@@ -312,7 +312,11 @@ export async function ensureTailscaleEndpoint(params: {
 
   const baseUrl = `https://${dnsName}${pathArg}`;
   // Funnel/serve strips pathArg before proxying; keep it only in the public URL.
-  return params.token ? `${baseUrl}?token=${params.token}` : baseUrl;
+  // Do not include the token in the push endpoint URL: it leaks to Tailscale relay
+  // logs and Google Pub/Sub subscription metadata, and server-http.ts rejects
+  // requests with ?token= in the query string (returns 400). The gog serve process
+  // receives the token via --token CLI arg and authenticates via header instead.
+  return baseUrl;
 }
 
 export async function resolveProjectIdFromGogCredentials(): Promise<string | null> {
