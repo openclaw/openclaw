@@ -47,6 +47,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "agentId",
   "sessionKey",
   "failureAlert",
+  "preHook",
   ...CRON_FLAT_PAYLOAD_KEYS,
 ]);
 

@@ -1143,6 +1143,10 @@ export async function executeJobCore(
     });
   };
 
+  if (abortSignal?.aborted) {
+    return resolveAbortError();
+  }
+
   // Pre-hook gate: run optional shell command before the job.
   if (job.preHook?.command) {
     const { runPreHook } = await import("../pre-hook.js");
