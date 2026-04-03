@@ -4,9 +4,18 @@ import {
   BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
   BUNDLED_PROVIDER_PLUGIN_ID_ALIASES,
 } from "./bundled-capability-metadata.js";
-import type { PluginRecord } from "./registry.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
-import type { PluginKind } from "./types.js";
+import type { PluginKind, PluginOrigin } from "./types.js";
+
+export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
+
+export type PluginActivationState = {
+  enabled: boolean;
+  activated: boolean;
+  explicitlyEnabled: boolean;
+  source: PluginActivationSource;
+  reason?: string;
+};
 
 export type NormalizedPluginsConfig = {
   enabled: boolean;
@@ -236,42 +245,181 @@ export function isTestDefaultMemorySlotDisabled(
   return true;
 }
 
+function resolveExplicitPluginSelection(params: {
+  id: string;
+  origin: PluginOrigin;
+  config: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
+}): { explicitlyEnabled: boolean; reason?: string } {
+  if (params.config.entries[params.id]?.enabled === true) {
+    return { explicitlyEnabled: true, reason: "enabled in config" };
+  }
+  if (
+    params.origin === "bundled" &&
+    isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
+  ) {
+    return { explicitlyEnabled: true, reason: "channel enabled in config" };
+  }
+  if (params.config.slots.memory === params.id) {
+    return { explicitlyEnabled: true, reason: "selected memory slot" };
+  }
+  if (params.origin !== "bundled" && params.config.allow.includes(params.id)) {
+    return { explicitlyEnabled: true, reason: "selected in allowlist" };
+  }
+  return { explicitlyEnabled: false };
+}
+
+export function resolvePluginActivationState(params: {
+  id: string;
+  origin: PluginOrigin;
+  config: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
+  enabledByDefault?: boolean;
+  sourceConfig?: NormalizedPluginsConfig;
+  sourceRootConfig?: OpenClawConfig;
+  autoEnabledReason?: string;
+}): PluginActivationState {
+  const explicitSelection = resolveExplicitPluginSelection({
+    id: params.id,
+    origin: params.origin,
+    config: params.sourceConfig ?? params.config,
+    rootConfig: params.sourceRootConfig ?? params.rootConfig,
+  });
+
+  if (!params.config.enabled) {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      reason: "plugins disabled",
+    };
+  }
+  if (params.config.deny.includes(params.id)) {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      reason: "blocked by denylist",
+    };
+  }
+  const entry = params.config.entries[params.id];
+  if (entry?.enabled === false) {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      reason: "disabled in config",
+    };
+  }
+  const explicitlyAllowed = params.config.allow.includes(params.id);
+  if (params.origin === "workspace" && !explicitlyAllowed && entry?.enabled !== true) {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      reason: "workspace plugin (disabled by default)",
+    };
+  }
+  if (params.config.slots.memory === params.id) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "selected memory slot",
+    };
+  }
+  if (params.config.allow.length > 0 && !explicitlyAllowed) {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      reason: "not in allowlist",
+    };
+  }
+  if (explicitSelection.explicitlyEnabled) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: explicitSelection.reason,
+    };
+  }
+  if (params.autoEnabledReason) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto",
+      reason: params.autoEnabledReason,
+    };
+  }
+  if (entry?.enabled === true) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto",
+      reason: "enabled by effective config",
+    };
+  }
+  if (
+    params.origin === "bundled" &&
+    isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
+  ) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto",
+      reason: "channel configured",
+    };
+  }
+  if (params.origin === "bundled" && params.enabledByDefault === true) {
+    return {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "default",
+      reason: "bundled default enablement",
+    };
+  }
+  if (params.origin === "bundled") {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: false,
+      source: "disabled",
+      reason: "bundled (disabled by default)",
+    };
+  }
+  return {
+    enabled: true,
+    activated: true,
+    explicitlyEnabled: explicitSelection.explicitlyEnabled,
+    source: "default",
+  };
+}
+
 export function resolveEnableState(
   id: string,
-  origin: PluginRecord["origin"],
+  origin: PluginOrigin,
   config: NormalizedPluginsConfig,
   enabledByDefault?: boolean,
 ): { enabled: boolean; reason?: string } {
-  if (!config.enabled) {
-    return { enabled: false, reason: "plugins disabled" };
-  }
-  if (config.deny.includes(id)) {
-    return { enabled: false, reason: "blocked by denylist" };
-  }
-  const entry = config.entries[id];
-  if (entry?.enabled === false) {
-    return { enabled: false, reason: "disabled in config" };
-  }
-  const explicitlyAllowed = config.allow.includes(id);
-  if (origin === "workspace" && !explicitlyAllowed && entry?.enabled !== true) {
-    return { enabled: false, reason: "workspace plugin (disabled by default)" };
-  }
-  if (config.slots.memory === id) {
-    return { enabled: true };
-  }
-  if (config.allow.length > 0 && !explicitlyAllowed) {
-    return { enabled: false, reason: "not in allowlist" };
-  }
-  if (entry?.enabled === true) {
-    return { enabled: true };
-  }
-  if (origin === "bundled" && enabledByDefault === true) {
-    return { enabled: true };
-  }
-  if (origin === "bundled") {
-    return { enabled: false, reason: "bundled (disabled by default)" };
-  }
-  return { enabled: true };
+  const state = resolvePluginActivationState({
+    id,
+    origin,
+    config,
+    enabledByDefault,
+  });
+  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
 }
 
 export function isBundledChannelEnabledByChannelConfig(
@@ -295,20 +443,26 @@ export function isBundledChannelEnabledByChannelConfig(
 
 export function resolveEffectiveEnableState(params: {
   id: string;
-  origin: PluginRecord["origin"];
+  origin: PluginOrigin;
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
 }): { enabled: boolean; reason?: string } {
-  const base = resolveEnableState(params.id, params.origin, params.config, params.enabledByDefault);
-  if (
-    !base.enabled &&
-    base.reason === "bundled (disabled by default)" &&
-    isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
-  ) {
-    return { enabled: true };
-  }
-  return base;
+  const state = resolveEffectivePluginActivationState(params);
+  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
+}
+
+export function resolveEffectivePluginActivationState(params: {
+  id: string;
+  origin: PluginOrigin;
+  config: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
+  enabledByDefault?: boolean;
+  sourceConfig?: NormalizedPluginsConfig;
+  sourceRootConfig?: OpenClawConfig;
+  autoEnabledReason?: string;
+}): PluginActivationState {
+  return resolvePluginActivationState(params);
 }
 
 export function resolveMemorySlotDecision(params: {

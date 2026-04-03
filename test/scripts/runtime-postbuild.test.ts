@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   copyStaticExtensionAssets,
+  listStaticExtensionAssetOutputs,
   writeStableRootRuntimeAliases,
 } from "../../scripts/runtime-postbuild.mjs";
 
@@ -22,6 +23,12 @@ async function createTempRoot() {
 }
 
 describe("runtime postbuild static assets", () => {
+  it("tracks plugin-owned static assets that release packaging must ship", () => {
+    expect(listStaticExtensionAssetOutputs()).toContain(
+      "dist/extensions/diffs/assets/viewer-runtime.js",
+    );
+  });
+
   it("copies declared static assets into dist", async () => {
     const rootDir = await createTempRoot();
     const src = "extensions/acpx/src/runtime-internals/mcp-proxy.mjs";

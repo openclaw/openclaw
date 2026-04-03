@@ -161,4 +161,18 @@ describe("resolveDeliveryTarget thread session lookup", () => {
     expect(result.to).toBe("63448508");
     expect(result.threadId).toBe(1008013);
   });
+
+  it("preserves explicit delivery.threadId on first run without topic syntax", async () => {
+    mockStore["/mock/store.json"] = {};
+
+    const result = await resolveDeliveryTarget(cfg, "main", {
+      channel: "telegram",
+      to: "63448508",
+      threadId: "1008013",
+    });
+
+    expect(result.to).toBe("63448508");
+    expect(result.threadId).toBe("1008013");
+    expect(result.channel).toBe("telegram");
+  });
 });

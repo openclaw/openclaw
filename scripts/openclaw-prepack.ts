@@ -81,7 +81,7 @@ function ensurePreparedArtifacts(): void {
     const preparedFiles = collectPreparedFilePaths();
     const errors = collectPreparedPrepackErrors(preparedFiles.files, preparedFiles.assets);
     if (errors.length === 0) {
-      console.log(
+      console.error(
         `prepack: using prepared artifacts from ${skipPrepackPreparedEnv}; skipping rebuild.`,
       );
       return;

@@ -54,15 +54,22 @@ export type {
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeResolvedModelContext,
+  ProviderNormalizeToolSchemasContext,
   ProviderPrepareDynamicModelContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareRuntimeAuthContext,
   ProviderPreparedRuntimeAuth,
+  ProviderReasoningOutputMode,
+  ProviderReasoningOutputModeContext,
+  ProviderReplayPolicy,
+  ProviderReplayPolicyContext,
   ProviderResolveDynamicModelContext,
   ProviderResolvedUsageAuth,
+  ProviderSanitizeReplayHistoryContext,
   ProviderResolveUsageAuthContext,
   ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
+  ProviderValidateReplayTurnsContext,
   ProviderWrapStreamFnContext,
   SpeechProviderPlugin,
 } from "./plugin-entry.js";
@@ -101,6 +108,21 @@ export type {
 export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 export type { ChannelConfigUiHint, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
+export type {
+  BoundTaskFlowsRuntime,
+  BoundTaskRunsRuntime,
+  PluginRuntimeTaskFlows,
+  PluginRuntimeTaskRuns,
+  PluginRuntimeTasks,
+} from "../plugins/runtime/runtime-tasks.js";
+export type {
+  TaskFlowDetail,
+  TaskFlowView,
+  TaskRunAggregateSummary,
+  TaskRunCancelResult,
+  TaskRunDetail,
+  TaskRunView,
+} from "../plugins/runtime/task-domain-types.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
 export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";

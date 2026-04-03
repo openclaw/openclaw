@@ -5,6 +5,7 @@ import {
   createAsyncLock,
   pruneExpiredPending,
   readJsonFile,
+  reconcilePendingPairingRequests,
   resolvePairingPaths,
   writeJsonAtomic,
 } from "./pairing-files.js";
@@ -169,8 +170,15 @@ export function listEffectivePairedDeviceRoles(
   device: Pick<PairedDevice, "role" | "roles" | "tokens">,
 ): string[] {
   const activeTokenRoles = listActiveTokenRoles(device.tokens);
-  if (device.tokens) {
-    return activeTokenRoles ?? [];
+  if (activeTokenRoles && activeTokenRoles.length > 0) {
+    return activeTokenRoles;
+  }
+  // Only fall back to legacy role fields when the tokens map is absent
+  // or has no entries at all (empty object from a fresh pairing record).
+  // When token entries exist but are all revoked, the revocation is
+  // authoritative — do not re-grant roles from sticky historical fields.
+  if (device.tokens && Object.keys(device.tokens).length > 0) {
+    return [];
   }
   return mergeRoles(device.roles, device.role) ?? [];
 }
@@ -419,57 +427,43 @@ export async function requestDevicePairing(
     const pendingForDevice = Object.values(state.pendingById)
       .filter((pending) => pending.deviceId === deviceId)
       .toSorted((left, right) => right.ts - left.ts);
-    const latestPending = pendingForDevice[0];
-    if (latestPending && pendingForDevice.length === 1) {
-      if (samePendingApprovalSnapshot(latestPending, req)) {
-        const refreshed = refreshPendingDevicePairingRequest(latestPending, req, isRepair);
-        state.pendingById[latestPending.requestId] = refreshed;
-        await persistState(state, baseDir);
-        return { status: "pending" as const, request: refreshed, created: false };
-      }
-    }
-    if (pendingForDevice.length > 0) {
-      const mergedRoles = mergeRoles(
-        ...pendingForDevice.flatMap((pending) => [pending.roles, pending.role]),
-        req.roles,
-        req.role,
-      );
-      const mergedScopes = mergeScopes(
-        ...pendingForDevice.map((pending) => pending.scopes),
-        req.scopes,
-      );
-      for (const pending of pendingForDevice) {
-        delete state.pendingById[pending.requestId];
-      }
-      const superseded = buildPendingDevicePairingRequest({
-        deviceId,
-        isRepair,
-        req: {
-          ...req,
-          role: normalizeRole(req.role) ?? latestPending?.role,
-          roles: mergedRoles,
-          scopes: mergedScopes,
-          // Preserve interactive visibility when superseding pending requests:
-          // if any previous pending request was interactive, keep this one interactive.
-          silent: resolveSupersededPendingSilent({
-            existing: pendingForDevice,
-            incomingSilent: req.silent,
-          }),
-        },
-      });
-      state.pendingById[superseded.requestId] = superseded;
-      await persistState(state, baseDir);
-      return { status: "pending" as const, request: superseded, created: true };
-    }
-
-    const request = buildPendingDevicePairingRequest({
-      deviceId,
-      isRepair,
-      req,
+    return await reconcilePendingPairingRequests({
+      pendingById: state.pendingById,
+      existing: pendingForDevice,
+      incoming: req,
+      canRefreshSingle: (existing, incoming) => samePendingApprovalSnapshot(existing, incoming),
+      refreshSingle: (existing, incoming) =>
+        refreshPendingDevicePairingRequest(existing, incoming, isRepair),
+      buildReplacement: ({ existing, incoming }) => {
+        const latestPending = existing[0];
+        const mergedRoles = mergeRoles(
+          ...existing.flatMap((pending) => [pending.roles, pending.role]),
+          incoming.roles,
+          incoming.role,
+        );
+        const mergedScopes = mergeScopes(
+          ...existing.map((pending) => pending.scopes),
+          incoming.scopes,
+        );
+        return buildPendingDevicePairingRequest({
+          deviceId,
+          isRepair,
+          req: {
+            ...incoming,
+            role: normalizeRole(incoming.role) ?? latestPending?.role,
+            roles: mergedRoles,
+            scopes: mergedScopes,
+            // Preserve interactive visibility when superseding pending requests:
+            // if any previous pending request was interactive, keep this one interactive.
+            silent: resolveSupersededPendingSilent({
+              existing,
+              incomingSilent: incoming.silent,
+            }),
+          },
+        });
+      },
+      persist: async () => await persistState(state, baseDir),
     });
-    state.pendingById[request.requestId] = request;
-    await persistState(state, baseDir);
-    return { status: "pending" as const, request, created: true };
   });
 }
 

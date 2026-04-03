@@ -47,6 +47,7 @@ async function expectSessionEnsureFallback(params: {
   env?: Record<string, string>;
   expectNewAfterStatus: boolean;
   expectedRecordId?: string;
+  expectedResumeSessionId?: string | null;
 }) {
   const previousEnv = new Map<string, string | undefined>();
   for (const [key, value] of Object.entries(params.env ?? {})) {
@@ -70,13 +71,26 @@ async function expectSessionEnsureFallback(params: {
     const logs = await readMockRuntimeLogEntries(logPath);
     const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
     const statusIndex = logs.findIndex((entry) => entry.kind === "status");
-    const newIndex = logs.findIndex((entry) => entry.kind === "new");
+    const newEntries = logs.filter((entry) => entry.kind === "new");
+    const newEntry = newEntries[0] ?? null;
+    const newIndex = newEntry ? logs.indexOf(newEntry) : -1;
     expect(ensureIndex).toBeGreaterThanOrEqual(0);
     expect(statusIndex).toBeGreaterThan(ensureIndex);
     if (params.expectNewAfterStatus) {
+      expect(newEntries).toHaveLength(1);
       expect(newIndex).toBeGreaterThan(statusIndex);
     } else {
-      expect(newIndex).toBe(-1);
+      expect(newEntries).toHaveLength(0);
+    }
+    const newArgs = ((newEntry?.args as string[]) ?? []).slice();
+    const resumeFlagIndex = newArgs.indexOf("--resume-session");
+    if (params.expectedResumeSessionId === undefined) {
+      // No assertion requested for resume behavior.
+    } else if (params.expectedResumeSessionId === null) {
+      expect(resumeFlagIndex).toBe(-1);
+    } else {
+      expect(resumeFlagIndex).toBeGreaterThanOrEqual(0);
+      expect(newArgs[resumeFlagIndex + 1]).toBe(params.expectedResumeSessionId);
     }
   } finally {
     for (const [key, value] of previousEnv.entries()) {
@@ -241,14 +255,15 @@ describe("AcpxRuntime", () => {
     expect(resumeArgs[resumeFlagIndex + 1]).toBe(resumeSessionId);
   });
 
-  it("retains dead named sessions when status only reports queue owner unavailable", async () => {
+  it("repairs dead named sessions when status only reports queue owner unavailable", async () => {
     await expectSessionEnsureFallback({
       sessionKey: "agent:codex:acp:dead-session",
       env: {
         MOCK_ACPX_STATUS_STATUS: "dead",
         MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
       },
-      expectNewAfterStatus: false,
+      expectNewAfterStatus: true,
+      expectedResumeSessionId: "sid-agent:codex:acp:dead-session",
     });
   });
 
@@ -275,7 +290,7 @@ describe("AcpxRuntime", () => {
     });
   });
 
-  it("retains the named session after ensure failure when status only reports queue owner unavailable", async () => {
+  it("repairs the named session after ensure failure when status only reports queue owner unavailable", async () => {
     await expectSessionEnsureFallback({
       sessionKey: "agent:codex:acp:ensure-fallback-dead",
       env: {
@@ -283,9 +298,71 @@ describe("AcpxRuntime", () => {
         MOCK_ACPX_STATUS_STATUS: "dead",
         MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
       },
-      expectNewAfterStatus: false,
+      expectNewAfterStatus: true,
       expectedRecordId: "rec-agent:codex:acp:ensure-fallback-dead",
+      expectedResumeSessionId: "sid-agent:codex:acp:ensure-fallback-dead",
     });
+  });
+
+  it("falls back to a fresh named session when queue owner recovery has no resumable id", async () => {
+    await expectSessionEnsureFallback({
+      sessionKey: "agent:codex:acp:dead-session-no-ids",
+      env: {
+        MOCK_ACPX_STATUS_STATUS: "dead",
+        MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
+        MOCK_ACPX_STATUS_NO_IDS: "1",
+      },
+      expectNewAfterStatus: true,
+      expectedResumeSessionId: null,
+    });
+  });
+
+  it("falls back to a fresh named session when queue owner resume repair uses a stale session id", async () => {
+    const previousResumeFailure = process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME;
+    const previousStatus = process.env.MOCK_ACPX_STATUS_STATUS;
+    const previousSummary = process.env.MOCK_ACPX_STATUS_SUMMARY;
+    process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME = "1";
+    process.env.MOCK_ACPX_STATUS_STATUS = "dead";
+    process.env.MOCK_ACPX_STATUS_SUMMARY = "queue owner unavailable";
+
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:dead-session-stale-resume",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.backend).toBe("acpx");
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const newEntries = logs.filter((entry) => entry.kind === "new");
+      expect(newEntries).toHaveLength(2);
+      const firstArgs = ((newEntries[0]?.args as string[]) ?? []).slice();
+      const secondArgs = ((newEntries[1]?.args as string[]) ?? []).slice();
+      const firstResumeFlagIndex = firstArgs.indexOf("--resume-session");
+      expect(firstResumeFlagIndex).toBeGreaterThanOrEqual(0);
+      expect(firstArgs[firstResumeFlagIndex + 1]).toBe(
+        "sid-agent:codex:acp:dead-session-stale-resume",
+      );
+      expect(secondArgs.indexOf("--resume-session")).toBe(-1);
+    } finally {
+      if (previousResumeFailure === undefined) {
+        delete process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME;
+      } else {
+        process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME = previousResumeFailure;
+      }
+      if (previousStatus === undefined) {
+        delete process.env.MOCK_ACPX_STATUS_STATUS;
+      } else {
+        process.env.MOCK_ACPX_STATUS_STATUS = previousStatus;
+      }
+      if (previousSummary === undefined) {
+        delete process.env.MOCK_ACPX_STATUS_SUMMARY;
+      } else {
+        process.env.MOCK_ACPX_STATUS_SUMMARY = previousSummary;
+      }
+    }
   });
 
   it("creates a fresh named session after ensure failure when status indicates an unrecoverable failure", async () => {

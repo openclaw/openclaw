@@ -48,13 +48,14 @@ import {
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
+import { ADMIN_SCOPE } from "../../method-scopes.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
   isTrustedProxyAddress,
   resolveClientIp,
 } from "../../net.js";
-import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
+import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import {
   ConnectErrorDetailCodes,
@@ -992,40 +993,20 @@ export function attachGatewayWsMessageHandler(params: {
           : null;
 
         if (role === "node") {
-          const cfg = loadConfig();
-          const nodeId = connectParams.device?.id ?? connectParams.client.id;
-          const declared = Array.isArray(connectParams.commands) ? connectParams.commands : [];
-          const allowlist = resolveNodeCommandAllowlist(cfg, {
-            platform: connectParams.client.platform,
-            deviceFamily: connectParams.client.deviceFamily,
+          const reconciliation = await reconcileNodePairingOnConnect({
+            cfg: loadConfig(),
+            connectParams,
+            pairedNode: await getPairedNode(connectParams.device?.id ?? connectParams.client.id),
+            reportedClientIp,
+            requestPairing: async (input) => await requestNodePairing(input),
           });
-          const allowlistedDeclared = declared
-            .map((cmd) => cmd.trim())
-            .filter((cmd) => cmd.length > 0 && allowlist.has(cmd));
-          let pairedNode = await getPairedNode(nodeId);
-          if (!pairedNode) {
-            const pending = await requestNodePairing({
-              nodeId,
-              displayName: connectParams.client.displayName,
-              platform: connectParams.client.platform,
-              version: connectParams.client.version,
-              deviceFamily: connectParams.client.deviceFamily,
-              modelIdentifier: connectParams.client.modelIdentifier,
-              caps: connectParams.caps,
-              commands: allowlistedDeclared,
-              remoteIp: reportedClientIp,
+          if (reconciliation.pendingPairing?.created) {
+            const requestContext = buildRequestContext();
+            requestContext.broadcast("node.pair.requested", reconciliation.pendingPairing.request, {
+              dropIfSlow: true,
             });
-            if (pending.status === "pending" && pending.created) {
-              const requestContext = buildRequestContext();
-              requestContext.broadcast("node.pair.requested", pending.request, {
-                dropIfSlow: true,
-              });
-            }
-            pairedNode = await getPairedNode(nodeId);
           }
-          const pairedCommands = new Set(pairedNode?.commands ?? []);
-          const filtered = allowlistedDeclared.filter((cmd) => pairedCommands.has(cmd));
-          connectParams.commands = filtered;
+          connectParams.commands = reconciliation.effectiveCommands;
         }
 
         const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
@@ -1068,7 +1049,9 @@ export function attachGatewayWsMessageHandler(params: {
           incrementPresenceVersion();
         }
 
-        const snapshot = buildGatewaySnapshot();
+        const snapshot = buildGatewaySnapshot({
+          includeSensitive: scopes.includes(ADMIN_SCOPE),
+        });
         const cachedHealth = getHealthCache();
         if (cachedHealth) {
           snapshot.health = cachedHealth;

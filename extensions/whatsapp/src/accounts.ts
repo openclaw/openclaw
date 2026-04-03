@@ -4,12 +4,11 @@ import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
-  resolveAccountEntry,
-  resolveMergedAccountConfig,
   resolveUserPath,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
+import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import { hasWebCredsSync } from "./creds-files.js";
 import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "./runtime-api.js";
 
@@ -73,13 +72,6 @@ export function hasAnyWhatsAppAuth(cfg: OpenClawConfig): boolean {
   return listWhatsAppAuthDirs(cfg).some((authDir) => hasWebCredsSync(authDir));
 }
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): WhatsAppAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.whatsapp?.accounts, accountId);
-}
-
 function resolveDefaultAuthDir(accountId: string): string {
   return path.join(resolveOAuthDir(), "whatsapp", normalizeAccountId(accountId));
 }
@@ -102,7 +94,7 @@ export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId:
   isLegacy: boolean;
 } {
   const accountId = params.accountId.trim() || DEFAULT_ACCOUNT_ID;
-  const account = resolveAccountConfig(params.cfg, accountId);
+  const account = resolveMergedWhatsAppAccountConfig({ cfg: params.cfg, accountId });
   const configured = account?.authDir?.trim();
   if (configured) {
     return { authDir: resolveUserPath(configured), isLegacy: false };
@@ -123,14 +115,11 @@ export function resolveWhatsAppAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedWhatsAppAccount {
-  const rootCfg = params.cfg.channels?.whatsapp;
-  const accountId = params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg);
-  const merged = resolveMergedAccountConfig<WhatsAppAccountConfig>({
-    channelConfig: rootCfg as WhatsAppAccountConfig | undefined,
-    accounts: rootCfg?.accounts as Record<string, Partial<WhatsAppAccountConfig>> | undefined,
-    accountId,
-    omitKeys: ["defaultAccount"],
+  const merged = resolveMergedWhatsAppAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg),
   });
+  const accountId = merged.accountId;
   const enabled = merged.enabled !== false;
   const { authDir, isLegacy } = resolveWhatsAppAuthDir({
     cfg: params.cfg,
