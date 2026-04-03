@@ -40,7 +40,6 @@ async function loadModule() {
 
 describe("live model switch", () => {
   beforeEach(() => {
-    vi.resetModules();
     state.abortEmbeddedPiRunMock.mockReset().mockReturnValue(false);
     state.requestEmbeddedRunModelSwitchMock.mockReset();
     state.consumeEmbeddedRunModelSwitchMock.mockReset();

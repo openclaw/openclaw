@@ -89,6 +89,7 @@ const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional(
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     skills: z.array(z.string()).optional(),
@@ -104,6 +105,7 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,
@@ -1046,6 +1048,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
 const SignalGroupEntrySchema = z
   .object({
     requireMention: z.boolean().optional(),
+    ingest: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
   })
