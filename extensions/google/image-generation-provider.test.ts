@@ -3,6 +3,32 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
 import { __testing as geminiWebSearchTesting } from "./src/gemini-web-search-provider.js";
 
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
+  return {
+    ...actual,
+    postJsonRequest: async (params: {
+      url: string;
+      headers: Headers;
+      body: unknown;
+      timeoutMs: number;
+      fetchFn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+      allowPrivateNetwork?: boolean;
+    }) => {
+      const response = await params.fetchFn(params.url, {
+        method: "POST",
+        headers: params.headers,
+        body: JSON.stringify(params.body),
+      });
+      return {
+        response,
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  };
+});
+
 function mockGoogleApiKeyAuth() {
   vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
     apiKey: "google-test-key",
