@@ -8,8 +8,8 @@ const dockerMocks = vi.hoisted(() => ({
   execDockerRaw: vi.fn(),
 }));
 
-vi.mock("./docker.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./docker.js")>();
+vi.mock("./docker.js", async () => {
+  const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
   return {
     ...actual,
     dockerContainerState: dockerMocks.dockerContainerState,
@@ -19,7 +19,7 @@ vi.mock("./docker.js", async (importOriginal) => {
   };
 });
 
-let dockerSandboxBackendManager: typeof import("./docker-backend.js").dockerSandboxBackendManager;
+const { dockerSandboxBackendManager } = await import("./docker-backend.js");
 
 function createConfig(): OpenClawConfig {
   return {
@@ -43,23 +43,8 @@ function createConfig(): OpenClawConfig {
   };
 }
 
-async function loadFreshDockerBackendModuleForTest() {
-  vi.resetModules();
-  vi.doMock("./docker.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./docker.js")>();
-    return {
-      ...actual,
-      dockerContainerState: dockerMocks.dockerContainerState,
-      ensureSandboxContainer: dockerMocks.ensureSandboxContainer,
-      execDocker: dockerMocks.execDocker,
-      execDockerRaw: dockerMocks.execDockerRaw,
-    };
-  });
-  ({ dockerSandboxBackendManager } = await import("./docker-backend.js"));
-}
-
 describe("docker sandbox backend manager", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     dockerMocks.dockerContainerState.mockResolvedValue({
       exists: true,
@@ -70,7 +55,6 @@ describe("docker sandbox backend manager", () => {
       stdout: "unused-image",
       stderr: "",
     });
-    await loadFreshDockerBackendModuleForTest();
   });
 
   it("matches ordinary sandbox runtimes against sandbox.docker.image", async () => {

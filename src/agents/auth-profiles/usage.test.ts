@@ -17,8 +17,8 @@ const storeMocks = vi.hoisted(() => ({
 }));
 const fetchMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./store.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./store.js")>();
+vi.mock("./store.js", async () => {
+  const original = await vi.importActual<typeof import("./store.js")>("./store.js");
   return {
     ...original,
     updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,

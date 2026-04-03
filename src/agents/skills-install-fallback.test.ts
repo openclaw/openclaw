@@ -17,13 +17,17 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
-vi.mock("../security/skill-scanner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../security/skill-scanner.js")>()),
+vi.mock("../security/skill-scanner.js", async () => ({
+  ...(await vi.importActual<typeof import("../security/skill-scanner.js")>(
+    "../security/skill-scanner.js",
+  )),
   scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
 }));
 
-vi.mock("../shared/config-eval.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../shared/config-eval.js")>();
+vi.mock("../shared/config-eval.js", async () => {
+  const actual = await vi.importActual<typeof import("../shared/config-eval.js")>(
+    "../shared/config-eval.js",
+  );
   return {
     ...actual,
     hasBinary: (bin: string) => hasBinaryMock(bin),
