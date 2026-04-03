@@ -1187,6 +1187,41 @@ describe("doctor config flow", () => {
     }
   });
 
+  it("warns clearly about legacy talk config and points to doctor --fix", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          talk: {
+            voiceId: "voice-1",
+            modelId: "eleven_v3",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            String(message).includes("talk:") &&
+            String(message).includes(
+              "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey",
+            ),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Doctor" &&
+            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("migrates top-level heartbeat visibility into channels.defaults.heartbeat on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
