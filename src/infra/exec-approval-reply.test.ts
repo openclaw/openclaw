@@ -335,6 +335,9 @@ describe("exec approval reply helpers", () => {
       }),
     ).toEqual({
       text: "Careful.\n\nApproval required. I sent approval DMs to the approvers for this account.",
+      channelData: {
+        execApprovalUnavailable: { reason: "no-approval-route" },
+      },
     });
   });
 
