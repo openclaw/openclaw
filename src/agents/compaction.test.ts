@@ -278,4 +278,36 @@ describe("stripAnalysisScratchpad", () => {
     const input = "Plain text <analysis>Thinking</analysis>";
     expect(stripAnalysisScratchpad(input)).toBe("Plain text");
   });
+
+  it("passes through text with no tags", () => {
+    const input = "Just a regular string with no special tags at all.";
+    expect(stripAnalysisScratchpad(input)).toBe(input);
+  });
+
+  it("handles multiple <analysis> blocks", () => {
+    const input =
+      "<analysis>Thought 1</analysis> middle text <analysis>Thought 2</analysis> end text";
+    expect(stripAnalysisScratchpad(input)).toBe("middle text  end text");
+  });
+
+  it("handles empty input or empty after stripping", () => {
+    expect(stripAnalysisScratchpad("")).toBe("");
+    expect(stripAnalysisScratchpad("   ")).toBe("");
+    expect(stripAnalysisScratchpad("<analysis>Only thoughts, no output</analysis>")).toBe("");
+  });
+
+  it("extracts <summary> even if <analysis> tags are absent", () => {
+    const input = "Some intro text <summary>The actual summary</summary> some outro text";
+    expect(stripAnalysisScratchpad(input)).toBe("The actual summary");
+  });
+
+  it("ignores <summary> when it is an HTML <details> element", () => {
+    const input =
+      "Intro.\n<details>\n<summary>Click to expand</summary>\nMore info\n</details>\n<summary>The real summary</summary>";
+    expect(stripAnalysisScratchpad(input)).toBe("The real summary");
+
+    const input2 = "Check this <details><summary>Details</summary> info</details> tag.";
+    // If no top-level summary is found, it falls back to keeping everything (minus analysis tags).
+    expect(stripAnalysisScratchpad(input2)).toBe(input2);
+  });
 });

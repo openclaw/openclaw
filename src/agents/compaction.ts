@@ -281,7 +281,10 @@ async function summarizeChunks(params: {
         shouldRetry: (err) => !(err instanceof Error && err.name === "AbortError"),
       },
     );
-    summary = stripAnalysisScratchpad(rawSummary) || undefined;
+    const stripped = stripAnalysisScratchpad(rawSummary);
+    if (stripped) {
+      summary = stripped;
+    }
   }
 
   return summary ?? DEFAULT_SUMMARY_FALLBACK;
@@ -321,13 +324,29 @@ function generateSummary(
 }
 
 export function stripAnalysisScratchpad(text: string): string {
+  if (!text) {
+    return "";
+  }
+
   // Removes <analysis>...</analysis> blocks (case-insensitive, handles newlines)
   let stripped = text.replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").trim();
 
   // Extracts content from <summary>...</summary> if it exists, otherwise keeps the rest
-  const summaryMatch = /<summary>([\s\S]*?)<\/summary>/i.exec(stripped);
-  if (summaryMatch?.[1]) {
-    stripped = summaryMatch[1].trim();
+  const summaryRegex = /<summary>([\s\S]*?)<\/summary>/gi;
+  let match;
+  let extracted: string | null = null;
+
+  while ((match = summaryRegex.exec(stripped)) !== null) {
+    const before = stripped.substring(0, match.index);
+    // Ignore <summary> if it's immediately preceded by a <details> tag
+    if (!/<details[^>]*>\s*$/i.test(before)) {
+      extracted = match[1];
+      break; // Take the first valid top-level <summary>
+    }
+  }
+
+  if (extracted !== null) {
+    stripped = extracted.trim();
   }
 
   return stripped;
