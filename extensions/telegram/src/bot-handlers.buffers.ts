@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { mergeTelegramAccountConfig } from "./accounts.js";
+import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import {
   hasInboundMedia,
   isRecoverableMediaGroupError,
@@ -85,9 +85,12 @@ export function createTelegramInboundBufferRuntime(params: {
     runtime,
     telegramTransport,
   } = params;
-  const telegramCfg = accountId
-    ? mergeTelegramAccountConfig(cfg, accountId)
-    : cfg.channels?.telegram;
+  const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
+    cfg,
+    accountId,
+    token: opts.token,
+    transport: telegramTransport,
+  });
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
     typeof opts.testTimings?.textFragmentGapMs === "number" &&
@@ -151,18 +154,15 @@ export function createTelegramInboundBufferRuntime(params: {
       return [];
     }
     try {
-      const media = await resolveMedia(
-        {
+      const media = await resolveMedia({
+        ctx: {
           message: replyMessage,
           me: ctx.me,
           getFile: async () => await bot.api.getFile(replyFileId),
         },
-        mediaMaxBytes,
-        opts.token,
-        telegramTransport,
-        telegramCfg?.apiRoot,
-        telegramCfg?.network?.dangerouslyAllowPrivateNetwork,
-      );
+        maxBytes: mediaMaxBytes,
+        ...mediaRuntimeOptions,
+      });
       if (!media) {
         return [];
       }
@@ -192,14 +192,11 @@ export function createTelegramInboundBufferRuntime(params: {
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(
+          media = await resolveMedia({
             ctx,
-            mediaMaxBytes,
-            opts.token,
-            telegramTransport,
-            telegramCfg?.apiRoot,
-            telegramCfg?.network?.dangerouslyAllowPrivateNetwork,
-          );
+            maxBytes: mediaMaxBytes,
+            ...mediaRuntimeOptions,
+          });
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;

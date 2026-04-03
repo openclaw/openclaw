@@ -297,19 +297,20 @@ async function resolveStickerMedia(params: {
   }
 }
 
-export async function resolveMedia(
-  ctx: TelegramContext,
-  maxBytes: number,
-  token: string,
-  transport?: TelegramTransport,
-  apiRoot?: string,
-  dangerouslyAllowPrivateNetwork?: boolean,
-): Promise<{
+export async function resolveMedia(params: {
+  ctx: TelegramContext;
+  maxBytes: number;
+  token: string;
+  transport?: TelegramTransport;
+  apiRoot?: string;
+  dangerouslyAllowPrivateNetwork?: boolean;
+}): Promise<{
   path: string;
   contentType?: string;
   placeholder: string;
   stickerMetadata?: StickerMetadata;
 } | null> {
+  const { ctx, maxBytes, token, transport, apiRoot, dangerouslyAllowPrivateNetwork } = params;
   const msg = ctx.message;
   const stickerResolved = await resolveStickerMedia({
     msg,

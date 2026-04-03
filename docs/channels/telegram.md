@@ -933,6 +933,12 @@ channels:
       dangerouslyAllowPrivateNetwork: true
 ```
 
+    - The same opt-in is available per account at
+      `channels.telegram.accounts.<accountId>.network.dangerouslyAllowPrivateNetwork`.
+    - If your proxy resolves Telegram media hosts into `198.18.x.x`, leave the
+      dangerous flag off first. Telegram media already allows the RFC 2544
+      benchmark range by default.
+
     <Warning>
       `channels.telegram.network.dangerouslyAllowPrivateNetwork` weakens Telegram
       media SSRF protections. Use it only for trusted operator-controlled proxy
