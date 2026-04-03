@@ -264,10 +264,12 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         ? undefined // explicitly disabled
         : DEFAULT_HOOK_TIMEOUT_MS;
 
-  // Tracks handlers (pluginId:hookName) that have timed out. Once quarantined,
-  // subsequent invocations are skipped to prevent unbounded promise accumulation
-  // from a handler that never settles.
-  const quarantinedHandlers = new Set<string>();
+  // Tracks individual handler functions that have timed out. Once quarantined,
+  // subsequent invocations of that specific handler are skipped to prevent
+  // unbounded promise accumulation. Uses WeakSet so quarantine entries are
+  // garbage-collected if the handler registration is removed.
+  // oxlint-disable-next-line typescript/no-unsafe-function-type
+  const quarantinedHandlers = new WeakSet<Function>();
 
   /**
    * Execute a single async handler with the configured timeout.
@@ -283,9 +285,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     fn: () => Promise<T>,
     hookName: PluginHookName,
     pluginId: string,
+    // oxlint-disable-next-line typescript/no-unsafe-function-type
+    handlerFn: Function,
   ): Promise<T> {
-    const quarantineKey = `${pluginId}:${hookName}`;
-    if (quarantinedHandlers.has(quarantineKey)) {
+    if (quarantinedHandlers.has(handlerFn)) {
       throw new Error(`${hookName} handler from ${pluginId} quarantined after previous timeout`);
     }
 
@@ -303,7 +306,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       );
     } catch (err) {
       if (err instanceof TimeoutError) {
-        quarantinedHandlers.add(quarantineKey);
+        quarantinedHandlers.add(handlerFn);
         logger?.warn?.(
           `[hooks] quarantined ${hookName} handler from ${pluginId} after timeout — future invocations will be skipped`,
         );
@@ -431,6 +434,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           () => (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx),
           hookName,
           hook.pluginId,
+          hook.handler,
         );
       } catch (err) {
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
@@ -465,6 +469,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           () => (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>)(event, ctx),
           hookName,
           hook.pluginId,
+          hook.handler,
         );
 
         if (handlerResult !== undefined && handlerResult !== null) {
@@ -513,6 +518,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
             (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
           hookName,
           hook.pluginId,
+          hook.handler,
         );
         if (handlerResult?.handled) {
           return handlerResult;
@@ -550,6 +556,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
             (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
           hookName,
           hook.pluginId,
+          hook.handler,
         );
         if (handlerResult?.handled) {
           return handlerResult;
@@ -601,6 +608,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
             (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
           hookName,
           hook.pluginId,
+          hook.handler,
         );
         if (handlerResult?.handled) {
           return { status: "handled", result: handlerResult };
