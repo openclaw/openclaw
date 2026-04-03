@@ -103,7 +103,7 @@ jobs:
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
-          import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
+          import { listChangedExtensionIds } from "./scripts/lib/changed-extensions.mjs";
 
           const extensionIds = listChangedExtensionIds({
             base: process.env.BASE_SHA,
