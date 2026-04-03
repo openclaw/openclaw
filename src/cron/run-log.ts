@@ -153,11 +153,38 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
     return;
   }
 
-  const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
-  const lines = raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  // Stream-safe tail: only read a bounded portion of the file from the tail
+  // instead of the entire contents, preventing OOM on extremely large run-log files.
+  const { createReadStream } = await import("node:fs");
+  const { createInterface } = await import("node:readline");
+
+  // Read at most maxBytes from the tail of the file.  This is enough to
+  // contain keepLines lines (each run-log JSON line is typically <2 KB).
+  // Read enough bytes to capture keepLines entries.  Each JSONL run-log line
+  // is typically under 2 KB, so keepLines * 2048 is a safe upper bound.
+  // Use the greater of maxBytes and the line-count estimate to be safe.
+  const tailBytes = Math.max(opts.maxBytes, opts.keepLines * 2048);
+  const startPos = Math.max(0, stat.size - tailBytes);
+
+  const lines: string[] = [];
+  const rl = createInterface({
+    input: createReadStream(filePath, { start: startPos, encoding: "utf-8" }),
+    crlfDelay: Infinity,
+  });
+
+  for await (const line of rl) {
+    const trimmed = line.trim();
+    if (trimmed) {
+      lines.push(trimmed);
+    }
+  }
+
+  // If we started mid-file the first "line" is likely a partial JSON fragment;
+  // drop it to avoid writing corrupt data.
+  if (startPos > 0 && lines.length > 0) {
+    lines.shift();
+  }
+
   const kept = lines.slice(Math.max(0, lines.length - opts.keepLines));
   const { randomBytes } = await import("node:crypto");
   const tmp = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
