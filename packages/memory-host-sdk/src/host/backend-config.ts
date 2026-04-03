@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 import type {
   MemoryBackend,
+  MemoryChainConfig,
   MemoryCitationsMode,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
@@ -486,7 +487,7 @@ function resolveChainConfig(chainConfig: MemoryChainConfig): ResolvedChainConfig
   };
 
   // Ensure providers array exists (defensive programming)
-  const providers = chainConfig.providers ?? [];
+  const providers: MemoryChainConfig["providers"] = chainConfig.providers ?? [];
 
   const resolvedProviders: ResolvedChainProvider[] = providers.map((provider) => ({
     name: provider.name,

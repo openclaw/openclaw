@@ -49,6 +49,37 @@ export type MemoryRuntimeBackendConfig =
   | {
       backend: "qmd";
       qmd?: MemoryRuntimeQmdConfig;
+    }
+  | {
+      backend: "chain";
+      chain?: {
+        providers?: Array<{
+          name: string;
+          priority: "primary" | "secondary" | "fallback";
+          backend?: string;
+          plugin?: string;
+          enabled?: boolean;
+          timeout?: {
+            add?: number;
+            search?: number;
+            update?: number;
+            delete?: number;
+          };
+          retry?: {
+            maxAttempts?: number;
+            backoffMs?: number;
+          };
+          circuitBreaker?: {
+            failureThreshold?: number;
+            resetTimeoutMs?: number;
+          };
+        }>;
+        global?: {
+          defaultTimeout?: number;
+          enableFallback?: boolean;
+          healthCheckInterval?: number;
+        };
+      };
     };
 
 export type MemoryPluginRuntime = {

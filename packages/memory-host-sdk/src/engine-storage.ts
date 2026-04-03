@@ -21,6 +21,7 @@ export type {
   ResolvedMemoryBackendConfig,
   ResolvedQmdConfig,
   ResolvedQmdMcporterConfig,
+  ResolvedChainConfig,
 } from "./host/backend-config.js";
 export type {
   MemoryEmbeddingProbeResult,
