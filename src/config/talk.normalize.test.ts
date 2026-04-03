@@ -33,7 +33,7 @@ describe("talk normalization", () => {
       apiKey: "secret-key", // pragma: allowlist secret
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
-    });
+    } as unknown as never);
 
     expect(normalized).toEqual({
       providers: {
@@ -59,7 +59,6 @@ describe("talk normalization", () => {
           custom: true,
         },
       },
-      voiceId: "legacy-voice",
       interruptOnSpeech: true,
     });
 
@@ -84,7 +83,6 @@ describe("talk normalization", () => {
           modelId: "acme-model",
         },
       },
-      voiceId: "legacy-voice",
       interruptOnSpeech: true,
     });
 

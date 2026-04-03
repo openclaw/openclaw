@@ -6,10 +6,6 @@ function asLegacyConfig(value: Record<string, unknown>): OpenClawConfig {
   return value as unknown as OpenClawConfig;
 }
 
-function readLegacyKey(value: unknown, key: string): unknown {
-  return value && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
-}
-
 describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
   it("normalizes telegram boolean streaming aliases to enum", () => {
     const res = normalizeCompatibilityConfigValues(
@@ -23,7 +19,9 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     );
 
     expect(res.config.channels?.telegram?.streaming).toBe("off");
-    expect(readLegacyKey(res.config.channels?.telegram, "streamMode")).toBeUndefined();
+    expect(
+      (res.config.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
     expect(res.changes).toEqual(["Normalized channels.telegram.streaming boolean → enum (off)."]);
   });
 
@@ -39,7 +37,9 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     );
 
     expect(res.config.channels?.discord?.streaming).toBe("partial");
-    expect(readLegacyKey(res.config.channels?.discord, "streamMode")).toBeUndefined();
+    expect(
+      (res.config.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
     expect(res.changes).toEqual([
       "Normalized channels.discord.streaming boolean → enum (partial).",
     ]);
@@ -57,7 +57,9 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     );
 
     expect(res.config.channels?.discord?.streaming).toBe("off");
-    expect(readLegacyKey(res.config.channels?.discord, "streamMode")).toBeUndefined();
+    expect(
+      (res.config.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
     expect(res.changes).toEqual(["Normalized channels.discord.streaming boolean → enum (off)."]);
   });
 
@@ -73,7 +75,9 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     );
 
     expect(res.config.channels?.discord?.streaming).toBe("off");
-    expect(readLegacyKey(res.config.channels?.discord, "streamMode")).toBeUndefined();
+    expect(
+      (res.config.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.discord.streamMode → channels.discord.streaming (off).",
       'channels.discord.streaming remains off by default to avoid Discord preview-edit rate limits; set channels.discord.streaming="partial" to opt in explicitly.',
@@ -93,7 +97,9 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
 
     expect(res.config.channels?.slack?.streaming).toBe("off");
     expect(res.config.channels?.slack?.nativeStreaming).toBe(false);
-    expect(readLegacyKey(res.config.channels?.slack, "streamMode")).toBeUndefined();
+    expect(
+      (res.config.channels?.slack as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.slack.streaming (boolean) → channels.slack.nativeStreaming (false).",
     ]);

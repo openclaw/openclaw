@@ -128,11 +128,13 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
     messages: {
       tts: {
         provider: "openai",
-        openai: {
-          apiKey: "test-key",
-          model,
-          voice: "alloy",
-          instructions: "Speak warmly",
+        providers: {
+          openai: {
+            apiKey: "test-key",
+            model,
+            voice: "alloy",
+            instructions: "Speak warmly",
+          },
         },
       },
     },
@@ -977,7 +979,9 @@ describe("tts", () => {
         tts: {
           auto: "inbound",
           provider: "openai",
-          openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+          providers: {
+            openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+          },
         },
       },
     });

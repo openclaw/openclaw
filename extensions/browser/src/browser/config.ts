@@ -100,10 +100,13 @@ function normalizeStringList(raw: string[] | undefined): string[] | undefined {
 }
 
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
-  const allowPrivateNetwork = cfg?.ssrfPolicy?.allowPrivateNetwork;
-  const dangerouslyAllowPrivateNetwork = cfg?.ssrfPolicy?.dangerouslyAllowPrivateNetwork;
-  const allowedHostnames = normalizeStringList(cfg?.ssrfPolicy?.allowedHostnames);
-  const hostnameAllowlist = normalizeStringList(cfg?.ssrfPolicy?.hostnameAllowlist);
+  const rawPolicy = cfg?.ssrfPolicy as
+    | (BrowserConfig["ssrfPolicy"] & { allowPrivateNetwork?: boolean })
+    | undefined;
+  const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
+  const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
+  const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
+  const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   // Browser defaults to trusted-network mode unless explicitly disabled by policy.
