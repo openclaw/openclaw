@@ -97,6 +97,11 @@ export function createDiscordMessageToolComponentsSchema() {
           description: "Allow components to be used multiple times until they expire.",
         }),
       ),
+      expiresAtMs: Type.Optional(
+        Type.Number({
+          description: "Unix epoch timestamp in milliseconds after which the components expire.",
+        }),
+      ),
       container: Type.Optional(
         Type.Object({
           accentColor: Type.Optional(Type.String()),
