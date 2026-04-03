@@ -4,7 +4,8 @@ import {
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
-  createTopLevelChannelDmPolicy,
+  mergeAllowFromEntries,
+  patchChannelConfigForAccount,
   parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
@@ -120,14 +121,45 @@ export async function promptSignalAllowFrom(params: {
   });
 }
 
-export const signalDmPolicy = createTopLevelChannelDmPolicy({
+export const signalDmPolicy = {
   label: "Signal",
   channel,
   policyKey: "channels.signal.dmPolicy",
   allowFromKey: "channels.signal.allowFrom",
-  getCurrent: (cfg: OpenClawConfig) => cfg.channels?.signal?.dmPolicy ?? "pairing",
+  resolveConfigKeys: (_cfg: OpenClawConfig, accountId?: string) =>
+    accountId && accountId !== resolveDefaultSignalAccountId(_cfg)
+      ? {
+          policyKey: `channels.signal.accounts.${accountId}.dmPolicy`,
+          allowFromKey: `channels.signal.accounts.${accountId}.allowFrom`,
+        }
+      : {
+          policyKey: "channels.signal.dmPolicy",
+          allowFromKey: "channels.signal.allowFrom",
+        },
+  getCurrent: (cfg: OpenClawConfig, accountId?: string) =>
+    resolveSignalAccount({ cfg, accountId }).config.dmPolicy ?? "pairing",
+  setPolicy: (
+    cfg: OpenClawConfig,
+    policy: "pairing" | "allowlist" | "open" | "disabled",
+    accountId?: string,
+  ) =>
+    patchChannelConfigForAccount({
+      cfg,
+      channel,
+      accountId: accountId ?? resolveDefaultSignalAccountId(cfg),
+      patch:
+        policy === "open"
+          ? {
+              dmPolicy: "open",
+              allowFrom: mergeAllowFromEntries(
+                resolveSignalAccount({ cfg, accountId }).config.allowFrom,
+                ["*"],
+              ),
+            }
+          : { dmPolicy: policy },
+    }),
   promptAllowFrom: promptSignalAllowFrom,
-});
+};
 
 function resolveSignalCliPath(params: {
   cfg: OpenClawConfig;

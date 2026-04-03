@@ -277,6 +277,7 @@ describe("sanitizeHostExecEnv", () => {
         PIP_TRUSTED_HOST: "example.invalid",
         UV_INDEX: "https://example.invalid/simple",
         UV_INDEX_URL: "https://example.invalid/simple",
+        UV_PYTHON: "/tmp/evil-uv-python",
         UV_DEFAULT_INDEX: "https://example.invalid/simple",
         UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
         DOCKER_HOST: "tcp://example.invalid:2376",
@@ -364,6 +365,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.PIP_REQUIREMENT).toBeUndefined();
     expect(env.UV_INDEX).toBeUndefined();
     expect(env.UV_INDEX_URL).toBeUndefined();
+    expect(env.UV_PYTHON).toBeUndefined();
     expect(env.UV_DEFAULT_INDEX).toBeUndefined();
     expect(env.UV_EXTRA_INDEX_URL).toBeUndefined();
     expect(env.DOCKER_HOST).toBeUndefined();
@@ -538,6 +540,7 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("PIP_EXTRA_INDEX_URL")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("UV_INDEX")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("UV_INDEX_URL")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("uv_python")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("uv_default_index")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("UV_EXTRA_INDEX_URL")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("DOCKER_HOST")).toBe(true);
@@ -604,6 +607,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         PIP_TRUSTED_HOST: "example.invalid",
         UV_INDEX: "https://example.invalid/simple",
         UV_INDEX_URL: "https://example.invalid/simple",
+        UV_PYTHON: "/tmp/evil-uv-python",
         UV_DEFAULT_INDEX: "https://example.invalid/simple",
         UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
         DOCKER_HOST: "tcp://example.invalid:2376",
@@ -699,6 +703,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "UV_EXTRA_INDEX_URL",
       "UV_INDEX",
       "UV_INDEX_URL",
+      "UV_PYTHON",
       "VIRTUAL_ENV",
       "YARN_RC_FILENAME",
     ]);
@@ -723,6 +728,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.PIP_TRUSTED_HOST).toBeUndefined();
     expect(result.env.UV_INDEX).toBeUndefined();
     expect(result.env.UV_INDEX_URL).toBeUndefined();
+    expect(result.env.UV_PYTHON).toBeUndefined();
     expect(result.env.UV_DEFAULT_INDEX).toBeUndefined();
     expect(result.env.UV_EXTRA_INDEX_URL).toBeUndefined();
     expect(result.env.GIT_SSL_NO_VERIFY).toBeUndefined();

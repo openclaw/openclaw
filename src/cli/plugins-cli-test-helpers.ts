@@ -138,6 +138,8 @@ vi.mock("../infra/clawhub.js", () => ({
 
 const { registerPluginsCli } = await import("./plugins-cli.js");
 
+export { registerPluginsCli };
+
 export function runPluginsCommand(argv: string[]) {
   const program = new Command();
   program.exitOverride();

@@ -13,6 +13,10 @@ vi.mock("chokidar", () => ({
   default: { watch: watchMock },
 }));
 
+vi.mock("./plugin-skills.js", () => ({
+  resolvePluginSkillDirs: vi.fn(() => []),
+}));
+
 describe("ensureSkillsWatcher", () => {
   beforeAll(async () => {
     refreshModule = await import("./refresh.js");

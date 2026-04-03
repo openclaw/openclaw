@@ -3686,16 +3686,6 @@
       "hasChildren": false
     },
     {
-      "path": "agents.defaults.sandbox.perSession",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "agents.defaults.sandbox.prune",
       "kind": "core",
       "type": "object",
@@ -4012,6 +4002,26 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.subagents.allowAgents",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.subagents.allowAgents.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "agents.defaults.subagents.announceTimeoutMs",
@@ -6135,16 +6145,6 @@
       "path": "agents.list.*.sandbox.mode",
       "kind": "core",
       "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "agents.list.*.sandbox.perSession",
-      "kind": "core",
-      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -8742,20 +8742,6 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "browser.ssrfPolicy.allowPrivateNetwork",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Browser Allow Private Network",
-      "help": "Legacy alias for browser.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so risk intent is explicit.",
       "hasChildren": false
     },
     {
@@ -14439,7 +14425,7 @@
         "advanced"
       ],
       "label": "Enable Status Reactions",
-      "help": "Enable lifecycle status reactions for Telegram. When enabled, the ack reaction becomes the initial 'queued' state and progresses through thinking, tool, done/error automatically. Default: false.",
+      "help": "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Telegram requires this to be true before lifecycle reactions are used.",
       "hasChildren": false
     },
     {
@@ -15601,7 +15587,7 @@
         "models"
       ],
       "label": "Model Provider Request Overrides",
-      "help": "Optional request overrides for model-provider requests. Today this path supports header and auth overrides only; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
+      "help": "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, and TLS client settings. Use these only when your upstream or enterprise network path requires transport customization.",
       "hasChildren": true
     },
     {
@@ -15818,6 +15804,521 @@
       "hasChildren": false
     },
     {
+      "path": "models.providers.*.request.proxy",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request Proxy",
+      "help": "Optional proxy override for model-provider requests. Use \"env-proxy\" to honor environment proxy settings or \"explicit-proxy\" to route through a specific proxy URL.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.mode",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request Proxy Mode",
+      "help": "Proxy override mode for model-provider requests: \"env-proxy\" or \"explicit-proxy\".",
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request Proxy TLS",
+      "help": "Optional TLS settings used when connecting to the configured proxy.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.ca",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request Proxy TLS CA",
+      "help": "Custom CA bundle used to verify the proxy TLS certificate chain.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.ca.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.ca.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.ca.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.cert",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request Proxy TLS Cert",
+      "help": "Client TLS certificate presented to the proxy when mutual TLS is required.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.cert.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.cert.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.cert.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.insecureSkipVerify",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request Proxy TLS Skip Verify",
+      "help": "Skips proxy TLS certificate verification. Use only for controlled development environments.",
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.key",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request Proxy TLS Key",
+      "help": "Private key paired with request.proxy.tls.cert for proxy mutual TLS.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.key.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.key.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.key.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.passphrase",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request Proxy TLS Passphrase",
+      "help": "Optional passphrase used to decrypt request.proxy.tls.key.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.passphrase.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.passphrase.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.passphrase.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.serverName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request Proxy TLS Server Name",
+      "help": "Optional SNI/server-name override used when establishing TLS to the proxy.",
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.url",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models",
+        "url-secret"
+      ],
+      "label": "Model Provider Request Proxy URL",
+      "help": "Explicit proxy URL used when request.proxy.mode is explicit-proxy. Credentials embedded in the URL are treated as sensitive and redacted from snapshots.",
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request TLS",
+      "help": "Optional TLS settings used when connecting directly to the upstream model endpoint.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.tls.ca",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request TLS CA",
+      "help": "Custom CA bundle used to verify the upstream TLS certificate chain.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.tls.ca.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.ca.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.ca.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.cert",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request TLS Cert",
+      "help": "Client TLS certificate presented to the upstream endpoint when mutual TLS is required.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.tls.cert.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.cert.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.cert.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.insecureSkipVerify",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request TLS Skip Verify",
+      "help": "Skips upstream TLS certificate verification. Use only for controlled development environments.",
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.key",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request TLS Key",
+      "help": "Private key paired with request.tls.cert for upstream mutual TLS.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.tls.key.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.key.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.key.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.passphrase",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request TLS Passphrase",
+      "help": "Optional passphrase used to decrypt request.tls.key.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.tls.passphrase.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.passphrase.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.passphrase.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.serverName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request TLS Server Name",
+      "help": "Optional SNI/server-name override used when establishing upstream TLS.",
+      "hasChildren": false
+    },
+    {
       "path": "nodeHost",
       "kind": "core",
       "type": "object",
@@ -15910,7 +16411,7 @@
         "access"
       ],
       "label": "Plugin Allowlist",
-      "help": "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Use this to enforce approved extension inventories in controlled environments.",
+      "help": "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
       "hasChildren": true
     },
     {
@@ -17828,55 +18329,6 @@
       "hasChildren": true
     },
     {
-      "path": "talk.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "media",
-        "security"
-      ],
-      "label": "Talk API Key",
-      "help": "Use this legacy ElevenLabs API key for Talk mode only during migration, and keep secrets in env-backed storage. Prefer talk.providers.elevenlabs.apiKey (fallback: ELEVENLABS_API_KEY).",
-      "hasChildren": true
-    },
-    {
-      "path": "talk.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "talk.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "talk.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "talk.interruptOnSpeech",
       "kind": "core",
       "type": "boolean",
@@ -17888,35 +18340,6 @@
       ],
       "label": "Talk Interrupt on Speech",
       "help": "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
-      "hasChildren": false
-    },
-    {
-      "path": "talk.modelId",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media",
-        "models"
-      ],
-      "label": "Talk Model ID",
-      "help": "Legacy ElevenLabs model ID for Talk mode (default: eleven_v3). Prefer talk.providers.elevenlabs.modelId.",
-      "hasChildren": false
-    },
-    {
-      "path": "talk.outputFormat",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media"
-      ],
-      "label": "Talk Output Format",
-      "help": "Use this legacy ElevenLabs output format for Talk mode (for example pcm_44100 or mp3_44100_128) only during migration. Prefer talk.providers.elevenlabs.outputFormat.",
       "hasChildren": false
     },
     {
@@ -18095,44 +18518,6 @@
       ],
       "label": "Talk Silence Timeout (ms)",
       "help": "Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (700 ms on macOS and Android, 900 ms on iOS).",
-      "hasChildren": false
-    },
-    {
-      "path": "talk.voiceAliases",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media"
-      ],
-      "label": "Talk Voice Aliases",
-      "help": "Use this legacy ElevenLabs voice alias map (for example {\"Clawd\":\"EXAVITQu4vr4xnSDxMaL\"}) only during migration. Prefer talk.providers.elevenlabs.voiceAliases.",
-      "hasChildren": true
-    },
-    {
-      "path": "talk.voiceAliases.*",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "talk.voiceId",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media"
-      ],
-      "label": "Talk Voice ID",
-      "help": "Legacy ElevenLabs default voice ID for Talk mode. Prefer talk.providers.elevenlabs.voiceId.",
       "hasChildren": false
     },
     {

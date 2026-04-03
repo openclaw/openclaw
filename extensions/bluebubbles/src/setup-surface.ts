@@ -135,8 +135,21 @@ const dmPolicy: ChannelSetupDmPolicy = {
   channel,
   policyKey: "channels.bluebubbles.dmPolicy",
   allowFromKey: "channels.bluebubbles.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.bluebubbles?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) => setBlueBubblesDmPolicy(cfg, policy),
+  resolveConfigKeys: (_cfg, accountId) =>
+    accountId && accountId !== DEFAULT_ACCOUNT_ID
+      ? {
+          policyKey: `channels.bluebubbles.accounts.${accountId}.dmPolicy`,
+          allowFromKey: `channels.bluebubbles.accounts.${accountId}.allowFrom`,
+        }
+      : {
+          policyKey: "channels.bluebubbles.dmPolicy",
+          allowFromKey: "channels.bluebubbles.allowFrom",
+        },
+  getCurrent: (cfg, accountId) =>
+    resolveBlueBubblesAccount({ cfg, accountId: accountId ?? DEFAULT_ACCOUNT_ID }).config
+      .dmPolicy ?? "pairing",
+  setPolicy: (cfg, policy, accountId) =>
+    setBlueBubblesDmPolicy(cfg, accountId ?? DEFAULT_ACCOUNT_ID, policy),
   promptAllowFrom: promptBlueBubblesAllowFrom,
 };
 
@@ -153,9 +166,9 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
       configuredScore: 1,
       unconfiguredScore: 0,
       includeStatusLine: true,
-      resolveConfigured: ({ cfg }) =>
-        listBlueBubblesAccountIds(cfg).some((accountId) => {
-          const account = resolveBlueBubblesAccount({ cfg, accountId });
+      resolveConfigured: ({ cfg, accountId }) =>
+        (accountId ? [accountId] : listBlueBubblesAccountIds(cfg)).some((resolvedAccountId) => {
+          const account = resolveBlueBubblesAccount({ cfg, accountId: resolvedAccountId });
           return account.configured;
         }),
     }),

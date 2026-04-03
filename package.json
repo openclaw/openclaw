@@ -91,6 +91,10 @@
       "types": "./dist/plugin-sdk/setup-tools.d.ts",
       "default": "./dist/plugin-sdk/setup-tools.js"
     },
+    "./plugin-sdk/approval-auth-runtime": {
+      "types": "./dist/plugin-sdk/approval-auth-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-auth-runtime.js"
+    },
     "./plugin-sdk/approval-runtime": {
       "types": "./dist/plugin-sdk/approval-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-runtime.js"
@@ -322,6 +326,10 @@
     "./plugin-sdk/browser-runtime": {
       "types": "./dist/plugin-sdk/browser-runtime.d.ts",
       "default": "./dist/plugin-sdk/browser-runtime.js"
+    },
+    "./plugin-sdk/browser-config-support": {
+      "types": "./dist/plugin-sdk/browser-config-support.d.ts",
+      "default": "./dist/plugin-sdk/browser-config-support.js"
     },
     "./plugin-sdk/browser-support": {
       "types": "./dist/plugin-sdk/browser-support.d.ts",

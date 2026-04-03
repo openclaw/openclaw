@@ -2,13 +2,19 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import { buildKimiCodingProvider } from "./provider-catalog.js";
-import { createKimiToolCallMarkupWrapper } from "./stream.js";
+import { wrapKimiProviderStream } from "./stream.js";
 
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function buildKimiReplayPolicy() {
+  return {
+    preserveSignatures: false,
+  };
 }
 
 export default definePluginEntry({
@@ -80,13 +86,8 @@ export default definePluginEntry({
           };
         },
       },
-      capabilities: {
-        anthropicToolSchemaMode: "openai-functions",
-        anthropicToolChoiceMode: "openai-string-modes",
-        openAiPayloadNormalizationMode: "moonshot-thinking",
-        preserveAnthropicThinkingSignatures: false,
-      },
-      wrapStreamFn: (ctx) => createKimiToolCallMarkupWrapper(ctx.streamFn),
+      buildReplayPolicy: () => buildKimiReplayPolicy(),
+      wrapStreamFn: (ctx) => wrapKimiProviderStream(ctx.streamFn),
     });
   },
 });

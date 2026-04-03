@@ -152,7 +152,7 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
   });
   const hasConfiguredUnavailableToken = listTelegramAccountIds(cfg).some((accountId) => {
     const inspected = inspectTelegramAccount({ cfg, accountId });
-    return inspected.enabled && inspected.tokenStatus === "configured_unavailable";
+    return inspected.tokenStatus === "configured_unavailable";
   });
   const tokenResolutionWarnings: string[] = [];
   const resolverAccountIds: string[] = [];

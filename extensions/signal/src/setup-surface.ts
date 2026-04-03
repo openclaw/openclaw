@@ -28,11 +28,16 @@ export const signalSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "signal-cli missing",
     configuredScore: 1,
     unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) =>
-      listSignalAccountIds(cfg).some(
-        (accountId) => resolveSignalAccount({ cfg, accountId }).configured,
-      ),
-    resolveBinaryPath: ({ cfg }) => cfg.channels?.signal?.cliPath ?? "signal-cli",
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? resolveSignalAccount({ cfg, accountId }).configured
+        : listSignalAccountIds(cfg).some(
+            (resolvedAccountId) =>
+              resolveSignalAccount({ cfg, accountId: resolvedAccountId }).configured,
+          ),
+    resolveBinaryPath: ({ cfg, accountId }) =>
+      resolveSignalAccount({ cfg, accountId: accountId ?? "default" }).config.cliPath ??
+      "signal-cli",
     detectBinary,
   }),
   prepare: async ({ cfg, accountId, credentialValues, runtime, prompter, options }) => {
