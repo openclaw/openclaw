@@ -45,4 +45,57 @@ describe("test-update-memory-hotspots source loading", () => {
       },
     );
   });
+
+  it("loads GitHub Actions run jobs and filters by job name", () => {
+    const execFileSyncImpl = vi.fn((command, args) => {
+      if (
+        command === "gh" &&
+        args[0] === "run" &&
+        args[1] === "view" &&
+        args[2] === "23933168654" &&
+        args[3] === "--json" &&
+        args[4] === "jobs"
+      ) {
+        return JSON.stringify({
+          jobs: [
+            { databaseId: 69804189668, name: "checks-fast-extensions-1" },
+            { databaseId: 69804189669, name: "build-smoke" },
+          ],
+        });
+      }
+      if (command === "gh" && args[0] === "run" && args[1] === "view" && args[2] === "--job") {
+        return `job-log-${args[3]}`;
+      }
+      throw new Error("unexpected gh call");
+    });
+
+    expect(
+      loadHotspotInputTexts({
+        ghRuns: ["23933168654"],
+        ghRunJobMatches: ["extensions"],
+        execFileSyncImpl,
+      }),
+    ).toEqual([{ sourceName: "gh-job-69804189668", text: "job-log-69804189668" }]);
+    expect(execFileSyncImpl).toHaveBeenCalledWith(
+      "gh",
+      ["run", "view", "23933168654", "--json", "jobs"],
+      {
+        encoding: "utf8",
+        maxBuffer: 8 * 1024 * 1024,
+      },
+    );
+    const jobLogCalls = execFileSyncImpl.mock.calls.filter(
+      (call) => call[0] === "gh" && call[1][2] === "--job",
+    );
+    expect(jobLogCalls).toEqual([
+      [
+        "gh",
+        ["run", "view", "--job", "69804189668", "--log"],
+        {
+          encoding: "utf8",
+          maxBuffer: 64 * 1024 * 1024,
+        },
+      ],
+    ]);
+  });
 });
