@@ -79,7 +79,7 @@ function collectModelProviderAssignments(params: {
         context: params.context,
         active: providerIsActive,
         inactiveReason: "provider is disabled.",
-        collectTransportSecrets: false,
+        collectTransportSecrets: true,
       });
     }
   }

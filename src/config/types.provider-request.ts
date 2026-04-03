@@ -42,4 +42,4 @@ export type ConfiguredProviderRequest = {
   tls?: ConfiguredProviderRequestTls;
 };
 
-export type ConfiguredModelProviderRequest = Pick<ConfiguredProviderRequest, "headers" | "auth">;
+export type ConfiguredModelProviderRequest = ConfiguredProviderRequest;
