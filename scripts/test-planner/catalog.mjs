@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { channelTestPrefixes } from "../../vitest.channel-paths.mjs";
-import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
+import { channelTestPrefixes, isChannelSurfaceTestFile } from "../../vitest.channel-paths.mjs";
+import {
+  isBoundaryTestFile,
+  isBundledPluginDependentUnitTestFile,
+  isUnitConfigTestFile,
+} from "../../vitest.unit-paths.mjs";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
@@ -82,6 +86,7 @@ export function loadTestCatalog() {
     const reasons = [];
     const isolated =
       options.unitMemoryIsolatedFiles?.includes(normalizedFile) ||
+      options.extensionMemoryIsolatedFiles?.includes(normalizedFile) ||
       options.extensionTimedIsolatedFiles?.includes(normalizedFile) ||
       options.channelTimedIsolatedFiles?.includes(normalizedFile) ||
       unitForkIsolatedFileSet.has(normalizedFile) ||
@@ -89,6 +94,9 @@ export function loadTestCatalog() {
       channelIsolatedFileSet.has(normalizedFile);
     if (options.unitMemoryIsolatedFiles?.includes(normalizedFile)) {
       reasons.push("unit-memory-isolated");
+    }
+    if (options.extensionMemoryIsolatedFiles?.includes(normalizedFile)) {
+      reasons.push("extensions-memory-heavy");
     }
     if (options.extensionTimedIsolatedFiles?.includes(normalizedFile)) {
       reasons.push("extensions-timed-heavy");
@@ -107,7 +115,11 @@ export function loadTestCatalog() {
     }
 
     let surface = "base";
-    if (isUnitConfigTestFile(normalizedFile)) {
+    if (isBundledPluginDependentUnitTestFile(normalizedFile)) {
+      surface = "bundled";
+    } else if (isBoundaryTestFile(normalizedFile)) {
+      surface = "unit";
+    } else if (isUnitConfigTestFile(normalizedFile)) {
       surface = "unit";
     } else if (contractTestPrefixes.some((prefix) => normalizedFile.startsWith(prefix))) {
       surface = "contracts";
@@ -115,7 +127,7 @@ export function loadTestCatalog() {
       surface = "live";
     } else if (normalizedFile.endsWith(".e2e.test.ts")) {
       surface = "e2e";
-    } else if (channelTestPrefixes.some((prefix) => normalizedFile.startsWith(prefix))) {
+    } else if (isChannelSurfaceTestFile(normalizedFile)) {
       surface = "channels";
     } else if (normalizedFile.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
       surface = "extensions";
@@ -202,6 +214,7 @@ export function loadTestCatalog() {
 
 export const testSurfaces = [
   "unit",
+  "bundled",
   "extensions",
   "channels",
   "contracts",

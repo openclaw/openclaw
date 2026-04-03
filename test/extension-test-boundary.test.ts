@@ -7,6 +7,8 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 
 const allowedNonExtensionTests = new Set<string>([
   "src/agents/pi-embedded-runner-extraparams.test.ts",
+  "src/channels/plugins/contracts/dm-policy.contract.test.ts",
+  "src/channels/plugins/contracts/group-policy.contract.test.ts",
   "src/plugins/contracts/discovery.contract.test.ts",
 ]);
 

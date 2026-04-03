@@ -1,5 +1,10 @@
 import type { Api } from "@mariozechner/pi-ai";
 import type { ModelDefinitionConfig } from "../config/types.js";
+import type {
+  ConfiguredModelProviderRequest,
+  ConfiguredProviderRequest,
+} from "../config/types.provider-request.js";
+import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type {
   ProviderRequestCapabilities,
@@ -157,6 +162,188 @@ type ResolveProviderRequestPolicyConfigParams = {
   allowPrivateNetwork?: boolean;
   request?: ProviderRequestTransportOverrides;
 };
+
+function sanitizeConfiguredRequestString(value: unknown, path: string): string | undefined {
+  if (typeof value !== "string") {
+    // Config transport overrides are sanitized after secrets runtime resolution.
+    // Fail closed if a raw SecretRef leaks into this path instead of silently dropping it.
+    assertSecretInputResolved({ value, path });
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function sanitizeConfiguredProviderRequest(
+  request: ConfiguredProviderRequest | ProviderRequestTransportOverrides | undefined,
+): ProviderRequestTransportOverrides | undefined {
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    return undefined;
+  }
+
+  let headers: Record<string, string> | undefined;
+  if (request.headers && typeof request.headers === "object" && !Array.isArray(request.headers)) {
+    const nextHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(request.headers)) {
+      const sanitized = sanitizeConfiguredRequestString(value, `request.headers.${key}`);
+      if (sanitized) {
+        nextHeaders[key] = sanitized;
+      }
+    }
+    if (Object.keys(nextHeaders).length > 0) {
+      headers = nextHeaders;
+    }
+  }
+
+  let auth: ProviderRequestAuthOverride | undefined;
+  const rawAuth = request.auth;
+  if (rawAuth && typeof rawAuth === "object" && !Array.isArray(rawAuth)) {
+    if (rawAuth.mode === "provider-default") {
+      auth = { mode: "provider-default" };
+    } else if (rawAuth.mode === "authorization-bearer") {
+      const token = sanitizeConfiguredRequestString(rawAuth.token, "request.auth.token");
+      if (token) {
+        auth = { mode: "authorization-bearer", token };
+      }
+    } else if (rawAuth.mode === "header") {
+      const headerName = sanitizeConfiguredRequestString(
+        rawAuth.headerName,
+        "request.auth.headerName",
+      );
+      const value = sanitizeConfiguredRequestString(rawAuth.value, "request.auth.value");
+      const prefix = sanitizeConfiguredRequestString(rawAuth.prefix, "request.auth.prefix");
+      if (headerName && value) {
+        auth = {
+          mode: "header",
+          headerName,
+          value,
+          ...(prefix ? { prefix } : {}),
+        };
+      }
+    }
+  }
+
+  const sanitizeTls = (
+    tls: unknown,
+    pathPrefix: "request.tls" | "request.proxy.tls",
+  ): ProviderRequestTlsOverride | undefined => {
+    if (!tls || typeof tls !== "object" || Array.isArray(tls)) {
+      return undefined;
+    }
+    const rawTls = tls as Record<string, unknown>;
+    const next: ProviderRequestTlsOverride = {};
+    const ca = sanitizeConfiguredRequestString(rawTls.ca, `${pathPrefix}.ca`);
+    const cert = sanitizeConfiguredRequestString(rawTls.cert, `${pathPrefix}.cert`);
+    const key = sanitizeConfiguredRequestString(rawTls.key, `${pathPrefix}.key`);
+    const passphrase = sanitizeConfiguredRequestString(
+      rawTls.passphrase,
+      `${pathPrefix}.passphrase`,
+    );
+    const serverName = sanitizeConfiguredRequestString(
+      rawTls.serverName,
+      `${pathPrefix}.serverName`,
+    );
+    if (ca) {
+      next.ca = ca;
+    }
+    if (cert) {
+      next.cert = cert;
+    }
+    if (key) {
+      next.key = key;
+    }
+    if (passphrase) {
+      next.passphrase = passphrase;
+    }
+    if (serverName) {
+      next.serverName = serverName;
+    }
+    if (rawTls.insecureSkipVerify === true) {
+      next.insecureSkipVerify = true;
+    } else if (rawTls.insecureSkipVerify === false) {
+      next.insecureSkipVerify = false;
+    }
+    return Object.keys(next).length > 0 ? next : undefined;
+  };
+
+  let proxy: ProviderRequestProxyOverride | undefined;
+  const rawProxy = request.proxy;
+  if (rawProxy && typeof rawProxy === "object" && !Array.isArray(rawProxy)) {
+    const tls = sanitizeTls(rawProxy.tls, "request.proxy.tls");
+    if (rawProxy.mode === "env-proxy") {
+      proxy = {
+        mode: "env-proxy",
+        ...(tls ? { tls } : {}),
+      };
+    } else if (rawProxy.mode === "explicit-proxy") {
+      const url = sanitizeConfiguredRequestString(rawProxy.url, "request.proxy.url");
+      if (url) {
+        proxy = {
+          mode: "explicit-proxy",
+          url,
+          ...(tls ? { tls } : {}),
+        };
+      }
+    }
+  }
+
+  const tls = sanitizeTls(request.tls, "request.tls");
+
+  if (!headers && !auth && !proxy && !tls) {
+    return undefined;
+  }
+  return {
+    ...(headers ? { headers } : {}),
+    ...(auth ? { auth } : {}),
+    ...(proxy ? { proxy } : {}),
+    ...(tls ? { tls } : {}),
+  };
+}
+
+const MODEL_PROVIDER_REQUEST_TRANSPORT_MESSAGE =
+  "models.providers.*.request only supports headers and auth overrides; proxy and TLS transport settings are not wired for model-provider requests";
+
+export function sanitizeConfiguredModelProviderRequest(
+  request: ConfiguredModelProviderRequest | ConfiguredProviderRequest | undefined,
+): ProviderRequestTransportOverrides | undefined {
+  const sanitized = sanitizeConfiguredProviderRequest(request);
+  if (!sanitized) {
+    return undefined;
+  }
+  if (sanitized.proxy || sanitized.tls) {
+    throw new Error(MODEL_PROVIDER_REQUEST_TRANSPORT_MESSAGE);
+  }
+  return {
+    ...(sanitized.headers ? { headers: sanitized.headers } : {}),
+    ...(sanitized.auth ? { auth: sanitized.auth } : {}),
+  };
+}
+
+export function mergeProviderRequestOverrides(
+  ...overrides: Array<ProviderRequestTransportOverrides | undefined>
+): ProviderRequestTransportOverrides | undefined {
+  let merged: ProviderRequestTransportOverrides | undefined;
+  for (const current of overrides) {
+    if (!current) {
+      continue;
+    }
+    merged = {
+      ...merged,
+      ...(current.headers
+        ? {
+            headers: {
+              ...merged?.headers,
+              ...current.headers,
+            },
+          }
+        : {}),
+      ...(current.auth ? { auth: current.auth } : {}),
+      ...(current.proxy ? { proxy: current.proxy } : {}),
+      ...(current.tls ? { tls: current.tls } : {}),
+    };
+  }
+  return merged;
+}
 
 export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string;
 export function normalizeBaseUrl(

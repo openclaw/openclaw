@@ -151,6 +151,19 @@ describe("plugin-sdk subpath exports", () => {
     }
   });
 
+  it("keeps removed bundled-channel prefixes out of the public sdk list", () => {
+    const bannedPrefixes = ["discord", "signal", "slack", "telegram", "whatsapp"];
+    const banned = pluginSdkSubpaths.filter((subpath) =>
+      bannedPrefixes.some(
+        (prefix) =>
+          subpath === prefix ||
+          subpath.startsWith(`${prefix}-`) ||
+          subpath.startsWith(`${prefix}.`),
+      ),
+    );
+    expect(banned).toEqual([]);
+  });
+
   it("keeps helper subpaths aligned", () => {
     expectSourceMentions("core", [
       "emptyPluginConfigSchema",
@@ -188,13 +201,6 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("media-runtime", [
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
-    ]);
-    expectSourceMentions("telegram-core", [
-      "ChannelMessageActionAdapter",
-      "TelegramAccountConfig",
-      "buildChannelConfigSchema",
-      "buildTokenChannelStatusSummary",
-      "resolveConfiguredFromCredentialStatuses",
     ]);
     expectSourceMentions("bluebubbles", [
       "normalizeBlueBubblesAcpConversationId",
@@ -235,7 +241,6 @@ describe("plugin-sdk subpath exports", () => {
     ]) {
       expectSourceMentions(subpath, ["chunkTextForOutbound"]);
     }
-    expectSourceMentions("signal", ["chunkText"]);
     expectSourceMentions("reply-history", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
@@ -284,12 +289,6 @@ describe("plugin-sdk subpath exports", () => {
       ],
     });
     expectSourceMentions("runtime", ["createLoggerBackedRuntime"]);
-    expectSourceMentions("discord", [
-      "buildDiscordComponentMessage",
-      "editDiscordComponentMessage",
-      "registerBuiltDiscordComponentMessage",
-      "resolveDiscordAccount",
-    ]);
     expectSourceMentions("huggingface", [
       "buildHuggingfaceModelDefinition",
       "buildHuggingfaceProvider",
@@ -482,8 +481,10 @@ describe("plugin-sdk subpath exports", () => {
       "applyChannelMatchMeta",
       "buildChannelKeyCandidates",
       "buildMessagingTarget",
+      "ChannelId",
       "createAllowedChatSenderMatcher",
       "ensureTargetId",
+      "normalizeChannelId",
       "parseChatAllowTargetPrefixes",
       "parseMentionPrefixOrAtUserTarget",
       "parseChatTargetPrefixesOrThrow",
@@ -789,6 +790,7 @@ describe("plugin-sdk subpath exports", () => {
       "createChannelPairingChallengeIssuer",
       "createLoggedPairingApprovalNotifier",
       "createPairingPrefixStripper",
+      "readChannelAllowFromStoreSync",
       "createTextPairingAdapter",
     ]);
     expect("createScopedPairingAccess" in channelPairingSdk).toBe(false);
