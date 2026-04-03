@@ -102,6 +102,12 @@ export function createDiscordMessageToolComponentsSchema() {
           description: "Unix epoch timestamp in milliseconds after which the components expire.",
         }),
       ),
+      bindSession: Type.Optional(
+        Type.Boolean({
+          description:
+            "If false, route interaction events through the channel's normal session instead of a bound session key.",
+        }),
+      ),
       container: Type.Optional(
         Type.Object({
           accentColor: Type.Optional(Type.String()),
@@ -113,7 +119,7 @@ export function createDiscordMessageToolComponentsSchema() {
     },
     {
       description:
-        "Discord components v2 payload. Set reusable=true to keep buttons, selects, and forms active until expiry.",
+        "Discord components v2 payload. Set reusable=true to keep buttons, selects, and forms active until expiry. Set bindSession=false to route interactions through the channel's normal session.",
     },
   );
 }

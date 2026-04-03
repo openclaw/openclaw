@@ -79,6 +79,14 @@ describe("discord components", () => {
       }),
     ).toThrow("filename");
   });
+
+  it("reads bindSession=false from spec", () => {
+    const spec = readDiscordComponentSpec({
+      blocks: [{ type: "text", text: "hello" }],
+      bindSession: false,
+    });
+    expect(spec?.bindSession).toBe(false);
+  });
 });
 
 describe("discord component registry", () => {
