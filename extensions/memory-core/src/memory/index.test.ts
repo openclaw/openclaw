@@ -937,12 +937,21 @@ describe("memory index", () => {
       });
 
       expect(activateFallbackProvider).toHaveBeenCalledWith("embedding backend failed");
-      expect(runUnsafeReindex).toHaveBeenCalledWith({
+      const expectedReindexParams = {
         reason: "post-compaction",
         force: true,
         progress: undefined,
-      });
-      expect(runSafeReindex).not.toHaveBeenCalled();
+      };
+      const usesUnsafeReindex =
+        process.env.OPENCLAW_TEST_FAST === "1" &&
+        process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1";
+      if (usesUnsafeReindex) {
+        expect(runUnsafeReindex).toHaveBeenCalledWith(expectedReindexParams);
+        expect(runSafeReindex).not.toHaveBeenCalled();
+      } else {
+        expect(runSafeReindex).toHaveBeenCalledWith(expectedReindexParams);
+        expect(runUnsafeReindex).not.toHaveBeenCalled();
+      }
 
       internal.syncSessionFiles = originalSyncSessionFiles;
       internal.shouldFallbackOnError = originalShouldFallbackOnError;
