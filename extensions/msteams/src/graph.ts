@@ -26,6 +26,19 @@ export type GraphChannel = {
 
 export type GraphResponse<T> = { value?: T[] };
 
+/** Graph collection response with optional pagination link. */
+export type GraphPagedResponse<T> = {
+  value?: T[];
+  "@odata.nextLink"?: string;
+};
+
+/** Result of a paginated Graph API fetch. */
+export type PaginatedResult<T> = {
+  items: T[];
+  truncated: boolean;
+  found?: T;
+};
+
 export function normalizeQuery(value?: string | null): string {
   return value?.trim() ?? "";
 }
@@ -89,6 +102,56 @@ export async function fetchGraphJson<T>(params: {
   return await readOptionalGraphJson<T>(res);
 }
 
+/**
+ * Fetch all pages of a Graph API collection, following @odata.nextLink.
+ * Optionally stop early when `findOne` matches an item.
+ */
+export async function fetchAllGraphPages<T>(params: {
+  token: string;
+  path: string;
+  headers?: Record<string, string>;
+  /** Max pages to fetch before stopping. Default: 50. */
+  maxPages?: number;
+  /** Stop pagination early when this predicate returns true. */
+  findOne?: (item: T) => boolean;
+}): Promise<PaginatedResult<T>> {
+  const maxPages = params.maxPages ?? 50;
+  const items: T[] = [];
+  let nextPath: string | undefined = params.path;
+
+  for (let page = 0; page < maxPages && nextPath; page++) {
+    const res: GraphPagedResponse<T> = await fetchGraphJson<GraphPagedResponse<T>>({
+      token: params.token,
+      path: nextPath,
+      headers: params.headers,
+    });
+
+    const pageItems = res.value ?? [];
+
+    if (params.findOne) {
+      const match = pageItems.find(params.findOne);
+      if (match) {
+        items.push(...pageItems);
+        return { items, truncated: false, found: match };
+      }
+    }
+
+    items.push(...pageItems);
+
+    // @odata.nextLink is an absolute URL; strip the Graph root to get a relative path
+    const rawNext: string | undefined = res["@odata.nextLink"];
+    if (rawNext) {
+      nextPath = rawNext
+        .replace("https://graph.microsoft.com/v1.0", "")
+        .replace("https://graph.microsoft.com/beta", "");
+    } else {
+      nextPath = undefined;
+    }
+  }
+
+  return { items, truncated: Boolean(nextPath) };
+}
+
 export async function resolveGraphToken(cfg: unknown): Promise<string> {
   const creds = resolveMSTeamsCredentials(
     (cfg as { channels?: { msteams?: unknown } })?.channels?.msteams as MSTeamsConfig | undefined,
@@ -110,8 +173,48 @@ export async function listTeamsByName(token: string, query: string): Promise<Gra
   const escaped = escapeOData(query);
   const filter = `resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'${escaped}')`;
   const path = `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
-  const res = await fetchGraphJson<GraphResponse<GraphGroup>>({ token, path });
-  return res.value ?? [];
+  const { items } = await fetchAllGraphPages<GraphGroup>({ token, path, maxPages: 5 });
+  return items;
+}
+
+export async function postGraphJson<T>(params: {
+  token: string;
+  path: string;
+  body?: unknown;
+}): Promise<T> {
+  const res = await requestGraph({
+    token: params.token,
+    path: params.path,
+    method: "POST",
+    body: params.body,
+    errorPrefix: "Graph POST",
+  });
+  return readOptionalGraphJson<T>(res);
+}
+
+export async function postGraphBetaJson<T>(params: {
+  token: string;
+  path: string;
+  body?: unknown;
+}): Promise<T> {
+  const res = await requestGraph({
+    token: params.token,
+    path: params.path,
+    method: "POST",
+    root: GRAPH_BETA,
+    body: params.body,
+    errorPrefix: "Graph beta POST",
+  });
+  return readOptionalGraphJson<T>(res);
+}
+
+export async function deleteGraphRequest(params: { token: string; path: string }): Promise<void> {
+  await requestGraph({
+    token: params.token,
+    path: params.path,
+    method: "DELETE",
+    errorPrefix: "Graph DELETE",
+  });
 }
 
 export async function postGraphJson<T>(params: {
@@ -156,6 +259,6 @@ export async function deleteGraphRequest(params: { token: string; path: string }
 
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
-  const res = await fetchGraphJson<GraphResponse<GraphChannel>>({ token, path });
-  return res.value ?? [];
+  const { items } = await fetchAllGraphPages<GraphChannel>({ token, path, maxPages: 10 });
+  return items;
 }
