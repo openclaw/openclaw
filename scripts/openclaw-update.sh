@@ -179,7 +179,8 @@ NPM_PLUGINS=()
 if [[ -d "${EXTENSIONS_DIR}" ]]; then
     for plugin_dir in "${EXTENSIONS_DIR}"/*/; do
         [[ -d "${plugin_dir}" ]] || continue
-        plugin_name=$(basename "${plugin_dir}")
+        # Use dir name only for path construction; display real ID from manifest
+        plugin_dir_name=$(basename "${plugin_dir}")
 
         pkg_file="${plugin_dir}package.json"
         peer_pkg="${plugin_dir}node_modules/openclaw/package.json"
@@ -188,16 +189,29 @@ if [[ -d "${EXTENSIONS_DIR}" ]]; then
         [[ -f "${peer_pkg}" ]] || continue
         [[ -f "${pkg_file}" ]] || continue
 
+        # Resolve true plugin ID from manifest (scoped packages like @org/plugin
+        # are stored under a hashed dir name — basename would be wrong for config)
+        plugin_id=""
+        if [[ -f "${plugin_dir}openclaw.plugin.json" ]]; then
+            plugin_id=$(python3 -c "import json; print(json.load(open('${plugin_dir}openclaw.plugin.json')).get('id',''))" 2>/dev/null || true)
+        fi
+        if [[ -z "${plugin_id}" && -f "${pkg_file}" ]]; then
+            plugin_id=$(python3 -c "import json; print(json.load(open('${pkg_file}')).get('name',''))" 2>/dev/null || true)
+        fi
+        [[ -z "${plugin_id}" ]] && plugin_id="${plugin_dir_name}"  # fallback
+
         plugin_version=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("version","unknown"))' < "${pkg_file}" 2>/dev/null || echo "unknown")
         peer_version=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("version","unknown"))' < "${peer_pkg}" 2>/dev/null || echo "unknown")
 
-        log "${plugin_name} v${plugin_version}"
+        log "${plugin_id} v${plugin_version}"
         log "  Current peer: ${peer_version}"
         log "  Target peer:  ${TARGET_VERSION}"
 
         if [[ "${peer_version}" != "${TARGET_VERSION}" ]]; then
             warn "  Peer mismatch — will update"
-            NPM_PLUGINS+=("${plugin_name}")
+            # Store as "dir_name:plugin_id" so Phase 4 can use the right path
+            # and the right config key without relying on basename alone
+            NPM_PLUGINS+=("${plugin_dir_name}:${plugin_id}")
         else
             success "  Peer already matches target"
         fi
@@ -209,10 +223,18 @@ fi
 if [[ -d "${EXTENSIONS_DIR}" ]]; then
     for plugin_dir in "${EXTENSIONS_DIR}"/*/; do
         [[ -d "${plugin_dir}" ]] || continue
-        plugin_name=$(basename "${plugin_dir}")
         peer_pkg="${plugin_dir}node_modules/openclaw/package.json"
         [[ -f "${peer_pkg}" ]] && continue  # already handled above
-        success "${plugin_name}: local plugin (no npm peer update needed)"
+        # Resolve display name from manifest
+        local_id=""
+        if [[ -f "${plugin_dir}openclaw.plugin.json" ]]; then
+            local_id=$(python3 -c "import json; print(json.load(open('${plugin_dir}openclaw.plugin.json')).get('id',''))" 2>/dev/null || true)
+        fi
+        if [[ -z "${local_id}" && -f "${plugin_dir}package.json" ]]; then
+            local_id=$(python3 -c "import json; print(json.load(open('${plugin_dir}package.json')).get('name',''))" 2>/dev/null || true)
+        fi
+        [[ -z "${local_id}" ]] && local_id=$(basename "${plugin_dir}")
+        success "${local_id}: local plugin (no npm peer update needed)"
     done
 fi
 echo ""
@@ -231,8 +253,9 @@ echo ""
 
 if [[ ${#NPM_PLUGINS[@]} -gt 0 ]]; then
     echo "  1. Update npm-sourced plugin peers:"
-    for plugin in "${NPM_PLUGINS[@]}"; do
-        echo "     - ${plugin}: install openclaw@${TARGET_VERSION} as peer"
+    for entry in "${NPM_PLUGINS[@]}"; do
+        plugin_id="${entry#*:}"  # strip dir_name: prefix
+        echo "     - ${plugin_id}: install openclaw@${TARGET_VERSION} as peer"
     done
 else
     echo "  1. No npm plugin peer updates needed"
@@ -270,19 +293,22 @@ echo -e "${BOLD}           Phase 4: Updating Plugin Peers                      $
 echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-for plugin in "${NPM_PLUGINS[@]}"; do
-    plugin_path="${EXTENSIONS_DIR}/${plugin}"
-    log "Updating ${plugin} peer dependency..."
+for entry in "${NPM_PLUGINS[@]}"; do
+    # NPM_PLUGINS entries are "dir_name:plugin_id" — split them out
+    plugin_dir_name="${entry%%:*}"
+    plugin_id="${entry#*:}"
+    plugin_path="${EXTENSIONS_DIR}/${plugin_dir_name}"
+    log "Updating ${plugin_id} peer dependency..."
     cd "${plugin_path}"
 
     if npm install "openclaw@${TARGET_VERSION}" --save-peer 2>&1; then
-        success "Installed openclaw@${TARGET_VERSION} as peer for ${plugin}"
+        success "Installed openclaw@${TARGET_VERSION} as peer for ${plugin_id}"
     else
         warn "  --save-peer failed; retrying without flag..."
         if npm install "openclaw@${TARGET_VERSION}" 2>&1; then
-            success "Installed openclaw@${TARGET_VERSION} for ${plugin}"
+            success "Installed openclaw@${TARGET_VERSION} for ${plugin_id}"
         else
-            fail "Failed to update peer for ${plugin}"
+            fail "Failed to update peer for ${plugin_id}"
             exit 2
         fi
     fi
@@ -304,7 +330,7 @@ for plugin in "${NPM_PLUGINS[@]}"; do
         log "Updating install record in openclaw.json..."
         OPENCLAW_UPD_CONFIG="${CONFIG_FILE}" \
         OPENCLAW_UPD_PLUGIN_PATH="${plugin_path}" \
-        OPENCLAW_UPD_PLUGIN_NAME="${plugin}" \
+        OPENCLAW_UPD_PLUGIN_NAME="${plugin_id}" \
         python3 <<'PYEOF'
 import json, datetime, os, sys, tempfile
 
@@ -373,12 +399,30 @@ echo -e "${BOLD}           Phase 5: Updating Gateway                           $
 echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-log "Running: openclaw update --tag ${TARGET_VERSION} --no-restart"
-if openclaw update --tag "${TARGET_VERSION}" --no-restart 2>&1; then
-    success "Gateway update completed"
+# Detect install type — git installs ignore --tag (update from git HEAD instead)
+INSTALL_TYPE=$(openclaw --version --json 2>/dev/null \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('installType','npm'))" 2>/dev/null \
+    || echo "npm")
+
+if [[ "${INSTALL_TYPE}" == "git" ]]; then
+    warn "Git install detected — --tag VERSION is ignored by 'openclaw update'."
+    warn "Gateway will update from git HEAD. Ensure your git branch/HEAD is at ${TARGET_VERSION} before continuing."
+    warn "Plugin peers were pinned to ${TARGET_VERSION} above; verify git HEAD matches."
+    log "Running: openclaw update --no-restart"
+    if openclaw update --no-restart 2>&1; then
+        success "Gateway update completed (git install — HEAD-based)"
+    else
+        fail "Gateway update failed"
+        exit 3
+    fi
 else
-    fail "Gateway update failed"
-    exit 3
+    log "Running: openclaw update --tag ${TARGET_VERSION} --no-restart"
+    if openclaw update --tag "${TARGET_VERSION}" --no-restart 2>&1; then
+        success "Gateway update completed"
+    else
+        fail "Gateway update failed"
+        exit 3
+    fi
 fi
 
 # Verify version
@@ -408,12 +452,20 @@ if [[ -d "${EXTENSIONS_DIR}" ]]; then
         [[ -d "${plugin_dir}" ]] || continue
         peer_pkg="${plugin_dir}node_modules/openclaw/package.json"
         [[ -f "${peer_pkg}" ]] || continue
-        plugin_name=$(basename "${plugin_dir}")
+        # Resolve display name from manifest
+        val_id=""
+        if [[ -f "${plugin_dir}openclaw.plugin.json" ]]; then
+            val_id=$(python3 -c "import json; print(json.load(open('${plugin_dir}openclaw.plugin.json')).get('id',''))" 2>/dev/null || true)
+        fi
+        if [[ -z "${val_id}" && -f "${plugin_dir}package.json" ]]; then
+            val_id=$(python3 -c "import json; print(json.load(open('${plugin_dir}package.json')).get('name',''))" 2>/dev/null || true)
+        fi
+        [[ -z "${val_id}" ]] && val_id=$(basename "${plugin_dir}")
         peer_ver=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("version","unknown"))' < "${peer_pkg}" 2>/dev/null || echo "unknown")
         if [[ "${peer_ver}" == "${TARGET_VERSION}" ]]; then
-            success "  ${plugin_name} peer: ${peer_ver} ✓"
+            success "  ${val_id} peer: ${peer_ver} ✓"
         else
-            warn "  ${plugin_name} peer: ${peer_ver} (expected ${TARGET_VERSION})"
+            warn "  ${val_id} peer: ${peer_ver} (expected ${TARGET_VERSION})"
             VALIDATION_ERRORS=$((VALIDATION_ERRORS + 1))
         fi
     done
@@ -454,7 +506,14 @@ echo ""
 echo "Summary:"
 echo "  Previous version: ${CURRENT_VERSION}"
 echo "  New version:      ${NEW_GATEWAY}"
-echo "  Plugins updated:  ${NPM_PLUGINS[*]:-none}"
+# Show real plugin IDs (strip the dir_name: prefix)
+if [[ ${#NPM_PLUGINS[@]} -gt 0 ]]; then
+    updated_ids=()
+    for entry in "${NPM_PLUGINS[@]}"; do updated_ids+=("${entry#*:}"); done
+    echo "  Plugins updated:  ${updated_ids[*]}"
+else
+    echo "  Plugins updated:  none"
+fi
 echo ""
 
 echo -e "${YELLOW}${BOLD}NEXT STEPS:${NC}"
