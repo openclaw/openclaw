@@ -178,7 +178,17 @@ export function createDiscordNativeApprovalAdapter(
   return splitChannelApprovalCapability(createDiscordApprovalCapability(configOverride));
 }
 
-export const discordApprovalCapability = createDiscordApprovalCapability();
+let cachedDiscordApprovalCapability: ReturnType<typeof createDiscordApprovalCapability> | undefined;
+let cachedDiscordNativeApprovalAdapter:
+  | ReturnType<typeof createDiscordNativeApprovalAdapter>
+  | undefined;
 
-export const discordNativeApprovalAdapter =
-  splitChannelApprovalCapability(discordApprovalCapability);
+export function getDiscordApprovalCapability() {
+  cachedDiscordApprovalCapability ??= createDiscordApprovalCapability();
+  return cachedDiscordApprovalCapability;
+}
+
+export function getDiscordNativeApprovalAdapter() {
+  cachedDiscordNativeApprovalAdapter ??= createDiscordNativeApprovalAdapter();
+  return cachedDiscordNativeApprovalAdapter;
+}

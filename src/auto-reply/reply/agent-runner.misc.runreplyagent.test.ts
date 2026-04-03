@@ -7,6 +7,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryFlushPlanResolver,
+} from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -111,6 +115,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   resetSystemEventsForTest();
+  clearMemoryPluginState();
 });
 
 describe("runReplyAgent onAgentRunStart", () => {
@@ -142,7 +147,10 @@ describe("runReplyAgent onAgentRunStart", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config:
+          provider === "claude-cli"
+            ? { agents: { defaults: { cliBackends: { "claude-cli": {} } } } }
+            : {},
         skillsSnapshot: {},
         provider,
         model,
@@ -1150,7 +1158,7 @@ describe("runReplyAgent claude-cli routing", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: { agents: { defaults: { cliBackends: { "claude-cli": {} } } } },
         skillsSnapshot: {},
         provider: "claude-cli",
         model: "opus-4.5",
@@ -1754,6 +1762,14 @@ describe("runReplyAgent fallback reasoning tags", () => {
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 1_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 20_000,
+      prompt: "Pre-compaction memory flush.",
+      systemPrompt: "Flush memory into the configured memory file.",
+      relativePath: "memory/active.md",
+    }));
     runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedPiAgentParams) => {
       if (params.prompt?.includes("Pre-compaction memory flush.")) {
         return { payloads: [], meta: {} };

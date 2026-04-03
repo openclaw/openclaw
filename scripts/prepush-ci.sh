@@ -59,9 +59,9 @@ run_linux_ci_mirror() {
   run_step pnpm vitest run --config vitest.extensions.config.ts --maxWorkers=1
   run_step env CI=true pnpm exec vitest run --config vitest.unit.config.ts --maxWorkers=1
 
-  log_step "OPENCLAW_TEST_WORKERS=${OPENCLAW_TEST_WORKERS:-1} OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=${OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB:-6144} pnpm test"
-  OPENCLAW_TEST_WORKERS="${OPENCLAW_TEST_WORKERS:-1}" \
-  OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB="${OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB:-6144}" \
+  log_step "OPENCLAW_VITEST_MAX_WORKERS=${OPENCLAW_VITEST_MAX_WORKERS:-1} NODE_OPTIONS=${NODE_OPTIONS:---max-old-space-size=6144} pnpm test"
+  OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-1}" \
+  NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=6144}" \
     pnpm test
 }
 

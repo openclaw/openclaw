@@ -180,6 +180,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { buildAttemptReplayMetadata } from "./incomplete-turn.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 export {
@@ -3175,6 +3176,11 @@ export async function runEmbeddedAttempt(
       }
 
       return {
+        replayMetadata: buildAttemptReplayMetadata({
+          toolMetas: toolMetasNormalized,
+          didSendViaMessagingTool: didSendViaMessagingTool(),
+          successfulCronAdds: getSuccessfulCronAdds(),
+        }),
         aborted,
         timedOut,
         timedOutDuringCompaction,

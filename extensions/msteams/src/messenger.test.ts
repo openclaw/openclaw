@@ -2,22 +2,23 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
+import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareOneDrive: vi.fn(),
+  uploadAndShareSharePoint: vi.fn(),
+  getDriveItemProperties: vi.fn(),
 }));
 
-vi.mock("./graph-upload.js", async () => {
-  const actual = await vi.importActual<typeof import("./graph-upload.js")>("./graph-upload.js");
+vi.mock("./graph-upload.js", () => {
   return {
-    ...actual,
     uploadAndShareOneDrive: graphUploadMockState.uploadAndShareOneDrive,
+    uploadAndShareSharePoint: graphUploadMockState.uploadAndShareSharePoint,
+    getDriveItemProperties: graphUploadMockState.getDriveItemProperties,
   };
 });
 
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   type MSTeamsAdapter,
   type MSTeamsRenderedMessage,
@@ -41,7 +42,10 @@ const chunkMarkdownText = (text: string, limit: number) => {
   return chunks;
 };
 
-const runtimeStub: PluginRuntime = createPluginRuntimeMock({
+const runtimeStub = {
+  config: {
+    loadConfig: () => ({}),
+  },
   channel: {
     text: {
       chunkMarkdownText,
@@ -50,7 +54,7 @@ const runtimeStub: PluginRuntime = createPluginRuntimeMock({
       convertMarkdownTables: (text: string) => text,
     },
   },
-});
+} as unknown as PluginRuntime;
 
 const noopUpdateActivity = async () => {};
 const noopDeleteActivity = async () => {};
@@ -113,6 +117,8 @@ describe("msteams messenger", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
     graphUploadMockState.uploadAndShareOneDrive.mockReset();
+    graphUploadMockState.uploadAndShareSharePoint.mockReset();
+    graphUploadMockState.getDriveItemProperties.mockReset();
     graphUploadMockState.uploadAndShareOneDrive.mockResolvedValue({
       itemId: "item123",
       webUrl: "https://onedrive.example.com/item123",

@@ -1,12 +1,12 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
 import {
   createReplyPrefixContext,
   type ClawdbotConfig,
   type ReplyPayload,
   type RuntimeEnv,
-} from "../runtime-api.js";
-import { resolveFeishuRuntimeAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
+} from "./comment-dispatcher-runtime-api.js";
 import type { CommentFileType } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { getFeishuRuntime } from "./runtime.js";

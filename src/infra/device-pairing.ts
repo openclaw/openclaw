@@ -344,6 +344,34 @@ function buildDeviceAuthToken(params: {
   };
 }
 
+function resolveRoleScopedDeviceTokenScopes(role: string, scopes: string[] | undefined): string[] {
+  const normalized = normalizeDeviceAuthScopes(scopes);
+  if (role === "operator") {
+    return normalized.filter((scope) => scope.startsWith(OPERATOR_SCOPE_PREFIX));
+  }
+  return normalized.filter((scope) => !scope.startsWith(OPERATOR_SCOPE_PREFIX));
+}
+
+function resolveApprovedTokenScopes(params: {
+  role: string;
+  pending: DevicePairingPendingRequest;
+  existingToken?: DeviceAuthToken;
+  approvedScopes?: string[];
+  existing?: PairedDevice;
+}): string[] {
+  const requestedScopes = resolveRoleScopedDeviceTokenScopes(params.role, params.pending.scopes);
+  if (requestedScopes.length > 0) {
+    return requestedScopes;
+  }
+  return resolveRoleScopedDeviceTokenScopes(
+    params.role,
+    params.existingToken?.scopes ??
+      params.approvedScopes ??
+      params.existing?.approvedScopes ??
+      params.existing?.scopes,
+  );
+}
+
 function resolveApprovedDeviceScopeBaseline(device: PairedDevice): string[] | null {
   const baseline = device.approvedScopes ?? device.scopes;
   if (!Array.isArray(baseline)) {
@@ -506,19 +534,15 @@ export async function approveDevicePairing(
       pending.scopes,
     );
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
-    const roleForToken = normalizeRole(pending.role);
-    if (roleForToken) {
+    for (const roleForToken of requestedRoles) {
       const existingToken = tokens[roleForToken];
-      const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
-      const nextScopes =
-        requestedScopes.length > 0
-          ? requestedScopes
-          : normalizeDeviceAuthScopes(
-              existingToken?.scopes ??
-                approvedScopes ??
-                existing?.approvedScopes ??
-                existing?.scopes,
-            );
+      const nextScopes = resolveApprovedTokenScopes({
+        role: roleForToken,
+        pending,
+        existingToken,
+        approvedScopes,
+        existing,
+      });
       const now = Date.now();
       tokens[roleForToken] = {
         token: newToken(),

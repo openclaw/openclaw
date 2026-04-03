@@ -282,6 +282,54 @@ describe("redactConfigSnapshot", () => {
     );
   });
 
+  it("redacts model provider request auth secrets from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [],
+        request: {
+          auth: {
+            mode: "authorization-bearer",
+            token: "provider-secret-token",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: "provider-secret-token",
+                },
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.models.providers.openai.request.auth.token).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("provider-secret-token");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.models.providers.openai.request.auth.token).toBe("provider-secret-token");
+  });
+
   it("does not redact maxTokens-style fields", () => {
     const snapshot = makeSnapshot({
       maxTokens: 16384,

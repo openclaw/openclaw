@@ -373,6 +373,10 @@ export type GatewayServerOptions = {
     runtime: import("../runtime.js").RuntimeEnv,
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
+  /**
+   * Optional startup timestamp used for concise readiness logging.
+   */
+  startupStartedAt?: number;
 };
 
 export async function startGatewayServer(
@@ -606,7 +610,6 @@ export async function startGatewayServer(
   let pluginRegistry = emptyPluginRegistry;
   let baseGatewayMethods = baseMethods;
   if (!minimalTestGateway) {
-    log.info("loading plugins...");
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayStartupPlugins({
       cfg: gatewayPluginConfigAtStart,
       workspaceDir: defaultWorkspaceDir,
@@ -616,7 +619,6 @@ export async function startGatewayServer(
       pluginIds: startupPluginIds,
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
     }));
-    log.info(`plugins loaded (${pluginRegistry.plugins.length} plugins)`);
   } else {
     setActivePluginRegistry(emptyPluginRegistry);
   }
@@ -1340,8 +1342,10 @@ export async function startGatewayServer(
       bindHosts: httpBindHosts,
       port,
       tlsEnabled: gatewayTls.enabled,
+      pluginCount: pluginRegistry.plugins.length,
       log,
       isNixMode,
+      startupStartedAt: opts.startupStartedAt,
     });
     stopGatewayUpdateCheck = minimalTestGateway
       ? () => {}

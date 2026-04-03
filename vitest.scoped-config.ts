@@ -45,6 +45,7 @@ export function createScopedVitestConfig(
     exclude?: string[];
     pool?: "threads" | "forks";
     passWithNoTests?: boolean;
+    setupFiles?: string[];
   },
 ) {
   const base = baseConfig as unknown as Record<string, unknown>;
@@ -56,6 +57,7 @@ export function createScopedVitestConfig(
           exclude?: string[];
           pool?: "threads" | "forks";
           passWithNoTests?: boolean;
+          setupFiles?: string[];
         };
       }
     ).test ?? {};
@@ -72,6 +74,7 @@ export function createScopedVitestConfig(
       ...baseTest,
       isolate,
       runner: "./test/non-isolated-runner.ts",
+      setupFiles: [...new Set([...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"])],
       ...(scopedDir ? { dir: scopedDir } : {}),
       include: relativizeScopedPatterns(include, scopedDir),
       exclude,
@@ -79,6 +82,7 @@ export function createScopedVitestConfig(
       ...(options?.passWithNoTests !== undefined
         ? { passWithNoTests: options.passWithNoTests }
         : {}),
+      ...(options?.setupFiles ? { setupFiles: options.setupFiles } : {}),
     },
   });
 }
