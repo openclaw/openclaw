@@ -224,6 +224,72 @@ type _ModelCompatTypeAssignableToSchema = AssertAssignable<
   z.infer<typeof ModelCompatSchema>
 >;
 
+const ConfiguredProviderRequestTlsSchema = z
+  .object({
+    ca: SecretInputSchema.optional().register(sensitive),
+    cert: SecretInputSchema.optional().register(sensitive),
+    key: SecretInputSchema.optional().register(sensitive),
+    passphrase: SecretInputSchema.optional().register(sensitive),
+    serverName: z.string().optional(),
+    insecureSkipVerify: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const ConfiguredProviderRequestAuthSchema = z
+  .union([
+    z
+      .object({
+        mode: z.literal("provider-default"),
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("authorization-bearer"),
+        token: SecretInputSchema.register(sensitive),
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("header"),
+        headerName: z.string().min(1),
+        value: SecretInputSchema.register(sensitive),
+        prefix: z.string().optional(),
+      })
+      .strict(),
+  ])
+  .optional();
+
+const ConfiguredProviderRequestProxySchema = z
+  .union([
+    z
+      .object({
+        mode: z.literal("env-proxy"),
+        tls: ConfiguredProviderRequestTlsSchema,
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("explicit-proxy"),
+        url: z.string().min(1),
+        tls: ConfiguredProviderRequestTlsSchema,
+      })
+      .strict(),
+  ])
+  .optional();
+
+const ConfiguredProviderRequestSchema = z
+  .object({
+    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+    auth: ConfiguredProviderRequestAuthSchema,
+    proxy: ConfiguredProviderRequestProxySchema,
+    tls: ConfiguredProviderRequestTlsSchema,
+  })
+  .strict()
+  .optional();
+
+const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
+
 export const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -258,6 +324,7 @@ export const ModelProviderSchema = z
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
+    request: ConfiguredModelProviderRequestSchema,
     models: z.array(ModelDefinitionSchema),
   })
   .strict();
@@ -647,6 +714,7 @@ const MediaUnderstandingRuntimeFields = {
   deepgram: DeepgramAudioSchema,
   baseUrl: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
+  request: ConfiguredProviderRequestSchema,
 };
 
 export const MediaUnderstandingModelSchema = z

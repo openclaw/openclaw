@@ -1,4 +1,9 @@
+import type {
+  ProviderReplayPolicy,
+  ProviderReplayPolicyContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -14,6 +19,12 @@ import { buildMoonshotProvider } from "./provider-catalog.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 const PROVIDER_ID = "moonshot";
+
+function buildMoonshotReplayPolicy(
+  ctx: ProviderReplayPolicyContext,
+): ProviderReplayPolicy | undefined {
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
+}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -58,6 +69,7 @@ export default defineSingleProviderPluginEntry({
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),
+    buildReplayPolicy: (ctx) => buildMoonshotReplayPolicy(ctx),
     wrapStreamFn: (ctx) => {
       const thinkingType = resolveMoonshotThinkingType({
         configuredThinking: ctx.extraParams?.thinking,

@@ -17,12 +17,9 @@ import {
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { isBlockedHostnameOrIp, isPrivateNetworkAllowedByPolicy } from "../infra/net/ssrf.js";
-import {
-  redactCdpUrl,
-  resolveBrowserConfig,
-  resolveBrowserControlAuth,
-  resolveProfile,
-} from "../plugin-sdk/browser-config.js";
+import { redactCdpUrl } from "../plugin-sdk/browser-cdp.js";
+import { resolveBrowserConfig, resolveProfile } from "../plugin-sdk/browser-config.js";
+import { resolveBrowserControlAuth } from "../plugin-sdk/browser-control-auth.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   formatPermissionDetail,
@@ -123,6 +120,9 @@ let auditDeepModulePromise: Promise<typeof import("./audit.deep.runtime.js")> | 
 let auditChannelModulePromise:
   | Promise<typeof import("./audit-channel.collect.runtime.js")>
   | undefined;
+let pluginRegistryLoaderModulePromise:
+  | Promise<typeof import("../plugins/runtime/runtime-registry-loader.js")>
+  | undefined;
 let gatewayProbeDepsPromise:
   | Promise<{
       buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
@@ -149,6 +149,11 @@ async function loadAuditDeepModule() {
 async function loadAuditChannelModule() {
   auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
   return await auditChannelModulePromise;
+}
+
+async function loadPluginRegistryLoaderModule() {
+  pluginRegistryLoaderModulePromise ??= import("../plugins/runtime/runtime-registry-loader.js");
+  return await pluginRegistryLoaderModulePromise;
 }
 
 async function loadGatewayProbeDeps() {
@@ -1458,6 +1463,14 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     context.includeChannelSecurity &&
     (context.plugins !== undefined || hasPotentialConfiguredChannels(cfg, env));
   if (shouldAuditChannelSecurity) {
+    if (context.plugins === undefined) {
+      (await loadPluginRegistryLoaderModule()).ensurePluginRegistryLoaded({
+        scope: "configured-channels",
+        config: cfg,
+        activationSourceConfig: context.sourceConfig,
+        env,
+      });
+    }
     const channelPlugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
     const { collectChannelSecurityFindings } = await loadAuditChannelModule();
     findings.push(

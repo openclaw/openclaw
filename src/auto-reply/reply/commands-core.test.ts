@@ -12,12 +12,19 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runBeforeReset: vi.fn<HookRunner["runBeforeReset"]>(),
 }));
 
-vi.mock("node:fs/promises", () => ({
-  default: {
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      readFile: fsMocks.readFile,
+      readdir: fsMocks.readdir,
+    },
     readFile: fsMocks.readFile,
     readdir: fsMocks.readdir,
-  },
-}));
+  };
+});
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () =>

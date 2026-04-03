@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
@@ -9,14 +10,18 @@ const copyToClipboardMock = vi.hoisted(() => vi.fn(async () => false));
 
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];
-const runtime = vi.hoisted(() => ({
-  log: (message: string) => runtimeLogs.push(message),
-  error: (message: string) => runtimeErrors.push(message),
+const runtime = vi.hoisted<RuntimeEnv>(() => ({
+  log: (...args: unknown[]) => {
+    runtimeLogs.push(args.map(String).join(" "));
+  },
+  error: (...args: unknown[]) => {
+    runtimeErrors.push(args.map(String).join(" "));
+  },
   exit: vi.fn<(code: number) => void>(),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: loadConfigMock,
@@ -33,8 +38,8 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+let dashboardCommand: typeof import("../commands/dashboard.js").dashboardCommand;
 let registerQrCli: typeof import("./qr-cli.js").registerQrCli;
-let registerMaintenanceCommands: typeof import("./program/register.maintenance.js").registerMaintenanceCommands;
 
 function createGatewayTokenRefFixture() {
   return {
@@ -50,7 +55,7 @@ function createGatewayTokenRefFixture() {
     },
     gateway: {
       bind: "custom",
-      customBindHost: "gateway.local",
+      customBindHost: "127.0.0.1",
       port: 18789,
       auth: {
         mode: "token",
@@ -81,7 +86,6 @@ function decodeSetupCode(setupCode: string): {
 async function runCli(args: string[]): Promise<void> {
   const program = new Command();
   registerQrCli(program);
-  registerMaintenanceCommands(program);
   await program.parseAsync(args, { from: "user" });
 }
 
@@ -92,17 +96,16 @@ const unmockedDependencyIds = [
   "../gateway/resolve-configured-secret-input-string.js",
   "../pairing/setup-code.js",
   "./command-secret-gateway.js",
-  "./program/register.maintenance.js",
   "./qr-cli.js",
-];
+] as const;
 
 async function loadCliModules() {
   vi.resetModules();
   for (const id of unmockedDependencyIds) {
     vi.doUnmock(id);
   }
+  ({ dashboardCommand } = await import("../commands/dashboard.js"));
   ({ registerQrCli } = await import("./qr-cli.js"));
-  ({ registerMaintenanceCommands } = await import("./program/register.maintenance.js"));
 }
 
 describe("cli integration: qr + dashboard token SecretRef", () => {
@@ -157,13 +160,13 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     const setupCode = runtimeLogs.at(-1);
     expect(setupCode).toBeTruthy();
     const payload = decodeSetupCode(setupCode ?? "");
-    expect(payload.url).toBe("ws://gateway.local:18789");
+    expect(payload.url).toBe("ws://127.0.0.1:18789");
     expect(payload.bootstrapToken).toBeTruthy();
     expect(runtimeErrors).toEqual([]);
 
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
-    await runCli(["dashboard", "--no-open"]);
+    await dashboardCommand(runtime, { noOpen: true });
     const joined = runtimeLogs.join("\n");
     expect(joined).toContain("Dashboard URL: http://127.0.0.1:18789/");
     expect(joined).not.toContain("#token=");
@@ -191,7 +194,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
 
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
-    await runCli(["dashboard", "--no-open"]);
+    await dashboardCommand(runtime, { noOpen: true });
     const joined = runtimeLogs.join("\n");
     expect(joined).toContain("Dashboard URL: http://127.0.0.1:18789/");
     expect(joined).not.toContain("#token=");

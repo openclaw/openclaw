@@ -1,28 +1,24 @@
+import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
-import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import {
-  buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
-  createChannelPairingController,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  evaluateSupplementalContextVisibility,
-  filterSupplementalContextItems,
-  type HistoryEntry,
-  normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
-  resolveChannelContextVisibilityMode,
-  resolveAgentOutboundIdentity,
-  resolveOpenProviderRuntimeGroupPolicy,
+  type HistoryEntry,
+} from "openclaw/plugin-sdk/reply-history";
+import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import {
   resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
   checkBotMentioned,
@@ -34,6 +30,14 @@ import {
   resolveFeishuMediaList,
   toMessageResourceType,
 } from "./bot-content.js";
+import {
+  buildAgentMediaPayload,
+  evaluateSupplementalContextVisibility,
+  filterSupplementalContextItems,
+  normalizeAgentId,
+  resolveChannelContextVisibilityMode,
+} from "./bot-runtime-api.js";
+import type { ClawdbotConfig, RuntimeEnv } from "./bot-runtime-api.js";
 import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";

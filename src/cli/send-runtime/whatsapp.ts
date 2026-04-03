@@ -1,9 +1,6 @@
-import { sendMessageWhatsApp as sendMessageWhatsAppImpl } from "../../plugins/runtime/runtime-whatsapp-boundary.js";
+import { createChannelOutboundRuntimeSend } from "./channel-outbound-send.js";
 
-type RuntimeSend = {
-  sendMessage: typeof import("../../plugins/runtime/runtime-whatsapp-boundary.js").sendMessageWhatsApp;
-};
-
-export const runtimeSend = {
-  sendMessage: sendMessageWhatsAppImpl,
-} satisfies RuntimeSend;
+export const runtimeSend = createChannelOutboundRuntimeSend({
+  channelId: "whatsapp",
+  unavailableMessage: "WhatsApp outbound adapter is unavailable.",
+});

@@ -477,12 +477,12 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - Prefer explicit `plugins.allow` allowlists.
 - Review plugin config before enabling.
 - Restart the Gateway after plugin changes.
-- If you install plugins (`openclaw plugins install <package>`), treat it like running untrusted code:
+- If you install or update plugins (`openclaw plugins install <package>`, `openclaw plugins update <id>`), treat it like running untrusted code:
   - The install path is the per-plugin directory under the active plugin install root.
-  - OpenClaw runs a built-in dangerous-code scan before install. `critical` findings block by default.
+  - OpenClaw runs a built-in dangerous-code scan before install/update. `critical` findings block by default.
   - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
-  - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.
+  - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives on plugin install/update flows. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.
   - Gateway-backed skill dependency installs follow the same dangerous/suspicious split: built-in `critical` findings block unless the caller explicitly sets `dangerouslyForceUnsafeInstall`, while suspicious findings still warn only. `openclaw skills install` remains the separate ClawHub skill download/install flow.
 
 Details: [Plugins](/tools/plugin)
@@ -1015,7 +1015,7 @@ Important: `tools.elevated` is the global baseline escape hatch that runs exec o
 If you allow session tools, treat delegated sub-agent runs as another boundary decision:
 
 - Deny `sessions_spawn` unless the agent truly needs delegation.
-- Keep `agents.list[].subagents.allowAgents` restricted to known-safe target agents.
+- Keep `agents.defaults.subagents.allowAgents` and any per-agent `agents.list[].subagents.allowAgents` overrides restricted to known-safe target agents.
 - For any workflow that must remain sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `inherit`).
 - `sandbox: "require"` fails fast when the target child runtime is not sandboxed.
 

@@ -3,8 +3,10 @@ const { recordInboundSessionMock } = vi.hoisted(() => ({
   recordInboundSessionMock: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("./bot-message-context.session.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./bot-message-context.session.runtime.js")>(
+    "./bot-message-context.session.runtime.js",
+  );
   return {
     ...actual,
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),

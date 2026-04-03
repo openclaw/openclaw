@@ -42,8 +42,6 @@ export {
   resolveThreadBindingThreadName,
 } from "../channels/thread-bindings-messages.js";
 export {
-  DISCORD_THREAD_BINDING_CHANNEL,
-  MATRIX_THREAD_BINDING_CHANNEL,
   formatThreadBindingDisabledError,
   resolveThreadBindingEffectiveExpiresAt,
   resolveThreadBindingIdleTimeoutMs,

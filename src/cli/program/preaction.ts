@@ -91,7 +91,7 @@ function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: 
         commandPath,
         argv: process.argv,
       }),
-    ) === "recover-matrix-only"
+    ) === "allow-bundled-recovery"
   );
 }
 

@@ -8,8 +8,8 @@ vi.mock("../gateway/call.js", () => ({
 let mockConfig: Record<string, unknown> = {
   session: { mainKey: "main", scope: "per-sender" },
 };
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => mockConfig,
@@ -26,8 +26,9 @@ async function loadFreshOpenClawToolsModuleForTest() {
   vi.doMock("../gateway/call.js", () => ({
     callGateway: (opts: unknown) => callGatewayMock(opts),
   }));
-  vi.doMock("../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/config.js")>();
+  vi.doMock("../config/config.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
     return {
       ...actual,
       loadConfig: () => mockConfig,

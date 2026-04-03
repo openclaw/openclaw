@@ -41,6 +41,8 @@ export {
   resolveTelegramCustomCommands,
 } from "../config/telegram-custom-commands.js";
 export {
+  formatSlackStreamingBooleanMigrationMessage,
+  formatSlackStreamModeMigrationMessage,
   mapStreamingModeToSlackLegacyDraftStreamMode,
   resolveDiscordPreviewStreamMode,
   resolveSlackNativeStreaming,
@@ -63,6 +65,7 @@ export type {
   DiscordAccountConfig,
   DiscordActionConfig,
   DiscordAutoPresenceConfig,
+  DiscordConfig,
   DiscordExecApprovalConfig,
   DiscordGuildChannelConfig,
   DiscordGuildEntry,

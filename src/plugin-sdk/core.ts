@@ -34,7 +34,6 @@ export type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginCommandContext,
-  PluginInteractiveTelegramHandlerContext,
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
@@ -63,9 +62,12 @@ export type {
   ProviderReasoningOutputModeContext,
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
+  ProviderReplaySessionEntry,
+  ProviderReplaySessionState,
   ProviderResolveDynamicModelContext,
   ProviderResolvedUsageAuth,
   ProviderSanitizeReplayHistoryContext,
+  ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
   ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
@@ -108,21 +110,6 @@ export type {
 export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 export type { ChannelConfigUiHint, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
-export type {
-  BoundTaskFlowsRuntime,
-  BoundTaskRunsRuntime,
-  PluginRuntimeTaskFlows,
-  PluginRuntimeTaskRuns,
-  PluginRuntimeTasks,
-} from "../plugins/runtime/runtime-tasks.js";
-export type {
-  TaskFlowDetail,
-  TaskFlowView,
-  TaskRunAggregateSummary,
-  TaskRunCancelResult,
-  TaskRunDetail,
-  TaskRunView,
-} from "../plugins/runtime/task-domain-types.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
 export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
@@ -259,6 +246,8 @@ type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   meta?: Partial<NonNullable<ChannelPlugin<TResolvedAccount>["meta"]>>;
   setupWizard?: NonNullable<ChannelPlugin<TResolvedAccount>["setupWizard"]>;
   capabilities?: ChannelPlugin<TResolvedAccount>["capabilities"];
+  commands?: ChannelPlugin<TResolvedAccount>["commands"];
+  doctor?: ChannelPlugin<TResolvedAccount>["doctor"];
   agentPrompt?: ChannelPlugin<TResolvedAccount>["agentPrompt"];
   streaming?: ChannelPlugin<TResolvedAccount>["streaming"];
   reload?: ChannelPlugin<TResolvedAccount>["reload"];
@@ -279,6 +268,8 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
       ChannelPlugin<TResolvedAccount>,
       | "setupWizard"
       | "capabilities"
+      | "commands"
+      | "doctor"
       | "agentPrompt"
       | "streaming"
       | "reload"
@@ -369,6 +360,7 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
     normalizeEntry?: (raw: string) => string;
   };
   collectWarnings?: ChannelSecurityAdapter<TResolvedAccount>["collectWarnings"];
+  collectAuditFindings?: ChannelSecurityAdapter<TResolvedAccount>["collectAuditFindings"];
 };
 
 type ChatChannelPairingOptions = {
@@ -476,6 +468,9 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
         normalizeEntry: security.dm.normalizeEntry,
       }),
     ...(security.collectWarnings ? { collectWarnings: security.collectWarnings } : {}),
+    ...(security.collectAuditFindings
+      ? { collectAuditFindings: security.collectAuditFindings }
+      : {}),
   };
 }
 
@@ -571,6 +566,8 @@ export function createChannelPluginBase<TResolvedAccount>(
     },
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
     ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+    ...(params.commands ? { commands: params.commands } : {}),
+    ...(params.doctor ? { doctor: params.doctor } : {}),
     ...(params.agentPrompt ? { agentPrompt: params.agentPrompt } : {}),
     ...(params.streaming ? { streaming: params.streaming } : {}),
     ...(params.reload ? { reload: params.reload } : {}),

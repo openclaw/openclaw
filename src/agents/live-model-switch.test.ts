@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
 const state = vi.hoisted(() => ({
@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   requestEmbeddedRunModelSwitchMock: vi.fn(),
   consumeEmbeddedRunModelSwitchMock: vi.fn(),
   resolveDefaultModelForAgentMock: vi.fn(),
+  resolvePersistedModelRefMock: vi.fn(),
   loadSessionStoreMock: vi.fn(),
   resolveStorePathMock: vi.fn(),
 }));
@@ -24,6 +25,7 @@ vi.mock("./pi-embedded-runner/runs.js", () => ({
 vi.mock("./model-selection.js", () => ({
   resolveDefaultModelForAgent: (...args: unknown[]) =>
     state.resolveDefaultModelForAgentMock(...args),
+  resolvePersistedModelRef: (...args: unknown[]) => state.resolvePersistedModelRefMock(...args),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -46,14 +48,53 @@ describe("live model switch", () => {
     state.resolveDefaultModelForAgentMock
       .mockReset()
       .mockReturnValue({ provider: "anthropic", model: "claude-opus-4-6" });
+    state.resolvePersistedModelRefMock
+      .mockReset()
+      .mockImplementation(
+        (params: {
+          defaultProvider: string;
+          runtimeProvider?: string;
+          runtimeModel?: string;
+          overrideProvider?: string;
+          overrideModel?: string;
+        }) => {
+          const defaultProvider = params.defaultProvider.trim();
+          const runtimeProvider = params.runtimeProvider?.trim();
+          const runtimeModel = params.runtimeModel?.trim();
+          if (runtimeModel) {
+            if (runtimeProvider) {
+              return { provider: runtimeProvider, model: runtimeModel };
+            }
+            const slash = runtimeModel.indexOf("/");
+            if (slash <= 0 || slash === runtimeModel.length - 1) {
+              return { provider: defaultProvider, model: runtimeModel };
+            }
+            return {
+              provider: runtimeModel.slice(0, slash),
+              model: runtimeModel.slice(slash + 1),
+            };
+          }
+          const overrideProvider = params.overrideProvider?.trim();
+          const overrideModel = params.overrideModel?.trim();
+          if (!overrideModel) {
+            return null;
+          }
+          if (overrideProvider) {
+            return { provider: overrideProvider, model: overrideModel };
+          }
+          const slash = overrideModel.indexOf("/");
+          if (slash <= 0 || slash === overrideModel.length - 1) {
+            return { provider: defaultProvider, model: overrideModel };
+          }
+          return {
+            provider: overrideModel.slice(0, slash),
+            model: overrideModel.slice(slash + 1),
+          };
+        },
+      );
     state.loadSessionStoreMock.mockReset().mockReturnValue({});
     state.resolveStorePathMock.mockReset().mockReturnValue("/tmp/session-store.json");
   });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
   it("resolves persisted session overrides ahead of agent defaults", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {
@@ -112,6 +153,57 @@ describe("live model switch", () => {
     ).toEqual({
       provider: "anthropic",
       model: "claude-sonnet-4-6",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+  });
+
+  it("splits legacy combined session overrides when providerOverride is missing", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        modelOverride: "ollama-beelink2/qwen2.5-coder:7b",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      }),
+    ).toEqual({
+      provider: "ollama-beelink2",
+      model: "qwen2.5-coder:7b",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+  });
+
+  it("preserves provider when runtime model is a vendor-prefixed OpenRouter id", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        modelProvider: "openrouter",
+        model: "anthropic/claude-haiku-4.5",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      }),
+    ).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-haiku-4.5",
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });

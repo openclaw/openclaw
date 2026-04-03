@@ -21,3 +21,36 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
     expect(contextTokens).toBe(123_456);
   });
 });
+
+describe("statusSummaryRuntime.resolveSessionModelRef", () => {
+  const cfg = {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-sonnet-4-6" },
+      },
+    },
+  } as never;
+
+  it("preserves explicit runtime providers for vendor-prefixed model ids", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+        modelProvider: "openrouter",
+        model: "anthropic/claude-haiku-4.5",
+      }),
+    ).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-haiku-4.5",
+    });
+  });
+
+  it("splits legacy combined overrides when provider is missing", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+        modelOverride: "ollama-beelink2/qwen2.5-coder:7b",
+      }),
+    ).toEqual({
+      provider: "ollama-beelink2",
+      model: "qwen2.5-coder:7b",
+    });
+  });
+});
