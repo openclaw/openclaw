@@ -60,7 +60,7 @@ import {
   resolveConfiguredFromCredentialStatuses,
   type OpenClawConfig,
 } from "./runtime-api.js";
-import { getDiscordRuntime, getOptionalDiscordRuntime } from "./runtime.js";
+import { getDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord, sendMessageDiscord, sendPollDiscord } from "./send.js";
 import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.js";
 import { discordSetupAdapter } from "./setup-core.js";
@@ -90,24 +90,31 @@ const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
 
+function resolveRuntimeDiscordMessageActions() {
+  try {
+    return getDiscordRuntime().channel?.discord?.messageActions ?? null;
+  } catch {
+    return null;
+  }
+}
+
 const discordMessageActions = {
   describeMessageTool: (
     ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.describeMessageTool>>[0],
   ) =>
-    getOptionalDiscordRuntime()?.channel?.discord?.messageActions?.describeMessageTool?.(ctx) ??
+    resolveRuntimeDiscordMessageActions()?.describeMessageTool?.(ctx) ??
     discordMessageActionsImpl.describeMessageTool?.(ctx) ??
     null,
   extractToolSend: (
     ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.extractToolSend>>[0],
   ) =>
-    getOptionalDiscordRuntime()?.channel?.discord?.messageActions?.extractToolSend?.(ctx) ??
+    resolveRuntimeDiscordMessageActions()?.extractToolSend?.(ctx) ??
     discordMessageActionsImpl.extractToolSend?.(ctx) ??
     null,
   handleAction: async (
     ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.handleAction>>[0],
   ) => {
-    const runtimeHandleAction =
-      getOptionalDiscordRuntime()?.channel?.discord?.messageActions?.handleAction;
+    const runtimeHandleAction = resolveRuntimeDiscordMessageActions()?.handleAction;
     if (runtimeHandleAction) {
       return await runtimeHandleAction(ctx);
     }
