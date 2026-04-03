@@ -564,6 +564,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.resetByType.thread": "Session Reset (Thread)",
   "session.resetByChannel": "Session Reset by Channel",
   "session.store": "Session Store Path",
+  "session.storeType": "Session Store Type",
   "session.typingIntervalSeconds": "Session Typing Interval (seconds)",
   "session.typingMode": "Session Typing Mode",
   "session.parentForkMaxTokens": "Session Parent Fork Max Tokens",

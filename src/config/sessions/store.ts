@@ -37,6 +37,10 @@ import {
 } from "./store-maintenance.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
 import {
+  loadSessionStoreWithFacade,
+  saveSessionStoreWithFacade,
+} from "./store-facade.js";
+import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
   normalizeSessionRuntimeModelFields,
@@ -214,7 +218,11 @@ type LoadSessionStoreOptions = {
   skipCache?: boolean;
 };
 
-export function loadSessionStore(
+/**
+ * Load session store from JSON file (internal implementation).
+ * Used by the facade when JSON backend is active.
+ */
+function loadSessionStoreFromJson(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
@@ -288,6 +296,20 @@ export function loadSessionStore(
   }
 
   return structuredClone(store);
+}
+
+/**
+ * Load session store using the configured backend (JSON or SQLite).
+ * Handles auto-migration from JSON to SQLite when switching backends.
+ */
+export function loadSessionStore(
+  storePath: string,
+  opts: LoadSessionStoreOptions = {},
+): Record<string, SessionEntry> {
+  const result = loadSessionStoreWithFacade(storePath, () =>
+    loadSessionStoreFromJson(storePath, opts),
+  );
+  return result.store;
 }
 
 export function readSessionUpdatedAt(params: {
@@ -540,58 +562,62 @@ async function saveSessionStoreUnlocked(
     }
   }
 
-  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const json = JSON.stringify(store, null, 2);
-  if (getSerializedSessionStore(storePath) === json) {
-    updateSessionStoreWriteCaches({ storePath, store, serialized: json });
-    return;
-  }
-
-  // Windows: keep retry semantics because rename can fail while readers hold locks.
-  if (process.platform === "win32") {
-    for (let i = 0; i < 5; i++) {
-      try {
-        await writeSessionStoreAtomic({ storePath, store, serialized: json });
-        return;
-      } catch (err) {
-        const code = getErrorCode(err);
-        if (code === "ENOENT") {
-          return;
-        }
-        if (i < 4) {
-          await new Promise((r) => setTimeout(r, 50 * (i + 1)));
-          continue;
-        }
-        // Final attempt failed — skip this save. The write lock ensures
-        // the next save will retry with fresh data. Log for diagnostics.
-        log.warn(`atomic write failed after 5 attempts: ${storePath}`);
-      }
+  // Persist to the configured backend (JSON or SQLite)
+  await saveSessionStoreWithFacade(storePath, store, async () => {
+    // JSON backend implementation
+    await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+    const json = JSON.stringify(store, null, 2);
+    if (getSerializedSessionStore(storePath) === json) {
+      updateSessionStoreWriteCaches({ storePath, store, serialized: json });
+      return;
     }
-    return;
-  }
 
-  try {
-    await writeSessionStoreAtomic({ storePath, store, serialized: json });
-  } catch (err) {
-    const code = getErrorCode(err);
-
-    if (code === "ENOENT") {
-      // In tests the temp session-store directory may be deleted while writes are in-flight.
-      // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
-      try {
-        await writeSessionStoreAtomic({ storePath, store, serialized: json });
-      } catch (err2) {
-        const code2 = getErrorCode(err2);
-        if (code2 === "ENOENT") {
+    // Windows: keep retry semantics because rename can fail while readers hold locks.
+    if (process.platform === "win32") {
+      for (let i = 0; i < 5; i++) {
+        try {
+          await writeSessionStoreAtomic({ storePath, store, serialized: json });
           return;
+        } catch (err) {
+          const code = getErrorCode(err);
+          if (code === "ENOENT") {
+            return;
+          }
+          if (i < 4) {
+            await new Promise((r) => setTimeout(r, 50 * (i + 1)));
+            continue;
+          }
+          // Final attempt failed — skip this save. The write lock ensures
+          // the next save will retry with fresh data. Log for diagnostics.
+          log.warn(`atomic write failed after 5 attempts: ${storePath}`);
         }
-        throw err2;
       }
       return;
     }
 
-    throw err;
-  }
+    try {
+      await writeSessionStoreAtomic({ storePath, store, serialized: json });
+    } catch (err) {
+      const code = getErrorCode(err);
+
+      if (code === "ENOENT") {
+        // In tests the temp session-store directory may be deleted while writes are in-flight.
+        // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
+        try {
+          await writeSessionStoreAtomic({ storePath, store, serialized: json });
+        } catch (err2) {
+          const code2 = getErrorCode(err2);
+          if (code2 === "ENOENT") {
+            return;
+          }
+          throw err2;
+        }
+        return;
+      }
+
+      throw err;
+    }
+  });
 }
 
 export async function saveSessionStore(

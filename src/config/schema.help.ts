@@ -1184,6 +1184,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Provides channel-specific reset overrides keyed by provider/channel id for fine-grained behavior control. Use this only when one channel needs exceptional reset behavior beyond type-level policies.",
   "session.store":
     "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
+  "session.storeType":
+    "Selects the session storage backend: json (default) or sqlite. SQLite offers better performance for large session stores and requires Node.js 22.5+ with the built-in node:sqlite module.",
   "session.typingIntervalSeconds":
     "Controls interval for repeated typing indicators while replies are being prepared in typing-capable channels. Increase to reduce chatty updates or decrease for more active typing feedback.",
   "session.typingMode":

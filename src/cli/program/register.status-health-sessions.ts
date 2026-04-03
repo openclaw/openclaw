@@ -2,6 +2,10 @@ import type { Command } from "commander";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
+import {
+  sessionsMigrateCommand,
+  sessionsStoreInfoCommand,
+} from "../../commands/sessions-migrate.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
 import {
@@ -216,6 +220,75 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             enforce: Boolean(opts.enforce),
             fixMissing: Boolean(opts.fixMissing),
             activeKey: opts.activeKey as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
+    .command("migrate")
+    .description("Migrate session store from JSON to SQLite")
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to migrate (default: configured default agent)")
+    .option("--all-agents", "Migrate all configured agents", false)
+    .option("--dry-run", "Preview migration without writing", false)
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions migrate --dry-run", "Preview migration."],
+          ["openclaw sessions migrate", "Migrate default agent sessions to SQLite."],
+          ["openclaw sessions migrate --all-agents", "Migrate all agents to SQLite."],
+          ["openclaw sessions migrate --json", "Machine-readable output."],
+        ])}\n\n${theme.muted(
+          "SQLite storage provides better performance at scale (100+ sessions).\nRelated: github.com/openclaw/openclaw/issues/58534",
+        )}`,
+    )
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            allAgents?: boolean;
+            json?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsMigrateCommand(
+          {
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+            dryRun: Boolean(opts.dryRun),
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
+    .command("store-info")
+    .description("Show session store backend info")
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            json?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsStoreInfoCommand(
+          {
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
             json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,

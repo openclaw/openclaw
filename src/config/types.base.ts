@@ -103,10 +103,21 @@ export type SessionThreadBindingsConfig = {
   maxAgeHours?: number;
 };
 
+export type SessionStoreType = "json" | "sqlite";
+
 export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
   dmScope?: DmScope;
+  /**
+   * Session store backend type.
+   * - "json": Legacy flat JSON file (sessions.json) - default for backward compatibility
+   * - "sqlite": SQLite-backed store for better performance at scale
+   *
+   * SQLite is recommended for installations with 100+ sessions.
+   * Related issues: #58534 (perf), #57497 (Postgres request)
+   */
+  storeType?: SessionStoreType;
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];
