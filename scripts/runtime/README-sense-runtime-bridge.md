@@ -582,6 +582,8 @@ Manager policy output is now two-stage:
   - main action for `primary_issue`
 - `secondary_action`
   - optional follow-up action for `secondary_issues[0]`
+- `secondary_next_step`
+  - follow-up step paired with `secondary_action`
 - `fallback_action`
   - safe fallback when confidence is low or no deterministic rule matches
 

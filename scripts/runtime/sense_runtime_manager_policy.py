@@ -11,6 +11,7 @@ from sense_runtime_manager_signal_classifier import classify_manager_signal
 POLICY_OUTPUT_DEFAULTS = {
     'secondary_action': None,
     'secondary_reason': None,
+    'secondary_next_step': None,
     'fallback_action': 'manual_review',
     'confidence_gate_applied': False,
 }
@@ -39,6 +40,7 @@ def build_policy_output(
     manager_reason: str,
     secondary_action: str | None = None,
     secondary_reason: str | None = None,
+    secondary_next_step: str | None = None,
     next_step: str,
     fallback_action: str = 'manual_review',
     confidence_gate_applied: bool = False,
@@ -52,6 +54,9 @@ def build_policy_output(
     resolved_secondary_reason = (
         secondary_reason if secondary_reason is not None else POLICY_OUTPUT_DEFAULTS.get('secondary_reason')
     )
+    resolved_secondary_next_step = (
+        secondary_next_step if secondary_next_step is not None else POLICY_OUTPUT_DEFAULTS.get('secondary_next_step')
+    )
     resolved_fallback_action = (
         fallback_action if fallback_action != 'manual_review' else POLICY_OUTPUT_DEFAULTS.get('fallback_action', 'manual_review')
     )
@@ -63,6 +68,7 @@ def build_policy_output(
         'manager_reason': manager_reason,
         'secondary_action': resolved_secondary_action,
         'secondary_reason': resolved_secondary_reason,
+        'secondary_next_step': resolved_secondary_next_step,
         'next_step': next_step,
         'fallback_action': resolved_fallback_action,
         'confidence_gate_applied': resolved_confidence_gate_applied,
@@ -86,48 +92,55 @@ def build_classifier_matched_on(classification: dict) -> dict:
     }
 
 
-def build_secondary_plan(classification: dict) -> tuple[str | None, str | None, bool]:
+def build_secondary_plan(classification: dict) -> tuple[str | None, str | None, str | None, bool]:
     secondary_issues = classification.get('secondary_issues')
     if not isinstance(secondary_issues, list) or not secondary_issues:
-        return None, None, False
+        return None, None, None, False
 
     confidence = classification.get('confidence')
     if not isinstance(confidence, (int, float)) or confidence < 0.5:
-        return None, None, True
+        return None, None, None, True
 
     secondary_issue = secondary_issues[0]
     mapping = {
         'provider_api_key_issue': (
             'configure_provider',
             'secondary issue indicates provider API key remediation may also be needed after the primary action',
+            'check_api_key_config',
         ),
         'provider_recognition_issue': (
             'configure_provider',
             'secondary issue indicates provider recognition remediation may also be needed after the primary action',
+            'check_provider_config',
         ),
         'runtime_capability_issue_nim': (
             'start_nim_runtime',
             'secondary issue indicates NIM runtime remediation should follow the primary action',
+            'start_nim_runtime',
         ),
         'runtime_capability_issue_gpu': (
             'configure_gpu_runtime',
             'secondary issue indicates GPU/runtime capability remediation should follow the primary action',
+            'configure_gpu_runtime',
         ),
         'selected_model_retry_issue': (
             'retry_once',
             'secondary issue indicates a single runtime confirmation retry may still be useful after the primary action',
+            'check_selected_model_config',
         ),
         'selected_model_mismatch_issue': (
             'configure_model',
             'secondary issue indicates model remediation should follow the primary action',
+            'check_selected_model_config',
         ),
         'selected_model_provider_issue': (
             'configure_provider',
             'secondary issue indicates provider remediation should follow the primary action',
+            'check_provider_config',
         ),
     }
-    action, reason = mapping.get(secondary_issue, (None, None))
-    return action, reason, False
+    action, reason, step = mapping.get(secondary_issue, (None, None, None))
+    return action, reason, step, False
 
 
 def main() -> int:
@@ -142,13 +155,14 @@ def main() -> int:
     classification = classify_manager_signal(payload)
     classified_issue = classification.get('primary_issue') or classification.get('classified_issue')
     fallback_action = str(classification.get('fallback_action') or 'manual_review')
-    secondary_action, secondary_reason, confidence_gate_applied = build_secondary_plan(classification)
+    secondary_action, secondary_reason, secondary_next_step, confidence_gate_applied = build_secondary_plan(classification)
     classifier_confidence = classification.get('confidence')
     low_confidence_gate = isinstance(classifier_confidence, (int, float)) and classifier_confidence < 0.5
     POLICY_OUTPUT_DEFAULTS.update(
         {
             'secondary_action': secondary_action,
             'secondary_reason': secondary_reason,
+            'secondary_next_step': secondary_next_step,
             'fallback_action': fallback_action,
             'confidence_gate_applied': confidence_gate_applied or low_confidence_gate,
         }
