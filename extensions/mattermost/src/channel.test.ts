@@ -175,6 +175,33 @@ describe("mattermostPlugin", () => {
         }),
       ).toBe("off");
     });
+
+    it("uses configured defaultAccount when accountId is omitted", () => {
+      const resolveReplyToMode = requireMattermostReplyToModeResolver();
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            defaultAccount: "alerts",
+            replyToMode: "off",
+            accounts: {
+              alerts: {
+                replyToMode: "all",
+                botToken: "alerts-token",
+                baseUrl: "https://alerts.example.com",
+              },
+            },
+          },
+        },
+      };
+
+      expect(
+        resolveReplyToMode({
+          cfg,
+          chatType: "channel",
+        }),
+      ).toBe("all");
+    });
   });
 
   describe("messageActions", () => {
