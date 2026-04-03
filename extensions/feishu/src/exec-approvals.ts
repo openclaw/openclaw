@@ -27,7 +27,10 @@ function normalizeFeishuDirectApproverId(value: string | number): string | undef
   if (!normalized) {
     return undefined;
   }
-  if (!normalized.startsWith("ou_") && !normalized.startsWith("on_")) {
+  // Only accept ou_ (open_id) — the identifier used in Feishu card action
+  // callbacks (event.operator.open_id).  on_ (union_id) would silently fail
+  // approver checks at runtime.
+  if (!normalized.startsWith("ou_")) {
     return undefined;
   }
   return normalized;

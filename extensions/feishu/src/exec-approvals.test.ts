@@ -37,9 +37,9 @@ describe("getFeishuExecApprovalApprovers", () => {
     expect(getFeishuExecApprovalApprovers({ cfg: buildConfig() })).toEqual([]);
   });
 
-  it("normalizes approver IDs and filters invalid prefixes", () => {
+  it("normalizes approver IDs and filters non-ou_ prefixes", () => {
     const cfg = buildConfig({ enabled: true, approvers: ["ou_123", 456, "on_789"] });
-    expect(getFeishuExecApprovalApprovers({ cfg })).toEqual(["ou_123", "on_789"]);
+    expect(getFeishuExecApprovalApprovers({ cfg })).toEqual(["ou_123"]);
   });
 
   it("filters empty approver IDs", () => {
