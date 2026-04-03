@@ -3,6 +3,7 @@ import type {
   ProviderReplayPolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -22,17 +23,7 @@ const PROVIDER_ID = "moonshot";
 function buildMoonshotReplayPolicy(
   ctx: ProviderReplayPolicyContext,
 ): ProviderReplayPolicy | undefined {
-  if (ctx.modelApi !== "openai-completions") {
-    return undefined;
-  }
-
-  return {
-    sanitizeToolCallIds: true,
-    toolCallIdMode: "strict",
-    applyAssistantFirstOrderingFix: true,
-    validateGeminiTurns: true,
-    validateAnthropicTurns: true,
-  };
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
 }
 
 export default defineSingleProviderPluginEntry({

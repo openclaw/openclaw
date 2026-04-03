@@ -11,10 +11,15 @@ export type {
   ModelCompatConfig,
   ModelDefinitionConfig,
 } from "../config/types.models.js";
+export type {
+  ProviderEndpointClass,
+  ProviderEndpointResolution,
+} from "../agents/provider-attribution.js";
 export type { ProviderPlugin } from "../plugins/types.js";
 export type { KilocodeModelCatalogEntry } from "../plugins/provider-model-kilocode.js";
 
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+export { resolveProviderEndpoint } from "../agents/provider-attribution.js";
 export {
   applyModelCompatPatch,
   hasToolSchemaProfile,
@@ -24,6 +29,10 @@ export {
   resolveToolCallArgumentsEncoding,
 } from "../plugins/provider-model-compat.js";
 export { normalizeProviderId } from "../agents/provider-id.js";
+export {
+  buildOpenAICompatibleReplayPolicy,
+  buildStrictAnthropicReplayPolicy,
+} from "../plugins/provider-replay-helpers.js";
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,

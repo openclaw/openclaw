@@ -8,6 +8,7 @@ import {
   type ProviderReplayPolicy,
   type ProviderReplayPolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildOllamaProvider,
   configureOllamaNonInteractive,
@@ -31,30 +32,7 @@ const DEFAULT_API_KEY = "ollama-local";
 function buildOllamaReplayPolicy(
   ctx: ProviderReplayPolicyContext,
 ): ProviderReplayPolicy | undefined {
-  if (
-    ctx.modelApi !== "openai-completions" &&
-    ctx.modelApi !== "openai-responses" &&
-    ctx.modelApi !== "openai-codex-responses" &&
-    ctx.modelApi !== "azure-openai-responses"
-  ) {
-    return undefined;
-  }
-
-  return {
-    sanitizeToolCallIds: true,
-    toolCallIdMode: "strict",
-    ...(ctx.modelApi === "openai-completions"
-      ? {
-          applyAssistantFirstOrderingFix: true,
-          validateGeminiTurns: true,
-          validateAnthropicTurns: true,
-        }
-      : {
-          applyAssistantFirstOrderingFix: false,
-          validateGeminiTurns: false,
-          validateAnthropicTurns: false,
-        }),
-  };
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
 }
 
 function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
