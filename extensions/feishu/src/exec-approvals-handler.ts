@@ -136,10 +136,14 @@ export class FeishuExecApprovalHandler {
   }
 
   private async finalizeResolved(
-    _request: ApprovalRequest,
+    request: ApprovalRequest,
     resolved: ApprovalResolved,
     messages: PendingMessage[],
   ): Promise<void> {
+    const execRequest = !request.id.startsWith("plugin:") ? (request as ExecApprovalRequest) : null;
+    const commandDisplay = execRequest
+      ? resolveExecApprovalCommandDisplay(execRequest.request)
+      : null;
     await Promise.allSettled(
       messages.map(async (message) => {
         try {
@@ -147,6 +151,8 @@ export class FeishuExecApprovalHandler {
             approvalId: resolved.id,
             decision: resolved.decision,
             resolvedBy: resolved.resolvedBy ?? undefined,
+            command: commandDisplay?.commandText,
+            cwd: execRequest?.request.cwd ?? undefined,
           });
           await updateCardFeishu({
             cfg: this.opts.cfg,

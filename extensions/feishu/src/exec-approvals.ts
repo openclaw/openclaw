@@ -27,7 +27,9 @@ function normalizeFeishuDirectApproverId(value: string | number): string | undef
   if (!normalized) {
     return undefined;
   }
-  // Feishu user IDs start with ou_ or on_
+  if (!normalized.startsWith("ou_") && !normalized.startsWith("on_")) {
+    return undefined;
+  }
   return normalized;
 }
 
@@ -43,8 +45,10 @@ export function getFeishuExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
+  const account = resolveFeishuAccount(params).config;
   return resolveApprovalApprovers({
     explicit: resolveFeishuExecApprovalConfig(params)?.approvers,
+    allowFrom: (account as Record<string, unknown>).allowFrom as Array<string | number> | undefined,
     normalizeApprover: normalizeFeishuDirectApproverId,
   });
 }
