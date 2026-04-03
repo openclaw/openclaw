@@ -316,14 +316,24 @@ describe("logs cli", () => {
   });
 
   describe("formatLogTimestamp", () => {
-    it("formats UTC timestamp in plain mode by default", () => {
+    it("preserves the logged timestamp in plain mode by default", () => {
       const result = formatLogTimestamp("2025-01-01T12:00:00.000Z");
       expect(result).toBe("2025-01-01T12:00:00.000Z");
     });
 
-    it("formats UTC timestamp in pretty mode", () => {
+    it("renders a compact timestamp while preserving the logged offset in pretty mode", () => {
       const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "pretty");
       expect(result).toBe("12:00:00+00:00");
+    });
+
+    it("keeps the original offset in plain mode for offset-bearing timestamps", () => {
+      const result = formatLogTimestamp("2025-01-01T08:00:00.000-04:00");
+      expect(result).toBe("2025-01-01T08:00:00.000-04:00");
+    });
+
+    it("keeps the original offset in pretty mode for offset-bearing timestamps", () => {
+      const result = formatLogTimestamp("2025-01-01T08:00:00.000-04:00", "pretty");
+      expect(result).toBe("08:00:00-04:00");
     });
 
     it("formats local time in plain mode when localTime is true", () => {
