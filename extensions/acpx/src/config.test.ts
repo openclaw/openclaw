@@ -269,6 +269,26 @@ describe("acpx plugin config parsing", () => {
     ).toThrow("strictWindowsCmdWrapper must be a boolean");
   });
 
+  it("accepts skipJsonFormatArgs override", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        skipJsonFormatArgs: true,
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.skipJsonFormatArgs).toBe(true);
+  });
+
+  it("skipJsonFormatArgs defaults to false", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.skipJsonFormatArgs).toBe(false);
+  });
+
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),

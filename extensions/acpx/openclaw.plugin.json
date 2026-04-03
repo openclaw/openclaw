@@ -53,17 +53,24 @@
             },
             "args": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Arguments to pass to the command"
             },
             "env": {
               "type": "object",
-              "additionalProperties": { "type": "string" },
+              "additionalProperties": {
+                "type": "string"
+              },
               "description": "Environment variables for the MCP server"
             }
           },
           "required": ["command"]
         }
+      },
+      "skipJsonFormatArgs": {
+        "type": "boolean"
       }
     }
   },

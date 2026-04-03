@@ -93,6 +93,7 @@ export type AcpxPluginConfig = {
   nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge?: boolean;
   strictWindowsCmdWrapper?: boolean;
+  skipJsonFormatArgs?: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
   mcpServers?: Record<string, McpServerConfig>;
@@ -109,6 +110,7 @@ export type ResolvedAcpxPluginConfig = {
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge: boolean;
   strictWindowsCmdWrapper: boolean;
+  skipJsonFormatArgs: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
   mcpServers: Record<string, McpServerConfig>;
@@ -162,6 +164,7 @@ const AcpxPluginConfigSchema = z.strictObject({
   strictWindowsCmdWrapper: z
     .boolean({ error: "strictWindowsCmdWrapper must be a boolean" })
     .optional(),
+  skipJsonFormatArgs: z.boolean({ error: "skipJsonFormatArgs must be a boolean" }).optional(),
   timeoutSeconds: z
     .number({ error: "timeoutSeconds must be a number >= 0.001" })
     .min(0.001, { error: "timeoutSeconds must be a number >= 0.001" })
@@ -323,6 +326,7 @@ export function resolveAcpxPluginConfig(params: {
     pluginToolsMcpBridge,
     strictWindowsCmdWrapper:
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
+    skipJsonFormatArgs: normalized.skipJsonFormatArgs ?? false,
     timeoutSeconds: normalized.timeoutSeconds,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
     mcpServers,

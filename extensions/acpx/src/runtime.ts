@@ -1023,12 +1023,12 @@ export class AcpxRuntime implements AcpRuntime {
     sessionName: string;
     cwd: string;
   }): Promise<string[]> {
+    const baseArgs = ["--cwd", params.cwd];
+    if (!this.config.skipJsonFormatArgs) {
+      baseArgs.push("--format", "json", "--json-strict");
+    }
     const prefix = [
-      "--format",
-      "json",
-      "--json-strict",
-      "--cwd",
-      params.cwd,
+      ...baseArgs,
       ...buildPermissionArgs(this.config.permissionMode),
       "--non-interactive-permissions",
       this.config.nonInteractivePermissions,
@@ -1051,7 +1051,11 @@ export class AcpxRuntime implements AcpRuntime {
     command: string[];
     prefix?: string[];
   }): Promise<string[]> {
-    const prefix = params.prefix ?? ["--format", "json", "--json-strict", "--cwd", params.cwd];
+    const baseArgs = ["--cwd", params.cwd];
+    if (!this.config.skipJsonFormatArgs) {
+      baseArgs.push("--format", "json", "--json-strict");
+    }
+    const prefix = params.prefix ?? baseArgs;
     const agentCommand = await this.resolveRawAgentCommand({
       agent: params.agent,
       cwd: params.cwd,
