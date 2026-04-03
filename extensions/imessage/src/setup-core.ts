@@ -186,17 +186,18 @@ export const imessageSetupStatusBase = {
   unconfiguredHint: "imsg missing",
   configuredScore: 1,
   unconfiguredScore: 0,
-  resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
-    listIMessageAccountIds(cfg).some((accountId) => {
-      const account = resolveIMessageAccount({ cfg, accountId });
-      return Boolean(
-        account.config.cliPath ||
-        account.config.dbPath ||
-        account.config.allowFrom ||
-        account.config.service ||
-        account.config.region,
-      );
-    }),
+  resolveConfigured: ({
+    cfg,
+    accountId,
+  }: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+  }) =>
+    accountId
+      ? resolveIMessageAccount({ cfg, accountId }).configured
+      : listIMessageAccountIds(cfg).some((listedAccountId) =>
+          resolveIMessageAccount({ cfg, accountId: listedAccountId }).configured,
+        ),
 };
 
 export function createIMessageSetupWizardProxy(loadWizard: () => Promise<ChannelSetupWizard>) {

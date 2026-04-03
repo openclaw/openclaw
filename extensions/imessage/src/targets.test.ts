@@ -238,6 +238,31 @@ describe("parseIMessageAllowFromEntries", () => {
   });
 });
 
+describe("imessage setup status", () => {
+  it("does not inherit configured state from a sibling account", async () => {
+    const result = await getIMessageSetupStatus({
+      cfg: {
+        channels: {
+          imessage: {
+            accounts: {
+              default: {
+                cliPath: "/usr/local/bin/imsg",
+              },
+              work: {},
+            },
+          },
+        },
+      },
+      accountOverrides: {
+        imessage: "work",
+      },
+    });
+
+    expect(result.configured).toBe(false);
+    expect(result.statusLines).toContain("iMessage: needs setup");
+  });
+});
+
 describe("probeIMessage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
