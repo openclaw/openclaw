@@ -672,6 +672,67 @@ describe("config strict validation", () => {
     });
   });
 
+  it("accepts legacy thread binding ttlHours via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        session: {
+          threadBindings: {
+            ttlHours: 24,
+          },
+        },
+        channels: {
+          discord: {
+            threadBindings: {
+              ttlHours: 12,
+            },
+            accounts: {
+              alpha: {
+                threadBindings: {
+                  ttlHours: 6,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "session.threadBindings")).toBe(true);
+      expect(
+        snap.legacyIssues.some((issue) => issue.path === "channels.discord.threadBindings"),
+      ).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.session?.threadBindings).toMatchObject({
+        idleHours: 24,
+      });
+      expect(snap.sourceConfig.channels?.discord?.threadBindings).toMatchObject({
+        idleHours: 12,
+      });
+      expect(snap.sourceConfig.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
+        idleHours: 6,
+      });
+      expect(
+        (snap.sourceConfig.session?.threadBindings as Record<string, unknown> | undefined)
+          ?.ttlHours,
+      ).toBeUndefined();
+      expect(
+        (snap.sourceConfig.channels?.discord?.threadBindings as Record<string, unknown> | undefined)
+          ?.ttlHours,
+      ).toBeUndefined();
+      expect(
+        (
+          snap.sourceConfig.channels?.discord?.accounts?.alpha?.threadBindings as
+            | Record<string, unknown>
+            | undefined
+        )?.ttlHours,
+      ).toBeUndefined();
+    });
+  });
+
   it("accepts legacy channel streaming aliases via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
