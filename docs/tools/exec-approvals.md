@@ -14,6 +14,14 @@ commands on a real host (`gateway` or `node`). Think of it like a safety interlo
 commands are allowed only when policy + allowlist + (optional) user approval all agree.
 Exec approvals are **in addition** to tool policy and elevated gating (unless elevated is set to `full`, which skips approvals).
 Effective policy is the **stricter** of `tools.exec.*` and approvals defaults; if an approvals field is omitted, the `tools.exec` value is used.
+
+> **Important:** If `defaults` is `{}` (empty) or missing entirely, all omitted fields
+> fall back to their most restrictive values: `security` defaults to `"allowlist"`,
+> `ask` defaults to `"on-miss"`, and `askFallback` defaults to `"deny"`. This means
+> an empty `defaults` block does **not** grant passthrough execution — commands will
+> require allowlist matches or interactive approval. For unattended environments
+> (cron jobs, headless nodes), you must set `defaults` explicitly.
+
 Host exec also uses the local approvals state on that machine. A host-local
 `ask: "always"` in `~/.openclaw/exec-approvals.json` keeps prompting even if
 session or config defaults request `ask: "on-miss"`.
@@ -205,7 +213,11 @@ This is defense-in-depth for interpreter loaders that do not map cleanly to one 
 
 Allowlists are **per agent**. If multiple agents exist, switch which agent you’re
 editing in the macOS app. Patterns are **case-insensitive glob matches**.
-Patterns should resolve to **binary paths** (basename-only entries are ignored).
+Patterns match the **resolved executable path only** — not the full command string
+including arguments. For example, `/opt/homebrew/bin/rg` matches any invocation of
+that binary regardless of its arguments, but `/opt/homebrew/bin/rg -n TODO` does
+**not** work as a pattern (it will never match).
+Basename-only entries are ignored.
 Legacy `agents.default` entries are migrated to `agents.main` on load.
 Shell chains such as `echo ok && pwd` still need every top-level segment to satisfy allowlist rules.
 
@@ -214,6 +226,7 @@ Examples:
 - `~/Projects/**/bin/peekaboo`
 - `~/.local/bin/*`
 - `/opt/homebrew/bin/rg`
+- `/opt/homebrew/opt/python@3.12/bin/python3.12` — matches all Python invocations with any arguments
 
 Each allowlist entry tracks:
 
@@ -586,6 +599,59 @@ stale results from a prior successful run.
 - Approvals only apply to host exec requests from **authorized senders**. Unauthorized senders cannot issue `/exec`.
 - `/exec security=full` is a session-level convenience for authorized operators and skips approvals by design.
   To hard-block host exec, set approvals security to `deny` or deny the `exec` tool via tool policy.
+
+## Troubleshooting
+
+### Commands denied with "allowlist miss" despite allowlist entries
+
+Allowlist patterns match the **resolved executable path**, not the full command string. If your
+pattern includes arguments (for example `/usr/bin/python3 scripts/*.py`), it will never match.
+Use the binary path alone:
+
+```
+# Wrong — will never match
+/opt/homebrew/opt/python@3.12/bin/python3.12 scripts/*.py
+/opt/homebrew/opt/python@3.12/bin/python3.12 *
+
+# Correct — matches any invocation of this binary
+/opt/homebrew/opt/python@3.12/bin/python3.12
+```
+
+### Cron jobs or headless sessions always require approval
+
+If `defaults` in `exec-approvals.json` is `{}` or missing, exec policy falls back to
+`security: "allowlist"` with `ask: "on-miss"`. In unattended environments where no UI
+can resolve prompts, commands stall until the approval times out and are denied.
+
+Fix: set `defaults` explicitly:
+
+```bash
+openclaw approvals set --stdin <<'EOF'
+{
+  "version": 1,
+  "defaults": {
+    "security": "allowlist",
+    "ask": "off",
+    "askFallback": "deny"
+  }
+}
+EOF
+```
+
+Then re-add your allowlist entries (the `set` command replaces the entire file):
+
+```bash
+openclaw approvals allowlist add --agent <agent-id> "/path/to/binary"
+```
+
+### Changes to exec-approvals.json not taking effect
+
+After editing `exec-approvals.json` (manually or via CLI), restart the gateway for
+changes to be picked up by running sessions:
+
+```bash
+openclaw gateway restart
+```
 
 Related:
 
