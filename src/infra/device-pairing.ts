@@ -168,12 +168,19 @@ function listActiveTokenRoles(
   );
 }
 
+export function listApprovedPairedDeviceRoles(
+  device: Pick<PairedDevice, "role" | "roles">,
+): string[] {
+  return mergeRoles(device.roles, device.role) ?? [];
+}
+
 export function listEffectivePairedDeviceRoles(
   device: Pick<PairedDevice, "role" | "roles" | "tokens">,
 ): string[] {
   const activeTokenRoles = listActiveTokenRoles(device.tokens);
   if (activeTokenRoles && activeTokenRoles.length > 0) {
-    return activeTokenRoles;
+    const approvedRoles = new Set(listApprovedPairedDeviceRoles(device));
+    return activeTokenRoles.filter((role) => approvedRoles.has(role));
   }
   // Only fall back to legacy role fields when the tokens map is absent
   // or has no entries at all (empty object from a fresh pairing record).
@@ -182,7 +189,7 @@ export function listEffectivePairedDeviceRoles(
   if (device.tokens && Object.keys(device.tokens).length > 0) {
     return [];
   }
-  return mergeRoles(device.roles, device.role) ?? [];
+  return listApprovedPairedDeviceRoles(device);
 }
 
 export function hasEffectivePairedDeviceRole(
@@ -871,6 +878,9 @@ function resolveDeviceTokenUpdateContext(params: {
   }
   const role = normalizeRole(params.role);
   if (!role) {
+    return null;
+  }
+  if (!listApprovedPairedDeviceRoles(device).includes(role)) {
     return null;
   }
   const tokens = cloneDeviceTokens(device);

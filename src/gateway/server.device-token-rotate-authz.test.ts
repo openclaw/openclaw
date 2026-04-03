@@ -239,4 +239,41 @@ describe("gateway device.token.rotate caller scope guard", () => {
       started.envSnapshot.restore();
     }
   });
+
+  test("rejects rotating a token for an unapproved role on an existing paired device", async () => {
+    const started = await startServerWithClient("secret");
+    const attacker = await issueOperatorToken({
+      name: "rotate-unapproved-role",
+      approvedScopes: ["operator.pairing"],
+      tokenScopes: ["operator.pairing"],
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+
+    let pairingWs: WebSocket | undefined;
+    try {
+      pairingWs = await connectPairingScopedOperator({
+        port: started.port,
+        identityPath: attacker.identityPath,
+        deviceToken: attacker.token,
+      });
+
+      const rotate = await rpcReq(pairingWs, "device.token.rotate", {
+        deviceId: attacker.deviceId,
+        role: "node",
+      });
+
+      expect(rotate.ok).toBe(false);
+      expect(rotate.error?.message).toBe("device token rotation denied");
+
+      const paired = await getPairedDevice(attacker.deviceId);
+      expect(paired?.tokens?.node).toBeUndefined();
+      expect(paired?.tokens?.operator?.scopes).toEqual(["operator.pairing"]);
+    } finally {
+      pairingWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
 });
