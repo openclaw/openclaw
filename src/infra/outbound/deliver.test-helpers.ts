@@ -232,7 +232,7 @@ export async function runChunkedWhatsAppDelivery(params: {
     channel: "whatsapp",
     to: "+1555",
     payloads: [{ text: "abcd" }],
-    deps: { sendWhatsApp },
+    deps: { whatsapp: sendWhatsApp },
     ...(params.mirror ? { mirror: params.mirror } : {}),
   });
   return { sendWhatsApp, results };

@@ -210,7 +210,7 @@ function createWhatsAppHarness(params: PayloadHarnessParams) {
     text: "",
     payload: params.payload,
     deps: {
-      sendWhatsApp,
+      whatsapp: sendWhatsApp,
     },
   };
   return {

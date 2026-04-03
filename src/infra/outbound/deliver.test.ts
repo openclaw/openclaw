@@ -103,7 +103,7 @@ type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
 
 async function deliverWhatsAppPayload(params: {
   sendWhatsApp: NonNullable<
-    NonNullable<Parameters<DeliverModule["deliverOutboundPayloads"]>[0]["deps"]>["sendWhatsApp"]
+    NonNullable<Parameters<DeliverModule["deliverOutboundPayloads"]>[0]["deps"]>["whatsapp"]
   >;
   payload: DeliverOutboundPayload;
   cfg?: OpenClawConfig;
@@ -113,7 +113,7 @@ async function deliverWhatsAppPayload(params: {
     channel: "whatsapp",
     to: "+1555",
     payloads: [params.payload],
-    deps: { sendWhatsApp: params.sendWhatsApp },
+    deps: { whatsapp: params.sendWhatsApp },
   });
 }
 
@@ -132,7 +132,7 @@ async function runChunkedWhatsAppDelivery(params?: {
     channel: "whatsapp",
     to: "+1555",
     payloads: [{ text: "abcd" }],
-    deps: { sendWhatsApp },
+    deps: { whatsapp: sendWhatsApp },
     ...(params?.mirror ? { mirror: params.mirror } : {}),
   });
   return { sendWhatsApp, results };
@@ -145,7 +145,7 @@ async function deliverSingleWhatsAppForHookTest(params?: { sessionKey?: string }
     channel: "whatsapp",
     to: "+1555",
     payloads: [{ text: "hello" }],
-    deps: { sendWhatsApp },
+    deps: { whatsapp: sendWhatsApp },
     ...(params?.sessionKey ? { session: { key: params.sessionKey } } : {}),
   });
 }
@@ -162,7 +162,7 @@ async function runBestEffortPartialFailureDelivery() {
     channel: "whatsapp",
     to: "+1555",
     payloads: [{ text: "a" }, { text: "b" }],
-    deps: { sendWhatsApp },
+    deps: { whatsapp: sendWhatsApp },
     bestEffort: true,
     onError,
   });
@@ -426,7 +426,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
     });
 
     expect(sendWhatsApp).toHaveBeenCalledWith(
@@ -446,7 +446,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "imessage",
       to: "imessage:+15551234567",
       payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
-      deps: { sendIMessage },
+      deps: { imessage: sendIMessage },
     });
 
     expect(sendIMessage).toHaveBeenCalledWith(
@@ -476,7 +476,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "Line one\n\nLine two" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
@@ -587,7 +587,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "imessage",
       to: "chat_id:42",
       payloads: [{ text: "hello" }],
-      deps: { sendIMessage },
+      deps: { imessage: sendIMessage },
     });
 
     expect(sendIMessage).toHaveBeenCalledWith(
@@ -671,7 +671,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "hello" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
       session: { agentId: "agent-main" },
     });
 
@@ -707,7 +707,7 @@ describe("deliverOutboundPayloads", () => {
         channel: "whatsapp",
         to: "+1555",
         payloads: [{ text: "a" }],
-        deps: { sendWhatsApp },
+        deps: { whatsapp: sendWhatsApp },
         abortSignal: abortController.signal,
       }),
     ).rejects.toThrow("Operation aborted");
@@ -727,7 +727,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "hi", mediaUrl: "https://x.test/a.jpg" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
       bestEffort: true,
       onError,
     });
@@ -788,7 +788,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "hello" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
     });
 
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
@@ -829,7 +829,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "hello" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
     });
 
     expect(hookMocks.runner.runMessageSending).toHaveBeenCalledTimes(1);
@@ -1041,7 +1041,7 @@ describe("deliverOutboundPayloads", () => {
         channel: "whatsapp",
         to: "+1555",
         payloads: [{ text: "hi" }],
-        deps: { sendWhatsApp },
+        deps: { whatsapp: sendWhatsApp },
       }),
     ).rejects.toThrow("downstream failed");
 
