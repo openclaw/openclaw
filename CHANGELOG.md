@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/browser seams: split browser and WhatsApp plugin-sdk seams into narrower browser, approval-auth, and target-helper facades so hot paths and owner tests avoid broader runtime fan-out. (#60376) Thanks @shakkernerd.
 - Tests/runtime: trim local unit-test import/runtime fan-out across browser, WhatsApp, cron, task, and reply flows so owner suites start faster with lower shared-worker overhead while preserving the same focused behavior coverage. (#60249) Thanks @shakkernerd.
 - Tests/secrets runtime: restore split secrets suite cache and env isolation cleanup so broader runs do not leak stale plugin or provider snapshot state. (#60395) Thanks @shakkernerd.
+- Providers/Ollama: add bundled Ollama Web Search provider for key-free web_search via your configured Ollama host and `ollama signin`. (#59318) Thanks @BruceMacD.
 
 ### Fixes
 
@@ -85,6 +86,11 @@ Docs: https://docs.openclaw.ai
 - Discord/voice: make READY auto-join fire-and-forget while keeping the shorter initial voice-connect timeout separate from the longer playback-start wait. (#60345) Thanks @geekhuashan.
 - Agents/skills: add inherited `agents.defaults.skills` allowlists, make per-agent `agents.list[].skills` replace defaults instead of merging, and scope embedded, session, sandbox, and cron skill snapshots through the effective runtime agent. (#59992) Thanks @gumadeiras.
 - Matrix/Telegram exec approvals: recover stored same-channel account bindings even when session reply state drifted to another channel, so foreign-channel approvals route to the bound account instead of fanning out or being rejected as ambiguous. (#60417) thanks @gumadeiras.
+- Slack/app manifest: set `bot_user.always_online` to `true` in the onboarding and example Slack app manifest so the Slack app appears ready to respond.
+- Gateway/websocket auth: refresh auth on new websocket connects after secrets reload so rotated gateway tokens take effect immediately without requiring a restart. (#60323) Thanks @mappel-nv.
+- Agents/workspace: respect `agents.defaults.workspace` for non-default agents by resolving them under the configured base path instead of falling back to `workspace-<id>`. (#59858) Thanks @joelnishanth.
+- Config/All Settings: keep the raw config view intact when sensitive fields are blank instead of corrupting or dropping the snapshot during redaction. (#28214) thanks @solodmd.
+- Plugins/runtime: honor explicit capability allowlists during fallback speech, media-understanding, and image-generation provider loading so bundled capability plugins do not bypass restrictive `plugins.allow` config. (#52262) Thanks @PerfectPan.
 
 ## 2026.4.2
 

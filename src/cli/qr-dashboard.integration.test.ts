@@ -2,21 +2,28 @@ import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
 const copyToClipboardMock = vi.hoisted(() => vi.fn(async () => false));
 
+type CliRuntimeEnv = RuntimeEnv & {
+  log: MockFn<RuntimeEnv["log"]>;
+  error: MockFn<RuntimeEnv["error"]>;
+  exit: MockFn<RuntimeEnv["exit"]>;
+};
+
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];
-const runtime = vi.hoisted<RuntimeEnv>(() => ({
-  log: (...args: unknown[]) => {
+const runtime = vi.hoisted<CliRuntimeEnv>(() => ({
+  log: vi.fn((...args: unknown[]) => {
     runtimeLogs.push(args.map(String).join(" "));
-  },
-  error: (...args: unknown[]) => {
+  }),
+  error: vi.fn((...args: unknown[]) => {
     runtimeErrors.push(args.map(String).join(" "));
-  },
+  }),
   exit: vi.fn<(code: number) => void>(),
 }));
 
@@ -34,9 +41,13 @@ vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
 }));
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: runtime,
-}));
+vi.mock("../runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
+  return {
+    ...actual,
+    defaultRuntime: runtime,
+  };
+});
 
 let dashboardCommand: typeof import("../commands/dashboard.js").dashboardCommand;
 let registerQrCli: typeof import("./qr-cli.js").registerQrCli;
@@ -83,29 +94,24 @@ function decodeSetupCode(setupCode: string): {
   };
 }
 
+function findSetupCodeLogLine(lines: string[]): string | undefined {
+  for (const line of lines) {
+    try {
+      const payload = decodeSetupCode(line);
+      if (payload.url || payload.bootstrapToken) {
+        return line;
+      }
+    } catch {
+      // Ignore non-setup-code log lines.
+    }
+  }
+  return undefined;
+}
+
 async function runCli(args: string[]): Promise<void> {
   const program = new Command();
   registerQrCli(program);
   await program.parseAsync(args, { from: "user" });
-}
-
-const mockedModuleIds = ["../config/config.js", "../infra/clipboard.js", "../runtime.js"];
-
-const unmockedDependencyIds = [
-  "../commands/dashboard.js",
-  "../gateway/resolve-configured-secret-input-string.js",
-  "../pairing/setup-code.js",
-  "./command-secret-gateway.js",
-  "./qr-cli.js",
-] as const;
-
-async function loadCliModules() {
-  vi.resetModules();
-  for (const id of unmockedDependencyIds) {
-    vi.doUnmock(id);
-  }
-  ({ dashboardCommand } = await import("../commands/dashboard.js"));
-  ({ registerQrCli } = await import("./qr-cli.js"));
 }
 
 describe("cli integration: qr + dashboard token SecretRef", () => {
@@ -118,27 +124,16 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
       "OPENCLAW_GATEWAY_PASSWORD",
     ]);
   });
-
   beforeAll(async () => {
-    await loadCliModules();
-  });
-
-  afterAll(() => {
-    envSnapshot.restore();
-    vi.restoreAllMocks();
-    for (const id of mockedModuleIds) {
-      vi.doUnmock(id);
-    }
-    for (const id of unmockedDependencyIds) {
-      vi.doUnmock(id);
-    }
-    vi.resetModules();
+    ({ dashboardCommand } = await import("../commands/dashboard.js"));
+    ({ registerQrCli } = await import("./qr-cli.js"));
   });
 
   beforeEach(() => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     vi.clearAllMocks();
+    runtime.exit.mockImplementation(() => {});
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.SHARED_GATEWAY_TOKEN;
@@ -157,7 +152,8 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     });
 
     await runCli(["qr", "--setup-code-only"]);
-    const setupCode = runtimeLogs.at(-1);
+    expect(runtime.exit).not.toHaveBeenCalled();
+    const setupCode = findSetupCodeLogLine(runtimeLogs);
     expect(setupCode).toBeTruthy();
     const payload = decodeSetupCode(setupCode ?? "");
     expect(payload.url).toBe("ws://127.0.0.1:18789");
@@ -200,5 +196,9 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     expect(joined).not.toContain("#token=");
     expect(joined).toContain("Token auto-auth unavailable");
     expect(joined).toContain("Set OPENCLAW_GATEWAY_TOKEN");
+  });
+
+  afterAll(() => {
+    envSnapshot.restore();
   });
 });

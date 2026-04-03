@@ -318,6 +318,34 @@ describe("feishu setup wizard status", () => {
     expect(status.statusLines).toEqual(["Feishu: needs app credentials"]);
   });
 
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const status = await feishuGetStatus({
+      cfg: {
+        channels: {
+          feishu: {
+            defaultAccount: "work",
+            appId: "top_level_app",
+            appSecret: "top-level-secret", // pragma: allowlist secret
+            accounts: {
+              alerts: {
+                appId: "alerts-app",
+                appSecret: "alerts-secret", // pragma: allowlist secret
+              },
+              work: {
+                appId: "",
+                appSecret: "work-secret", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(false);
+    expect(status.statusLines).toEqual(["Feishu: needs app credentials"]);
+  });
+
   it("uses configured defaultAccount for omitted DM policy account context", async () => {
     const { feishuSetupWizard } = await import("./setup-surface.js");
     const cfg = {

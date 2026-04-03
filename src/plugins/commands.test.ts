@@ -536,4 +536,76 @@ describe("registerPluginCommand", () => {
       sessionId: "session-123",
     });
   });
+
+  it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "line",
+              label: "LINE",
+              config: {
+                listAccountIds: () => ["default", "work"],
+                defaultAccountId: () => "work",
+                resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "work" }),
+              },
+            }),
+            bindings: {
+              resolveCommandConversation: ({
+                originatingTo,
+                commandTo,
+                fallbackTo,
+              }: {
+                originatingTo?: string;
+                commandTo?: string;
+                fallbackTo?: string;
+              }) => {
+                const rawTarget = [originatingTo, commandTo, fallbackTo].find(Boolean)?.trim();
+                if (!rawTarget) {
+                  return null;
+                }
+                return {
+                  conversationId: rawTarget.replace(/^line:/i, "").replace(/^user:/i, ""),
+                };
+              },
+            },
+          },
+        },
+      ]),
+    );
+
+    let receivedCtx:
+      | {
+          accountId?: string;
+        }
+      | undefined;
+    const handler = async (ctx: { accountId?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "accountcheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "line",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      commandBody: "/accountcheck",
+      config: {} as never,
+      from: "line:user:U1234567890abcdef1234567890abcdef",
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx).toMatchObject({
+      accountId: "work",
+    });
+  });
 });

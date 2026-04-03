@@ -265,6 +265,34 @@ describe("line setup wizard", () => {
     expect(next?.channels?.line?.accounts?.work?.dmPolicy).toBe("open");
     expect(next?.channels?.line?.accounts?.work?.allowFrom).toEqual(["Uroot", "*"]);
   });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const { lineSetupWizard } = await import("./setup-surface.js");
+
+    const configured = await lineSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          line: {
+            defaultAccount: "work",
+            channelAccessToken: "root-token",
+            channelSecret: "root-secret",
+            accounts: {
+              alerts: {
+                channelAccessToken: "alerts-token",
+                channelSecret: "alerts-secret",
+              },
+              work: {
+                channelAccessToken: "",
+                channelSecret: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
+  });
 });
 
 describe("probeLineBot", () => {

@@ -178,6 +178,33 @@ describe("probeSignal", () => {
 
     expect(status.statusLines).toContain("signal-cli: missing (/tmp/work-signal-cli)");
   });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            defaultAccount: "work",
+            cliPath: "/tmp/root-signal-cli",
+            accounts: {
+              alerts: {
+                cliPath: "/tmp/alerts-signal-cli",
+              },
+              work: {
+                cliPath: "",
+                account: "",
+                httpHost: "",
+                httpUrl: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(false);
+  });
 });
 
 describe("signal outbound", () => {

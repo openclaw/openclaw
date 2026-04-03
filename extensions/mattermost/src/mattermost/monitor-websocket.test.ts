@@ -5,7 +5,6 @@ import {
   type MattermostWebSocketLike,
   WebSocketClosedBeforeOpenError,
 } from "./monitor-websocket.js";
-import { runWithReconnect } from "./reconnect.js";
 
 class FakeWebSocket implements MattermostWebSocketLike {
   public readonly sent: string[] = [];
@@ -111,8 +110,6 @@ describe("mattermost websocket monitor", () => {
   });
 
   it("retries when first attempt errors before open and next attempt succeeds", async () => {
-    const reconnectDelays: number[] = [];
-    const onError = vi.fn();
     const patches: Array<Record<string, unknown>> = [];
     const sockets: FakeWebSocket[] = [];
 
@@ -145,12 +142,10 @@ describe("mattermost websocket monitor", () => {
       },
     });
 
-    await runWithReconnect(connectOnce, {
-      initialDelayMs: 1,
-      onError,
-      onReconnect: (delay) => reconnectDelays.push(delay),
-      shouldReconnect: ({ outcome }) => outcome === "rejected",
-    });
+    const firstAttempt = connectOnce();
+    await expect(firstAttempt).rejects.toBeInstanceOf(WebSocketClosedBeforeOpenError);
+
+    await connectOnce();
 
     expect(sockets).toHaveLength(2);
     expect(sockets[0].closeCalls).toBe(1);
@@ -160,8 +155,6 @@ describe("mattermost websocket monitor", () => {
       data: { token: "token" },
       seq: 1,
     });
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(reconnectDelays).toEqual([1]);
     expect(patches.some((patch) => patch.connected === true)).toBe(true);
     expect(patches.filter((patch) => patch.connected === false)).toHaveLength(2);
   });

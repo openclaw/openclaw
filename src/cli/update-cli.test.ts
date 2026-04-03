@@ -751,6 +751,7 @@ describe("update-cli", () => {
     const brewRoot = path.join(brewPrefix, "lib", "node_modules");
     const pkgRoot = path.join(brewRoot, "openclaw");
     const brewNpm = path.join(brewPrefix, "bin", "npm");
+    const win32PrefixNpm = path.join(brewPrefix, "npm.cmd");
     const pathNpmRoot = createCaseDir("nvm-root");
     mockPackageInstallStatus(pkgRoot);
     pathExists.mockResolvedValue(false);
@@ -808,7 +809,9 @@ describe("update-cli", () => {
       .mock.calls.find(
         ([argv]) =>
           Array.isArray(argv) &&
-          path.normalize(String(argv[0] ?? "")) === path.normalize(brewNpm) &&
+          [path.normalize(brewNpm), path.normalize(win32PrefixNpm)].includes(
+            path.normalize(String(argv[0] ?? "")),
+          ) &&
           argv[1] === "i" &&
           argv[2] === "-g" &&
           argv[3] === "openclaw@latest",
