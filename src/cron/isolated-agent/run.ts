@@ -7,14 +7,12 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveNestedAgentLane } from "../../agents/lanes.js";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider, resolveThinkingDefault } from "../../agents/model-selection.js";
@@ -22,7 +20,7 @@ import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   countActiveDescendantRuns,
   listDescendantRunsForRequester,
-} from "../../agents/subagent-registry.js";
+} from "../../agents/subagent-registry-read.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -33,11 +31,8 @@ import {
 } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveSessionTranscriptPath,
-  setSessionRuntimeModel,
-  updateSessionStore,
-} from "../../config/sessions.js";
+import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
+import { setSessionRuntimeModel } from "../../config/sessions/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -48,8 +43,7 @@ import {
   isExternalHookSession,
   resolveHookExternalContentSource,
 } from "../../security/external-content.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
-import { resolveCronDeliveryPlan } from "../delivery.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   dispatchCronDelivery,
@@ -68,6 +62,15 @@ import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup.js";
+
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
+
+async function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return await sessionStoreRuntimePromise;
+}
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -170,6 +173,18 @@ function appendCronDeliveryInstruction(params: {
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
+function resolvePositiveContextTokens(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+async function loadCliRunnerRuntime() {
+  return await import("../../agents/cli-runner.runtime.js");
+}
+
+async function loadUsageFormatRuntime() {
+  return await import("../../utils/usage-format.js");
+}
+
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -266,6 +281,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (runSessionKey !== agentSessionKey) {
       cronSession.store[runSessionKey] = cronSession.sessionEntry;
     }
+    const { updateSessionStore } = await loadSessionStoreRuntime();
     await updateSessionStore(cronSession.storePath, (store) => {
       store[agentSessionKey] = cronSession.sessionEntry;
       if (runSessionKey !== agentSessionKey) {
@@ -496,6 +512,7 @@ export async function runCronIsolatedAgentTurn(params: {
           const bootstrapPromptWarningSignature =
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
           if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
+            const { getCliSessionId, runCliAgent } = await loadCliRunnerRuntime();
             // Fresh isolated cron sessions must not reuse a stored CLI session ID.
             // Passing an existing ID activates the resume watchdog profile
             // (noOutputTimeoutRatio 0.3, maxMs 180 s) instead of the fresh profile
@@ -704,8 +721,9 @@ export async function runCronIsolatedAgentTurn(params: {
     const providerUsed =
       finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? liveSelection.provider;
     const contextTokens =
-      agentCfg?.contextTokens ??
+      resolvePositiveContextTokens(agentCfg?.contextTokens) ??
       lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??
+      resolvePositiveContextTokens(cronSession.sessionEntry.contextTokens) ??
       DEFAULT_CONTEXT_TOKENS;
 
     setSessionRuntimeModel(cronSession.sessionEntry, {
@@ -716,10 +734,12 @@ export async function runCronIsolatedAgentTurn(params: {
     if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
       const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
       if (cliSessionId) {
+        const { setCliSessionId } = await loadCliRunnerRuntime();
         setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);
       }
     }
     if (hasNonzeroUsage(usage)) {
+      const { estimateUsageCost, resolveModelCostConfig } = await loadUsageFormatRuntime();
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
       const totalTokens = deriveSessionTotalTokens({

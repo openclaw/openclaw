@@ -206,6 +206,27 @@ describe("provider attribution", () => {
     });
   });
 
+  it("classifies native Mistral hosts centrally", () => {
+    expect(resolveProviderEndpoint("https://api.mistral.ai/v1")).toMatchObject({
+      endpointClass: "mistral-public",
+      hostname: "api.mistral.ai",
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "mistral",
+        api: "openai-completions",
+        baseUrl: "https://api.mistral.ai/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "mistral-public",
+      isKnownNativeEndpoint: true,
+      knownProviderFamily: "mistral",
+    });
+  });
+
   it("treats OpenRouter-hosted Responses routes as explicit proxy-like endpoints", () => {
     expect(
       resolveProviderRequestPolicy({
@@ -222,7 +243,7 @@ describe("provider attribution", () => {
     });
   });
 
-  it("keeps documented OpenRouter attribution centralized while leaving host-gating deferred", () => {
+  it("gates documented OpenRouter attribution to known OpenRouter endpoints", () => {
     expect(
       resolveProviderRequestPolicy({
         provider: "openrouter",
@@ -244,11 +265,7 @@ describe("provider attribution", () => {
         transport: "stream",
         capability: "llm",
       }),
-    ).toEqual({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
-    });
+    ).toBeUndefined();
   });
 
   it("models other provider families without enabling hidden attribution", () => {

@@ -19,25 +19,55 @@ import {
   installChannelThreadingContractSuite,
   installSessionBindingContractSuite,
 } from "../../../src/channels/plugins/contracts/suites.js";
-import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-helpers.js";
+import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-registry.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../src/config/config.js";
 import { __testing as sessionBindingTesting } from "../../../src/infra/outbound/session-binding-service.js";
-import { feishuThreadBindingTesting } from "../../../src/plugin-sdk/feishu-conversation.js";
-import { resetMatrixThreadBindingsForTests } from "../../../src/plugin-sdk/matrix.js";
 import { resetPluginRuntimeStateForTest } from "../../../src/plugins/runtime.js";
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
-const { discordThreadBindingTesting } = loadBundledPluginTestApiSync<{
-  discordThreadBindingTesting: {
-    resetThreadBindingsForTests: () => void;
-  };
-}>("discord");
-const { resetTelegramThreadBindingsForTests } = loadBundledPluginTestApiSync<{
-  resetTelegramThreadBindingsForTests: () => Promise<void>;
-}>("telegram");
+type DiscordThreadBindingTesting = {
+  resetThreadBindingsForTests: () => void;
+};
+
+let discordThreadBindingTestingCache: DiscordThreadBindingTesting | undefined;
+let feishuApiPromise: Promise<typeof import("../../../extensions/feishu/api.js")> | undefined;
+let matrixApiPromise: Promise<typeof import("../../../extensions/matrix/api.js")> | undefined;
+
+function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
+  if (!discordThreadBindingTestingCache) {
+    ({ discordThreadBindingTesting: discordThreadBindingTestingCache } =
+      loadBundledPluginTestApiSync<{
+        discordThreadBindingTesting: DiscordThreadBindingTesting;
+      }>("discord"));
+  }
+  return discordThreadBindingTestingCache;
+}
+type ResetTelegramThreadBindingsForTests = () => Promise<void>;
+
+let resetTelegramThreadBindingsForTestsCache: ResetTelegramThreadBindingsForTests | undefined;
+
+function getResetTelegramThreadBindingsForTests(): ResetTelegramThreadBindingsForTests {
+  if (!resetTelegramThreadBindingsForTestsCache) {
+    ({ resetTelegramThreadBindingsForTests: resetTelegramThreadBindingsForTestsCache } =
+      loadBundledPluginTestApiSync<{
+        resetTelegramThreadBindingsForTests: ResetTelegramThreadBindingsForTests;
+      }>("telegram"));
+  }
+  return resetTelegramThreadBindingsForTestsCache;
+}
+
+async function getFeishuThreadBindingTesting() {
+  feishuApiPromise ??= import("../../../extensions/feishu/api.js");
+  return (await feishuApiPromise).feishuThreadBindingTesting;
+}
+
+async function getResetMatrixThreadBindingsForTests() {
+  matrixApiPromise ??= import("../../../extensions/matrix/api.js");
+  return (await matrixApiPromise).resetMatrixThreadBindingsForTests;
+}
 
 function hasEntries<T extends { id: string }>(
   entries: readonly T[],
@@ -153,10 +183,10 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
       }
       setDefaultChannelPluginRegistryForTests();
       sessionBindingTesting.resetSessionBindingAdaptersForTests();
-      discordThreadBindingTesting.resetThreadBindingsForTests();
-      feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
-      resetMatrixThreadBindingsForTests();
-      await resetTelegramThreadBindingsForTests();
+      getDiscordThreadBindingTesting().resetThreadBindingsForTests();
+      (await getFeishuThreadBindingTesting()).resetFeishuThreadBindingsForTests();
+      (await getResetMatrixThreadBindingsForTests())();
+      await getResetTelegramThreadBindingsForTests()();
     });
     afterEach(() => {
       clearRuntimeConfigSnapshot();

@@ -8,7 +8,9 @@ import {
 } from "./vitest.unit-paths.mjs";
 
 const base = baseConfig as unknown as Record<string, unknown>;
-const baseTest = (baseConfig as { test?: { include?: string[]; exclude?: string[] } }).test ?? {};
+const baseTest =
+  (baseConfig as { test?: { include?: string[]; exclude?: string[]; setupFiles?: string[] } })
+    .test ?? {};
 const exclude = baseTest.exclude ?? [];
 
 export function loadIncludePatternsFromEnv(
@@ -23,18 +25,26 @@ export function loadExtraExcludePatternsFromEnv(
   return loadPatternListFromEnv("OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE", env) ?? [];
 }
 
-export function createUnitVitestConfig(env: Record<string, string | undefined> = process.env) {
+export function createUnitVitestConfigWithOptions(
+  env: Record<string, string | undefined> = process.env,
+  options: {
+    includePatterns?: string[];
+    extraExcludePatterns?: string[];
+  } = {},
+) {
   return defineConfig({
     ...base,
     test: {
       ...baseTest,
       isolate: resolveVitestIsolation(env),
       runner: "./test/non-isolated-runner.ts",
-      include: loadIncludePatternsFromEnv(env) ?? unitTestIncludePatterns,
+      setupFiles: [...new Set([...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"])],
+      include:
+        loadIncludePatternsFromEnv(env) ?? options.includePatterns ?? unitTestIncludePatterns,
       exclude: [
         ...new Set([
           ...exclude,
-          ...unitTestAdditionalExcludePatterns,
+          ...(options.extraExcludePatterns ?? unitTestAdditionalExcludePatterns),
           ...loadExtraExcludePatternsFromEnv(env),
         ]),
       ],
@@ -42,4 +52,8 @@ export function createUnitVitestConfig(env: Record<string, string | undefined> =
   });
 }
 
-export default createUnitVitestConfig();
+export function createUnitVitestConfig(env: Record<string, string | undefined> = process.env) {
+  return createUnitVitestConfigWithOptions(env);
+}
+
+export default createUnitVitestConfigWithOptions();

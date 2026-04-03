@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
@@ -37,8 +37,6 @@ async function withHeartbeatFixture(
     { prefix: "openclaw-hb-model-" },
   );
 }
-
-beforeEach(() => {});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -231,6 +229,51 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         expect.objectContaining({
           isHeartbeat: true,
           heartbeatModelOverride: "ollama/llama3.2:1b",
+        }),
+        cfg,
+      );
+    });
+  });
+
+  it("passes per-agent heartbeat lightContext override after merging defaults", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "30m",
+              lightContext: false,
+            },
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "ops",
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "whatsapp",
+                lightContext: true,
+              },
+            },
+          ],
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
+      const result = await runHeartbeatWithSeed({
+        seedSession,
+        cfg,
+        agentId: "ops",
+        sessionKey,
+      });
+
+      expect(result.replySpy).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          isHeartbeat: true,
+          bootstrapContextMode: "lightweight",
         }),
         cfg,
       );

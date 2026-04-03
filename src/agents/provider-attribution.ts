@@ -35,6 +35,7 @@ export type ProviderEndpointClass =
   | "default"
   | "anthropic-public"
   | "github-copilot-native"
+  | "mistral-public"
   | "moonshot-native"
   | "modelstudio-native"
   | "openai-public"
@@ -201,6 +202,9 @@ export function resolveProviderEndpoint(
   }
   if (host === "api.anthropic.com") {
     return { endpointClass: "anthropic-public", hostname: host };
+  }
+  if (host === "api.mistral.ai") {
+    return { endpointClass: "mistral-public", hostname: host };
   }
   if (host.endsWith(".githubcopilot.com")) {
     return { endpointClass: "github-copilot-native", hostname: host };
@@ -450,12 +454,11 @@ export function resolveProviderRequestPolicy(
   ) {
     attributionProvider = "openai-codex";
   } else if (provider === "openrouter" && policy?.enabledByDefault) {
-    // OpenRouter attribution is documented and intentionally remains
-    // provider-key-gated for this pass, including custom base URLs configured
-    // under the openrouter provider. The endpoint class is still surfaced so a
-    // later host-gating decision can reuse the same classifier without changing
-    // callers again.
-    attributionProvider = "openrouter";
+    // OpenRouter attribution is documented, but only apply it to known
+    // OpenRouter endpoints or the default (unset) baseUrl path.
+    if (endpointClass === "openrouter" || endpointClass === "default") {
+      attributionProvider = "openrouter";
+    }
   }
 
   const attributionHeaders = attributionProvider
@@ -499,6 +502,7 @@ export function resolveProviderRequestCapabilities(
   const isKnownNativeEndpoint =
     endpointClass === "anthropic-public" ||
     endpointClass === "github-copilot-native" ||
+    endpointClass === "mistral-public" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||
     endpointClass === "openai-public" ||

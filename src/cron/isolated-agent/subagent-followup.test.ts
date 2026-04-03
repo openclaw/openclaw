@@ -12,7 +12,7 @@ import {
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
 
-vi.mock("../../agents/subagent-registry.js", () => ({
+vi.mock("../../agents/subagent-registry-read.js", () => ({
   listDescendantRunsForRequester: vi.fn().mockReturnValue([]),
 }));
 
@@ -24,7 +24,7 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
 }));
 
-const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry.js");
+const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry-read.js");
 const { readLatestAssistantReply } = await import("../../agents/tools/agent-step.js");
 const { callGateway } = await import("../../gateway/call.js");
 

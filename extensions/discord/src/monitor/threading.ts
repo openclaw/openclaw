@@ -5,7 +5,7 @@ import {
   type OpenClawConfig,
   type ReplyToMode,
 } from "openclaw/plugin-sdk/config-runtime";
-import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
@@ -29,6 +29,10 @@ export type DiscordThreadChannel = {
 export type DiscordThreadStarter = {
   text: string;
   author: string;
+  authorId?: string;
+  authorName?: string;
+  authorTag?: string;
+  memberRoleIds?: string[];
   timestamp?: number;
 };
 
@@ -194,6 +198,14 @@ export async function resolveDiscordThreadStarter(params: {
     )) as {
       content?: string | null;
       embeds?: Array<{ title?: string | null; description?: string | null }>;
+      message_snapshots?: Array<{
+        message?: {
+          content?: string | null;
+          attachments?: unknown[];
+          embeds?: Array<{ title?: string | null; description?: string | null }>;
+          sticker_items?: unknown[];
+        };
+      }>;
       member?: { nick?: string | null; displayName?: string | null };
       author?: {
         id?: string | null;
@@ -207,7 +219,8 @@ export async function resolveDiscordThreadStarter(params: {
     }
     const content = starter.content?.trim() ?? "";
     const embedText = resolveDiscordEmbedText(starter.embeds?.[0]);
-    const text = content || embedText;
+    const forwardedText = resolveStarterForwardedText(starter.message_snapshots);
+    const text = content || embedText || forwardedText;
     if (!text) {
       return null;
     }
@@ -223,6 +236,18 @@ export async function resolveDiscordThreadStarter(params: {
     const payload: DiscordThreadStarter = {
       text,
       author,
+      authorId: starter.author?.id ?? undefined,
+      authorName: starter.author?.username ?? undefined,
+      authorTag:
+        starter.author?.username && starter.author?.discriminator
+          ? starter.author.discriminator !== "0"
+            ? `${starter.author.username}#${starter.author.discriminator}`
+            : starter.author.username
+          : undefined,
+      memberRoleIds: (() => {
+        const roles = (starter.member as { roles?: string[] } | undefined)?.roles;
+        return Array.isArray(roles) ? roles.map((roleId) => String(roleId)) : undefined;
+      })(),
       timestamp: timestamp ?? undefined,
     };
     setCachedThreadStarter(cacheKey, payload, Date.now());
@@ -570,4 +595,32 @@ export function resolveDiscordReplyDeliveryPlan(params: {
     allowReference,
   });
   return { deliverTarget, replyTarget, replyReference };
+}
+
+/**
+ * Extract text from forwarded message snapshots for thread starter resolution.
+ * Discord forwarded messages have empty `content` and store the original text
+ * in `message_snapshots[0].message.content`.
+ */
+function resolveStarterForwardedText(
+  snapshots?: Array<{
+    message?: {
+      content?: string | null;
+      attachments?: unknown[];
+      embeds?: Array<{ title?: string | null; description?: string | null }>;
+      sticker_items?: unknown[];
+    };
+  }>,
+): string {
+  if (!Array.isArray(snapshots) || snapshots.length === 0) {
+    return "";
+  }
+  const blocks: string[] = [];
+  for (const snapshot of snapshots) {
+    const msg = snapshot.message;
+    if (!msg) continue;
+    const text = msg.content?.trim() || resolveDiscordEmbedText(msg.embeds?.[0]) || "";
+    if (text) blocks.push(`[Forwarded message]\n${text}`);
+  }
+  return blocks.join("\n\n");
 }

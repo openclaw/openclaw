@@ -8,18 +8,11 @@ import {
   type SessionBindingCapabilities,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
-import { createThreadBindingManager as createDiscordThreadBindingManager } from "../../../plugin-sdk/discord-thread-bindings.js";
-import { createFeishuThreadBindingManager } from "../../../plugin-sdk/feishu.js";
 import {
   listLineAccountIds,
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../../../plugin-sdk/line.js";
-import { setMatrixRuntime } from "../../../plugin-sdk/matrix-runtime-surface.js";
-import {
-  createMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
-} from "../../../plugin-sdk/matrix-surface.js";
 import { loadBundledPluginTestApiSync } from "../../../test-utils/bundled-plugin-public-surface.js";
 import {
   listBundledChannelPlugins,
@@ -35,11 +28,49 @@ import {
   type SessionBindingContractChannelId,
 } from "./manifest.js";
 
-const { discordThreadBindingTesting } = loadBundledPluginTestApiSync<{
-  discordThreadBindingTesting: {
-    resetThreadBindingsForTests: () => void;
-  };
-}>("discord");
+type DiscordThreadBindingTesting = {
+  resetThreadBindingsForTests: () => void;
+};
+
+let discordThreadBindingTestingCache: DiscordThreadBindingTesting | undefined;
+let discordRuntimeApiPromise:
+  | Promise<typeof import("../../../../extensions/discord/runtime-api.js")>
+  | undefined;
+let feishuApiPromise: Promise<typeof import("../../../../extensions/feishu/api.js")> | undefined;
+let matrixApiPromise: Promise<typeof import("../../../../extensions/matrix/api.js")> | undefined;
+let matrixRuntimeApiPromise:
+  | Promise<typeof import("../../../../extensions/matrix/runtime-api.js")>
+  | undefined;
+
+function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
+  if (!discordThreadBindingTestingCache) {
+    ({ discordThreadBindingTesting: discordThreadBindingTestingCache } =
+      loadBundledPluginTestApiSync<{
+        discordThreadBindingTesting: DiscordThreadBindingTesting;
+      }>("discord"));
+  }
+  return discordThreadBindingTestingCache;
+}
+
+async function getDiscordRuntimeApi() {
+  discordRuntimeApiPromise ??= import("../../../../extensions/discord/runtime-api.js");
+  return await discordRuntimeApiPromise;
+}
+
+async function getFeishuApi() {
+  feishuApiPromise ??= import("../../../../extensions/feishu/api.js");
+  return await feishuApiPromise;
+}
+
+async function getMatrixApi() {
+  matrixApiPromise ??= import("../../../../extensions/matrix/api.js");
+  return await matrixApiPromise;
+}
+
+async function getMatrixRuntimeApi() {
+  matrixRuntimeApiPromise ??= import("../../../../extensions/matrix/runtime-api.js");
+  return await matrixRuntimeApiPromise;
+}
 
 function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
   return ["..", "..", "..", "..", "extensions", pluginId, artifactBasename].join("/");
@@ -176,23 +207,12 @@ function expectClearedSessionBinding(params: {
   ).toBeNull();
 }
 
-const discordDescribeMessageToolMock = vi.fn();
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (to: string, _message: string, opts?: { threadId?: string }) => ({
     messageId: opts?.threadId ? "$matrix-thread" : "$matrix-root",
     roomId: to.replace(/^room:/, ""),
   })),
 );
-
-setBundledChannelRuntime("discord", {
-  channel: {
-    discord: {
-      messageActions: {
-        describeMessageTool: discordDescribeMessageToolMock,
-      },
-    },
-  },
-} as never);
 
 setBundledChannelRuntime("line", {
   channel: {
@@ -231,6 +251,8 @@ function resetMatrixSessionBindingStateDir() {
 
 async function createContractMatrixThreadBindingManager() {
   resetMatrixSessionBindingStateDir();
+  const { setMatrixRuntime } = await getMatrixRuntimeApi();
+  const { createMatrixThreadBindingManager } = await getMatrixApi();
   setMatrixRuntime({
     state: {
       resolveStateDir: () => matrixSessionBindingStateDir,
@@ -401,17 +423,37 @@ export const actionContractRegistry: ActionsContractEntry[] = [
     plugin: requireBundledChannelPlugin("discord"),
     cases: [
       {
-        name: "forwards runtime-backed Discord actions and capabilities",
-        cfg: {} as OpenClawConfig,
-        expectedActions: ["send", "react", "poll"],
+        name: "describes configured Discord actions and capabilities",
+        cfg: {
+          channels: {
+            discord: {
+              token: "Bot token-main",
+              actions: {
+                polls: true,
+                reactions: true,
+                permissions: false,
+                messages: false,
+                pins: false,
+                threads: false,
+                search: false,
+                stickers: false,
+                memberInfo: false,
+                roleInfo: false,
+                emojiUploads: false,
+                stickerUploads: false,
+                channelInfo: false,
+                channels: false,
+                voiceStatus: false,
+                events: false,
+                roles: false,
+                moderation: false,
+                presence: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        expectedActions: ["send", "poll", "react", "reactions", "emoji-list"],
         expectedCapabilities: ["interactive", "components"],
-        beforeTest: () => {
-          discordDescribeMessageToolMock.mockReset();
-          discordDescribeMessageToolMock.mockReturnValue({
-            actions: ["send", "react", "poll"],
-            capabilities: ["interactive", "components"],
-          });
-        },
       },
     ],
   },
@@ -702,8 +744,9 @@ const sessionBindingContractEntries: Record<
       unbindSupported: true,
       placements: ["current", "child"],
     },
-    getCapabilities: () => {
-      createDiscordThreadBindingManager({
+    getCapabilities: async () => {
+      const { createThreadBindingManager } = await getDiscordRuntimeApi();
+      createThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -714,7 +757,8 @@ const sessionBindingContractEntries: Record<
       });
     },
     bindAndResolve: async () => {
-      createDiscordThreadBindingManager({
+      const { createThreadBindingManager } = await getDiscordRuntimeApi();
+      createThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
@@ -743,13 +787,14 @@ const sessionBindingContractEntries: Record<
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
-      const manager = createDiscordThreadBindingManager({
+      const { createThreadBindingManager } = await getDiscordRuntimeApi();
+      const manager = createThreadBindingManager({
         accountId: "default",
         persist: false,
         enableSweeper: false,
       });
       manager.stop();
-      discordThreadBindingTesting.resetThreadBindingsForTests();
+      getDiscordThreadBindingTesting().resetThreadBindingsForTests();
       expectClearedSessionBinding({
         channel: "discord",
         accountId: "default",
@@ -764,7 +809,8 @@ const sessionBindingContractEntries: Record<
       unbindSupported: true,
       placements: ["current"],
     },
-    getCapabilities: () => {
+    getCapabilities: async () => {
+      const { createFeishuThreadBindingManager } = await getFeishuApi();
       createFeishuThreadBindingManager({ cfg: baseSessionBindingCfg, accountId: "default" });
       return getSessionBindingService().getCapabilities({
         channel: "feishu",
@@ -772,6 +818,7 @@ const sessionBindingContractEntries: Record<
       });
     },
     bindAndResolve: async () => {
+      const { createFeishuThreadBindingManager } = await getFeishuApi();
       createFeishuThreadBindingManager({ cfg: baseSessionBindingCfg, accountId: "default" });
       const service = getSessionBindingService();
       const binding = await service.bind({
@@ -799,6 +846,7 @@ const sessionBindingContractEntries: Record<
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
+      const { createFeishuThreadBindingManager } = await getFeishuApi();
       const manager = createFeishuThreadBindingManager({
         cfg: baseSessionBindingCfg,
         accountId: "default",
@@ -914,6 +962,7 @@ const sessionBindingContractEntries: Record<
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
+      const { resetMatrixThreadBindingsForTests } = await getMatrixApi();
       resetMatrixThreadBindingsForTests();
       resetMatrixSessionBindingStateDir();
       expectClearedSessionBinding({

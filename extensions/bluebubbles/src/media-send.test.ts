@@ -19,7 +19,7 @@ vi.mock("./send.js", () => ({
   sendMessageBlueBubbles: sendMessageBlueBubblesMock,
 }));
 
-vi.mock("./monitor.js", () => ({
+vi.mock("./monitor-reply-cache.js", () => ({
   resolveBlueBubblesMessageId: resolveBlueBubblesMessageIdMock,
 }));
 

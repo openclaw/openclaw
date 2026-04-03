@@ -18,6 +18,7 @@ type ApprovalAdapterParams = {
 
 type DeliverySuppressionParams = {
   cfg: OpenClawConfig;
+  approvalKind: ApprovalKind;
   target: { channel: string; accountId?: string | null };
   request: { request: { turnSourceChannel?: string | null; turnSourceAccountId?: string | null } };
 };
@@ -168,11 +169,13 @@ export function createApproverRestrictedNativeApprovalAdapter(
 export function createChannelApprovalCapability(params: {
   authorizeActorAction?: ChannelApprovalCapability["authorizeActorAction"];
   getActionAvailabilityState?: ChannelApprovalCapability["getActionAvailabilityState"];
+  resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
   approvals?: Pick<ChannelApprovalCapability, "delivery" | "render" | "native">;
 }): ChannelApprovalCapability {
   return {
     authorizeActorAction: params.authorizeActorAction,
     getActionAvailabilityState: params.getActionAvailabilityState,
+    resolveApproveCommandBehavior: params.resolveApproveCommandBehavior,
     delivery: params.approvals?.delivery,
     render: params.approvals?.render,
     native: params.approvals?.native,
@@ -183,6 +186,7 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
   auth: {
     authorizeActorAction?: ChannelApprovalCapability["authorizeActorAction"];
     getActionAvailabilityState?: ChannelApprovalCapability["getActionAvailabilityState"];
+    resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
   };
   delivery: ChannelApprovalCapability["delivery"];
   render: ChannelApprovalCapability["render"];
@@ -192,6 +196,7 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
     auth: {
       authorizeActorAction: capability.authorizeActorAction,
       getActionAvailabilityState: capability.getActionAvailabilityState,
+      resolveApproveCommandBehavior: capability.resolveApproveCommandBehavior,
     },
     delivery: capability.delivery,
     render: capability.render,

@@ -51,7 +51,8 @@ OpenClaw has three public release lanes:
   - real npm publish must pass a successful npm `preflight_run_id`
   - stable npm releases default to `beta`
   - stable npm publish can target `latest` explicitly via workflow input
-  - stable npm promotion from `beta` to `latest` is still available as a separate manual workflow step
+  - stable npm promotion from `beta` to `latest` is still available as an explicit manual mode on the trusted `OpenClaw NPM Release` workflow
+  - that promotion mode still needs a valid `NPM_TOKEN` in the `npm-release` environment because npm `dist-tag` management is separate from trusted publishing
   - public `macOS Release` is validation-only
   - real private mac publish must pass successful private mac
     `preflight_run_id` and `validate_run_id`
@@ -66,7 +67,7 @@ OpenClaw has three public release lanes:
   so we do not ship an empty browser dashboard again
 - If the release work touched CI planning, extension timing manifests, or fast
   test matrices, regenerate and review the planner-owned `checks-fast-extensions`
-  shard plan via `node scripts/ci-write-manifest-outputs.mjs --workflow ci`
+  workflow matrix outputs from `.github/workflows/ci.yml`
   before approval so release notes do not describe a stale CI layout
 - Stable macOS release readiness also includes the updater surfaces:
   - the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`
@@ -86,6 +87,8 @@ OpenClaw has three public release lanes:
 - `preflight_run_id`: required on the real publish path so the workflow reuses
   the prepared tarball from the successful preflight run
 - `npm_dist_tag`: npm target tag for the publish path; defaults to `beta`
+- `promote_beta_to_latest`: `true` to skip publish and move an already-published
+  stable `beta` build onto `latest`
 
 Rules:
 
@@ -93,6 +96,10 @@ Rules:
 - Beta prerelease tags may publish only to `beta`
 - The real publish path must use the same `npm_dist_tag` used during preflight;
   the workflow verifies that metadata before publish continues
+- Promotion mode must use a stable or correction tag, `preflight_only=false`,
+  an empty `preflight_run_id`, and `npm_dist_tag=beta`
+- Promotion mode also requires a valid `NPM_TOKEN` in the `npm-release`
+  environment because `npm dist-tag add` still needs regular npm auth
 
 ## Stable npm release sequence
 
@@ -104,9 +111,13 @@ When cutting a stable npm release:
 3. Save the successful `preflight_run_id`
 4. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
    `tag`, the same `npm_dist_tag`, and the saved `preflight_run_id`
-5. If the release landed on `beta`, run `OpenClaw NPM Promote Beta` later with
-   the exact stable version when you want to move that published build to
-   `latest`
+5. If the release landed on `beta`, run `OpenClaw NPM Release` later with the
+   same stable `tag`, `promote_beta_to_latest=true`, `preflight_only=false`,
+   `preflight_run_id` empty, and `npm_dist_tag=beta` when you want to move that
+   published build to `latest`
+
+The promotion mode still requires the `npm-release` environment approval and a
+valid `NPM_TOKEN` in that environment.
 
 That keeps the direct publish path and the beta-first promotion path both
 documented and operator-visible.
@@ -114,7 +125,6 @@ documented and operator-visible.
 ## Public references
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
-- [`.github/workflows/openclaw-npm-promote-beta.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-promote-beta.yml)
 - [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
 - [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
 - [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)

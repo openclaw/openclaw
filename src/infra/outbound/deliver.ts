@@ -15,10 +15,7 @@ import type {
   ChannelOutboundContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  resolveMirroredTranscriptText,
-} from "../../config/sessions.js";
+import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
@@ -33,7 +30,6 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
@@ -49,6 +45,23 @@ export { normalizeOutboundPayloads } from "./payloads.js";
 export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 
 const log = createSubsystemLogger("outbound/deliver");
+let transcriptRuntimePromise:
+  | Promise<typeof import("../../config/sessions/transcript.runtime.js")>
+  | undefined;
+
+async function loadTranscriptRuntime() {
+  transcriptRuntimePromise ??= import("../../config/sessions/transcript.runtime.js");
+  return await transcriptRuntimePromise;
+}
+
+let channelBootstrapRuntimePromise:
+  | Promise<typeof import("./channel-bootstrap.runtime.js")>
+  | undefined;
+
+async function loadChannelBootstrapRuntime() {
+  channelBootstrapRuntimePromise ??= import("./channel-bootstrap.runtime.js");
+  return await channelBootstrapRuntimePromise;
+}
 
 export type OutboundDeliveryResult = {
   channel: Exclude<OutboundChannel, "none">;
@@ -136,14 +149,15 @@ type ChannelHandlerParams = {
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
 async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
-  // Recover channel plugins the same way target resolution does so direct cron
-  // delivery still works when a prior test or lazy path left the active plugin
-  // registry empty.
-  resolveOutboundChannelPlugin({
-    channel: params.channel,
-    cfg: params.cfg,
-  });
-  const outbound = await loadChannelOutboundAdapter(params.channel);
+  let outbound = await loadChannelOutboundAdapter(params.channel);
+  if (!outbound) {
+    const { bootstrapOutboundChannelPlugin } = await loadChannelBootstrapRuntime();
+    bootstrapOutboundChannelPlugin({
+      channel: params.channel,
+      cfg: params.cfg,
+    });
+    outbound = await loadChannelOutboundAdapter(params.channel);
+  }
   const handler = createPluginHandler({ ...params, outbound });
   if (!handler) {
     throw new Error(`Outbound not configured for channel: ${params.channel}`);
@@ -791,6 +805,7 @@ async function deliverOutboundPayloadsCore(
       mediaUrls: params.mirror.mediaUrls,
     });
     if (mirrorText) {
+      const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
       await appendAssistantMessageToSessionTranscript({
         agentId: params.mirror.agentId,
         sessionKey: params.mirror.sessionKey,

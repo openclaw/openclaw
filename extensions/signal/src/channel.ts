@@ -4,6 +4,10 @@ import {
   attachChannelToResult,
   attachChannelToResults,
 } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  looksLikeSignalTargetId,
+  normalizeSignalMessagingTarget,
+} from "openclaw/plugin-sdk/channel-targets";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
@@ -14,9 +18,7 @@ import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js"
 import { signalApprovalAuth } from "./approval-auth.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import { signalMessageActions } from "./message-actions.js";
-import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
-import { probeSignal, type SignalProbe } from "./probe.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import {
   buildBaseChannelStatusSummary,
@@ -29,7 +31,7 @@ import {
   resolveChannelMediaMaxBytes,
   type ChannelPlugin,
 } from "./runtime-api.js";
-import { getSignalRuntime } from "./runtime.js";
+import { sendMessageSignal } from "./send.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
   signalConfigAdapter,
@@ -37,16 +39,28 @@ import {
   signalSecurityAdapter,
   signalSetupWizard,
 } from "./shared.js";
-type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
+type SignalSendFn = typeof sendMessageSignal;
+type SignalProbe = import("./probe.js").SignalProbe;
+
+let signalMonitorModulePromise: Promise<typeof import("./monitor.js")> | null = null;
+let signalProbeModulePromise: Promise<typeof import("./probe.js")> | null = null;
+
+async function loadSignalMonitorModule() {
+  signalMonitorModulePromise ??= import("./monitor.js");
+  return await signalMonitorModulePromise;
+}
+
+async function loadSignalProbeModule() {
+  signalProbeModulePromise ??= import("./probe.js");
+  return await signalProbeModulePromise;
+}
 
 function resolveSignalSendContext(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   accountId?: string;
   deps?: { [channelId: string]: unknown };
 }) {
-  const send =
-    resolveOutboundSendDep<SignalSendFn>(params.deps, "signal") ??
-    getSignalRuntime().channel.signal.sendMessageSignal;
+  const send = resolveOutboundSendDep<SignalSendFn>(params.deps, "signal") ?? sendMessageSignal;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -274,6 +288,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           }),
         probeAccount: async ({ account, timeoutMs }) => {
           const baseUrl = account.baseUrl;
+          const { probeSignal } = await loadSignalProbeModule();
           return await probeSignal(baseUrl, timeoutMs);
         },
         formatCapabilitiesProbe: ({ probe }) =>
@@ -298,8 +313,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             baseUrl: account.baseUrl,
           });
           ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
-          // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-          return getSignalRuntime().channel.signal.monitorSignalProvider({
+          const { monitorSignalProvider } = await loadSignalMonitorModule();
+          return await monitorSignalProvider({
             accountId: account.accountId,
             config: ctx.cfg,
             runtime: ctx.runtime,
@@ -315,7 +330,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         message: PAIRING_APPROVED_MESSAGE,
         normalizeAllowEntry: createPairingPrefixStripper(/^signal:/i),
         notify: async ({ id, message }) => {
-          await getSignalRuntime().channel.signal.sendMessageSignal(id, message);
+          await sendMessageSignal(id, message);
         },
       },
     },

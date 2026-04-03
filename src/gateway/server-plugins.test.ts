@@ -252,6 +252,7 @@ describe("loadGatewayPlugins", () => {
     });
     expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
       config: {},
+      activationSourceConfig: undefined,
       workspaceDir: "/tmp",
       env: process.env,
     });
@@ -308,6 +309,7 @@ describe("loadGatewayPlugins", () => {
 
     expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
       config: autoEnabledConfig,
+      activationSourceConfig: undefined,
       workspaceDir: "/tmp",
       env: process.env,
     });
@@ -341,6 +343,12 @@ describe("loadGatewayPlugins", () => {
 
     expect(applyPluginAutoEnable).toHaveBeenCalledWith({
       config: rawConfig,
+      env: process.env,
+    });
+    expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
+      config: resolvedConfig,
+      activationSourceConfig: rawConfig,
+      workspaceDir: "/tmp",
       env: process.env,
     });
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(

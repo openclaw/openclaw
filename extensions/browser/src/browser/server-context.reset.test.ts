@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createProfileResetOps } from "./server-context.reset.js";
 
 const trashMocks = vi.hoisted(() => ({
   movePathToTrash: vi.fn(async (from: string) => `${from}.trashed`),
@@ -14,15 +15,12 @@ const pwAiMocks = vi.hoisted(() => ({
 vi.mock("./trash.js", () => trashMocks);
 vi.mock("./pw-ai.js", () => pwAiMocks);
 
-let createProfileResetOps: typeof import("./server-context.reset.js").createProfileResetOps;
-
 afterEach(() => {
   vi.clearAllMocks();
 });
 
-beforeEach(async () => {
-  vi.resetModules();
-  ({ createProfileResetOps } = await import("./server-context.reset.js"));
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 function localOpenClawProfile(): Parameters<typeof createProfileResetOps>[0]["profile"] {

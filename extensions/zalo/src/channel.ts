@@ -1,4 +1,6 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -14,12 +16,20 @@ import {
   createEmptyChannelResult,
   createRawChannelSendResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { buildTokenChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createChatChannelPlugin, buildChannelConfigSchema } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
+  isNumericTargetId,
+  sendPayloadWithChunkedTextAndMedia,
+} from "openclaw/plugin-sdk/reply-payload";
+import {
+  type ChannelAccountSnapshot,
+  type ChannelPlugin,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
@@ -33,19 +43,6 @@ import { zaloMessageActions } from "./actions.js";
 import { zaloApprovalAuth } from "./approval-auth.js";
 import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
-import {
-  buildChannelConfigSchema,
-  buildTokenChannelStatusSummary,
-  DEFAULT_ACCOUNT_ID,
-  chunkTextForOutbound,
-  formatAllowFromLowercase,
-  listDirectoryUserEntriesFromAllowFrom,
-  isNumericTargetId,
-  sendPayloadWithChunkedTextAndMedia,
-  type ChannelAccountSnapshot,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "./runtime-api.js";
 import { resolveZaloOutboundSessionRoute } from "./session-route.js";
 import { zaloSetupAdapter } from "./setup-core.js";
 import { zaloSetupWizard } from "./setup-surface.js";
@@ -69,6 +66,22 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
     return undefined;
   }
   return trimmed.replace(/^(zalo|zl):/i, "").trim();
+}
+
+function chunkTextForOutbound(text: string, limit: number): string[] {
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > limit) {
+    const window = remaining.slice(0, limit);
+    const splitAt = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
+    const breakAt = splitAt > 0 ? splitAt : limit;
+    chunks.push(remaining.slice(0, breakAt).trimEnd());
+    remaining = remaining.slice(breakAt).trimStart();
+  }
+  if (remaining.length > 0 || text.length === 0) {
+    chunks.push(remaining);
+  }
+  return chunks;
 }
 
 const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));

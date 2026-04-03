@@ -1,4 +1,10 @@
+import {
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import { vi } from "vitest";
+import { resolveDmGroupAccessWithLists } from "../../../src/security/dm-policy-shared.js";
 
 export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {
   (...args: TArgs): Promise<TResult>;
@@ -17,33 +23,38 @@ export function resetPairingSecurityMocks(config: Record<string, unknown>) {
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
 }
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", () => {
   return {
-    ...actual,
     loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+    resolveDefaultGroupPolicy,
+    resolveOpenProviderRuntimeGroupPolicy,
+    warnMissingProviderGroupPolicyFallbackOnce,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => {
   return {
-    ...actual,
     upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+vi.mock("openclaw/plugin-sdk/security-runtime", () => {
   return {
-    ...actual,
-    readStoreAllowFromForDmPolicy: async (
-      params: Parameters<typeof actual.readStoreAllowFromForDmPolicy>[0],
-    ) =>
-      await actual.readStoreAllowFromForDmPolicy({
-        ...params,
-        readStore: async (provider, accountId) =>
-          (await readAllowFromStoreMock(provider, accountId)) as string[],
-      }),
+    readStoreAllowFromForDmPolicy: async (params: {
+      provider: string;
+      accountId: string;
+      dmPolicy?: string | null;
+      shouldRead?: boolean | null;
+    }) => {
+      if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+        return [];
+      }
+      try {
+        return (await readAllowFromStoreMock(params.provider, params.accountId)) as string[];
+      } catch {
+        return [];
+      }
+    },
+    resolveDmGroupAccessWithLists,
   };
 });
