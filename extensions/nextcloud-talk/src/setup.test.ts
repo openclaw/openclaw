@@ -387,4 +387,30 @@ describe("resolveNextcloudTalkAccount", () => {
     expect(account.secret).toBe("work-secret");
     expect(account.secretSource).toBe("config");
   });
+
+  it("uses configured defaultAccount for omitted setup configured state", () => {
+    const configured = nextcloudTalkSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            defaultAccount: "work",
+            baseUrl: "https://root.example.com",
+            botSecret: "root-secret",
+            accounts: {
+              alerts: {
+                baseUrl: "https://alerts.example.com",
+                botSecret: "alerts-secret",
+              },
+              work: {
+                baseUrl: "",
+                botSecret: "",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+    });
+
+    expect(configured).toBe(false);
+  });
 });
