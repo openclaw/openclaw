@@ -1032,10 +1032,25 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
       });
 
-  // Prefer the last runtime model recorded on the session entry.
-  // This is the actual model used by the latest run and must win over defaults.
   let provider = resolved.provider;
   let model = resolved.model;
+  // Gateway control paths should resolve the selected session model first.
+  // Runtime model fields track the last executed fallback and belong to the
+  // runtime identity helper below.
+  const storedModelOverride = entry?.modelOverride?.trim();
+  if (storedModelOverride) {
+    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
+    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
+    if (parsedOverride) {
+      provider = parsedOverride.provider;
+      model = parsedOverride.model;
+    } else {
+      provider = overrideProvider;
+      model = storedModelOverride;
+    }
+    return { provider, model };
+  }
+
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
   if (runtimeModel) {
@@ -1056,21 +1071,6 @@ export function resolveSessionModelRef(
       model = runtimeModel;
     }
     return { provider, model };
-  }
-
-  // Fall back to explicit per-session override (set at spawn/model-patch time),
-  // then finally to configured defaults.
-  const storedModelOverride = entry?.modelOverride?.trim();
-  if (storedModelOverride) {
-    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
-    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
-    if (parsedOverride) {
-      provider = parsedOverride.provider;
-      model = parsedOverride.model;
-    } else {
-      provider = overrideProvider;
-      model = storedModelOverride;
-    }
   }
   return { provider, model };
 }
@@ -1190,6 +1190,9 @@ export function buildGatewaySessionRow(params: {
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
   const subagentRuntimeMs = subagentRun ? resolveSessionRuntimeMs(subagentRun, now) : undefined;
+  const selectedModel = entry?.modelOverride?.trim()
+    ? resolveSessionModelRef(cfg, entry, sessionAgentId)
+    : null;
   const resolvedModel = resolveSessionModelIdentityRef(
     cfg,
     entry,
@@ -1322,8 +1325,8 @@ export function buildGatewaySessionRow(params: {
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
-    modelProvider,
-    model,
+    modelProvider: selectedModel?.provider ?? modelProvider,
+    model: selectedModel?.model ?? model,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,

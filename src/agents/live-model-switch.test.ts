@@ -90,7 +90,7 @@ describe("live model switch", () => {
     });
   });
 
-  it("prefers persisted runtime model fields ahead of session overrides", async () => {
+  it("prefers persisted session overrides ahead of runtime model fields", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {
         providerOverride: "anthropic",
@@ -112,7 +112,7 @@ describe("live model switch", () => {
       }),
     ).toEqual({
       provider: "anthropic",
-      model: "claude-sonnet-4-6",
+      model: "claude-opus-4-6",
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
