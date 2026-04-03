@@ -366,7 +366,7 @@ jobs:
           SHARD_COUNT: ${{ matrix.shard_count || '' }}
           SHARD_INDEX: ${{ matrix.shard_index || '' }}
         run: |
-          # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
+          # `pnpm test:planner` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
           # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
           echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
@@ -402,7 +402,7 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test)
-              pnpm test
+              pnpm test:planner
               ;;
             channels)
               pnpm test:channels
@@ -843,7 +843,7 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test)
-              pnpm test
+              pnpm test:planner
               ;;
             *)
               echo "Unsupported Windows checks task: $TASK" >&2
@@ -901,7 +901,7 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test)
-              pnpm test
+              pnpm test:planner
               ;;
             *)
               echo "Unsupported macOS node task: $TASK" >&2

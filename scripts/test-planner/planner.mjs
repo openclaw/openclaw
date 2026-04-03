@@ -1511,7 +1511,7 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
           checkNamePrefix: "checks-node-test",
           runtime: "node",
           task: "test",
-          command: "pnpm test",
+          command: "pnpm test:planner",
           shardCount: unitShardCount,
         }),
         ...createShardMatrixEntries({
@@ -1546,7 +1546,7 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
         checkNamePrefix: "checks-windows-node-test",
         runtime: "node",
         task: "test",
-        command: "pnpm test",
+        command: "pnpm test:planner",
         shardCount: windowsShardCount,
       })
     : [];
@@ -1555,7 +1555,7 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
         checkNamePrefix: "macos-node",
         runtime: "node",
         task: "test",
-        command: "pnpm test",
+        command: "pnpm test:planner",
         shardCount: macosNodeShardCount,
       })
     : [];
