@@ -107,10 +107,6 @@
         "reason": "This Telegram bot runtime suite measured ~819.9 MiB RSS growth locally; keep it in its own forked channel lane so the shared channels worker can recycle immediately after the hotspot file."
       },
       {
-        "file": "extensions/telegram/src/fetch.test.ts",
-        "reason": "This Telegram transport suite measured ~759.3 MiB RSS growth locally; keep it in its own forked channel lane so the shared channels worker can recycle immediately after the hotspot file."
-      },
-      {
         "file": "extensions/telegram/src/sendchataction-401-backoff.test.ts",
         "reason": "This Telegram send-chat-action backoff suite hoists infra-runtime sleep mocks and remains a relatively heavy shared hotspot; keep it isolated so top-level concurrency can overlap it instead of extending the shared channels batch."
       },
@@ -209,6 +205,10 @@
       {
         "file": "extensions/line/src/send.test.ts",
         "reason": "This LINE send suite hoists SDK and account/token mocks; keep it isolated so shared extension workers do not reuse cached send modules that bypass those mocks."
+      },
+      {
+        "file": "extensions/telegram/src/fetch.test.ts",
+        "reason": "This Telegram transport suite is extension-owned and still measures high RSS locally; keep it in its own forked extensions lane so the shared worker can recycle immediately after the hotspot."
       },
       {
         "file": "extensions/tavily/src/tavily-extract-tool.test.ts",

@@ -320,7 +320,12 @@ describe("resolveMedia getFile retry", () => {
   it("uses caller-provided fetch impl for file downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
-    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch };
+    const dispatcherAttempts = [{ dispatcherPolicy: { mode: "direct" as const } }];
+    const callerTransport = {
+      fetch: callerFetch,
+      sourceFetch: callerFetch,
+      dispatcherAttempts,
+    };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("pdf-data"),
       contentType: "application/pdf",
@@ -339,6 +344,13 @@ describe("resolveMedia getFile retry", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         fetchImpl: callerFetch,
+        dispatcherAttempts,
+        shouldRetryFetchError: expect.any(Function),
+        readIdleTimeoutMs: 30_000,
+        ssrfPolicy: {
+          allowRfc2544BenchmarkRange: true,
+          hostnameAllowlist: ["api.telegram.org"],
+        },
       }),
     );
   });
@@ -365,6 +377,36 @@ describe("resolveMedia getFile retry", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         fetchImpl: callerFetch,
+      }),
+    );
+  });
+
+  it("allows an explicit Telegram apiRoot host without broadening the default SSRF allowlist", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf-data"),
+      contentType: "application/pdf",
+      fileName: "file_42.pdf",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_42---uuid.pdf",
+      contentType: "application/pdf",
+    });
+
+    await resolveMediaWithDefaults(makeCtx("document", getFile), {
+      apiRoot: "https://telegram.internal:8443/custom/",
+      dangerouslyAllowPrivateNetwork: true,
+    });
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `https://telegram.internal:8443/custom/file/bot${BOT_TOKEN}/documents/file_42.pdf`,
+        ssrfPolicy: {
+          hostnameAllowlist: ["api.telegram.org", "telegram.internal"],
+          allowedHostnames: ["telegram.internal"],
+          allowPrivateNetwork: true,
+          allowRfc2544BenchmarkRange: true,
+        },
       }),
     );
   });

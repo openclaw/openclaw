@@ -60,14 +60,8 @@
     "extensions/discord/src/monitor/message-handler.queue.test.ts": {
       "durationMs": 3900
     },
-    "extensions/telegram/src/fetch.test.ts": {
-      "durationMs": 3500
-    },
     "extensions/whatsapp/src/monitor-inbox.captures-media-path-image-messages.test.ts": {
       "durationMs": 3200
-    },
-    "extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts": {
-      "durationMs": 15830
     },
     "extensions/telegram/src/webhook.test.ts": {
       "durationMs": 2900
