@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { getPresence } from "../monitor/presence-cache.js";
 import {
   type ActionGate,
@@ -8,6 +9,7 @@ import {
   readStringArrayParam,
   readStringParam,
   type DiscordActionConfig,
+  type OpenClawConfig,
 } from "../runtime-api.js";
 import {
   addRoleDiscord,
@@ -92,6 +94,7 @@ export async function handleDiscordGuildAction(
   action: string,
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
+  cfg?: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
   switch (action) {
@@ -105,10 +108,13 @@ export async function handleDiscordGuildAction(
       const userId = readStringParam(params, "userId", {
         required: true,
       });
-      const member = accountId
-        ? await discordGuildActionRuntime.fetchMemberInfoDiscord(guildId, userId, { accountId })
+      const effectiveAccountId = accountId ?? (cfg ? resolveDefaultDiscordAccountId(cfg) : undefined);
+      const member = effectiveAccountId
+        ? await discordGuildActionRuntime.fetchMemberInfoDiscord(guildId, userId, {
+            accountId: effectiveAccountId,
+          })
         : await discordGuildActionRuntime.fetchMemberInfoDiscord(guildId, userId);
-      const presence = getPresence(accountId, userId);
+      const presence = getPresence(effectiveAccountId, userId);
       const activities = presence?.activities ?? undefined;
       const status = presence?.status ?? undefined;
       return jsonResult({ ok: true, member, ...(presence ? { status, activities } : {}) });
