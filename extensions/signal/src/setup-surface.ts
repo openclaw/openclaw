@@ -34,7 +34,9 @@ export const signalSetupWizard: ChannelSetupWizard = {
         : listSignalAccountIds(cfg).some(
             (resolvedAccountId) => resolveSignalAccount({ cfg, accountId: resolvedAccountId }).configured,
           ),
-    resolveBinaryPath: ({ cfg }) => cfg.channels?.signal?.cliPath ?? "signal-cli",
+    resolveBinaryPath: ({ cfg, accountId }) =>
+      resolveSignalAccount({ cfg, accountId: accountId ?? "default" }).config.cliPath ??
+      "signal-cli",
     detectBinary,
   }),
   prepare: async ({ cfg, accountId, credentialValues, runtime, prompter, options }) => {

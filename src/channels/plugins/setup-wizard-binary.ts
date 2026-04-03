@@ -22,7 +22,7 @@ export function createDetectedBinaryStatus(params: {
     cfg: OpenClawConfig;
     accountId?: string;
   }) => boolean | Promise<boolean>;
-  resolveBinaryPath: (params: { cfg: OpenClawConfig }) => string;
+  resolveBinaryPath: (params: { cfg: OpenClawConfig; accountId?: string }) => string;
   detectBinary?: (path: string) => Promise<boolean>;
 }): ChannelSetupWizardStatus {
   const detectBinary = params.detectBinary ?? defaultDetectBinary;
@@ -35,8 +35,8 @@ export function createDetectedBinaryStatus(params: {
     configuredScore: params.configuredScore,
     unconfiguredScore: params.unconfiguredScore,
     resolveConfigured: params.resolveConfigured,
-    async resolveStatusLines({ cfg, configured }: SetupStatusParams): Promise<string[]> {
-      const binaryPath = params.resolveBinaryPath({ cfg });
+    async resolveStatusLines({ cfg, accountId, configured }: SetupStatusParams): Promise<string[]> {
+      const binaryPath = params.resolveBinaryPath({ cfg, accountId });
       const detected = await detectBinary(binaryPath);
       return [
         `${params.channelLabel}: ${configured ? params.configuredLabel : params.unconfiguredLabel}`,
@@ -45,21 +45,25 @@ export function createDetectedBinaryStatus(params: {
     },
     async resolveSelectionHint({
       cfg,
+      accountId,
     }: {
       cfg: OpenClawConfig;
+      accountId?: string;
       configured: boolean;
     }): Promise<string | undefined> {
-      return (await detectBinary(params.resolveBinaryPath({ cfg })))
+      return (await detectBinary(params.resolveBinaryPath({ cfg, accountId })))
         ? params.configuredHint
         : params.unconfiguredHint;
     },
     async resolveQuickstartScore({
       cfg,
+      accountId,
     }: {
       cfg: OpenClawConfig;
+      accountId?: string;
       configured: boolean;
     }): Promise<number | undefined> {
-      return (await detectBinary(params.resolveBinaryPath({ cfg })))
+      return (await detectBinary(params.resolveBinaryPath({ cfg, accountId })))
         ? params.configuredScore
         : params.unconfiguredScore;
     },

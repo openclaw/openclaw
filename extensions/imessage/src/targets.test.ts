@@ -1,6 +1,7 @@
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import * as clientModule from "./client.js";
 import { imessagePlugin } from "./channel.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
@@ -19,6 +20,8 @@ import {
   normalizeIMessageHandle,
   parseIMessageTarget,
 } from "./targets.js";
+
+const getIMessageSetupStatus = createPluginSetupWizardStatus(imessagePlugin);
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -298,5 +301,25 @@ describe("probeIMessage", () => {
       cliPath: "imsg-work",
       dbPath: "/tmp/work-db",
     });
+  });
+
+  it("setup status lines use the selected account cliPath", async () => {
+    const status = await getIMessageSetupStatus({
+      cfg: {
+        channels: {
+          imessage: {
+            cliPath: "/tmp/root-imsg",
+            accounts: {
+              work: {
+                cliPath: "/tmp/work-imsg",
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: { imessage: "work" },
+    });
+
+    expect(status.statusLines).toContain("imsg: missing (/tmp/work-imsg)");
   });
 });
