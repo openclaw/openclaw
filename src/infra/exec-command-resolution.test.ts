@@ -184,6 +184,35 @@ describe("exec-command-resolution", () => {
     expect(virtualBareResolution?.execution.resolvedPath).toBe("/usr/local/bin/python3");
   });
 
+  it("matches allowlist against all virtual PATH candidates for bare executables", () => {
+    const argv = ["python3", "--version"];
+    const env = { PATH: "/opt/homebrew/bin:/usr/bin" };
+    const analysis = {
+      ok: true as const,
+      segments: [
+        {
+          raw: argv.join(" "),
+          argv,
+          resolution: resolveCommandResolutionFromArgv(argv, "/workspace", env, {
+            platform: "linux",
+            resolutionMode: "virtual",
+          }),
+        },
+      ],
+    };
+
+    const allowlistEval = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: "/usr/bin/python3" }],
+      safeBins: normalizeSafeBins([]),
+      cwd: "/workspace",
+      env,
+      platform: "linux",
+      resolutionMode: "virtual",
+    });
+    expect(allowlistEval.allowlistSatisfied).toBe(true);
+  });
+
   it("unwraps transparent env and nice wrappers to the effective executable", () => {
     const fixture = createPathExecutableFixture();
 

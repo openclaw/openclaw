@@ -60,13 +60,23 @@ function resolveVirtualExecutableFromPathHints(
   env?: NodeJS.ProcessEnv,
   platform?: string | null,
 ): string | undefined {
+  const candidates = resolveVirtualExecutablePathCandidates(executable, pathEnv, env, platform);
+  return candidates[0];
+}
+
+export function resolveVirtualExecutablePathCandidates(
+  executable: string,
+  pathEnv: string,
+  env?: NodeJS.ProcessEnv,
+  platform?: string | null,
+): string[] {
   const targetPath = getPathModuleForPlatform(platform);
   const entries = pathEnv
     .split(getPathDelimiterForPlatform(platform))
     .map((entry) => entry.trim())
     .filter(Boolean);
   if (entries.length === 0) {
-    return undefined;
+    return [];
   }
   const extensions = resolveWindowsExecutableExtensions(executable, env, platform);
   const candidates: string[] = [];
@@ -75,10 +85,7 @@ function resolveVirtualExecutableFromPathHints(
       candidates.push(targetPath.join(entry, executable + ext));
     }
   }
-  if (candidates.length === 0) {
-    return undefined;
-  }
-  return candidates[0];
+  return candidates;
 }
 
 function resolveWindowsExecutableExtensions(

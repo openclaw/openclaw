@@ -7,6 +7,7 @@ import {
   resolveExecutablePath as resolveExecutableCandidatePath,
   type ExecutableResolutionMode,
   resolveExecutablePathCandidate,
+  resolveVirtualExecutablePathCandidates,
 } from "./executable-path.js";
 
 export type ExecutableResolution = {
@@ -14,6 +15,7 @@ export type ExecutableResolution = {
   resolvedPath?: string;
   resolvedRealPath?: string;
   executableName: string;
+  virtualPathCandidates?: string[];
 };
 
 export type CommandResolution = {
@@ -90,6 +92,17 @@ function buildExecutableResolution(
     platform: params.platform,
     resolutionMode: params.resolutionMode,
   });
+  const virtualPathCandidates =
+    params.resolutionMode === "virtual" &&
+    !rawExecutable.includes("/") &&
+    !rawExecutable.includes("\\")
+      ? resolveVirtualExecutablePathCandidates(
+          rawExecutable,
+          params.env?.PATH ?? params.env?.Path ?? process.env.PATH ?? process.env.Path ?? "",
+          params.env,
+          params.platform,
+        )
+      : undefined;
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath
     ? getPathModuleForPlatform(params.platform).basename(resolvedPath)
@@ -99,6 +112,7 @@ function buildExecutableResolution(
     resolvedPath,
     resolvedRealPath,
     executableName,
+    virtualPathCandidates,
   };
 }
 
@@ -380,19 +394,27 @@ export function matchAllowlist(
   const effectivePlatform = Array.isArray(argvOrOptions)
     ? platform
     : (argvOrOptions?.platform ?? platform);
-  const allowlistCandidatePath =
-    resolution.resolvedPath ??
-    (() => {
-      const rawExecutable = resolution.rawExecutable.trim();
-      if (!rawExecutable) {
-        return undefined;
-      }
-      return resolveExecutablePathCandidate(rawExecutable, {
-        platform: effectivePlatform,
-        requirePathSeparator: true,
-      });
-    })();
-  if (!allowlistCandidatePath) {
+  const allowlistCandidatePaths = Array.from(
+    new Set(
+      [resolution.resolvedPath, ...(resolution.virtualPathCandidates ?? [])].filter(
+        (candidate): candidate is string => Boolean(candidate),
+      ),
+    ),
+  );
+  if (allowlistCandidatePaths.length === 0) {
+    const rawExecutable = resolution.rawExecutable.trim();
+    if (!rawExecutable) {
+      return null;
+    }
+    const fallbackCandidate = resolveExecutablePathCandidate(rawExecutable, {
+      platform: effectivePlatform,
+      requirePathSeparator: true,
+    });
+    if (fallbackCandidate) {
+      allowlistCandidatePaths.push(fallbackCandidate);
+    }
+  }
+  if (allowlistCandidatePaths.length === 0) {
     return null;
   }
   // argPattern matching is currently Windows-only.  On other platforms every
@@ -414,7 +436,11 @@ export function matchAllowlist(
     if (!hasPath) {
       continue;
     }
-    if (!matchesExecAllowlistPattern(pattern, allowlistCandidatePath)) {
+    if (
+      !allowlistCandidatePaths.some((candidatePath) =>
+        matchesExecAllowlistPattern(pattern, candidatePath),
+      )
+    ) {
       continue;
     }
     if (!useArgPattern) {
