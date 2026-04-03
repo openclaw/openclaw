@@ -194,7 +194,7 @@ describe("collectMatchingSchemaPaths", () => {
 
     expect(paths.has("mcp.servers.*.url")).toBe(true);
     expect(paths.has("models.providers.*.baseUrl")).toBe(true);
-    expect(paths.has("models.providers.*.request.proxy.url")).toBe(true);
+    expect(paths.has("models.providers.*.request.proxy.url")).toBe(false);
     expect(paths.has("tools.media.audio.request.proxy.url")).toBe(true);
   });
 });

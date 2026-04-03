@@ -230,18 +230,6 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
       "x-api-key",
     );
   }
-  if (entry.id.startsWith("models.providers.*.request.proxy.tls.")) {
-    setPathCreateStrict(
-      config,
-      ["models", "providers", "sample", "request", "proxy", "mode"],
-      "explicit-proxy",
-    );
-    setPathCreateStrict(
-      config,
-      ["models", "providers", "sample", "request", "proxy", "url"],
-      "http://proxy.example:8080",
-    );
-  }
   return config;
 }
 

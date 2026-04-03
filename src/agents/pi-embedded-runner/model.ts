@@ -24,7 +24,7 @@ import {
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import {
   resolveProviderRequestConfig,
-  sanitizeConfiguredProviderRequest,
+  sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
@@ -311,7 +311,7 @@ function applyConfiguredProviderOverrides(params: {
   const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
     stripSecretRefMarkers: true,
   });
-  const providerRequest = sanitizeConfiguredProviderRequest(providerConfig.request);
+  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig.request);
   const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
@@ -380,7 +380,7 @@ export function buildInlineProviderModels(
     const providerHeaders = sanitizeModelHeaders(entry?.headers, {
       stripSecretRefMarkers: true,
     });
-    const providerRequest = sanitizeConfiguredProviderRequest(entry?.request);
+    const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
     return (entry?.models ?? []).map((model) => {
       const transport = resolveProviderTransport({
         provider: trimmed,
@@ -542,7 +542,7 @@ function resolveConfiguredFallbackModel(params: {
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
-  const providerRequest = sanitizeConfiguredProviderRequest(providerConfig?.request);
+  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });

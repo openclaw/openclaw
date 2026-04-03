@@ -282,7 +282,7 @@ describe("redactConfigSnapshot", () => {
     );
   });
 
-  it("redacts model provider request auth and proxy secrets from config snapshots", () => {
+  it("redacts model provider request auth secrets from config snapshots", () => {
     const hints = buildConfigSchema().uiHints;
     const raw = `{
   models: {
@@ -294,10 +294,6 @@ describe("redactConfigSnapshot", () => {
           auth: {
             mode: "authorization-bearer",
             token: "provider-secret-token",
-          },
-          proxy: {
-            mode: "explicit-proxy",
-            url: "http://user:pass@proxy.example.internal:8080",
           },
         },
       },
@@ -316,10 +312,6 @@ describe("redactConfigSnapshot", () => {
                   mode: "authorization-bearer",
                   token: "provider-secret-token",
                 },
-                proxy: {
-                  mode: "explicit-proxy",
-                  url: "http://user:pass@proxy.example.internal:8080",
-                },
               },
             },
           },
@@ -331,16 +323,11 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot, hints);
     const cfg = result.config as typeof snapshot.config;
     expect(cfg.models.providers.openai.request.auth.token).toBe(REDACTED_SENTINEL);
-    expect(cfg.models.providers.openai.request.proxy.url).toBe(REDACTED_SENTINEL);
     expect(result.raw).toContain(REDACTED_SENTINEL);
     expect(result.raw).not.toContain("provider-secret-token");
-    expect(result.raw).not.toContain("user:pass@");
 
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.models.providers.openai.request.auth.token).toBe("provider-secret-token");
-    expect(restored.models.providers.openai.request.proxy.url).toBe(
-      "http://user:pass@proxy.example.internal:8080",
-    );
   });
 
   it("does not redact maxTokens-style fields", () => {

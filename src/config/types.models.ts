@@ -1,5 +1,5 @@
 import type { OpenAICompletionsCompat } from "@mariozechner/pi-ai";
-import type { ConfiguredProviderRequest } from "./types.provider-request.js";
+import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export const MODEL_APIS = [
@@ -73,7 +73,7 @@ export type ModelProviderConfig = {
   injectNumCtxForOpenAICompat?: boolean;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
-  request?: ConfiguredProviderRequest;
+  request?: ConfiguredModelProviderRequest;
   models: ModelDefinitionConfig[];
 };
 

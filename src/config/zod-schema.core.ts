@@ -288,6 +288,14 @@ const ConfiguredProviderRequestSchema = z
   .strict()
   .optional();
 
+const ConfiguredModelProviderRequestSchema = z
+  .object({
+    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+    auth: ConfiguredProviderRequestAuthSchema,
+  })
+  .strict()
+  .optional();
+
 export const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -322,7 +330,7 @@ export const ModelProviderSchema = z
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
-    request: ConfiguredProviderRequestSchema,
+    request: ConfiguredModelProviderRequestSchema,
     models: z.array(ModelDefinitionSchema),
   })
   .strict();

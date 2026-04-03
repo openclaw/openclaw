@@ -79,6 +79,7 @@ function collectModelProviderAssignments(params: {
         context: params.context,
         active: providerIsActive,
         inactiveReason: "provider is disabled.",
+        collectTransportSecrets: false,
       });
     }
   }
@@ -307,6 +308,7 @@ function collectProviderRequestAssignments(params: {
   context: ResolverContext;
   active?: boolean;
   inactiveReason?: string;
+  collectTransportSecrets?: boolean;
 }): void {
   const headers = isRecord(params.request.headers) ? params.request.headers : undefined;
   if (headers) {
@@ -374,15 +376,17 @@ function collectProviderRequestAssignments(params: {
     }
   };
 
-  collectTlsAssignments(
-    isRecord(params.request.tls) ? params.request.tls : undefined,
-    `${params.pathPrefix}.tls`,
-  );
-  const proxy = isRecord(params.request.proxy) ? params.request.proxy : undefined;
-  collectTlsAssignments(
-    isRecord(proxy?.tls) ? proxy.tls : undefined,
-    `${params.pathPrefix}.proxy.tls`,
-  );
+  if (params.collectTransportSecrets !== false) {
+    collectTlsAssignments(
+      isRecord(params.request.tls) ? params.request.tls : undefined,
+      `${params.pathPrefix}.tls`,
+    );
+    const proxy = isRecord(params.request.proxy) ? params.request.proxy : undefined;
+    collectTlsAssignments(
+      isRecord(proxy?.tls) ? proxy.tls : undefined,
+      `${params.pathPrefix}.proxy.tls`,
+    );
+  }
 }
 
 function collectMediaRequestAssignments(params: {

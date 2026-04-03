@@ -748,7 +748,7 @@ export const FIELD_HELP: Record<string, string> = {
   "models.providers.*.authHeader":
     "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
   "models.providers.*.request":
-    "Optional transport overrides for provider requests (headers, auth, proxy, TLS). Use sparingly for gateways or enterprise routing requirements.",
+    "Optional request overrides for model-provider requests. Today this path supports header and auth overrides only; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
   "models.providers.*.request.headers":
     "Extra headers merged into provider requests after default attribution and auth resolution.",
   "models.providers.*.request.auth":
@@ -763,14 +763,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Custom auth header value used when auth mode is header.",
   "models.providers.*.request.auth.prefix":
     "Optional prefix prepended to request.auth.value when auth mode is header.",
-  "models.providers.*.request.proxy":
-    "Proxy routing override for provider requests (env-proxy or explicit-proxy).",
-  "models.providers.*.request.proxy.mode":
-    'Proxy override mode: "env-proxy" uses environment proxy variables, "explicit-proxy" uses request.proxy.url.',
-  "models.providers.*.request.proxy.url":
-    "Explicit proxy URL for provider requests when request.proxy.mode is explicit-proxy.",
-  "models.providers.*.request.proxy.tls": "TLS settings for connecting to the proxy endpoint.",
-  "models.providers.*.request.tls": "TLS settings for the provider connection.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
   "models.bedrockDiscovery":

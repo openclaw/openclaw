@@ -232,6 +232,24 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].headers).toEqual({ "X-Tenant": "acme" });
   });
 
+  it("rejects inline provider transport overrides that the llm model path cannot carry", () => {
+    expect(() =>
+      buildInlineProviderModels({
+        proxy: {
+          baseUrl: "https://proxy.example.com/v1",
+          api: "openai-completions",
+          request: {
+            proxy: {
+              mode: "explicit-proxy",
+              url: "http://proxy.internal:8443",
+            },
+          },
+          models: [makeModel("proxy-model")],
+        },
+      } as unknown as Parameters<typeof buildInlineProviderModels>[0]),
+    ).toThrow(/models\.providers\.\*\.request only supports headers and auth overrides/i);
+  });
+
   it("omits headers when neither provider nor model specifies them", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       plain: {

@@ -41,3 +41,5 @@ export type ConfiguredProviderRequest = {
   proxy?: ConfiguredProviderRequestProxy;
   tls?: ConfiguredProviderRequestTls;
 };
+
+export type ConfiguredModelProviderRequest = Pick<ConfiguredProviderRequest, "headers" | "auth">;
