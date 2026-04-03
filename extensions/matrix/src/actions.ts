@@ -107,14 +107,14 @@ function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery
 }
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
+  describeMessageTool: ({ cfg, accountId }) => {
     const resolvedCfg = cfg as CoreConfig;
-    if (requiresExplicitMatrixDefaultAccount(resolvedCfg)) {
+    if (!accountId && requiresExplicitMatrixDefaultAccount(resolvedCfg)) {
       return { actions: [], capabilities: [] };
     }
     const account = resolveMatrixAccount({
       cfg: resolvedCfg,
-      accountId: resolveDefaultMatrixAccountId(resolvedCfg),
+      accountId: accountId ?? resolveDefaultMatrixAccountId(resolvedCfg),
     });
     if (!account.enabled || !account.configured) {
       return { actions: [], capabilities: [] };
