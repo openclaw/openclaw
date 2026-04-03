@@ -249,6 +249,41 @@ describe("googlechat setup", () => {
     expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.policy).toBe("open");
   });
 
+  it("uses configured defaultAccount for omitted allowFrom prompt context", async () => {
+    const prompter = {
+      note: vi.fn(async () => {}),
+      text: vi.fn(async () => "users/123456789"),
+    };
+
+    const next = await googlechatPlugin.setupWizard?.dmPolicy?.promptAllowFrom?.({
+      cfg: {
+        channels: {
+          googlechat: {
+            defaultAccount: "alerts",
+            dm: {
+              allowFrom: ["users/root"],
+            },
+            accounts: {
+              alerts: {
+                serviceAccount: { client_email: "bot@example.com" },
+                dm: {
+                  allowFrom: ["users/alerts"],
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+    });
+
+    expect(next?.channels?.googlechat?.dm?.allowFrom).toEqual(["users/root"]);
+    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.allowFrom).toEqual([
+      "users/123456789",
+    ]);
+  });
+
   it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
     const next = googlechatPlugin.setupWizard?.dmPolicy?.setPolicy(
       {

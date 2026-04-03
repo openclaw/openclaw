@@ -1344,7 +1344,7 @@ export function createTopLevelChannelParsedAllowFromPrompt(params: {
 export function createNestedChannelParsedAllowFromPrompt(params: {
   channel: string;
   section: string;
-  defaultAccountId: string;
+  defaultAccountId: string | ((cfg: OpenClawConfig) => string);
   enabled?: boolean;
   noteTitle?: string;
   noteLines?: string[];
@@ -1360,7 +1360,10 @@ export function createNestedChannelParsedAllowFromPrompt(params: {
     ...(params.enabled ? { enabled: true } : {}),
   });
   return createPromptParsedAllowFromForAccount({
-    defaultAccountId: params.defaultAccountId,
+    defaultAccountId:
+      typeof params.defaultAccountId === "function"
+        ? params.defaultAccountId
+        : () => params.defaultAccountId,
     ...(params.noteTitle ? { noteTitle: params.noteTitle } : {}),
     ...(params.noteLines ? { noteLines: params.noteLines } : {}),
     message: params.message,

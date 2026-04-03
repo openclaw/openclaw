@@ -1,7 +1,7 @@
 import {
   addWildcardAllowFrom,
   applySetupAccountConfigPatch,
-  createNestedChannelParsedAllowFromPrompt,
+  createPromptParsedAllowFromForAccount,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -25,16 +25,27 @@ const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 const USE_ENV_FLAG = "__googlechatUseEnv";
 const AUTH_METHOD_FLAG = "__googlechatAuthMethod";
 
-const promptAllowFrom = createNestedChannelParsedAllowFromPrompt({
-  channel,
-  section: "dm",
-  defaultAccountId: DEFAULT_ACCOUNT_ID,
-  enabled: true,
+const promptAllowFrom = createPromptParsedAllowFromForAccount({
+  defaultAccountId: resolveDefaultGoogleChatAccountId,
   message: "Google Chat allowFrom (users/<id> or raw email; avoid users/<email>)",
   placeholder: "users/123456789, name@example.com",
   parseEntries: (raw) => ({
     entries: mergeAllowFromEntries(undefined, splitSetupEntries(raw)),
   }),
+  getExistingAllowFrom: ({ cfg, accountId }) =>
+    resolveGoogleChatAccount({ cfg, accountId }).config.dm?.allowFrom ?? [],
+  applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+    applySetupAccountConfigPatch({
+      cfg,
+      channelKey: channel,
+      accountId,
+      patch: {
+        dm: {
+          ...(resolveGoogleChatAccount({ cfg, accountId }).config.dm ?? {}),
+          allowFrom,
+        },
+      },
+    }),
 });
 
 const googlechatDmPolicy: ChannelSetupDmPolicy = {
