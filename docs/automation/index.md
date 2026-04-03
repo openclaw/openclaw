@@ -33,7 +33,25 @@ flowchart TD
 | React to commands or lifecycle       | Hooks               | Event-driven, runs custom scripts        |
 | Persistent agent instructions        | Standing orders     | Injected into every session              |
 
+### Cron vs heartbeat
+
+| Dimension       | Cron                                | Heartbeat                             |
+| --------------- | ----------------------------------- | ------------------------------------- |
+| Timing          | Exact (cron expressions, one-shot)  | Approximate (default every 30 min)    |
+| Session context | Fresh (isolated) or shared          | Full main-session context             |
+| Task records    | Always created                      | Never created                         |
+| Delivery        | Channel, webhook, or silent         | Inline in main session                |
+| Best for        | Reports, reminders, background jobs | Inbox checks, calendar, notifications |
+
+Use cron when you need precise timing or isolated execution. Use heartbeat when the work benefits from full session context and approximate timing is fine.
+
 ## Core concepts
+
+### Scheduled tasks (cron)
+
+Cron is the Gateway's built-in scheduler for precise timing. It persists jobs, wakes the agent at the right time, and can deliver output to a chat channel or webhook endpoint. Supports one-shot reminders, recurring expressions, and inbound webhook triggers.
+
+See [Scheduled Tasks](/automation/cron-jobs).
 
 ### Tasks
 
@@ -41,29 +59,11 @@ The background task ledger tracks all detached work: ACP runs, subagent spawns, 
 
 See [Background Tasks](/automation/tasks).
 
-### Scheduled tasks (cron)
-
-Cron is the Gateway's built-in scheduler for precise timing. It persists jobs, wakes the agent at the right time, and can deliver output to a chat channel or webhook. Supports one-shot reminders, recurring expressions, and inbound webhook triggers.
-
-See [Scheduled Tasks](/automation/cron-jobs).
-
 ### Task Flow
 
 Task Flow is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, revision tracking, and `openclaw tasks flow list|show|cancel` for inspection.
 
 See [Task Flow](/automation/taskflow).
-
-### Heartbeat
-
-Heartbeat is a periodic main-session turn (default every 30 minutes). It batches multiple checks (inbox, calendar, notifications) in one agent turn with full session context. Heartbeat turns do not create task records. Use `HEARTBEAT.md` to define what the agent checks.
-
-See [Heartbeat](/gateway/heartbeat).
-
-### Hooks
-
-Hooks are event-driven scripts triggered by agent lifecycle events (`/new`, `/reset`, `/stop`), session compaction, gateway startup, message flow, and tool calls. Hooks are automatically discovered from directories and can be managed with `openclaw hooks`.
-
-See [Hooks](/automation/hooks).
 
 ### Standing orders
 
@@ -71,10 +71,22 @@ Standing orders grant the agent permanent operating authority for defined progra
 
 See [Standing Orders](/automation/standing-orders).
 
+### Hooks
+
+Hooks are event-driven scripts triggered by agent lifecycle events (`/new`, `/reset`, `/stop`), session compaction, gateway startup, message flow, and tool calls. Hooks are automatically discovered from directories and can be managed with `openclaw hooks`.
+
+See [Hooks](/automation/hooks).
+
+### Heartbeat
+
+Heartbeat is a periodic main-session turn (default every 30 minutes). It batches multiple checks (inbox, calendar, notifications) in one agent turn with full session context. Heartbeat turns do not create task records. Use `HEARTBEAT.md` to define what the agent checks.
+
+See [Heartbeat](/gateway/heartbeat).
+
 ## How they work together
 
-- **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
 - **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders. All cron executions create task records.
+- **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
 - **Hooks** react to specific events (tool calls, session resets, compaction) with custom scripts.
 - **Standing orders** give the agent persistent context and authority boundaries.
 - **Task Flow** coordinates multi-step flows above individual tasks.
