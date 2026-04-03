@@ -14,10 +14,8 @@ const mocks = vi.hoisted(() => ({
   applyMatrixProfileUpdate: vi.fn(),
 }));
 
-vi.mock("./matrix/actions.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix/actions.js")>("./matrix/actions.js");
+vi.mock("./matrix/actions.js", () => {
   return {
-    ...actual,
     getMatrixMemberInfo: mocks.getMatrixMemberInfo,
     getMatrixRoomInfo: mocks.getMatrixRoomInfo,
     listMatrixReactions: mocks.listMatrixReactions,
@@ -28,10 +26,8 @@ vi.mock("./matrix/actions.js", async () => {
   };
 });
 
-vi.mock("./matrix/send.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix/send.js")>("./matrix/send.js");
+vi.mock("./matrix/send.js", () => {
   return {
-    ...actual,
     reactMatrixMessage: mocks.reactMatrixMessage,
   };
 });
