@@ -529,10 +529,7 @@ export async function dispatchCronDelivery(
       }
     };
 
-    if (!synthesizedText) {
-      return null;
-    }
-    const initialSynthesizedText = synthesizedText.trim();
+    const initialSynthesizedText = synthesizedText?.trim() ?? "";
     let activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
     // Also check for already-completed descendants. If the subagent finished
@@ -591,7 +588,7 @@ export async function dispatchCronDelivery(
     }
     if (
       hadDescendants &&
-      synthesizedText.trim() === initialSynthesizedText &&
+      (synthesizedText?.trim() ?? "") === initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
       initialSynthesizedText.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase()
     ) {
@@ -605,6 +602,19 @@ export async function dispatchCronDelivery(
         summary,
         outputText,
         deliveryAttempted,
+        ...params.telemetry,
+      });
+    }
+    if (!synthesizedText?.trim()) {
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "error",
+        error:
+          "cron produced no deliverable text after sanitization and the repair pass did not recover a final reply",
+        summary,
+        outputText,
+        deliveryAttempted,
+        delivered: false,
         ...params.telemetry,
       });
     }

@@ -2,6 +2,7 @@ import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelSelection from "../agents/model-selection.js";
+import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
 import { callGateway } from "../gateway/call.js";
@@ -433,6 +434,40 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.status).toBe("ok");
       expect(res.delivered).toBe(false);
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
+
+  it("fails loudly when no deliverable text exists after the repair pass", async () => {
+    await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
+      vi.mocked(runEmbeddedPiAgent)
+        .mockResolvedValueOnce({
+          payloads: [],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          },
+        })
+        .mockResolvedValueOnce({
+          payloads: [],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          },
+        });
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      expect(res.status).toBe("error");
+      expect(res.delivered).toBe(false);
+      expect(res.error).toContain("repair pass did not recover");
+      expect(vi.mocked(runEmbeddedPiAgent)).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(runEmbeddedPiAgent).mock.calls[1]?.[0]?.disableTools).toBe(true);
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });

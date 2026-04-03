@@ -21,6 +21,8 @@ export type RunCliAgentParams = {
   timeoutMs: number;
   runId: string;
   extraSystemPrompt?: string;
+  /** Disable bundled CLI tool wiring for this run (LLM-only mode). */
+  disableTools?: boolean;
   streamParams?: import("../command/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
