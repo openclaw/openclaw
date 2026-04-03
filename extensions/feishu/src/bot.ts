@@ -19,14 +19,6 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
-import {
-  buildAgentMediaPayload,
-  evaluateSupplementalContextVisibility,
-  filterSupplementalContextItems,
-  normalizeAgentId,
-  resolveChannelContextVisibilityMode,
-} from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
   checkBotMentioned,
@@ -38,6 +30,14 @@ import {
   resolveFeishuMediaList,
   toMessageResourceType,
 } from "./bot-content.js";
+import {
+  buildAgentMediaPayload,
+  evaluateSupplementalContextVisibility,
+  filterSupplementalContextItems,
+  normalizeAgentId,
+  resolveChannelContextVisibilityMode,
+} from "./bot-runtime-api.js";
+import type { ClawdbotConfig, RuntimeEnv } from "./bot-runtime-api.js";
 import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
