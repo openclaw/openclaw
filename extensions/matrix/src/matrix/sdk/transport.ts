@@ -6,6 +6,7 @@ import {
   resolvePinnedHostnameWithPolicy,
   type SsrFPolicy,
 } from "../../runtime-api.js";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
@@ -280,7 +281,7 @@ export async function performMatrixRequest(params: {
       if (params.maxBytes && contentLength) {
         const length = Number(contentLength);
         if (Number.isFinite(length) && length > params.maxBytes) {
-          throw new Error(
+          throw new MatrixMediaSizeLimitError(
             `Matrix media exceeds configured size limit (${length} bytes > ${params.maxBytes} bytes)`,
           );
         }
@@ -288,7 +289,7 @@ export async function performMatrixRequest(params: {
       const bytes = params.maxBytes
         ? await readResponseWithLimit(response, params.maxBytes, {
             onOverflow: ({ maxBytes, size }) =>
-              new Error(
+              new MatrixMediaSizeLimitError(
                 `Matrix media exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
               ),
             chunkTimeoutMs: params.readIdleTimeoutMs,

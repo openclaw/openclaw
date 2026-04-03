@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { performMatrixRequest } from "./transport.js";
 
 describe("performMatrixRequest", () => {
@@ -31,7 +32,7 @@ describe("performMatrixRequest", () => {
         maxBytes: 1024,
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
-    ).rejects.toThrow("Matrix media exceeds configured size limit");
+    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
   });
 
   it("applies streaming byte limits when raw responses omit content-length", async () => {
@@ -64,7 +65,7 @@ describe("performMatrixRequest", () => {
         maxBytes: 1024,
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
-    ).rejects.toThrow("Matrix media exceeds configured size limit");
+    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
   });
 
   it("uses the matrix-specific idle-timeout error for stalled raw downloads", async () => {

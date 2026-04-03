@@ -26,9 +26,13 @@ function resolveMatrixMediaLabel(
 
 function formatMatrixAttachmentMarker(params: {
   kind?: MatrixMessageAttachmentKind;
+  tooLarge?: boolean;
   unavailable?: boolean;
 }): string {
   const label = resolveMatrixMediaLabel(params.kind);
+  if (params.tooLarge) {
+    return `[matrix ${label} too large]`;
+  }
   return params.unavailable ? `[matrix ${label} unavailable]` : `[matrix ${label}]`;
 }
 
@@ -96,6 +100,7 @@ export function resolveMatrixMessageBody(params: {
 
 export function formatMatrixAttachmentText(params: {
   attachment?: MatrixMessageAttachmentSummary;
+  tooLarge?: boolean;
   unavailable?: boolean;
 }): string | undefined {
   if (!params.attachment) {
@@ -103,6 +108,7 @@ export function formatMatrixAttachmentText(params: {
   }
   return formatMatrixAttachmentMarker({
     kind: params.attachment.kind,
+    tooLarge: params.tooLarge,
     unavailable: params.unavailable,
   });
 }
@@ -110,11 +116,13 @@ export function formatMatrixAttachmentText(params: {
 export function formatMatrixMessageText(params: {
   body?: string;
   attachment?: MatrixMessageAttachmentSummary;
+  tooLarge?: boolean;
   unavailable?: boolean;
 }): string | undefined {
   const body = params.body?.trim() ?? "";
   const marker = formatMatrixAttachmentText({
     attachment: params.attachment,
+    tooLarge: params.tooLarge,
     unavailable: params.unavailable,
   });
   if (!marker) {
@@ -142,6 +150,20 @@ export function formatMatrixMediaUnavailableText(params: {
       body: resolveMatrixMessageBody(params),
       attachment: resolveMatrixMessageAttachment(params),
       unavailable: true,
+    }) ?? ""
+  );
+}
+
+export function formatMatrixMediaTooLargeText(params: {
+  body?: string;
+  filename?: string;
+  msgtype?: string;
+}): string {
+  return (
+    formatMatrixMessageText({
+      body: resolveMatrixMessageBody(params),
+      attachment: resolveMatrixMessageAttachment(params),
+      tooLarge: true,
     }) ?? ""
   );
 }
