@@ -92,6 +92,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "push.test",
   ],
   [ADMIN_SCOPE]: [
+    "bot-member.send-verification",
+    "bot-member.allow-from.add",
+    "bot-member.allow-from.remove",
     "channels.logout",
     "agents.create",
     "agents.update",
