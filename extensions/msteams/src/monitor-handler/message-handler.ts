@@ -620,6 +620,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const { dispatcher, replyOptions, markDispatchIdle } = createMSTeamsReplyDispatcher({
       cfg,
       agentId: route.agentId,
+      sessionKey: route.sessionKey,
       accountId: route.accountId,
       runtime,
       log,
