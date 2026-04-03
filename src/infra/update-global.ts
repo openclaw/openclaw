@@ -191,11 +191,24 @@ function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
   if (path.basename(nodeModulesDir) !== "node_modules") {
     return null;
   }
-  const libDir = path.dirname(nodeModulesDir);
-  if (path.basename(libDir) !== "lib") {
+  const parentDir = path.dirname(nodeModulesDir);
+  if (path.basename(parentDir) === "lib") {
+    return path.dirname(parentDir);
+  }
+  if (process.platform === "win32" && path.basename(parentDir).toLowerCase() === "npm") {
+    return parentDir;
+  }
+  return null;
+}
+
+function resolvePreferredNpmCommand(pkgRoot?: string | null): string | null {
+  const prefix = inferNpmPrefixFromPackageRoot(pkgRoot);
+  if (!prefix) {
     return null;
   }
-  return path.dirname(libDir);
+  const candidate =
+    process.platform === "win32" ? path.join(prefix, "npm.cmd") : path.join(prefix, "bin", "npm");
+  return fsSync.existsSync(candidate) ? candidate : null;
 }
 
 function resolvePreferredGlobalManagerCommand(
@@ -205,13 +218,7 @@ function resolvePreferredGlobalManagerCommand(
   if (manager !== "npm") {
     return manager;
   }
-  const prefix = inferNpmPrefixFromPackageRoot(pkgRoot);
-  if (!prefix) {
-    return manager;
-  }
-  const candidate =
-    process.platform === "win32" ? path.join(prefix, "npm.cmd") : path.join(prefix, "bin", "npm");
-  return fsSync.existsSync(candidate) ? candidate : manager;
+  return resolvePreferredNpmCommand(pkgRoot) ?? manager;
 }
 
 export async function resolveGlobalRoot(
@@ -290,7 +297,7 @@ export async function detectGlobalInstallManagerForRoot(
     }
   }
 
-  if (inferNpmPrefixFromPackageRoot(pkgRoot)) {
+  if (resolvePreferredNpmCommand(pkgRoot)) {
     return "npm";
   }
 
