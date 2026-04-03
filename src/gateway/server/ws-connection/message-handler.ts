@@ -5,6 +5,7 @@ import { loadConfig } from "../../../config/config.js";
 import {
   getDeviceBootstrapTokenProfile,
   redeemDeviceBootstrapTokenProfile,
+  restoreDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
@@ -214,6 +215,17 @@ export function attachGatewayWsMessageHandler(params: {
     logHealth,
     logWsControl,
   } = params;
+
+  const sendFrame = async (obj: unknown): Promise<void> =>
+    await new Promise<void>((resolve, reject) => {
+      socket.send(JSON.stringify(obj), (err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve();
+      });
+    });
 
   const configSnapshot = loadConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
@@ -1150,14 +1162,9 @@ export function attachGatewayWsMessageHandler(params: {
             );
         }
 
-        logWs("out", "hello-ok", {
-          connId,
-          methods: gatewayMethods.length,
-          events: events.length,
-          presence: snapshot.presence.length,
-          stateVersion: snapshot.stateVersion.presence,
-        });
-
+        let consumedBootstrapTokenRecord:
+          | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
+          | undefined;
         if (
           authMethod === "bootstrap-token" &&
           bootstrapProfile &&
@@ -1174,6 +1181,7 @@ export function attachGatewayWsMessageHandler(params: {
               const revoked = await revokeDeviceBootstrapToken({
                 token: bootstrapTokenCandidate,
               });
+              consumedBootstrapTokenRecord = revoked.record;
               if (!revoked.removed) {
                 logGateway.warn(
                   `bootstrap token revoke skipped after profile redemption device=${device.id}`,
@@ -1186,7 +1194,31 @@ export function attachGatewayWsMessageHandler(params: {
             );
           }
         }
-        send({ type: "res", id: frame.id, ok: true, payload: helloOk });
+        try {
+          await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
+        } catch (err) {
+          if (consumedBootstrapTokenRecord) {
+            try {
+              await restoreDeviceBootstrapToken({
+                record: consumedBootstrapTokenRecord,
+              });
+            } catch (restoreErr) {
+              logGateway.warn(
+                `bootstrap token restore failed after hello send error device=${device?.id ?? "unknown"}: ${formatForLog(restoreErr)}`,
+              );
+            }
+          }
+          setCloseCause("hello-send-failed", { error: formatForLog(err) });
+          close();
+          return;
+        }
+        logWs("out", "hello-ok", {
+          connId,
+          methods: gatewayMethods.length,
+          events: events.length,
+          presence: snapshot.presence.length,
+          stateVersion: snapshot.stateVersion.presence,
+        });
         void refreshGatewayHealthSnapshot({ probe: true }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );

@@ -8,6 +8,7 @@ import {
   getDeviceBootstrapTokenProfile,
   issueDeviceBootstrapToken,
   redeemDeviceBootstrapTokenProfile,
+  restoreDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "./device-bootstrap.js";
@@ -163,12 +164,30 @@ describe("device bootstrap tokens", () => {
     });
   });
 
+  it("restores a revoked bootstrap token record after send failure recovery", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    const revoked = await revokeDeviceBootstrapToken({ baseDir, token: issued.token });
+    expect(revoked.removed).toBe(true);
+    expect(revoked.record?.token).toBe(issued.token);
+
+    if (!revoked.record) {
+      throw new Error("expected revoked bootstrap token record");
+    }
+    await restoreDeviceBootstrapToken({ baseDir, record: revoked.record });
+    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+  });
+
   it("revokes a specific bootstrap token", async () => {
     const baseDir = await createTempDir();
     const first = await issueDeviceBootstrapToken({ baseDir });
     const second = await issueDeviceBootstrapToken({ baseDir });
 
-    await expect(revokeDeviceBootstrapToken({ baseDir, token: first.token })).resolves.toEqual({
+    await expect(
+      revokeDeviceBootstrapToken({ baseDir, token: first.token }),
+    ).resolves.toMatchObject({
       removed: true,
     });
 

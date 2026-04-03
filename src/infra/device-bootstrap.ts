@@ -192,7 +192,7 @@ export async function clearDeviceBootstrapTokens(
 export async function revokeDeviceBootstrapToken(params: {
   token: string;
   baseDir?: string;
-}): Promise<{ removed: boolean }> {
+}): Promise<{ removed: boolean; record?: DeviceBootstrapTokenRecord }> {
   return await withLock(async () => {
     const providedToken = params.token.trim();
     if (!providedToken) {
@@ -205,9 +205,21 @@ export async function revokeDeviceBootstrapToken(params: {
     if (!found) {
       return { removed: false };
     }
-    delete state[found[0]];
+    const [tokenKey, record] = found;
+    delete state[tokenKey];
     await persistState(state, params.baseDir);
-    return { removed: true };
+    return { removed: true, record };
+  });
+}
+
+export async function restoreDeviceBootstrapToken(params: {
+  record: DeviceBootstrapTokenRecord;
+  baseDir?: string;
+}): Promise<void> {
+  return await withLock(async () => {
+    const state = await loadState(params.baseDir);
+    state[params.record.token] = params.record;
+    await persistState(state, params.baseDir);
   });
 }
 
