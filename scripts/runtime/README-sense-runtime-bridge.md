@@ -587,6 +587,43 @@ Manager policy output is now two-stage:
 - `fallback_action`
   - safe fallback when confidence is low or no deterministic rule matches
 
+Thin manager executor:
+
+- `scripts/runtime/sense_runtime_manager_executor.py`
+- `scripts/runtime/sense-runtime-manager-executor.sh`
+
+Current orchestration layers are:
+
+- evaluator
+- classifier
+- policy
+- executor
+
+The executor is intentionally thin. It reads policy JSON and executes:
+
+- `manager_action` + `next_step`
+- then `secondary_action` + `secondary_next_step`
+
+Current execution mapping is:
+
+- `configure_provider` -> `check_provider_config`
+- `configure_model` -> `check_selected_model_config`
+- `configure_gpu_runtime` -> `configure_gpu_runtime`
+- `start_nim_runtime` -> `start_nim_runtime`
+- `review_runtime_capabilities` -> `review_runtime_capabilities`
+- `retry_once` -> `check_selected_model_config`
+- `run_runtime_task` -> `run_runtime_task`
+
+Execution report shape includes:
+
+- `executor_state`
+- `main_action`
+- `secondary_action`
+- `fallback_action`
+- `policy_trace`
+
+If `confidence_gate_applied == true` or the plan resolves to a non-executing action such as `manual_review` or `stop_and_surface_diff`, the executor stops without calling runtime remediation.
+
 Current confidence gate is intentionally small:
 
 - if `confidence < 0.5`
