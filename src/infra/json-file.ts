@@ -2,9 +2,12 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+const JSON_FILE_MODE = 0o600;
+const JSON_DIR_MODE = 0o700;
+
 function trySetSecureMode(pathname: string) {
   try {
-    fs.chmodSync(pathname, 0o600);
+    fs.chmodSync(pathname, JSON_FILE_MODE);
   } catch {
     // best-effort on platforms without chmod support
   }
@@ -50,13 +53,14 @@ export function loadJsonFile(pathname: string): unknown {
 
 export function saveJsonFile(pathname: string, data: unknown) {
   const targetPath = resolveJsonWriteTarget(pathname);
-  const dir = path.dirname(targetPath);
   const tmpPath = `${targetPath}.${randomUUID()}.tmp`;
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const payload = `${JSON.stringify(data, null, 2)}\n`;
+
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: JSON_DIR_MODE });
   try {
-    fs.writeFileSync(tmpPath, `${JSON.stringify(data, null, 2)}\n`, {
+    fs.writeFileSync(tmpPath, payload, {
       encoding: "utf8",
-      mode: 0o600,
+      mode: JSON_FILE_MODE,
     });
     trySetSecureMode(tmpPath);
     renameJsonFileWithFallback(tmpPath, targetPath);
