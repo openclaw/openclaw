@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { captureScreenshot } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { shouldUsePlaywrightForScreenshot } from "./profile-capabilities.js";
 
@@ -77,16 +78,12 @@ const localProfile: ResolvedBrowserProfile = {
   attachOnly: false,
 };
 
-let captureScreenshot: typeof import("./cdp.js").captureScreenshot;
-
-beforeEach(async () => {
+beforeEach(() => {
   sentMessages.length = 0;
   mockState.emulationCleared = false;
   mockState.emulatedTab = true;
   mockState.viewport = { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 };
   mockState.naturalViewport = { w: 1920, h: 1080, dpr: 1 };
-  vi.resetModules();
-  ({ captureScreenshot } = await import("./cdp.js"));
 });
 
 describe("CDP screenshot params", () => {
