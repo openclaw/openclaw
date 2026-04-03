@@ -1366,7 +1366,9 @@ function detectCompat(model: OpenAIModeModel) {
     requiresThinkingAsText: false,
     thinkingFormat: isZai
       ? "zai"
-      : provider === "openrouter" || capabilities.attributionProvider === "openrouter"
+      : provider === "openrouter" ||
+          capabilities.endpointClass === "openrouter" ||
+          capabilities.attributionProvider === "openrouter"
         ? "openrouter"
         : "openai",
     openRouterRouting: {},

@@ -185,4 +185,72 @@ describe("openai transport stream", () => {
       },
     });
   });
+
+  it("keeps OpenRouter thinking format for native OpenRouter hosts behind custom provider ids", async () => {
+    const streamFn = buildTransportAwareSimpleStreamFn(
+      attachModelProviderRequestTransport(
+        {
+          id: "anthropic/claude-sonnet-4",
+          name: "Claude Sonnet 4",
+          api: "openai-completions",
+          provider: "custom-openrouter",
+          baseUrl: "https://openrouter.ai/api/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } satisfies Model<"openai-completions">,
+        {
+          proxy: {
+            mode: "explicit-proxy",
+            url: "http://proxy.internal:8443",
+          },
+        },
+      ),
+    );
+
+    expect(streamFn).toBeTypeOf("function");
+    let capturedPayload: Record<string, unknown> | undefined;
+    let resolveCaptured!: () => void;
+    const captured = new Promise<void>((resolve) => {
+      resolveCaptured = resolve;
+    });
+
+    void streamFn!(
+      {
+        id: "anthropic/claude-sonnet-4",
+        name: "Claude Sonnet 4",
+        api: "openclaw-openai-completions-transport",
+        provider: "custom-openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } as Model<"openclaw-openai-completions-transport">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "high",
+        onPayload: async (payload) => {
+          capturedPayload = payload as Record<string, unknown>;
+          resolveCaptured();
+          return payload;
+        },
+      } as never,
+    );
+
+    await captured;
+
+    expect(capturedPayload).toMatchObject({
+      reasoning: {
+        effort: "high",
+      },
+    });
+  });
 });
