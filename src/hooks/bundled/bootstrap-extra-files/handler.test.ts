@@ -73,6 +73,47 @@ describe("bootstrap-extra-files hook", () => {
     );
   });
 
+  it("loads custom .md files when explicitly listed in paths (non-glob)", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-custom-");
+    await fs.writeFile(path.join(tempDir, "tone_skills.md"), "5-band tone scale", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["tone_skills.md"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:main",
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    const injected = context.bootstrapFiles.find((f) => f.name === "tone_skills.md");
+    expect(injected).toBeDefined();
+    expect(injected!.content).toBe("5-band tone scale");
+  });
+
+  it("rejects custom .md files from glob-expanded paths", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-glob-reject-");
+    const subDir = path.join(tempDir, "custom");
+    await fs.mkdir(subDir, { recursive: true });
+    await fs.writeFile(path.join(subDir, "tone_skills.md"), "should not load", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["custom/*.md"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:main",
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    const injected = context.bootstrapFiles.find((f) => f.name === "tone_skills.md");
+    expect(injected).toBeUndefined();
+  });
+
   it("re-applies subagent bootstrap allowlist after extras are added", async () => {
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-subagent-");
     const extraDir = path.join(tempDir, "packages", "persona");
