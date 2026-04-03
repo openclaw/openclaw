@@ -3,8 +3,10 @@ import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { setActivePluginRegistry } from "../../../../src/plugins/runtime.js";
-import { createTestRegistry } from "../../../../src/test-utils/channel-plugins.js";
+import {
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "../../../../test/helpers/plugins/plugin-registry.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,
