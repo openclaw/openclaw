@@ -164,7 +164,8 @@ export function handleA2aAgentCardRequest(
     return true;
   }
 
-  const proto = req.headers["x-forwarded-proto"] ?? "http";
+  const rawProto = req.headers["x-forwarded-proto"];
+  const proto = (Array.isArray(rawProto) ? rawProto[0] : rawProto) ?? "http";
   const host = req.headers.host ?? "localhost";
   const gatewayUrl = `${proto}://${host}`;
 
@@ -382,7 +383,8 @@ async function dispatchToAgent(
   agentId: string,
   inputText: string,
 ): Promise<string> {
-  const sessionKey = `a2a:${agentId}:task:${randomUUID()}`;
+  const runId = randomUUID();
+  const sessionKey = `a2a:${agentId}:task:${runId}`;
 
   // Use the ingress command pipeline to dispatch a message to the agent
   // and collect the response text.
@@ -391,6 +393,10 @@ async function dispatchToAgent(
   const collectPromise = new Promise<string>((resolve) => {
     let resolved = false;
     const unsub = onAgentEvent((event) => {
+      // Only process events for this specific run.
+      if (event.runId !== runId) {
+        return;
+      }
       if (resolved) {
         return;
       }
@@ -398,14 +404,14 @@ async function dispatchToAgent(
       if (deltaText) {
         responseChunks.push(deltaText);
       }
-      // Check for run completion.
-      if (
-        event.type === "agent:run:complete" ||
-        event.type === "agent:run:error"
-      ) {
-        resolved = true;
-        unsub?.();
-        resolve(responseChunks.join(""));
+      // Check for run completion via lifecycle stream.
+      if (event.stream === "lifecycle") {
+        const phase = (event.data as Record<string, unknown> | undefined)?.phase;
+        if (phase === "end" || phase === "error") {
+          resolved = true;
+          unsub?.();
+          resolve(responseChunks.join(""));
+        }
       }
     });
 
@@ -422,9 +428,11 @@ async function dispatchToAgent(
   await agentCommandFromIngress({
     agentId,
     sessionKey,
+    runId,
     message: inputText,
     source: "a2a",
-    // The ingress pipeline handles the rest (model resolution, tool execution, etc.)
+    senderIsOwner: false,
+    allowModelOverride: false,
   });
 
   return collectPromise;
