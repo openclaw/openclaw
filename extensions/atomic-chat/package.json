@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/atomic-chat-provider",
+  "version": "2026.4.2-beta.1",
+  "private": true,
+  "description": "OpenClaw Atomic Chat provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

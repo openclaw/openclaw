@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - Providers/StepFun: add the bundled StepFun provider plugin with standard and Step Plan endpoints, China/global onboarding choices, `step-3.5-flash` on both catalogs, and `step-3.5-flash-2603` currently exposed on Step Plan. (#60032) Thanks @hengm3467.
 - Providers/config: add `models.providers.*.request` overrides for headers and auth on model-provider paths, and full request transport overrides for media provider HTTP paths.
 - Control UI/skills: add ClawHub search, detail, and install flows directly in the Skills panel. (#60134) Thanks @samzong.
+- Providers/Atomic Chat: add bundled provider plugin for Atomic Chat, a local OpenAI-compatible LLM server, with onboarding wizard support, reachability checks, model auto-discovery, and synthetic local auth.
 
 ### Fixes
 

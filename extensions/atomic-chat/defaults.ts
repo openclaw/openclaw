@@ -1,0 +1,4 @@
+export const ATOMIC_CHAT_DEFAULT_BASE_URL = "http://127.0.0.1:1337/v1";
+export const ATOMIC_CHAT_PROVIDER_LABEL = "Atomic Chat";
+export const ATOMIC_CHAT_DEFAULT_API_KEY_ENV_VAR = "ATOMIC_CHAT_API_KEY";
+export const ATOMIC_CHAT_MODEL_PLACEHOLDER = "Qwen3_5-9B-Q4_K_M";

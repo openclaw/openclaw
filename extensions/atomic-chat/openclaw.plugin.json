@@ -1,0 +1,25 @@
+{
+  "id": "atomic-chat",
+  "enabledByDefault": true,
+  "providers": ["atomic-chat"],
+  "providerAuthEnvVars": {
+    "atomic-chat": ["ATOMIC_CHAT_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "atomic-chat",
+      "method": "local",
+      "choiceId": "atomic-chat",
+      "choiceLabel": "Atomic Chat",
+      "choiceHint": "Local OpenAI-compatible LLM server",
+      "groupId": "atomic-chat",
+      "groupLabel": "Atomic Chat",
+      "groupHint": "Local OpenAI-compatible LLM server"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

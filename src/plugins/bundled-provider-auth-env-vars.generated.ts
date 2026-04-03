@@ -2,6 +2,7 @@
 
 export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+  "atomic-chat": ["ATOMIC_CHAT_API_KEY"],
   brave: ["BRAVE_API_KEY"],
   byteplus: ["BYTEPLUS_API_KEY"],
   chutes: ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"],

@@ -1223,6 +1223,7 @@
                 "group": "Providers",
                 "pages": [
                   "providers/anthropic",
+                  "providers/atomic-chat",
                   "providers/bedrock",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
