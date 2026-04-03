@@ -252,7 +252,7 @@ export function buildAgentSystemPrompt(params: {
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
+    cron: 'Manage cron jobs and wake events (use for reminders. For relative or ambiguous times like "in 2 hours", "tomorrow morning", "after lunch", or "tonight at 8": first determine the current date/time from available context/tooling, using session_status when available, resolve to an absolute time in the user\'s timezone, then schedule. For one-shot absolute times, prefer including an explicit timezone or numeric UTC offset in the schedule. When scheduling, write the systemEvent text so it reads like a reminder when it fires and, when helpful, mention it is a reminder; include recent context if appropriate)',
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: acpSpawnRuntimeEnabled
@@ -437,7 +437,7 @@ export function buildAgentSystemPrompt(params: {
           "- browser: control OpenClaw's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
-          "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
+          "- cron: manage cron jobs and wake events (use for reminders. For relative or ambiguous times like 'in 2 hours', 'tomorrow morning', 'after lunch', or 'tonight at 8': first determine the current date/time from available context/tooling, using session_status when available, resolve to an absolute time in the user's timezone, then schedule. For one-shot absolute times, prefer including an explicit timezone or numeric UTC offset in the schedule. When scheduling, write the systemEvent text so it reads like a reminder when it fires and, when helpful, mention it is a reminder; include recent context if appropriate)",
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",

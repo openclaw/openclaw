@@ -740,6 +740,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
   });
+
+  it("adds clear reminder/cron guidance to resolve relative times and prefer explicit timezone", () => {
+    const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw" });
+
+    expect(prompt).toContain("relative or ambiguous times");
+    expect(prompt).toContain(
+      "first determine the current date/time from available context/tooling",
+    );
+    expect(prompt).toContain("using session_status when available");
+    expect(prompt).toContain("explicit timezone or numeric UTC offset");
+  });
 });
 
 describe("buildSubagentSystemPrompt", () => {
