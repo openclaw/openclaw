@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { applySqliteMmapPragma, requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.js";
@@ -418,6 +418,7 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
   db.exec(`PRAGMA journal_mode = WAL;`);
   db.exec(`PRAGMA synchronous = NORMAL;`);
   db.exec(`PRAGMA busy_timeout = 5000;`);
+  applySqliteMmapPragma(db);
   ensureSchema(db);
   ensureTaskRegistryPermissions(pathname);
   cachedDatabase = {

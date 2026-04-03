@@ -122,6 +122,10 @@ export type OpenClawConfig = {
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
   mcp?: McpConfig;
+  storage?: {
+    /** Enable SQLite memory-mapped I/O. Set to false for NFS-backed volumes. Default: true. */
+    sqliteMmap?: boolean;
+  };
 };
 
 declare const openClawConfigStateBrand: unique symbol;

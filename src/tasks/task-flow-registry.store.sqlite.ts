@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { applySqliteMmapPragma, requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import {
   resolveTaskFlowRegistryDir,
@@ -343,6 +343,7 @@ function openFlowRegistryDatabase(): FlowRegistryDatabase {
   db.exec(`PRAGMA journal_mode = WAL;`);
   db.exec(`PRAGMA synchronous = NORMAL;`);
   db.exec(`PRAGMA busy_timeout = 5000;`);
+  applySqliteMmapPragma(db);
   ensureSchema(db);
   ensureFlowRegistryPermissions(pathname);
   cachedDatabase = {

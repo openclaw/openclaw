@@ -28,6 +28,7 @@ import {
   type SessionFileEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
+  applySqliteMmapPragma,
   isFileMissingError,
   requireNodeSqlite,
   statRegularFile,
@@ -1869,6 +1870,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     // connection runs synchronous queries on the main thread via DatabaseSync.
     // In WAL mode readers rarely block, so 1 s is a safe upper bound.
     this.db.exec("PRAGMA busy_timeout = 1000");
+    applySqliteMmapPragma(this.db);
     return this.db;
   }
 

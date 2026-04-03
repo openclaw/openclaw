@@ -33,6 +33,7 @@ import {
   listMemoryFiles,
   loadSqliteVecExtension,
   normalizeExtraMemoryPaths,
+  applySqliteMmapPragma,
   requireNodeSqlite,
   runWithConcurrency,
   type MemoryFileEntry,
@@ -94,6 +95,7 @@ export function openMemoryDatabaseAtPath(dbPath: string, allowExtension: boolean
   // Set it on every open so concurrent processes retry instead of
   // failing immediately with SQLITE_BUSY.
   db.exec("PRAGMA busy_timeout = 5000");
+  applySqliteMmapPragma(db);
   return db;
 }
 
