@@ -97,4 +97,23 @@ describe("createDiscordRestClient proxy support", () => {
     expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://proxy.test:8080");
     expect(requestClient.options?.fetch).toBeUndefined();
   });
+
+  it("accepts IPv6 loopback Discord proxy URLs", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+          proxy: "http://[::1]:8080",
+        },
+      },
+    } as OpenClawConfig;
+
+    const { rest } = createDiscordRestClient({}, cfg);
+    const requestClient = rest as unknown as {
+      options?: { fetch?: typeof fetch };
+    };
+
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://[::1]:8080");
+    expect(requestClient.options?.fetch).toEqual(expect.any(Function));
+  });
 });

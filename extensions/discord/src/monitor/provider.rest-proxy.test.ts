@@ -84,4 +84,20 @@ describe("resolveDiscordRestFetch", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("loopback host"));
     expect(runtime.log).not.toHaveBeenCalled();
   });
+
+  it("uses undici proxy fetch when the proxy URL is IPv6 loopback", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as const;
+    undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+    const fetcher = resolveDiscordRestFetch("http://[::1]:8080", runtime);
+
+    await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
+
+    expect(proxyAgentSpy).toHaveBeenCalledWith("http://[::1]:8080");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
 });

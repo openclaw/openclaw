@@ -416,6 +416,15 @@ export function resolvePluginActivationState(params: {
       cause: "selected-memory-slot",
     });
   }
+  if (explicitSelection.cause === "bundled-channel-enabled-in-config") {
+    return toPluginActivationState({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      cause: explicitSelection.cause,
+    });
+  }
   if (params.config.allow.length > 0 && !explicitlyAllowed) {
     return toPluginActivationState({
       enabled: false,

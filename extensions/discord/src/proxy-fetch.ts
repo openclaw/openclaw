@@ -75,15 +75,17 @@ function isLoopbackProxyHostname(hostname: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === "localhost") {
+  const bracketless =
+    normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
+  if (bracketless === "localhost") {
     return true;
   }
-  const ipFamily = isIP(normalized);
+  const ipFamily = isIP(bracketless);
   if (ipFamily === 4) {
-    return normalized.startsWith("127.");
+    return bracketless.startsWith("127.");
   }
   if (ipFamily === 6) {
-    return normalized === "::1" || normalized === "0:0:0:0:0:0:0:1";
+    return bracketless === "::1" || bracketless === "0:0:0:0:0:0:0:1";
   }
   return false;
 }

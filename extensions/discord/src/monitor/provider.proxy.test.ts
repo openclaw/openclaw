@@ -319,6 +319,24 @@ describe("createDiscordGatewayPlugin", () => {
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts IPv6 loopback proxy URLs for gateway metadata and websocket setup", async () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://[::1]:8080" },
+      runtime,
+      __testing: createProxyTestingOverrides(),
+    });
+
+    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
+      .createWebSocket;
+    createWebSocket("wss://gateway.discord.gg");
+    await registerGatewayClientWithMetadata({ plugin, fetchMock: undiciFetchMock });
+
+    expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://[::1]:8080");
+    expect(restProxyAgentSpy).toHaveBeenCalledWith("http://[::1]:8080");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
   it("falls back to the default gateway plugin when proxy is remote", async () => {
     const runtime = createRuntime();
 
