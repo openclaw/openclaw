@@ -304,10 +304,10 @@ describe("doctor legacy state migrations", () => {
   it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
-    expect(
-      detected.pairingAllowFrom.copyPlans.map((plan) => path.basename(plan.targetPath)),
-    ).toEqual(["telegram-default-allowFrom.json"]);
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-default-allowFrom.json",
+    ]);
     expect(result.warnings).toEqual([]);
 
     const target = path.join(oauthDir, "telegram-default-allowFrom.json");
@@ -332,10 +332,10 @@ describe("doctor legacy state migrations", () => {
       },
     };
     const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
-    expect(
-      detected.pairingAllowFrom.copyPlans.map((plan) => path.basename(plan.targetPath)),
-    ).toEqual(["telegram-bot2-allowFrom.json"]);
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-bot2-allowFrom.json",
+    ]);
     expect(result.warnings).toEqual([]);
 
     const bot1Target = path.join(oauthDir, "telegram-bot1-allowFrom.json");
@@ -368,10 +368,10 @@ describe("doctor legacy state migrations", () => {
     };
 
     const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
-    expect(
-      detected.pairingAllowFrom.copyPlans.map((plan) => path.basename(plan.targetPath)),
-    ).toEqual(["telegram-alerts-allowFrom.json"]);
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-alerts-allowFrom.json",
+    ]);
     expect(result.warnings).toEqual([]);
 
     const alertsTarget = path.join(oauthDir, "telegram-alerts-allowFrom.json");
