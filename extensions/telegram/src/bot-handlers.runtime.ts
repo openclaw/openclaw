@@ -1445,17 +1445,22 @@ export const registerTelegramHandlers = ({
         const editMessageWithButtons = async (
           text: string,
           buttons: ReturnType<typeof buildProviderKeyboard>,
+          extra?: { parse_mode?: "HTML" | "Markdown" | "MarkdownV2" },
         ) => {
           const keyboard = buildInlineKeyboard(buttons);
+          const editParams = keyboard ? { reply_markup: keyboard, ...extra } : extra;
           try {
-            await editCallbackMessage(text, keyboard ? { reply_markup: keyboard } : undefined);
+            await editCallbackMessage(text, editParams);
           } catch (editErr) {
             const errStr = String(editErr);
             if (errStr.includes("no text in the message")) {
               try {
                 await deleteCallbackMessage();
               } catch {}
-              await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard } : undefined);
+              await replyToCallbackChat(
+                text,
+                keyboard ? { reply_markup: keyboard, ...extra } : extra,
+              );
             } else if (!errStr.includes("message is not modified")) {
               throw editErr;
             }
@@ -1587,10 +1592,11 @@ export const registerTelegramHandlers = ({
             // Update message to show success with visual feedback
             const actionText = isDefaultSelection
               ? "reset to default"
-              : `changed to **${selection.provider}/${selection.model}**`;
+              : `changed to <b>${selection.provider}/${selection.model}</b>`;
             await editMessageWithButtons(
               `✅ Model ${actionText}\n\nThis model will be used for your next message.`,
               [], // Empty buttons = remove inline keyboard
+              { parse_mode: "HTML" },
             );
           } catch (err) {
             await editMessageWithButtons(`❌ Failed to change model: ${String(err)}`, []);
