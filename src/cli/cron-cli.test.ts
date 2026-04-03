@@ -74,7 +74,7 @@ type CronUpdatePatch = {
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
   payload?: { model?: string; thinking?: string; lightContext?: boolean };
-  delivery?: { mode?: string; accountId?: string };
+  delivery?: { mode?: string; accountId?: string; to?: string };
   deleteAfterRun?: boolean;
   agentId?: string;
   sessionTarget?: string;
@@ -140,9 +140,42 @@ function mockCronEditJobLookup(schedule: unknown): void {
           ok: true,
           params: {},
           jobs: [{ id: "job-1", schedule }],
+          hasMore: false,
+          nextOffset: null,
         };
       }
       return { ok: true, params };
+    },
+  );
+}
+
+function mockCronEditPagedJobLookup(params: {
+  schedule?: unknown;
+  delivery?: { channel?: string; to?: string; mode?: string };
+}): void {
+  callGatewayFromCli.mockImplementation(
+    async (method: string, _opts: unknown, callParams?: unknown) => {
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      if (method === "cron.list") {
+        const p = (callParams ?? {}) as { offset?: number };
+        if ((p.offset ?? 0) >= 200) {
+          return {
+            ok: true,
+            jobs: [{ id: "job-1", schedule: params.schedule, delivery: params.delivery }],
+            hasMore: false,
+            nextOffset: null,
+          };
+        }
+        return {
+          ok: true,
+          jobs: [{ id: "other-job", schedule: { kind: "cron", expr: "* * * * *" } }],
+          hasMore: true,
+          nextOffset: 200,
+        };
+      }
+      return { ok: true, params: callParams };
     },
   );
 }
@@ -372,6 +405,45 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("applies --thread-id for telegram cron add delivery target", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "telegram-topic",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--channel",
+      "telegram",
+      "--to",
+      "-1001234567890",
+      "--thread-id",
+      "48",
+    ]);
+    expect(params?.delivery?.to).toBe("-1001234567890:topic:48");
+  });
+
+  it("rejects --thread-id without --channel telegram on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid-thread-id",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--to",
+      "-1001234567890",
+      "--thread-id",
+      "48",
+    ]);
+  });
+
   it.each([
     { command: "enable" as const, expectedEnabled: true },
     { command: "disable" as const, expectedEnabled: false },
@@ -491,6 +563,63 @@ describe("cron cli", () => {
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("19098680");
     expect(patch?.patch?.payload?.message).toBeUndefined();
+  });
+
+  it("applies --thread-id on cron edit with explicit telegram delivery target", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--channel",
+      "telegram",
+      "--to",
+      "-1001234567890",
+      "--thread-id",
+      "48",
+    ]);
+    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.delivery?.channel).toBe("telegram");
+    expect(patch?.patch?.delivery?.to).toBe("-1001234567890:topic:48");
+  });
+
+  it("rejects --thread-id with non-telegram channel on cron edit", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "edit",
+      "job-1",
+      "--channel",
+      "discord",
+      "--to",
+      "123",
+      "--thread-id",
+      "48",
+    ]);
+  });
+
+  it("rejects --thread-id when combined with --system-event on cron edit", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "edit",
+      "job-1",
+      "--system-event",
+      "tick",
+      "--thread-id",
+      "48",
+    ]);
+  });
+
+  it("resolves --thread-id existing target from page-2 cron.list lookup on edit", async () => {
+    resetGatewayMock();
+    mockCronEditPagedJobLookup({
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      delivery: { channel: "telegram", to: "-1001234567890" },
+    });
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--thread-id", "48"], { from: "user" });
+
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.delivery?.to).toBe("-1001234567890:topic:48");
+    const listCalls = callGatewayFromCli.mock.calls.filter((call) => call[0] === "cron.list");
+    expect(listCalls).toHaveLength(2);
+    expect((listCalls[0][2] as { offset?: number }).offset).toBe(0);
+    expect((listCalls[1][2] as { offset?: number }).offset).toBe(200);
   });
 
   it("supports --no-deliver on cron edit", async () => {
@@ -755,6 +884,27 @@ describe("cron cli", () => {
       tz: "UTC",
       staggerMs: 0,
     });
+  });
+
+  it("resolves --exact schedule from page-2 cron.list lookup on edit", async () => {
+    resetGatewayMock();
+    mockCronEditPagedJobLookup({
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+    });
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--exact"], { from: "user" });
+
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.schedule).toEqual({
+      kind: "cron",
+      expr: "0 */2 * * *",
+      tz: "UTC",
+      staggerMs: 0,
+    });
+    const listCalls = callGatewayFromCli.mock.calls.filter((call) => call[0] === "cron.list");
+    expect(listCalls).toHaveLength(2);
+    expect((listCalls[0][2] as { offset?: number }).offset).toBe(0);
+    expect((listCalls[1][2] as { offset?: number }).offset).toBe(200);
   });
 
   it("rejects --exact on edit when existing job is not cron", async () => {

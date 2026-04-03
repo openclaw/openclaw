@@ -21,6 +21,44 @@ const assignIf = (
   }
 };
 
+async function findCronJobById(params: {
+  id: string;
+  opts: Record<string, unknown>;
+}): Promise<CronJob | undefined> {
+  const pageSize = 200;
+  let offset = 0;
+  const visitedOffsets = new Set<number>();
+  while (!visitedOffsets.has(offset)) {
+    visitedOffsets.add(offset);
+    const listed = (await callGatewayFromCli("cron.list", params.opts, {
+      includeDisabled: true,
+      limit: pageSize,
+      offset,
+    })) as {
+      jobs?: CronJob[];
+      hasMore?: boolean;
+      nextOffset?: number | null;
+    } | null;
+    const jobs = listed?.jobs ?? [];
+    const found = jobs.find((job) => job.id === params.id);
+    if (found) {
+      return found;
+    }
+    if (listed?.hasMore !== true) {
+      return undefined;
+    }
+    const candidate =
+      typeof listed.nextOffset === "number" && Number.isFinite(listed.nextOffset)
+        ? listed.nextOffset
+        : offset + jobs.length;
+    if (!Number.isFinite(candidate) || candidate <= offset) {
+      return undefined;
+    }
+    offset = candidate;
+  }
+  return undefined;
+}
+
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
     cron
@@ -65,6 +103,7 @@ export function registerCronEditCommand(cron: Command) {
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
+      .option("--thread-id <id>", "Thread id (Telegram forum topic, must be a number)")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
@@ -158,10 +197,7 @@ export function registerCronEditCommand(cron: Command) {
           if (scheduleRequest.kind === "direct") {
             patch.schedule = scheduleRequest.schedule;
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const listed = (await callGatewayFromCli("cron.list", opts, {
-              includeDisabled: true,
-            })) as { jobs?: CronJob[] } | null;
-            const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+            const existing = await findCronJobById({ id, opts });
             if (!existing) {
               throw new Error(`unknown cron job id: ${id}`);
             }
@@ -182,6 +218,7 @@ export function registerCronEditCommand(cron: Command) {
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
           const hasDeliveryTarget = typeof opts.channel === "string" || typeof opts.to === "string";
           const hasDeliveryAccount = typeof opts.account === "string";
+          const hasThreadId = typeof opts.threadId === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
           const hasAgentTurnPatch =
             typeof opts.message === "string" ||
@@ -194,6 +231,7 @@ export function registerCronEditCommand(cron: Command) {
             hasDeliveryModeFlag ||
             hasDeliveryTarget ||
             hasDeliveryAccount ||
+            hasThreadId ||
             hasBestEffort;
           if (hasSystemEventPatch && hasAgentTurnPatch) {
             throw new Error("Choose at most one payload change");
@@ -226,7 +264,13 @@ export function registerCronEditCommand(cron: Command) {
             patch.payload = payload;
           }
 
-          if (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryAccount || hasBestEffort) {
+          if (
+            hasDeliveryModeFlag ||
+            hasDeliveryTarget ||
+            hasDeliveryAccount ||
+            hasThreadId ||
+            hasBestEffort
+          ) {
             const delivery: Record<string, unknown> = {};
             if (hasDeliveryModeFlag) {
               delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";
@@ -238,9 +282,50 @@ export function registerCronEditCommand(cron: Command) {
               const channel = opts.channel.trim();
               delivery.channel = channel ? channel : undefined;
             }
-            if (typeof opts.to === "string") {
-              const to = opts.to.trim();
-              delivery.to = to ? to : undefined;
+            if (typeof opts.to === "string" || hasThreadId) {
+              const threadId = typeof opts.threadId === "string" ? opts.threadId.trim() : "";
+              if (threadId && !/^\d+$/.test(threadId)) {
+                throw new Error("--thread-id must be a numeric value");
+              }
+              const explicitChannel =
+                typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
+              if (threadId && explicitChannel && explicitChannel !== "telegram") {
+                throw new Error("--thread-id requires --channel telegram");
+              }
+              let toRaw = typeof opts.to === "string" ? opts.to.trim() : "";
+              if (threadId && (!toRaw || typeof opts.channel !== "string")) {
+                const existing = await findCronJobById({ id, opts });
+                if (!existing) {
+                  throw new Error(`Cron job ${id} not found`);
+                }
+                const existingChannel =
+                  (existing.delivery as Record<string, string> | undefined)?.channel ?? "";
+                const existingMode =
+                  (existing.delivery as Record<string, string> | undefined)?.mode ?? "";
+                if (typeof opts.channel !== "string") {
+                  if (existingMode === "webhook") {
+                    throw new Error("--thread-id is not supported for webhook delivery jobs");
+                  }
+                  if (existingChannel.toLowerCase() !== "telegram") {
+                    throw new Error("--thread-id requires --channel telegram");
+                  }
+                }
+                if (!toRaw) {
+                  toRaw = (existing.delivery as Record<string, string> | undefined)?.to ?? "";
+                }
+              }
+              const to = threadId ? toRaw.replace(/:(?:topic:)?\d+$/, "") : toRaw;
+              if (to && threadId) {
+                delivery.to = `${to}:topic:${threadId}`;
+              } else if (to) {
+                delivery.to = to;
+              } else if (threadId) {
+                throw new Error(
+                  "--thread-id requires a delivery target (use --to or ensure the job has one)",
+                );
+              } else if (typeof opts.to === "string") {
+                delivery.to = undefined;
+              }
             }
             if (typeof opts.account === "string") {
               const account = opts.account.trim();
