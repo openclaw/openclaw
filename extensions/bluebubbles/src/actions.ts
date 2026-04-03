@@ -9,13 +9,13 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveBlueBubblesAccount } from "./accounts.js";
-import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
 import {
   BLUEBUBBLES_ACTION_NAMES,
   BLUEBUBBLES_ACTIONS,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
-} from "./runtime-api.js";
+} from "./actions-api.js";
+import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import {
   normalizeBlueBubblesHandle,
