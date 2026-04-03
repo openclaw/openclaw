@@ -379,17 +379,20 @@ function collectMediaRequestAssignments(params: {
   }
 
   const capabilityKeys = ["audio", "image", "video"] as const;
-  const capabilitySections = capabilityKeys
-    .map((capability) => (isRecord(media[capability]) ? media[capability] : undefined))
-    .filter((section): section is Record<string, unknown> => Boolean(section));
-  const sharedModelsActive = capabilitySections.some((section) => section.enabled !== false);
+  const isMediaCapability = (value: unknown): value is (typeof capabilityKeys)[number] =>
+    typeof value === "string" && (capabilityKeys as readonly string[]).includes(value);
+  const isCapabilityEnabled = (capability: (typeof capabilityKeys)[number]) =>
+    (isRecord(media[capability]) ? media[capability] : undefined)?.enabled !== false;
+  const sharedModelsActive = capabilityKeys.some((capability) => isCapabilityEnabled(capability));
   const sharedModelsInactiveReason = "all media understanding capabilities are disabled.";
 
   const collectModelAssignments = (
     models: unknown,
     pathPrefix: string,
-    active: boolean,
-    inactiveReason: string,
+    resolveActivity: (rawModel: Record<string, unknown>) => {
+      active: boolean;
+      inactiveReason: string;
+    },
   ) => {
     if (!Array.isArray(models)) {
       return;
@@ -398,6 +401,7 @@ function collectMediaRequestAssignments(params: {
       if (!isRecord(rawModel) || !isRecord(rawModel.request)) {
         return;
       }
+      const { active, inactiveReason } = resolveActivity(rawModel);
       collectProviderRequestAssignments({
         request: rawModel.request,
         pathPrefix: `${pathPrefix}.${index}.request`,
@@ -409,16 +413,26 @@ function collectMediaRequestAssignments(params: {
     });
   };
 
-  collectModelAssignments(
-    media.models,
-    "tools.media.models",
-    sharedModelsActive,
-    sharedModelsInactiveReason,
-  );
+  collectModelAssignments(media.models, "tools.media.models", (rawModel) => {
+    const capabilities = Array.isArray(rawModel.capabilities)
+      ? rawModel.capabilities.filter(isMediaCapability)
+      : [];
+    if (capabilities.length === 0) {
+      // Shared entries can still become active later via provider capability inference.
+      return {
+        active: sharedModelsActive,
+        inactiveReason: sharedModelsInactiveReason,
+      };
+    }
+    return {
+      active: capabilities.some((capability) => isCapabilityEnabled(capability)),
+      inactiveReason: `all configured media capabilities for this shared model are disabled: ${capabilities.join(", ")}.`,
+    };
+  });
 
   for (const capability of capabilityKeys) {
     const section = isRecord(media[capability]) ? media[capability] : undefined;
-    const active = section?.enabled !== false;
+    const active = isCapabilityEnabled(capability);
     const inactiveReason = `${capability} media understanding is disabled.`;
     if (section && isRecord(section.request)) {
       collectProviderRequestAssignments({
@@ -430,12 +444,10 @@ function collectMediaRequestAssignments(params: {
         inactiveReason,
       });
     }
-    collectModelAssignments(
-      section?.models,
-      `tools.media.${capability}.models`,
+    collectModelAssignments(section?.models, `tools.media.${capability}.models`, () => ({
       active,
       inactiveReason,
-    );
+    }));
   }
 }
 

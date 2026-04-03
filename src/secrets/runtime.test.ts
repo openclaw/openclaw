@@ -1402,6 +1402,90 @@ describe("secrets runtime snapshot", () => {
     });
   });
 
+  it("resolves shared media model request refs when capability blocks are omitted", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4o-mini-transcribe",
+                capabilities: ["audio"],
+                request: {
+                  auth: {
+                    mode: "authorization-bearer",
+                    token: {
+                      source: "env",
+                      provider: "default",
+                      id: "MEDIA_SHARED_AUDIO_TOKEN",
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      }),
+      env: {
+        MEDIA_SHARED_AUDIO_TOKEN: "shared-audio-token", // pragma: allowlist secret
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: "shared-audio-token",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "tools.media.models.0.request.auth.token",
+    );
+  });
+
+  it("treats shared media model request refs as inactive when their capabilities are disabled", async () => {
+    const sharedTokenRef = {
+      source: "env" as const,
+      provider: "default" as const,
+      id: "MEDIA_DISABLED_AUDIO_TOKEN",
+    };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4o-mini-transcribe",
+                capabilities: ["audio"],
+                request: {
+                  auth: {
+                    mode: "authorization-bearer",
+                    token: sharedTokenRef,
+                  },
+                },
+              },
+            ],
+            audio: {
+              enabled: false,
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: sharedTokenRef,
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "tools.media.models.0.request.auth.token",
+    );
+  });
+
   it("fails when an active exec ref id contains traversal segments", async () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
