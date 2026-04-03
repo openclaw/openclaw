@@ -39,8 +39,8 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runSubagentEnded: vi.fn(async () => {}),
 }));
 
-vi.mock("./pi-embedded.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./pi-embedded.js")>();
+vi.mock("./pi-embedded.js", async () => {
+  const actual = await vi.importActual<typeof import("./pi-embedded.js")>("./pi-embedded.js");
   return {
     ...actual,
     isEmbeddedPiRunActive: () => false,
