@@ -129,7 +129,134 @@ jobs:
           OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
           OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
           OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
-        run: node scripts/ci-write-manifest-outputs.mjs --workflow ci
+        run: |
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+
+          const parseBoolean = (value, fallback = false) => {
+            if (value === undefined) return fallback;
+            const normalized = value.trim().toLowerCase();
+            if (normalized === "true" || normalized === "1") return true;
+            if (normalized === "false" || normalized === "0" || normalized === "") return false;
+            return fallback;
+          };
+
+          const parseJson = (value, fallback) => {
+            try {
+              return value ? JSON.parse(value) : fallback;
+            } catch {
+              return fallback;
+            }
+          };
+
+          const createMatrix = (include) => ({ include });
+          const outputPath = process.env.GITHUB_OUTPUT;
+          const eventName = process.env.GITHUB_EVENT_NAME ?? "pull_request";
+          const isPush = eventName === "push";
+          const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
+          const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
+          const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
+          const runMacos = parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly;
+          const runAndroid = parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly;
+          const runWindows = parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) && !docsOnly;
+          const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
+          const hasChangedExtensions =
+            parseBoolean(process.env.OPENCLAW_CI_HAS_CHANGED_EXTENSIONS) && !docsOnly;
+          const changedExtensionsMatrix = hasChangedExtensions
+            ? parseJson(process.env.OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX, { include: [] })
+            : { include: [] };
+
+          const manifest = {
+            docs_only: docsOnly,
+            docs_changed: docsChanged,
+            run_node: runNode,
+            run_macos: runMacos,
+            run_android: runAndroid,
+            run_skills_python: runSkillsPython,
+            run_windows: runWindows,
+            has_changed_extensions: hasChangedExtensions,
+            changed_extensions_matrix: changedExtensionsMatrix,
+            run_build_artifacts: runNode,
+            run_checks_fast: runNode,
+            checks_fast_matrix: createMatrix(
+              runNode
+                ? [
+                    { check_name: "checks-fast-bundled", runtime: "node", task: "bundled" },
+                    { check_name: "checks-fast-extensions", runtime: "node", task: "extensions" },
+                    {
+                      check_name: "checks-fast-contracts-protocol",
+                      runtime: "node",
+                      task: "contracts-protocol",
+                    },
+                  ]
+                : [],
+            ),
+            run_checks: runNode,
+            checks_matrix: createMatrix(
+              runNode
+                ? [
+                    { check_name: "checks-node-test", runtime: "node", task: "test" },
+                    { check_name: "checks-node-channels", runtime: "node", task: "channels" },
+                    ...(isPush
+                      ? [
+                          {
+                            check_name: "checks-node-compat-node22",
+                            runtime: "node",
+                            task: "compat-node22",
+                            node_version: "22.x",
+                            cache_key_suffix: "node22",
+                          },
+                        ]
+                      : []),
+                  ]
+                : [],
+            ),
+            run_extension_fast: hasChangedExtensions,
+            extension_fast_matrix: createMatrix(
+              hasChangedExtensions
+                ? (changedExtensionsMatrix.include ?? []).map((entry) => ({
+                    check_name: `extension-fast-${entry.extension}`,
+                    extension: entry.extension,
+                  }))
+                : [],
+            ),
+            run_check: runNode,
+            run_check_additional: runNode,
+            run_build_smoke: runNode,
+            run_check_docs: docsChanged,
+            run_skills_python_job: runSkillsPython,
+            run_checks_windows: runWindows,
+            checks_windows_matrix: createMatrix(
+              runWindows
+                ? [{ check_name: "checks-windows-node-test", runtime: "node", task: "test" }]
+                : [],
+            ),
+            run_macos_node: runMacos,
+            macos_node_matrix: createMatrix(
+              runMacos ? [{ check_name: "macos-node", runtime: "node", task: "test" }] : [],
+            ),
+            run_macos_swift: runMacos,
+            run_android_job: runAndroid,
+            android_matrix: createMatrix(
+              runAndroid
+                ? [
+                    { check_name: "android-test-play", task: "test-play" },
+                    { check_name: "android-test-third-party", task: "test-third-party" },
+                    { check_name: "android-build-play", task: "build-play" },
+                    { check_name: "android-build-third-party", task: "build-third-party" },
+                  ]
+                : [],
+            ),
+          };
+
+          for (const [key, value] of Object.entries(manifest)) {
+            appendFileSync(
+              outputPath,
+              `${key}=${typeof value === "string" ? value : JSON.stringify(value)}\n`,
+              "utf8",
+            );
+          }
+          EOF
 
   # Run the fast security/SCM checks in parallel with scope detection so the
   # main Node jobs do not have to wait for Python/pre-commit setup.

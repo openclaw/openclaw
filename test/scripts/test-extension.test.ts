@@ -28,8 +28,7 @@ function runScript(args: string[], cwd = process.cwd()) {
 
 function findExtensionWithoutTests() {
   const extensionId = listAvailableExtensionIds().find(
-    (candidate) =>
-      resolveExtensionTestPlan({ targetArg: candidate, cwd: process.cwd() }).testFiles.length === 0,
+    (candidate) => !resolveExtensionTestPlan({ targetArg: candidate, cwd: process.cwd() }).hasTests,
   );
 
   expect(extensionId).toBeDefined();
@@ -43,9 +42,8 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.extensionId).toBe("slack");
     expect(plan.extensionDir).toBe(bundledPluginRoot("slack"));
     expect(plan.config).toBe("vitest.channels.config.ts");
-    expect(plan.testFiles.some((file) => file.startsWith(`${bundledPluginRoot("slack")}/`))).toBe(
-      true,
-    );
+    expect(plan.roots).toContain(bundledPluginRoot("slack"));
+    expect(plan.hasTests).toBe(true);
   });
 
   it("resolves provider extensions onto the extensions vitest config", () => {
@@ -53,19 +51,17 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(plan.extensionId).toBe("firecrawl");
     expect(plan.config).toBe("vitest.extensions.config.ts");
-    expect(
-      plan.testFiles.some((file) => file.startsWith(`${bundledPluginRoot("firecrawl")}/`)),
-    ).toBe(true);
+    expect(plan.roots).toContain(bundledPluginRoot("firecrawl"));
+    expect(plan.hasTests).toBe(true);
   });
 
-  it("includes paired src roots when they contain tests", () => {
+  it("keeps extension-root plans lean when there is no paired core test root", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "line", cwd: process.cwd() });
 
     expect(plan.roots).toContain(bundledPluginRoot("line"));
+    expect(plan.roots).not.toContain("src/line");
     expect(plan.config).toBe("vitest.extensions.config.ts");
-    expect(plan.testFiles.some((file) => file.startsWith(`${bundledPluginRoot("line")}/`))).toBe(
-      true,
-    );
+    expect(plan.hasTests).toBe(true);
   });
 
   it("infers the extension from the current working directory", () => {
@@ -111,7 +107,8 @@ describe("scripts/test-extension.mjs", () => {
     const plan = readPlan([extensionId]);
 
     expect(plan.extensionId).toBe(extensionId);
-    expect(plan.testFiles).toEqual([]);
+    expect(plan.hasTests).toBe(false);
+    expect(plan.testFileCount).toBe(0);
   });
 
   it("treats extensions without tests as a no-op by default", () => {

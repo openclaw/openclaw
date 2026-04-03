@@ -79,7 +79,6 @@ export default defineConfig({
       "test/setup.shared.ts",
       "test/setup.extensions.ts",
       "scripts/test-projects.mjs",
-      "scripts/ci-write-manifest-outputs.mjs",
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
       "vitest.bundled.config.ts",
