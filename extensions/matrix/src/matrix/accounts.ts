@@ -179,7 +179,9 @@ export function resolveMatrixAccount(params: {
   env?: NodeJS.ProcessEnv;
 }): ResolvedMatrixAccount {
   const env = params.env ?? process.env;
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
+  );
   const matrixBase = resolveMatrixBaseConfig(params.cfg);
   const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId, env });
   const explicitAuthConfig =
