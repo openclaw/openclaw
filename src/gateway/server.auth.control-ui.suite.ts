@@ -872,6 +872,18 @@ export function registerControlUiAndPairingSuite(): void {
         callerScopes: pendingRequest.scopes ?? ["operator.admin"],
       });
 
+      const wsNodeReconnect = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const nodeReconnect = await connectReq(wsNodeReconnect, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client: nodeClient,
+        deviceIdentityPath: identityPath,
+      });
+      expect(nodeReconnect.ok).toBe(true);
+      wsNodeReconnect.close();
+
       const wsOperatorApproved = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const operatorApproved = await connectReq(wsOperatorApproved, {
         skipDefaultAuth: true,
