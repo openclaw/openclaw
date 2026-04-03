@@ -4,9 +4,9 @@ import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "./test-support/inbound-context-contract.js";
 const {
   answerCallbackQuerySpy,
   commandSpy,
@@ -2220,6 +2220,20 @@ describe("createTelegramBot", () => {
       expectedEnqueueCalls: 0,
     },
     {
+      name: "blocks reaction in pairing mode for non-paired sender (default dmPolicy)",
+      updateId: 514,
+      channelConfig: { dmPolicy: "pairing", reactionNotifications: "all" },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+      expectedEnqueueCalls: 0,
+    },
+    {
       name: "blocks reaction in allowlist mode for unauthorized direct sender",
       updateId: 511,
       channelConfig: {
@@ -2669,5 +2683,36 @@ describe("createTelegramBot", () => {
     };
     const sessionKey = eventOptions.sessionKey ?? "";
     expect(sessionKey).not.toContain(":topic:");
+  });
+
+  it("blocks reaction in own mode when cache is warm and message not sent by bot", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    wasSentByBot.mockReturnValue(false);
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", reactionNotifications: "own" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 601 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 99,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
 });

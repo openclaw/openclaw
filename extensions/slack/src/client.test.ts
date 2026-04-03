@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@slack/web-api", () => {
   const WebClient = vi.fn(function WebClientMock(
@@ -20,8 +20,7 @@ let SLACK_DEFAULT_RETRY_OPTIONS: typeof import("./client.js").SLACK_DEFAULT_RETR
 let SLACK_WRITE_RETRY_OPTIONS: typeof import("./client.js").SLACK_WRITE_RETRY_OPTIONS;
 let WebClient: ReturnType<typeof vi.fn>;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   const slackWebApi = await import("@slack/web-api");
   ({
     createSlackWebClient,
@@ -32,6 +31,10 @@ beforeEach(async () => {
     SLACK_WRITE_RETRY_OPTIONS,
   } = await import("./client.js"));
   WebClient = slackWebApi.WebClient as unknown as ReturnType<typeof vi.fn>;
+});
+
+beforeEach(() => {
+  WebClient.mockClear();
 });
 
 describe("slack web client config", () => {

@@ -1,4 +1,5 @@
 import type { TUI } from "@mariozechner/pi-tui";
+import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
@@ -121,21 +122,14 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const resolveModelSelection = (entry?: SessionInfoEntry) => {
-    if (entry?.modelProvider || entry?.model) {
-      return {
-        modelProvider: entry.modelProvider ?? state.sessionInfo.modelProvider,
-        model: entry.model ?? state.sessionInfo.model,
-      };
-    }
-    const overrideModel = entry?.modelOverride?.trim();
-    if (overrideModel) {
-      const overrideProvider = entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
-      return { modelProvider: overrideProvider, model: overrideModel };
-    }
-    return {
-      modelProvider: state.sessionInfo.modelProvider,
-      model: state.sessionInfo.model,
-    };
+    return resolveSessionInfoModelSelection({
+      currentProvider: state.sessionInfo.modelProvider,
+      currentModel: state.sessionInfo.model,
+      entryProvider: entry?.modelProvider,
+      entryModel: entry?.model,
+      overrideProvider: entry?.providerOverride,
+      overrideModel: entry?.modelOverride,
+    });
   };
 
   const applySessionInfo = (params: {

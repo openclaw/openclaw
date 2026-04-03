@@ -15,7 +15,8 @@ const e2eWorkers =
     : defaultWorkers;
 const verboseE2E = process.env.OPENCLAW_E2E_VERBOSE === "1";
 
-const baseTest = (baseConfig as { test?: { exclude?: string[] } }).test ?? {};
+const baseTest =
+  (baseConfig as { test?: { exclude?: string[]; setupFiles?: string[] } }).test ?? {};
 const exclude = (baseTest.exclude ?? []).filter((p) => p !== "**/*.e2e.test.ts");
 
 export default defineConfig({
@@ -26,6 +27,7 @@ export default defineConfig({
     pool: "forks",
     maxWorkers: e2eWorkers,
     silent: !verboseE2E,
+    setupFiles: [...new Set([...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"])],
     include: ["test/**/*.e2e.test.ts", "src/**/*.e2e.test.ts", BUNDLED_PLUGIN_E2E_TEST_GLOB],
     exclude,
   },

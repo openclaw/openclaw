@@ -17,8 +17,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # Preflight: establish routing truth and planner-owned matrices once, then let
-  # real work fan out from a single source of truth.
+  # Preflight: establish routing truth and job matrices once, then let real
+  # work fan out from a single source of truth.
   preflight:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -302,17 +302,14 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           TASK: ${{ matrix.task }}
-          SHARD_COUNT: ${{ matrix.shard_count || '' }}
-          SHARD_INDEX: ${{ matrix.shard_index || '' }}
         shell: bash
         run: |
           set -euo pipefail
           case "$TASK" in
+            bundled)
+              pnpm test:bundled
+              ;;
             extensions)
-              if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
-                export OPENCLAW_TEST_SHARDS="$SHARD_COUNT"
-                export OPENCLAW_TEST_SHARD_INDEX="$SHARD_INDEX"
-              fi
               pnpm test:extensions
               ;;
             contracts|contracts-protocol)
@@ -360,20 +357,12 @@ jobs:
         if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
         env:
           TASK: ${{ matrix.task }}
-          SHARD_COUNT: ${{ matrix.shard_count || '' }}
-          SHARD_INDEX: ${{ matrix.shard_index || '' }}
         run: |
-          # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
-          # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+          echo "NODE_OPTIONS=--max-old-space-size=6144" >> "$GITHUB_ENV"
+          echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
           if [ "$TASK" = "channels" ]; then
-            echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
+            echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
             echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
-          fi
-          if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
-            echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
           fi
 
       - name: Download dist artifact
@@ -735,8 +724,7 @@ jobs:
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.
-      # Windows shard 2 has shown intermittent instability at 2 workers.
-      OPENCLAW_TEST_WORKERS: 1
+      OPENCLAW_VITEST_MAX_WORKERS: 1
     defaults:
       run:
         shell: bash
@@ -809,15 +797,6 @@ jobs:
           # caches can skip repeated rebuild/download work on later shards/runs.
           pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
-      - name: Configure test shard (Windows)
-        if: matrix.task == 'test'
-        env:
-          SHARD_COUNT: ${{ matrix.shard_count }}
-          SHARD_INDEX: ${{ matrix.shard_index }}
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
-
       - name: Download dist artifact
         if: matrix.task == 'test'
         uses: actions/download-artifact@v8
@@ -881,17 +860,10 @@ jobs:
           name: canvas-a2ui-bundle
           path: src/canvas-host/a2ui/
 
-      - name: Configure test shard (macOS)
-        env:
-          SHARD_COUNT: ${{ matrix.shard_count }}
-          SHARD_INDEX: ${{ matrix.shard_index }}
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
-
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          OPENCLAW_VITEST_MAX_WORKERS: 2
           TASK: ${{ matrix.task }}
         shell: bash
         run: |

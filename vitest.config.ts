@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
@@ -6,15 +7,37 @@ import {
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./scripts/lib/bundled-plugin-paths.mjs";
 import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
-import { resolveLocalVitestMaxWorkers } from "./scripts/test-planner/runtime-profile.mjs";
-import {
-  behaviorManifestPath,
-  unitMemoryHotspotManifestPath,
-  unitTimingManifestPath,
-} from "./scripts/test-runner-manifest.mjs";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 
-export { resolveLocalVitestMaxWorkers };
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+function parsePositiveInt(value) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function resolveLocalVitestMaxWorkers(
+  env = process.env,
+  system = {
+    cpuCount: os.cpus().length || 1,
+    totalMemoryBytes: os.totalmem(),
+  },
+) {
+  const override = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
+  if (override !== null) {
+    return clamp(override, 1, 16);
+  }
+
+  const cpuCount = Math.max(1, system.cpuCount || 1);
+  const memoryGiB = (system.totalMemoryBytes || 0) / 1024 ** 3;
+  let workers = cpuCount >= 16 ? 6 : cpuCount >= 10 ? 4 : cpuCount >= 6 ? 3 : 2;
+  if (memoryGiB < 24) {
+    workers = Math.min(workers, 2);
+  } else if (memoryGiB < 48) {
+    workers = Math.min(workers, 3);
+  }
+  return clamp(workers, 1, 16);
+}
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
@@ -53,14 +76,13 @@ export default defineConfig({
       "package.json",
       "pnpm-lock.yaml",
       "test/setup.ts",
-      "scripts/test-parallel.mjs",
-      "scripts/test-planner/catalog.mjs",
-      "scripts/test-planner/executor.mjs",
-      "scripts/test-planner/planner.mjs",
-      "scripts/test-planner/runtime-profile.mjs",
-      "scripts/test-runner-manifest.mjs",
+      "test/setup.shared.ts",
+      "test/setup.extensions.ts",
+      "scripts/test-projects.mjs",
+      "scripts/ci-write-manifest-outputs.mjs",
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
+      "vitest.bundled.config.ts",
       "vitest.config.ts",
       "vitest.contracts.config.ts",
       "vitest.e2e.config.ts",
@@ -68,12 +90,10 @@ export default defineConfig({
       "vitest.gateway.config.ts",
       "vitest.live.config.ts",
       "vitest.performance-config.ts",
+      "vitest.projects.config.ts",
       "vitest.scoped-config.ts",
       "vitest.unit.config.ts",
       "vitest.unit-paths.mjs",
-      behaviorManifestPath,
-      unitTimingManifestPath,
-      unitMemoryHotspotManifestPath,
     ],
     include: [
       "src/**/*.test.ts",
@@ -86,9 +106,11 @@ export default defineConfig({
       "ui/src/ui/views/channels.test.ts",
       "ui/src/ui/views/chat.test.ts",
       "ui/src/ui/views/nodes.devices.test.ts",
+      "ui/src/ui/views/skills.test.ts",
       "ui/src/ui/views/usage-render-details.test.ts",
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",
+      "ui/src/ui/controllers/skills.test.ts",
       "ui/src/ui/controllers/sessions.test.ts",
       "ui/src/ui/views/sessions.test.ts",
       "ui/src/ui/app-tool-stream.node.test.ts",

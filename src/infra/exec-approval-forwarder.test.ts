@@ -483,6 +483,31 @@ describe("exec approval forwarder", () => {
     );
   });
 
+  it("stores exec metadata on generic forwarded fallback payloads", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            channelData: expect.objectContaining({
+              execApproval: expect.objectContaining({
+                approvalId: "req-1",
+                approvalKind: "exec",
+                agentId: "main",
+                sessionKey: "agent:main:main",
+              }),
+            }),
+          }),
+        ],
+      }),
+    );
+  });
+
   it("formats single-line commands as inline code", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });

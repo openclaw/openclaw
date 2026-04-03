@@ -118,8 +118,16 @@ All fields are optional unless noted:
 - `fileQuality` (`"standard" | "hq" | "print"`): quality preset for PNG or PDF rendering.
 - `fileScale` (`number`): device scale override (`1`-`4`).
 - `fileMaxWidth` (`number`): max render width in CSS pixels (`640`-`2400`).
-- `ttlSeconds` (`number`): viewer artifact TTL in seconds. Default 1800, max 21600.
+- `ttlSeconds` (`number`): artifact TTL in seconds for viewer and standalone file outputs. Default 1800, max 21600.
 - `baseUrl` (`string`): viewer URL origin override. Overrides plugin `viewerBaseUrl`. Must be `http` or `https`, no query/hash.
+
+Legacy input aliases still accepted for backward compatibility:
+
+- `format` -> `fileFormat`
+- `imageFormat` -> `fileFormat`
+- `imageQuality` -> `fileQuality`
+- `imageScale` -> `fileScale`
+- `imageMaxWidth` -> `fileMaxWidth`
 
 Validation and limits:
 
@@ -164,11 +172,20 @@ File fields when PNG or PDF is rendered:
 - `fileScale`
 - `fileMaxWidth`
 
+Compatibility aliases also returned for existing callers:
+
+- `format` (same value as `fileFormat`)
+- `imagePath` (same value as `filePath`)
+- `imageBytes` (same value as `fileBytes`)
+- `imageQuality` (same value as `fileQuality`)
+- `imageScale` (same value as `fileScale`)
+- `imageMaxWidth` (same value as `fileMaxWidth`)
+
 Mode behavior summary:
 
 - `mode: "view"`: viewer fields only.
 - `mode: "file"`: file fields only, no viewer artifact.
-- `mode: "both"`: viewer fields plus file fields. If file rendering fails, viewer still returns with `fileError`.
+- `mode: "both"`: viewer fields plus file fields. If file rendering fails, viewer still returns with `fileError` and compatibility alias `imageError`.
 
 ## Collapsed unchanged sections
 
@@ -287,7 +304,7 @@ Example:
   - random token (48 hex chars)
   - `createdAt` and `expiresAt`
   - stored `viewer.html` path
-- Default viewer TTL is 30 minutes when not specified.
+- Default artifact TTL is 30 minutes when not specified.
 - Maximum accepted viewer TTL is 6 hours.
 - Cleanup runs opportunistically after artifact creation.
 - Expired artifacts are deleted.

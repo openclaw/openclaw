@@ -28,7 +28,6 @@ const {
   listDevicePairing,
   approveDevicePairing,
   summarizeDeviceTokens,
-  withProgress,
 } = mocks;
 
 vi.mock("../gateway/call.js", () => ({
@@ -337,20 +336,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  buildGatewayConnectionDetails.mockClear();
   buildGatewayConnectionDetails.mockReturnValue({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
     message: "",
   });
-  listDevicePairing.mockClear();
   listDevicePairing.mockResolvedValue({ pending: [], paired: [] });
-  approveDevicePairing.mockClear();
   approveDevicePairing.mockResolvedValue(undefined);
-  summarizeDeviceTokens.mockClear();
   summarizeDeviceTokens.mockReturnValue(undefined);
-  withProgress.mockClear();
-  runtime.log.mockClear();
-  runtime.error.mockClear();
-  runtime.exit.mockClear();
 });
