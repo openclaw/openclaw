@@ -52,8 +52,8 @@ vi.mock("openclaw/plugin-sdk/setup", () => {
   };
 });
 
-vi.mock("./accounts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./accounts.js")>();
+vi.mock("./accounts.js", async () => {
+  const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
   return {
     ...actual,
     resolveWhatsAppAuthDir: hoisted.resolveWhatsAppAuthDir,

@@ -7,10 +7,10 @@ let registerSlackMemberEvents: typeof import("./members.js").registerSlackMember
 let initSlackHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
 type MemberOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
-async function createChannelRuntimeMock(
-  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/infra-runtime")>,
-) {
-  const actual = await importOriginal();
+async function createChannelRuntimeMock() {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
+  );
   return { ...actual, enqueueSystemEvent: memberMocks.enqueue };
 }
 

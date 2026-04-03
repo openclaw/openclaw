@@ -176,8 +176,10 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
 let matrixJsClient = createMatrixJsClientStub();
 let lastCreateClientOpts: Record<string, unknown> | null = null;
 
-vi.mock("matrix-js-sdk/lib/matrix.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("matrix-js-sdk/lib/matrix.js")>();
+vi.mock("matrix-js-sdk/lib/matrix.js", async () => {
+  const actual = await vi.importActual<typeof import("matrix-js-sdk/lib/matrix.js")>(
+    "matrix-js-sdk/lib/matrix.js",
+  );
   return {
     ...actual,
     ClientEvent: { Event: "event", Room: "Room" },
