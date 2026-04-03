@@ -12,29 +12,35 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { listWhatsAppAccountIds, resolveWhatsAppAccount, resolveWhatsAppAuthDir } from "./accounts.js";
+import {
+  listWhatsAppAccountIds,
+  resolveWhatsAppAccount,
+  resolveWhatsAppAuthDir,
+} from "./accounts.js";
 import { loginWeb } from "./login.js";
-import type { WhatsAppAccountConfig, WhatsAppConfig } from "./runtime-api.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 
 const channel = "whatsapp" as const;
+type WhatsAppConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>;
+type WhatsAppAccountConfig = NonNullable<NonNullable<WhatsAppConfig["accounts"]>[string]>;
 
 function mergeWhatsAppConfig(
   cfg: OpenClawConfig,
   accountId: string,
-  patch: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>>,
+  patch: Partial<WhatsAppAccountConfig>,
   options?: { unsetOnUndefined?: string[] },
 ): OpenClawConfig {
   const channelConfig: WhatsAppConfig = { ...(cfg.channels?.whatsapp ?? {}) };
+  const mutableChannelConfig = channelConfig as Record<string, unknown>;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     for (const [key, value] of Object.entries(patch)) {
       if (value === undefined) {
         if (options?.unsetOnUndefined?.includes(key)) {
-          delete channelConfig[key as keyof WhatsAppConfig];
+          delete mutableChannelConfig[key];
         }
         continue;
       }
-      channelConfig[key as keyof WhatsAppConfig] = value as WhatsAppConfig[keyof WhatsAppConfig];
+      mutableChannelConfig[key] = value;
     }
     return {
       ...cfg,
@@ -46,18 +52,18 @@ function mergeWhatsAppConfig(
   }
 
   const accounts = {
-    ...(channelConfig.accounts ?? {}),
+    ...((channelConfig.accounts as Record<string, WhatsAppAccountConfig> | undefined) ?? {}),
   };
   const nextAccount: WhatsAppAccountConfig = { ...(accounts[accountId] ?? {}) };
+  const mutableNextAccount = nextAccount as Record<string, unknown>;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) {
       if (options?.unsetOnUndefined?.includes(key)) {
-        delete nextAccount[key as keyof WhatsAppAccountConfig];
+        delete mutableNextAccount[key];
       }
       continue;
     }
-    nextAccount[key as keyof WhatsAppAccountConfig] =
-      value as WhatsAppAccountConfig[keyof WhatsAppAccountConfig];
+    mutableNextAccount[key] = value;
   }
   accounts[accountId] = nextAccount;
   return {
@@ -72,7 +78,11 @@ function mergeWhatsAppConfig(
   };
 }
 
-function setWhatsAppDmPolicy(cfg: OpenClawConfig, accountId: string, dmPolicy: DmPolicy): OpenClawConfig {
+function setWhatsAppDmPolicy(
+  cfg: OpenClawConfig,
+  accountId: string,
+  dmPolicy: DmPolicy,
+): OpenClawConfig {
   return mergeWhatsAppConfig(cfg, accountId, { dmPolicy });
 }
 

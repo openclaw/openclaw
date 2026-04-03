@@ -499,6 +499,9 @@ const telegramCommandTestPlugin: ChannelPlugin = {
       if (isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
         return undefined;
       }
+      if (isTelegramExecApprovalTargetRecipient({ cfg, accountId, senderId })) {
+        return undefined;
+      }
       if (
         isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }) &&
         !getTelegramExecApprovalApprovers({ cfg, accountId }).includes(senderId?.trim() ?? "")
