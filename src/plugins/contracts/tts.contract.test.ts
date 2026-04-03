@@ -138,7 +138,6 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
         },
       },
     },
-  } as unknown as OpenClawConfig;
   });
 }
 
@@ -658,8 +657,6 @@ describe("tts", () => {
               },
             },
           },
-        },
-      } as unknown as OpenClawConfig);
         }),
       );
 
@@ -976,7 +973,6 @@ describe("tts", () => {
   });
 
   describe("maybeApplyTtsToPayload", () => {
-    const baseCfg = {
     const baseCfg: OpenClawConfig = asLegacyOpenClawConfig({
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: {
@@ -988,7 +984,6 @@ describe("tts", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
     });
 
     const withMockedAutoTtsFetch = async (
