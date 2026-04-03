@@ -27,6 +27,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "./src/resolve-users.js";',
     'export * from "./src/outbound-session-route.js";',
     'export * from "./src/send.js";',
+    'export * from "./src/send.components.js";',
   ],
   [bundledPluginFile("imessage", "runtime-api.ts")]: [
     'export { DEFAULT_ACCOUNT_ID, buildChannelConfigSchema, getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "openclaw/plugin-sdk/core";',
