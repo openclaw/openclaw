@@ -24,6 +24,7 @@ Most days:
 
 - Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
 - Faster local full-suite run on a roomy machine: `pnpm test:max`
+- Direct Vitest watch loop (modern projects config): `pnpm test:watch`
 
 When you touch tests or want extra confidence:
 
@@ -44,8 +45,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 ### Unit / integration (default)
 
 - Command: `pnpm test`
-- Config: `scripts/test-parallel.mjs` (runs `vitest.unit.config.ts`, `vitest.extensions.config.ts`, `vitest.gateway.config.ts`)
-- Files: `src/**/*.test.ts`, bundled plugin `**/*.test.ts`
+- Config: native Vitest `projects` via `vitest.projects.config.ts` (`unit` + `boundary`)
+- Files: core/unit inventories under `src/**/*.test.ts`, `packages/**/*.test.ts`, `test/**/*.test.ts`, and the whitelisted `ui` node tests covered by `vitest.unit.config.ts`
 - Scope:
   - Pure unit tests
   - In-process integration tests (gateway auth, routing, tooling, parsing, config)
@@ -54,8 +55,13 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI
   - No real keys required
   - Should be fast and stable
-- Scheduler note:
-  - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
+- Projects note:
+  - `pnpm test`, `pnpm test:projects`, and `pnpm test:watch` all use the same native Vitest `projects` config now.
+  - The wrapper CLI shape is preserved, so `pnpm test -- src/foo.test.ts -t bar` still works.
+- Planner note:
+  - Planner-backed lanes are explicit now: `pnpm test:planner`, `pnpm test:max`, `pnpm test:serial`, `pnpm test:bundled`, `pnpm test:extensions`, and `pnpm test:channels`.
+  - CI shards, pre-push mirrors, and other lane-tuned flows keep using the planner-backed scripts.
+  - The planner still keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
   - Extension-only local runs now also use a checked-in extensions timing snapshot plus a slightly coarser shared batch target on high-memory hosts, so the shared extensions lane avoids spawning an extra batch when two measured shared runs are enough.
   - High-memory local extension shared batches also run with a slightly higher worker cap than before, which shortened the two remaining shared extension batches without changing the isolated extension lanes.
   - High-memory local channel runs now reuse the checked-in channel timing snapshot to split the shared channels lane into a few measured batches instead of one long shared worker.
@@ -83,16 +89,18 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     sufficient substitute for those integration paths.
 - Pool note:
   - Base Vitest config still defaults to `forks`.
-  - Unit, channel, extension, and gateway wrapper lanes all default to `forks`.
+  - Unit and boundary projects stay on `forks`.
+  - Channel, extension, and gateway planner lanes also stay on `forks`.
   - Unit, channel, and extension configs default to `isolate: false` for faster file startup.
-  - `pnpm test` also passes `--isolate=false` at the wrapper level.
-  - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
+  - `pnpm test` inherits the isolation defaults from `vitest.projects.config.ts`.
+  - Opt back into unit-file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
   - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
 - Fast-local iteration note:
-  - `pnpm test:changed` runs the wrapper with `--changed origin/main`.
-  - `pnpm test:changed:max` keeps the same changed-file filter but uses the wrapper's aggressive local planner profile.
+  - `pnpm test:changed` runs the native projects config with `--changed origin/main`.
+  - `pnpm test:changed:max` keeps the same changed-file filter but uses the planner's aggressive local profile.
   - `pnpm test:max` exposes that same planner profile for a full local run.
-  - On supported local Node versions, including Node 25, the normal profile can use top-level lane parallelism. `pnpm test:max` still pushes the planner harder when you want a more aggressive local run.
+  - `pnpm test:planner` remains available when you want the old planner-backed local run shape.
+  - On supported local Node versions, including Node 25, the normal planner profile can use top-level lane parallelism. `pnpm test:max` still pushes the planner harder when you want a more aggressive local run.
   - The base Vitest config marks the wrapper manifests/config files as `forceRerunTriggers` so changed-mode reruns stay correct when scheduler inputs change.
   - The wrapper keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on supported hosts, but assigns a lane-local `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` so concurrent Vitest processes do not race on one shared experimental cache directory.
   - Set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path` if you want one explicit cache location for direct single-run profiling.
