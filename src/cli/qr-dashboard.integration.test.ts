@@ -89,41 +89,6 @@ async function runCli(args: string[]): Promise<void> {
   await program.parseAsync(args, { from: "user" });
 }
 
-const mockedModuleIds = ["../config/config.js", "../infra/clipboard.js", "../runtime.js"];
-
-const unmockedDependencyIds = [
-  "../commands/dashboard.js",
-  "../gateway/resolve-configured-secret-input-string.js",
-  "../pairing/setup-code.js",
-  "./command-secret-gateway.js",
-  "./qr-cli.js",
-] as const;
-
-async function loadCliModules() {
-  vi.resetModules();
-  for (const id of unmockedDependencyIds) {
-    vi.doUnmock(id);
-  }
-  vi.doMock("../config/config.js", async () => {
-    const actual =
-      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-    return {
-      ...actual,
-      loadConfig: loadConfigMock,
-      readConfigFileSnapshot: readConfigFileSnapshotMock,
-      resolveGatewayPort: resolveGatewayPortMock,
-    };
-  });
-  vi.doMock("../infra/clipboard.js", () => ({
-    copyToClipboard: copyToClipboardMock,
-  }));
-  vi.doMock("../runtime.js", () => ({
-    defaultRuntime: runtime,
-  }));
-  ({ dashboardCommand } = await import("../commands/dashboard.js"));
-  ({ registerQrCli } = await import("./qr-cli.js"));
-}
-
 describe("cli integration: qr + dashboard token SecretRef", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -134,27 +99,19 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
       "OPENCLAW_GATEWAY_PASSWORD",
     ]);
   });
-
-  afterAll(() => {
-    envSnapshot.restore();
-    vi.restoreAllMocks();
-    for (const id of mockedModuleIds) {
-      vi.doUnmock(id);
-    }
-    for (const id of unmockedDependencyIds) {
-      vi.doUnmock(id);
-    }
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ dashboardCommand } = await import("../commands/dashboard.js"));
+    ({ registerQrCli } = await import("./qr-cli.js"));
   });
 
-  beforeEach(async () => {
+  beforeEach(() => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     vi.clearAllMocks();
+    runtime.exit.mockImplementation(() => {});
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.SHARED_GATEWAY_TOKEN;
-    await loadCliModules();
   });
 
   it("uses the same resolved token SecretRef for qr auth validation and dashboard commands", async () => {
@@ -213,5 +170,9 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     expect(joined).not.toContain("#token=");
     expect(joined).toContain("Token auto-auth unavailable");
     expect(joined).toContain("Set OPENCLAW_GATEWAY_TOKEN");
+  });
+
+  afterAll(() => {
+    envSnapshot.restore();
   });
 });

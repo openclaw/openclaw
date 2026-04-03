@@ -1,10 +1,40 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import type { OutputRuntimeEnv } from "../runtime.js";
 
-const runtimeCapture = createCliRuntimeCapture();
-const runtime = runtimeCapture.defaultRuntime;
+const runtimeState = vi.hoisted(() => {
+  const runtimeLogs: string[] = [];
+  const runtimeErrors: string[] = [];
+  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const defaultRuntime: OutputRuntimeEnv = {
+    log: vi.fn((...args: unknown[]) => {
+      runtimeLogs.push(stringifyArgs(args));
+    }),
+    error: vi.fn((...args: unknown[]) => {
+      runtimeErrors.push(stringifyArgs(args));
+    }),
+    writeStdout: vi.fn((value: string) => {
+      const normalized = value.endsWith("\n") ? value.slice(0, -1) : value;
+      defaultRuntime.log(normalized);
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+  };
+  return {
+    runtimeLogs,
+    runtimeErrors,
+    defaultRuntime,
+    resetRuntimeCapture: () => {
+      runtimeLogs.length = 0;
+      runtimeErrors.length = 0;
+    },
+  };
+});
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
@@ -17,8 +47,9 @@ const mocks = vi.hoisted(() => ({
     cb("ASCII-QR");
   }),
 }));
+const runtime = runtimeState.defaultRuntime;
 
-vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
+vi.mock("../runtime.js", () => ({ defaultRuntime: runtimeState.defaultRuntime }));
 vi.mock("../config/config.js", () => ({ loadConfig: mocks.loadConfig }));
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
 vi.mock("./command-secret-gateway.js", () => ({
@@ -162,7 +193,7 @@ describe("registerQrCli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    runtimeCapture.resetRuntimeCapture();
+    runtimeState.resetRuntimeCapture();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     runtime.exit.mockImplementation(() => {
