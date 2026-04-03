@@ -369,6 +369,7 @@ export async function handleDirectiveOnly(
         profileOverride,
         markLiveSwitchPending: true,
         profileOverrideSource,
+        persistDefaultSelection: true,
       });
       modelSelectionUpdated = applied.updated;
     }

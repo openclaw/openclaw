@@ -177,6 +177,7 @@ export async function persistInlineDirectives(params: {
           selection: modelResolution.modelSelection,
           profileOverride: modelResolution.profileOverride,
           profileOverrideSource: modelResolution.profileOverrideSource,
+          persistDefaultSelection: true,
         });
         provider = modelResolution.modelSelection.provider;
         model = modelResolution.modelSelection.model;
