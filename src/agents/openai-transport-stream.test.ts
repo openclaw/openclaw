@@ -439,6 +439,82 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
+  it("gates responses service_tier to native OpenAI endpoints", () => {
+    const nativeParams = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        serviceTier: "priority",
+      },
+    ) as { service_tier?: unknown };
+    const proxyParams = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        serviceTier: "priority",
+      },
+    ) as { service_tier?: unknown };
+
+    expect(nativeParams.service_tier).toBe("priority");
+    expect(proxyParams).not.toHaveProperty("service_tier");
+  });
+
+  it("strips store when responses compat disables it", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "custom-provider",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: { supportsStore: false },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { store?: unknown };
+
+    expect(params).not.toHaveProperty("store");
+  });
+
   it("uses system role for xAI default-route responses providers without relying on baseUrl host sniffing", () => {
     const params = buildOpenAIResponsesParams(
       {
