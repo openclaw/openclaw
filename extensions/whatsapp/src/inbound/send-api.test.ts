@@ -162,4 +162,24 @@ describe("createWebSendApi", () => {
     await api.sendComposingTo("+1555");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
   });
+
+  it("sends media as document when mediaType is undefined", async () => {
+    const mediaBuffer = Buffer.from("test");
+
+    await api.sendMessage("123", "hello", mediaBuffer, undefined);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123@s.whatsapp.net",
+      expect.objectContaining({
+        document: mediaBuffer,
+        mimetype: "application/octet-stream",
+      }),
+    );
+  });
+
+  it("does not set mediaType when mediaBuffer is absent", async () => {
+    await api.sendMessage("123", "hello");
+
+    expect(sendMessage).toHaveBeenCalledWith("123@s.whatsapp.net", { text: "hello" });
+  });
 });

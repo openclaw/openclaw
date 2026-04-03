@@ -183,7 +183,9 @@ done:
 ```
 
 - `streaming: "off"` is the default. OpenClaw waits for the final reply and sends it once.
-- `streaming: "partial"` creates one editable preview message instead of sending multiple partial messages.
+- `streaming: "partial"` creates one editable preview message for the current assistant block instead of sending multiple partial messages.
+- `blockStreaming: true` enables separate Matrix progress messages. With `streaming: "partial"`, Matrix keeps the live draft for the current block and preserves completed blocks as separate messages.
+- When `streaming: "partial"` and `blockStreaming` is off, Matrix only edits the live draft and sends the completed reply once that block or turn finishes.
 - If the preview no longer fits in one Matrix event, OpenClaw stops preview streaming and falls back to normal final delivery.
 - Media replies still send attachments normally. If a stale preview can no longer be reused safely, OpenClaw redacts it before sending the final media reply.
 - Preview edits cost extra Matrix API calls. Leave streaming off if you want the most conservative rate-limit behavior.
@@ -420,6 +422,7 @@ OpenClaw currently provides that in Node by:
 - using `fake-indexeddb` as the IndexedDB API shim expected by the SDK
 - restoring the Rust crypto IndexedDB contents from `crypto-idb-snapshot.json` before `initRustCrypto`
 - persisting the updated IndexedDB contents back to `crypto-idb-snapshot.json` after init and during runtime
+- serializing snapshot restore and persist against `crypto-idb-snapshot.json` with an advisory file lock so gateway runtime persistence and CLI maintenance do not race on the same snapshot file
 
 This is compatibility/storage plumbing, not a custom crypto implementation.
 The snapshot file is sensitive runtime state and is stored with restrictive file permissions.
@@ -588,6 +591,7 @@ Current behavior:
 - The current trigger message is not included in `InboundHistory`; it stays in the main inbound body for that turn.
 - Retries of the same Matrix event reuse the original history snapshot instead of drifting forward to newer room messages.
 - Fetched room context (including reply and thread context lookups) is filtered by sender allowlists (`groupAllowFrom`), so non-allowlisted messages are excluded from agent context.
+- This filtering is channel-level hardening behavior. Other channels may still expose supplemental context as received.
 
 ## DM and room policy example
 
@@ -624,6 +628,36 @@ openclaw pairing approve matrix <CODE>
 If an unapproved Matrix user keeps messaging you before approval, OpenClaw reuses the same pending pairing code and may send a reminder reply again after a short cooldown instead of minting a new code.
 
 See [Pairing](/channels/pairing) for the shared DM pairing flow and storage layout.
+
+## Exec approvals
+
+Matrix can act as an exec approval client for a Matrix account.
+
+- `channels.matrix.execApprovals.enabled`
+- `channels.matrix.execApprovals.approvers` (optional; falls back to `channels.matrix.dm.allowFrom`)
+- `channels.matrix.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
+- `channels.matrix.execApprovals.agentFilter`
+- `channels.matrix.execApprovals.sessionFilter`
+
+Matrix becomes an exec approval client when `enabled` is true and at least one approver can be resolved. Approvers must be Matrix user IDs such as `@owner:example.org`.
+
+Delivery rules:
+
+- `target: "dm"` sends approval prompts to approver DMs
+- `target: "channel"` sends the prompt back to the originating Matrix room or DM
+- `target: "both"` sends to approver DMs and the originating Matrix room or DM
+
+Matrix uses text approval prompts today. Approvers resolve them with `/approve <id> allow-once`, `/approve <id> allow-always`, or `/approve <id> deny`.
+
+Only resolved approvers can approve or deny. Channel delivery includes the command text, so only enable `channel` or `both` in trusted rooms.
+
+Matrix approval prompts reuse the shared core approval planner. The Matrix-specific surface is transport only: room/DM routing and message send/update/delete behavior.
+
+Per-account override:
+
+- `channels.matrix.accounts.<account>.execApprovals`
+
+Related docs: [Exec approvals](/tools/exec-approvals)
 
 ## Multi-account example
 
@@ -752,6 +786,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
 - `replyToMode`: `off`, `first`, or `all`.
 - `streaming`: `off` (default) or `partial`. `partial` enables single-message draft previews with edit-in-place updates.
+- `blockStreaming`: `true` enables separate progress messages; when unset, Matrix keeps `streaming: "off"` as final-only delivery.
 - `threadReplies`: `off`, `inbound`, or `always`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
 - `startupVerification`: automatic self-verification request mode on startup (`if-unverified`, `off`).
@@ -768,6 +803,9 @@ Live directory lookup uses the logged-in Matrix account:
 - `dm`: DM policy block (`enabled`, `policy`, `allowFrom`, `threadReplies`).
 - `dm.allowFrom` entries should be full Matrix user IDs unless you already resolved them through live directory lookup.
 - `dm.threadReplies`: DM-only thread policy override (`off`, `inbound`, `always`). It overrides the top-level `threadReplies` setting for both reply placement and session isolation in DMs.
+- `execApprovals`: Matrix-native exec approval delivery (`enabled`, `approvers`, `target`, `agentFilter`, `sessionFilter`).
+- `execApprovals.approvers`: Matrix user IDs allowed to approve exec requests. Optional when `dm.allowFrom` already identifies the approvers.
+- `execApprovals.target`: `dm | channel | both` (default: `dm`).
 - `accounts`: named per-account overrides. Top-level `channels.matrix` values act as defaults for these entries.
 - `groups`: per-room policy map. Prefer room IDs or aliases; unresolved room names are ignored at runtime. Session/group identity uses the stable room ID after resolution, while human-readable labels still come from room names.
 - `rooms`: legacy alias for `groups`.

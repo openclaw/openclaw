@@ -11,7 +11,7 @@ export type RequestExecApprovalDecisionParams = {
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
-  cwd: string;
+  cwd: string | undefined;
   nodeId?: string;
   host: "gateway" | "node";
   security: ExecSecurity;
@@ -154,7 +154,7 @@ type HostExecApprovalParams = {
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
-  workdir: string;
+  workdir: string | undefined;
   host: "gateway" | "node";
   nodeId?: string;
   security: ExecSecurity;
@@ -245,3 +245,4 @@ export async function registerExecApprovalRequestForHostOrThrow(
     throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
   }
 }
+
