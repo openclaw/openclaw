@@ -55,11 +55,14 @@ guidance for how _you_ want them used.
 
 ## Skills
 
-OpenClaw loads skills from three locations (workspace wins on name conflict):
+OpenClaw loads skills from these locations (highest precedence first):
 
-- Bundled (shipped with the install)
-- Managed/local: `~/.openclaw/skills`
 - Workspace: `<workspace>/skills`
+- Project agent skills: `<workspace>/.agents/skills`
+- Personal agent skills: `~/.agents/skills`
+- Managed/local: `~/.openclaw/skills`
+- Bundled (shipped with the install)
+- Extra skill folders: `skills.load.extraDirs`
 
 Skills can be gated by config/env (see `skills` in [Gateway configuration](/gateway/configuration)).
 

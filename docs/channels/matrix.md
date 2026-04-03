@@ -654,7 +654,7 @@ Matrix can act as an exec approval client for a Matrix account.
 - `channels.matrix.execApprovals.agentFilter`
 - `channels.matrix.execApprovals.sessionFilter`
 
-Matrix becomes an exec approval client when `enabled` is true and at least one approver can be resolved. Approvers must be Matrix user IDs such as `@owner:example.org`.
+Approvers must be Matrix user IDs such as `@owner:example.org`. Matrix auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from `channels.matrix.dm.allowFrom`. Set `enabled: false` to disable Matrix as a native approval client explicitly. Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
 
 Delivery rules:
 
