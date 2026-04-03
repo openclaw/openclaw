@@ -30,7 +30,6 @@ describe("normalizeChatType", () => {
 describe("WA_WEB_AUTH_DIR", () => {
   afterEach(() => {
     vi.doUnmock("../plugins/runtime/runtime-whatsapp-boundary.js");
-    vi.resetModules();
   });
 
   it("resolves lazily and caches across the legacy and channels/web entrypoints", async () => {

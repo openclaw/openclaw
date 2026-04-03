@@ -129,10 +129,14 @@ describe("plugin activation boundary", () => {
     const { isChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
 
     expect(isChannelConfigured({}, "whatsapp", {})).toBe(false);
-    // Anthropic Vertex auth depends on ambient ADC state on the current machine.
-    expect([null, { apiKey: "gcp-vertex-credentials", source: "gcloud adc" }]).toContainEqual(
-      resolveEnvApiKey("anthropic-vertex", {}),
-    );
+    expect(
+      resolveEnvApiKey("anthropic-vertex", {
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+      }),
+    ).toEqual({
+      apiKey: "gcp-vertex-credentials",
+      source: "gcloud adc",
+    });
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 

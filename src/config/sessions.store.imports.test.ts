@@ -1,11 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 describe("session store module imports", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
   it("does not load archive runtime on module import", async () => {
+    vi.resetModules();
     const archiveRuntimeLoads = vi.fn();
     vi.doMock("../gateway/session-archive.runtime.js", async (importOriginal) => {
       archiveRuntimeLoads();

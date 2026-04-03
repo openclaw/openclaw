@@ -17,7 +17,6 @@ async function expectGlobalRunnerState(expected: { hasRunner: boolean; registry?
 afterEach(async () => {
   const mod = await importHookRunnerGlobalModule();
   mod.resetGlobalHookRunner();
-  vi.resetModules();
 });
 
 describe("hook-runner-global", () => {

@@ -1,21 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import * as translate from "../lib/translate.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
 import { zh_CN } from "../locales/zh-CN.ts";
 import { zh_TW } from "../locales/zh-TW.ts";
 
-type TranslateModule = typeof import("../lib/translate.ts");
-
 describe("i18n", () => {
-  let translate: TranslateModule;
-
   beforeEach(async () => {
-    vi.resetModules();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    translate = await import("../lib/translate.ts");
     localStorage.clear();
-    // Reset to English
     await translate.i18n.setLocale("en");
   });
 

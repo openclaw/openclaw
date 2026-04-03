@@ -1,12 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 describe("bundled channel config runtime", () => {
   beforeEach(() => {
-    vi.resetModules();
-    vi.doUnmock("../channels/plugins/bundled.js");
-  });
-
-  afterEach(() => {
     vi.resetModules();
     vi.doUnmock("../channels/plugins/bundled.js");
   });
@@ -23,7 +18,6 @@ describe("bundled channel config runtime", () => {
   });
 
   it("falls back to static channel schemas when bundled plugin access hits a TDZ-style ReferenceError", async () => {
-    vi.resetModules();
     vi.doMock("../channels/plugins/bundled.js", () => {
       return {
         listBundledChannelPlugins() {

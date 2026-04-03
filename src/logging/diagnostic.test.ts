@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   diagnosticSessionStates,
@@ -72,11 +73,13 @@ describe("logger import side effects", () => {
 
   it("does not mkdir at import time", async () => {
     vi.useRealTimers();
-    vi.resetModules();
 
     const mkdirSpy = vi.spyOn(fs, "mkdirSync");
 
-    await import("./logger.js");
+    await importFreshModule<typeof import("./logger.js")>(
+      import.meta.url,
+      "./logger.js?scope=diagnostic-mkdir",
+    );
 
     expect(mkdirSpy).not.toHaveBeenCalled();
   });
