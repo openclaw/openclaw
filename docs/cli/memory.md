@@ -83,6 +83,7 @@ Dreaming is the overnight reflection pass for memory. It is called "dreaming" be
 - It is opt-in and disabled by default.
 - Enable it with `plugins.entries.memory-core.config.shortTermPromotion.dreaming.enabled=true`.
 - When enabled, `memory-core` automatically creates and maintains a managed nightly cron job.
+- Set `shortTermPromotion.dreaming.limit` to `0` if you want dreaming enabled but automatic promotion effectively paused.
 - Ranking uses weighted signals: recall frequency, retrieval relevance, query diversity, and temporal recency (recent recalls decay over time).
 - Promotion into `MEMORY.md` only happens when quality thresholds are met, so long-term memory stays high signal instead of collecting one-off details.
 

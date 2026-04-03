@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -11,6 +11,7 @@ export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = 3;
 export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
+const storeWriteQueues = new Map<string, Promise<void>>();
 
 export type PromotionWeights = {
   frequency: number;
@@ -287,6 +288,24 @@ function resolveStorePath(workspaceDir: string): string {
   return path.join(workspaceDir, SHORT_TERM_STORE_RELATIVE_PATH);
 }
 
+async function queueStoreWrite<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
+  const storePath = resolveStorePath(workspaceDir);
+  const previous = storeWriteQueues.get(storePath) ?? Promise.resolve();
+  const queuedTask = previous.catch(() => undefined).then(task);
+  const tail = queuedTask.then(
+    () => undefined,
+    () => undefined,
+  );
+  storeWriteQueues.set(storePath, tail);
+  try {
+    return await queuedTask;
+  } finally {
+    if (storeWriteQueues.get(storePath) === tail) {
+      storeWriteQueues.delete(storePath);
+    }
+  }
+}
+
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
   const storePath = resolveStorePath(workspaceDir);
   try {
@@ -304,7 +323,7 @@ async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTer
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   const storePath = resolveStorePath(workspaceDir);
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  const tmpPath = `${storePath}.${process.pid}.${Date.now()}.tmp`;
+  const tmpPath = `${storePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
   await fs.rename(tmpPath, storePath);
 }
@@ -341,38 +360,40 @@ export async function recordShortTermRecalls(params: {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const nowIso = new Date(nowMs).toISOString();
   const queryHash = hashQuery(query);
-  const store = await readStore(workspaceDir, nowIso);
+  await queueStoreWrite(workspaceDir, async () => {
+    const store = await readStore(workspaceDir, nowIso);
 
-  for (const result of relevant) {
-    const key = buildEntryKey(result);
-    const normalizedPath = normalizeMemoryPath(result.path);
-    const existing = store.entries[key];
-    const snippet = normalizeSnippet(result.snippet);
-    const score = clampScore(result.score);
-    const recallCount = Math.max(1, Math.floor(existing?.recallCount ?? 0) + 1);
-    const totalScore = Math.max(0, (existing?.totalScore ?? 0) + score);
-    const maxScore = Math.max(existing?.maxScore ?? 0, score);
-    const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
+    for (const result of relevant) {
+      const key = buildEntryKey(result);
+      const normalizedPath = normalizeMemoryPath(result.path);
+      const existing = store.entries[key];
+      const snippet = normalizeSnippet(result.snippet);
+      const score = clampScore(result.score);
+      const recallCount = Math.max(1, Math.floor(existing?.recallCount ?? 0) + 1);
+      const totalScore = Math.max(0, (existing?.totalScore ?? 0) + score);
+      const maxScore = Math.max(existing?.maxScore ?? 0, score);
+      const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
 
-    store.entries[key] = {
-      key,
-      path: normalizedPath,
-      startLine: Math.max(1, Math.floor(result.startLine)),
-      endLine: Math.max(1, Math.floor(result.endLine)),
-      source: "memory",
-      snippet: snippet || existing?.snippet || "",
-      recallCount,
-      totalScore,
-      maxScore,
-      firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-      lastRecalledAt: nowIso,
-      queryHashes,
-      ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
-    };
-  }
+      store.entries[key] = {
+        key,
+        path: normalizedPath,
+        startLine: Math.max(1, Math.floor(result.startLine)),
+        endLine: Math.max(1, Math.floor(result.endLine)),
+        source: "memory",
+        snippet: snippet || existing?.snippet || "",
+        recallCount,
+        totalScore,
+        maxScore,
+        firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
+        lastRecalledAt: nowIso,
+        queryHashes,
+        ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
+      };
+    }
 
-  store.updatedAt = nowIso;
-  await writeStore(workspaceDir, store);
+    store.updatedAt = nowIso;
+    await writeStore(workspaceDir, store);
+  });
 }
 
 export async function rankShortTermPromotionCandidates(
@@ -558,16 +579,18 @@ export async function applyShortTermPromotions(
     "utf-8",
   );
 
-  const store = await readStore(workspaceDir, nowIso);
-  for (const candidate of selected) {
-    const entry = store.entries[candidate.key];
-    if (!entry) {
-      continue;
+  await queueStoreWrite(workspaceDir, async () => {
+    const store = await readStore(workspaceDir, nowIso);
+    for (const candidate of selected) {
+      const entry = store.entries[candidate.key];
+      if (!entry) {
+        continue;
+      }
+      entry.promotedAt = nowIso;
     }
-    entry.promotedAt = nowIso;
-  }
-  store.updatedAt = nowIso;
-  await writeStore(workspaceDir, store);
+    store.updatedAt = nowIso;
+    await writeStore(workspaceDir, store);
+  });
 
   return {
     memoryPath,

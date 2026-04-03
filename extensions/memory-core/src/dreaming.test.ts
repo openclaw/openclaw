@@ -26,7 +26,10 @@ function createLogger() {
   };
 }
 
-function createCronHarness(initialJobs: CronJobLike[] = []) {
+function createCronHarness(
+  initialJobs: CronJobLike[] = [],
+  opts?: { removeResult?: "boolean" | "unknown" },
+) {
   const jobs: CronJobLike[] = [...initialJobs];
   const addCalls: CronAddInput[] = [];
   const updateCalls: Array<{ id: string; patch: CronPatch }> = [];
@@ -79,6 +82,9 @@ function createCronHarness(initialJobs: CronJobLike[] = []) {
       const index = jobs.findIndex((entry) => entry.id === id);
       if (index >= 0) {
         jobs.splice(index, 1);
+      }
+      if (opts?.removeResult === "unknown") {
+        return {};
       }
       return { removed: index >= 0 };
     },
@@ -138,6 +144,20 @@ describe("short-term dreaming config", () => {
     });
   });
 
+  it("accepts limit=0 as an explicit no-op promotion cap", () => {
+    const resolved = resolveShortTermPromotionDreamingConfig({
+      pluginConfig: {
+        shortTermPromotion: {
+          dreaming: {
+            enabled: true,
+            limit: 0,
+          },
+        },
+      },
+    });
+    expect(resolved.limit).toBe(0);
+  });
+
   it("falls back to defaults when thresholds are negative", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
@@ -157,6 +177,22 @@ describe("short-term dreaming config", () => {
       minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
       minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
     });
+  });
+});
+
+describe("short-term dreaming startup event parsing", () => {
+  it("resolves cron service from gateway startup event deps", () => {
+    const harness = createCronHarness();
+    const resolved = __testing.resolveCronServiceFromStartupEvent({
+      type: "gateway",
+      action: "startup",
+      context: {
+        deps: {
+          cron: harness.cron,
+        },
+      },
+    });
+    expect(resolved).toBe(harness.cron);
   });
 });
 
@@ -302,6 +338,38 @@ describe("short-term dreaming cron reconciliation", () => {
     expect(result).toEqual({ status: "disabled", removed: 1 });
     expect(harness.removeCalls).toEqual(["job-managed"]);
     expect(harness.jobs.map((entry) => entry.id)).toEqual(["job-other"]);
+  });
+
+  it("does not overcount removed jobs when cron remove result is unknown", async () => {
+    const managedJob: CronJobLike = {
+      id: "job-managed",
+      name: constants.MANAGED_DREAMING_CRON_NAME,
+      description: `${constants.MANAGED_DREAMING_CRON_TAG} test`,
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 3 * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      createdAtMs: 10,
+    };
+    const harness = createCronHarness([managedJob], { removeResult: "unknown" });
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: false,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+      },
+      logger,
+    });
+
+    expect(result.removed).toBe(0);
+    expect(harness.removeCalls).toEqual(["job-managed"]);
   });
 });
 

@@ -87,6 +87,39 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("serializes concurrent recall writes so counts are not lost", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await Promise.all(
+        Array.from({ length: 20 }, (_, index) =>
+          recordShortTermRecalls({
+            workspaceDir,
+            query: `backup-${index % 4}`,
+            results: [
+              {
+                path: "memory/2026-04-03.md",
+                startLine: 1,
+                endLine: 2,
+                score: 0.9,
+                snippet: "Move backups to S3 Glacier.",
+                source: "memory",
+              },
+            ],
+          }),
+        ),
+      );
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(ranked).toHaveLength(1);
+      expect(ranked[0]?.recallCount).toBe(20);
+      expect(ranked[0]?.uniqueQueries).toBe(4);
+    });
+  });
+
   it("uses default thresholds for promotion", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({

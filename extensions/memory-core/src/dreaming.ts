@@ -98,14 +98,6 @@ function normalizeTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizePositiveInt(value: unknown, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  const floored = Math.floor(value);
-  return floored > 0 ? floored : fallback;
-}
-
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
@@ -176,7 +168,7 @@ function isManagedDreamingJob(job: ManagedCronJobLike): boolean {
 }
 
 function compareOptionalStrings(a: string | undefined, b: string | undefined): boolean {
-  return (a ?? undefined) === (b ?? undefined);
+  return a === b;
 }
 
 function buildManagedDreamingPatch(
@@ -251,7 +243,7 @@ function resolveCronServiceFromStartupEvent(event: unknown): CronServiceLike | n
   }
   const context = asRecord(payload.context);
   const deps = asRecord(context?.deps);
-  const cronCandidate = deps?.cron;
+  const cronCandidate = context?.cron ?? deps?.cron;
   if (!cronCandidate || typeof cronCandidate !== "object") {
     return null;
   }
@@ -278,7 +270,7 @@ export function resolveShortTermPromotionDreamingConfig(params: {
   const cron = normalizeTrimmedString(dreaming?.cron) ?? DEFAULT_DREAMING_CRON_EXPR;
   const timezone =
     normalizeTrimmedString(dreaming?.timezone) ?? resolveTimezoneFallback(params.cfg);
-  const limit = normalizePositiveInt(dreaming?.limit, DEFAULT_DREAMING_LIMIT);
+  const limit = normalizeNonNegativeInt(dreaming?.limit, DEFAULT_DREAMING_LIMIT);
   const minScore = normalizeScore(dreaming?.minScore, DEFAULT_DREAMING_MIN_SCORE);
   const minRecallCount = normalizeNonNegativeInt(
     dreaming?.minRecallCount,
@@ -317,7 +309,7 @@ export async function reconcileShortTermDreamingCronJob(params: {
     let removed = 0;
     for (const job of managed) {
       const result = await cron.remove(job.id);
-      if (result.removed !== false) {
+      if (result.removed === true) {
         removed += 1;
       }
     }
@@ -338,7 +330,7 @@ export async function reconcileShortTermDreamingCronJob(params: {
   let removed = 0;
   for (const duplicate of duplicates) {
     const result = await cron.remove(duplicate.id);
-    if (result.removed !== false) {
+    if (result.removed === true) {
       removed += 1;
     }
   }

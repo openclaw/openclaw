@@ -19,7 +19,7 @@
     "shortTermPromotion.dreaming.limit": {
       "label": "Promotion Limit",
       "placeholder": "10",
-      "help": "Maximum short-term candidates promoted per dreaming run."
+      "help": "Maximum short-term candidates promoted per dreaming run (set to 0 to skip promotions)."
     },
     "shortTermPromotion.dreaming.minScore": {
       "label": "Promotion Min Score",
@@ -60,7 +60,7 @@
               },
               "limit": {
                 "type": "number",
-                "minimum": 1
+                "minimum": 0
               },
               "minScore": {
                 "type": "number",
