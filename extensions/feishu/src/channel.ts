@@ -32,6 +32,7 @@ import {
   resolveDefaultFeishuAccountId,
 } from "./accounts.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
+import { feishuApprovalCapability } from "./approval-native.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
 import {
   buildChannelConfigSchema,
@@ -58,7 +59,6 @@ import {
   parseFeishuTargetId,
 } from "./conversation-id.js";
 import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
-import { buildFeishuExecApprovalPendingPayload } from "./exec-approval-forwarding.js";
 import { shouldSuppressLocalFeishuExecApprovalPrompt } from "./exec-approvals.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
@@ -1112,20 +1112,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           hint: "<chatId|user:openId|chat:chatId>",
         },
       },
-      approvals: {
-        render: {
-          exec: {
-            buildPendingPayload: (params) => buildFeishuExecApprovalPendingPayload(params),
-            // When resolved via Feishu card button, the card is already updated
-            // in-place by card-action.ts — suppress the duplicate text message.
-            // The gateway sets resolvedBy to clientDisplayName, which is
-            // "Feishu card approval (feishu:...)" for card-action resolutions.
-            // When resolved from another surface, return undefined to fall through
-            // to the default text notification so Feishu users stay informed.
-            buildResolvedPayload: ({ resolved }) =>
-              resolved.resolvedBy?.includes("Feishu card approval") ? null : undefined,
-          },
-        },
+      approvalCapability: {
+        ...feishuApprovalCapability,
       },
       directory: createChannelDirectoryAdapter({
         listPeers: async ({ cfg, query, limit, accountId }) =>

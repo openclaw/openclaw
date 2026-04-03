@@ -14,16 +14,15 @@ import {
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
 import {
-  isFeishuExecApprovalApprover,
-  isFeishuExecApprovalClientEnabled,
-} from "./exec-approvals.js";
-import {
   FEISHU_EXEC_APPROVAL_ALLOW_ONCE_ACTION,
   FEISHU_EXEC_APPROVAL_ALLOW_ALWAYS_ACTION,
   FEISHU_EXEC_APPROVAL_DENY_ACTION,
-  createExecApprovalResolvedCard,
 } from "./card-ux-exec-approval.js";
-import { sendCardFeishu, sendMessageFeishu, updateCardFeishu } from "./send.js";
+import {
+  isFeishuExecApprovalApprover,
+  isFeishuExecApprovalClientEnabled,
+} from "./exec-approvals.js";
+import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 
 export type FeishuCardActionEvent = {
   operator: {
@@ -357,9 +356,9 @@ export async function handleFeishuCardAction(params: {
           `feishu[${account.accountId}]: exec approval ${execApprovalDecision} for ${approvalId} by ${event.operator.open_id}`,
         );
         try {
-          // Resolve the exec approval directly via gateway RPC instead of
-          // dispatching a synthetic /approve chat command.  This avoids
-          // the command reply and system notification messages.
+          // Resolve the exec approval directly via gateway RPC.  The
+          // FeishuExecApprovalHandler will receive the resolved event and
+          // update all tracked cards (including this one) in-place.
           const resolvedBy = `feishu:${event.operator.open_id}`;
           await callGateway({
             method: "exec.approval.resolve",
@@ -368,46 +367,8 @@ export async function handleFeishuCardAction(params: {
             clientDisplayName: `Feishu card approval (${resolvedBy})`,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
           });
-          // Update original card in-place if message ID is available,
-          // otherwise fall back to sending a new card.
-          const command =
-            typeof envelope.m?.command === "string" ? envelope.m.command.trim() : undefined;
-          const cwd = typeof envelope.m?.cwd === "string" ? envelope.m.cwd.trim() : undefined;
-          const resolvedCard = createExecApprovalResolvedCard({
-            approvalId,
-            decision: execApprovalDecision,
-            resolvedBy: event.operator.open_id,
-            command: command || undefined,
-            cwd: cwd || undefined,
-          });
-          const originalMessageId = event.context.open_message_id;
-          let cardUpdated = false;
-          if (originalMessageId) {
-            try {
-              await updateCardFeishu({
-                cfg,
-                messageId: originalMessageId,
-                card: resolvedCard,
-                accountId,
-              });
-              cardUpdated = true;
-            } catch (patchErr) {
-              log(
-                `feishu[${account.accountId}]: failed to patch card ${originalMessageId}: ${String(patchErr)}`,
-              );
-            }
-          }
-          if (!cardUpdated) {
-            await sendCardFeishu({
-              cfg,
-              to: resolveCallbackTarget(event),
-              card: resolvedCard,
-              accountId,
-            }).catch(() => {});
-          }
         } catch (err) {
-          // Notify the user about the failure
-          const errorText = `❌ Failed to submit exec approval: ${String(err)}`;
+          const errorText = `❌ 审批提交失败: ${String(err)}`;
           await sendMessageFeishu({
             cfg,
             to: resolveCallbackTarget(event),

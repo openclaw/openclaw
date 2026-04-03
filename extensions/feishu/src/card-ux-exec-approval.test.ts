@@ -135,15 +135,27 @@ describe("createExecApprovalResolvedCard", () => {
     expect(title.content).toContain("已拒绝");
   });
 
-  it("includes resolvedBy when provided", () => {
+  it("includes resolvedBy with at-tag for Feishu open_id", () => {
     const card = createExecApprovalResolvedCard({
       approvalId: "test123",
       decision: "allow-once",
-      resolvedBy: "user@feishu",
+      resolvedBy: "ou_abc123",
     });
 
     const body = card.body as { elements: Array<Record<string, unknown>> };
-    expect(body.elements[0].content).toContain('<at id="user@feishu"></at>');
+    expect(body.elements[0].content).toContain('<at id="ou_abc123"></at>');
+  });
+
+  it("includes resolvedBy as plain text for non-Feishu identifiers", () => {
+    const card = createExecApprovalResolvedCard({
+      approvalId: "test123",
+      decision: "allow-once",
+      resolvedBy: "Chat approval (telegram:123)",
+    });
+
+    const body = card.body as { elements: Array<Record<string, unknown>> };
+    expect(body.elements[0].content).toContain("Chat approval (telegram:123)");
+    expect(body.elements[0].content).not.toContain("<at");
   });
 
   it("omits command and cwd when not provided", () => {
