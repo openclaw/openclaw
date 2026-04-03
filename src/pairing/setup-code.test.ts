@@ -399,6 +399,21 @@ describe("pairing setup code", () => {
         urlSource: "gateway.bind=custom",
       },
     },
+    {
+      name: "allows android emulator cleartext setup urls",
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "10.0.2.2",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      expected: {
+        authLabel: "token",
+        url: "ws://10.0.2.2:18789",
+        urlSource: "gateway.bind=custom",
+      },
+    },
   ] as const)("$name", async ({ config, options, expected }) => {
     await expectResolvedSetupSuccessCase({
       config,
@@ -443,7 +458,7 @@ describe("pairing setup code", () => {
       options: {
         networkInterfaces: () => createIpv4NetworkInterfaces("192.168.1.20"),
       } satisfies ResolveSetupOptions,
-      expectedError: "ws:// is only valid for localhost",
+      expectedError: "ws:// is only valid for localhost or the Android emulator",
     },
   ] as const)("$name", async ({ config, options, expectedError }) => {
     await expectResolvedSetupFailureCase({
