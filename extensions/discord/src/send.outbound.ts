@@ -16,8 +16,8 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
-import { resolveDiscordProxyFetch } from "./client.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
 import {
   buildDiscordMessagePayload,
   buildDiscordSendError,
@@ -370,7 +370,12 @@ export async function sendWebhookMessageDiscord(
   });
   const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
-  const fetchImpl = resolveDiscordProxyFetch({ cfg: opts.cfg, accountId: opts.accountId });
+  const resolvedCfg = opts.cfg ?? loadConfig();
+  const account = resolveDiscordAccount({
+    cfg: resolvedCfg,
+    accountId: opts.accountId,
+  });
+  const fetchImpl = resolveDiscordProxyFetchForAccount(account, resolvedCfg);
 
   const response = await (fetchImpl ?? fetch)(
     resolveWebhookExecutionUrl({
@@ -404,10 +409,6 @@ export async function sendWebhookMessageDiscord(
     channel_id?: string;
   };
   try {
-    const account = resolveDiscordAccount({
-      cfg: opts.cfg ?? loadConfig(),
-      accountId: opts.accountId,
-    });
     recordChannelActivity({
       channel: "discord",
       accountId: account.accountId,
