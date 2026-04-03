@@ -15,6 +15,13 @@ export const unitTestIncludePatterns = [
   "ui/src/ui/controllers/chat.test.ts",
 ];
 
+export const boundaryTestFiles = [
+  "test/extension-plugin-sdk-boundary.test.ts",
+  "test/plugin-extension-import-boundary.test.ts",
+  "test/web-fetch-provider-boundary.test.ts",
+  "test/web-search-provider-boundary.test.ts",
+];
+
 export const bundledPluginDependentUnitTestFiles = [
   "src/infra/matrix-plugin-helper.test.ts",
   "src/plugin-sdk/facade-runtime.test.ts",
@@ -31,6 +38,7 @@ export const unitTestAdditionalExcludePatterns = [
   "src/commands/**",
   "src/channels/plugins/contracts/**",
   "src/plugins/contracts/**",
+  ...boundaryTestFiles,
   ...bundledPluginDependentUnitTestFiles,
 ];
 
@@ -60,4 +68,8 @@ export function isUnitConfigTestFile(file) {
 
 export function isBundledPluginDependentUnitTestFile(file) {
   return bundledPluginDependentUnitTestFiles.includes(normalizeRepoPath(file));
+}
+
+export function isBoundaryTestFile(file) {
+  return boundaryTestFiles.includes(normalizeRepoPath(file));
 }
