@@ -107,10 +107,12 @@ describe("mattermost websocket monitor", () => {
   });
 
   it("retries when first attempt errors before open and next attempt succeeds", async () => {
+    const abort = new AbortController();
     const reconnectDelays: number[] = [];
     const onError = vi.fn();
     const patches: Array<Record<string, unknown>> = [];
     const sockets: FakeWebSocket[] = [];
+    let disconnects = 0;
 
     const connectOnce = createMattermostConnectOnce({
       wsUrl: "wss://example.invalid/api/v4/websocket",
@@ -121,8 +123,15 @@ describe("mattermost websocket monitor", () => {
         return () => seq++;
       })(),
       onPosted: async () => {},
+      abortSignal: abort.signal,
       statusSink: (patch) => {
         patches.push(patch as Record<string, unknown>);
+        if (patch.lastDisconnect) {
+          disconnects++;
+          if (disconnects >= 2) {
+            abort.abort();
+          }
+        }
       },
       webSocketFactory: () => {
         const socket = new FakeWebSocket();
@@ -135,22 +144,18 @@ describe("mattermost websocket monitor", () => {
             return;
           }
           socket.emitOpen();
+          socket.emitClose(1000);
         });
         return socket;
       },
     });
 
-    const run = runWithReconnect(connectOnce, {
+    await runWithReconnect(connectOnce, {
+      abortSignal: abort.signal,
       initialDelayMs: 1,
       onError,
       onReconnect: (delay) => reconnectDelays.push(delay),
-      shouldReconnect: ({ attempt, outcome }) => outcome === "rejected" && attempt === 0,
     });
-
-    await vi.waitFor(() => expect(sockets).toHaveLength(2));
-    await vi.waitFor(() => expect(sockets[1]?.sent).toHaveLength(1));
-    sockets[1]?.emitClose(1000);
-    await run;
 
     expect(sockets).toHaveLength(2);
     expect(sockets[0].closeCalls).toBe(1);
