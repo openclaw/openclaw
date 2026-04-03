@@ -1,6 +1,7 @@
 import {
   AllowFromListSchema,
   buildNestedDmConfigSchema,
+  ContextVisibilityModeSchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ToolPolicySchema,
@@ -65,6 +66,7 @@ export const MatrixConfigSchema = z.object({
   allowlistOnly: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   groupPolicy: GroupPolicySchema.optional(),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
   blockStreaming: z.boolean().optional(),
   streaming: z.union([z.enum(["partial", "off"]), z.boolean()]).optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional(),

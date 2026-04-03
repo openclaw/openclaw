@@ -49,6 +49,29 @@ is a small, self-contained module with a clear purpose and documented contract.
 ## How to migrate
 
 <Steps>
+  <Step title="Audit Windows wrapper fallback behavior">
+    If your plugin uses `openclaw/plugin-sdk/windows-spawn`, unresolved Windows
+    `.cmd`/`.bat` wrappers now fail closed unless you explicitly pass
+    `allowShellFallback: true`.
+
+    ```typescript
+    // Before
+    const program = applyWindowsSpawnProgramPolicy({ candidate });
+
+    // After
+    const program = applyWindowsSpawnProgramPolicy({
+      candidate,
+      // Only set this for trusted compatibility callers that intentionally
+      // accept shell-mediated fallback.
+      allowShellFallback: true,
+    });
+    ```
+
+    If your caller does not intentionally rely on shell fallback, do not set
+    `allowShellFallback` and handle the thrown error instead.
+
+  </Step>
+
   <Step title="Find deprecated imports">
     Search your plugin for imports from either deprecated surface:
 

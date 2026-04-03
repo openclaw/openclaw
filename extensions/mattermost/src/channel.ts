@@ -373,7 +373,12 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         if (!token || !baseUrl) {
           return { ok: false, error: "bot token or baseUrl missing" };
         }
-        return await probeMattermost(baseUrl, token, timeoutMs);
+        return await probeMattermost(
+          baseUrl,
+          token,
+          timeoutMs,
+          account.config.allowPrivateNetwork === true,
+        );
       },
       resolveAccountSnapshot: ({ account, runtime }) => ({
         accountId: account.accountId,

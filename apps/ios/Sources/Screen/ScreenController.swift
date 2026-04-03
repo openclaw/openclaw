@@ -7,6 +7,7 @@ import WebKit
 @Observable
 final class ScreenController {
     private weak var activeWebView: WKWebView?
+    private var trustedRemoteA2UIURL: URL?
 
     var urlString: String = ""
     var errorText: String?
@@ -26,10 +27,11 @@ final class ScreenController {
         self.reload()
     }
 
-    func navigate(to urlString: String) {
+    func navigate(to urlString: String, trustA2UIActions: Bool = false) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             self.urlString = ""
+            self.trustedRemoteA2UIURL = nil
             self.reload()
             return
         }
@@ -43,6 +45,7 @@ final class ScreenController {
             return
         }
         self.urlString = (trimmed == "/" ? "" : trimmed)
+        self.trustedRemoteA2UIURL = trustA2UIActions ? Self.normalizeTrustedRemoteA2UIURL(from: trimmed) : nil
         self.reload()
     }
 
@@ -72,6 +75,7 @@ final class ScreenController {
 
     func showDefaultCanvas() {
         self.urlString = ""
+        self.trustedRemoteA2UIURL = nil
         self.reload()
     }
 
@@ -237,28 +241,17 @@ final class ScreenController {
         subdirectory: "CanvasScaffold")
 
     func isTrustedCanvasUIURL(_ url: URL) -> Bool {
-        guard url.isFileURL else { return false }
-        let std = url.standardizedFileURL
-        if let expected = Self.canvasScaffoldURL,
-           std == expected.standardizedFileURL
-        {
-            return true
+        if url.isFileURL {
+            let std = url.standardizedFileURL
+            if let expected = Self.canvasScaffoldURL,
+               std == expected.standardizedFileURL
+            {
+                return true
+            }
+            return false
         }
-        return false
-    }
-
-    private func applyScrollBehavior() {
-        guard let webView = self.activeWebView else { return }
-        let trimmed = self.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        let allowScroll = !trimmed.isEmpty
-        let scrollView = webView.scrollView
-        // Default canvas needs raw touch events; external pages should scroll.
-        scrollView.isScrollEnabled = allowScroll
-        scrollView.bounces = allowScroll
-    }
-
-    func isLocalNetworkCanvasURL(_ url: URL) -> Bool {
-        LocalNetworkURLSupport.isLocalNetworkHTTPURL(url)
+        guard let trusted = self.trustedRemoteA2UIURL else { return false }
+        return Self.normalizeTrustedRemoteA2UIURL(from: url) == trusted
     }
 
     nonisolated static func parseA2UIActionBody(_ body: Any) -> [String: Any]? {
@@ -277,6 +270,36 @@ final class ScreenController {
             return mapped.isEmpty ? nil : mapped
         }
         return nil
+    }
+
+    private func applyScrollBehavior() {
+        guard let webView = self.activeWebView else { return }
+        let trimmed = self.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let allowScroll = !trimmed.isEmpty
+        let scrollView = webView.scrollView
+        // Default canvas needs raw touch events; external pages should scroll.
+        scrollView.isScrollEnabled = allowScroll
+        scrollView.bounces = allowScroll
+    }
+
+    private static func normalizeTrustedRemoteA2UIURL(from raw: String) -> URL? {
+        guard let url = URL(string: raw) else { return nil }
+        return self.normalizeTrustedRemoteA2UIURL(from: url)
+    }
+
+    private static func normalizeTrustedRemoteA2UIURL(from url: URL) -> URL? {
+        guard !url.isFileURL else { return nil }
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            return nil
+        }
+        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty else {
+            return nil
+        }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.scheme = scheme
+        components?.host = host.lowercased()
+        components?.fragment = nil
+        return components?.url
     }
 }
 

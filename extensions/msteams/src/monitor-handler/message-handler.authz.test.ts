@@ -399,6 +399,7 @@ describe("msteams monitor handler authz", () => {
         msteams: {
           groupPolicy: "allowlist",
           groupAllowFrom: ["alice-aad"],
+          contextVisibility: "allowlist",
           requireMention: false,
           teams: {
             team123: {
@@ -482,6 +483,7 @@ describe("msteams monitor handler authz", () => {
         msteams: {
           groupPolicy: "allowlist",
           groupAllowFrom: ["alice"],
+          contextVisibility: "allowlist",
           dangerouslyAllowNameMatching: true,
           requireMention: false,
           teams: {
@@ -529,6 +531,161 @@ describe("msteams monitor handler authz", () => {
     expect(dispatched?.ctxPayload).toMatchObject({
       BodyForAgent:
         "[Thread history]\nAlice: Allowlisted by display name\n[/Thread history]\n\nCurrent message",
+    });
+  });
+
+  it("keeps quote context when the parent sender id is allowlisted", async () => {
+    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
+    graphThreadMockState.resolveTeamGroupId.mockClear();
+    graphThreadMockState.fetchChannelMessage.mockReset();
+    graphThreadMockState.fetchThreadReplies.mockReset();
+
+    graphThreadMockState.fetchChannelMessage.mockResolvedValue({
+      id: "parent-msg",
+      from: { user: { id: "alice-aad", displayName: "Alice" } },
+      body: {
+        content: "Allowed context",
+        contentType: "text",
+      },
+    });
+    graphThreadMockState.fetchThreadReplies.mockResolvedValue([]);
+
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["alice-aad"],
+          contextVisibility: "allowlist",
+          requireMention: false,
+          teams: {
+            team123: {
+              channels: {
+                "19:channel@thread.tacv2": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "current-msg",
+        type: "message",
+        text: "Current message",
+        from: {
+          id: "alice-botframework-id",
+          aadObjectId: "alice-aad",
+          name: "Alice",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        replyToId: "parent-msg",
+        attachments: [
+          {
+            contentType: "text/html",
+            content:
+              '<blockquote itemtype="http://schema.skype.com/Reply"><strong itemprop="mri">Alice</strong><p itemprop="copy">Quoted body</p></blockquote>',
+          },
+        ],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    const dispatched =
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
+    expect(dispatched?.ctxPayload).toMatchObject({
+      ReplyToBody: "Quoted body",
+      ReplyToSender: "Alice",
+    });
+  });
+
+  it("drops quote context when attachment metadata disagrees with a blocked parent sender", async () => {
+    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
+    graphThreadMockState.resolveTeamGroupId.mockClear();
+    graphThreadMockState.fetchChannelMessage.mockReset();
+    graphThreadMockState.fetchThreadReplies.mockReset();
+
+    graphThreadMockState.fetchChannelMessage.mockResolvedValue({
+      id: "parent-msg",
+      from: { user: { id: "mallory-aad", displayName: "Mallory" } },
+      body: {
+        content: "Blocked context",
+        contentType: "text",
+      },
+    });
+    graphThreadMockState.fetchThreadReplies.mockResolvedValue([]);
+
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["alice-aad"],
+          contextVisibility: "allowlist",
+          requireMention: false,
+          teams: {
+            team123: {
+              channels: {
+                "19:channel@thread.tacv2": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "current-msg",
+        type: "message",
+        text: "Current message",
+        from: {
+          id: "alice-botframework-id",
+          aadObjectId: "alice-aad",
+          name: "Alice",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        replyToId: "parent-msg",
+        attachments: [
+          {
+            contentType: "text/html",
+            content:
+              '<blockquote itemtype="http://schema.skype.com/Reply"><strong itemprop="mri">Alice</strong><p itemprop="copy">Quoted body</p></blockquote>',
+          },
+        ],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    const dispatched =
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
+    expect(dispatched?.ctxPayload).toMatchObject({
+      ReplyToBody: undefined,
+      ReplyToSender: undefined,
+      BodyForAgent: "Current message",
     });
   });
 });

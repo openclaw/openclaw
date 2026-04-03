@@ -34,7 +34,10 @@ import {
   createDiscordApprovalCapability,
   shouldHandleDiscordApprovalRequest,
 } from "../approval-native.js";
-import { getDiscordExecApprovalApprovers } from "../exec-approvals.js";
+import {
+  getDiscordExecApprovalApprovers,
+  isDiscordExecApprovalClientEnabled,
+} from "../exec-approvals.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
@@ -190,13 +193,34 @@ class ExecApprovalActionButton extends Button {
 }
 
 class ExecApprovalActionRow extends Row<Button> {
-  constructor(approvalId: string) {
+  constructor(params: {
+    approvalId: string;
+    ask?: string | null;
+    allowedDecisions?: readonly ExecApprovalDecision[];
+  }) {
     super([
-      ...buildExecApprovalActionDescriptors({ approvalCommandId: approvalId }).map(
-        (descriptor) => new ExecApprovalActionButton({ approvalId, descriptor }),
+      ...buildExecApprovalActionDescriptors({
+        approvalCommandId: params.approvalId,
+        ask: params.ask,
+        allowedDecisions: params.allowedDecisions,
+      }).map(
+        (descriptor) => new ExecApprovalActionButton({ approvalId: params.approvalId, descriptor }),
       ),
     ]);
   }
+}
+
+function createApprovalActionRow(request: ApprovalRequest): Row<Button> {
+  if (isPluginApprovalRequest(request)) {
+    return new ExecApprovalActionRow({
+      approvalId: request.id,
+    });
+  }
+  return new ExecApprovalActionRow({
+    approvalId: request.id,
+    ask: request.request.ask,
+    allowedDecisions: request.request.allowedDecisions,
+  });
 }
 
 function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] {
@@ -463,10 +487,15 @@ export class DiscordExecApprovalHandler {
       gatewayUrl: this.opts.gatewayUrl,
       eventKinds: ["exec", "plugin"],
       nativeAdapter: createDiscordApprovalCapability(this.opts.config).native,
-      isConfigured: () => Boolean(this.opts.config.enabled && this.getApprovers().length > 0),
+      isConfigured: () =>
+        isDiscordExecApprovalClientEnabled({
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+          configOverride: this.opts.config,
+        }),
       shouldHandle: (request) => this.shouldHandle(request),
       buildPendingContent: ({ request }) => {
-        const actionRow = new ExecApprovalActionRow(request.id);
+        const actionRow = createApprovalActionRow(request);
         const container = isPluginApprovalRequest(request)
           ? createPluginApprovalRequestContainer({
               request,

@@ -117,6 +117,19 @@ describe("buildSystemRunApprovalEnvBinding", () => {
       envKeys: [],
     });
   });
+
+  it("includes Windows-compatible override keys in env binding", () => {
+    const base = buildSystemRunApprovalEnvBinding({
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    });
+    const changed = buildSystemRunApprovalEnvBinding({
+      "ProgramFiles(x86)": "D:\\SDKs",
+    });
+
+    expect(base.envKeys).toEqual(["ProgramFiles(x86)"]);
+    expect(base.envHash).toBeTypeOf("string");
+    expect(base.envHash).not.toEqual(changed.envHash);
+  });
 });
 
 describe("buildSystemRunApprovalBinding", () => {
@@ -173,6 +186,20 @@ describe("matchSystemRunApprovalEnvHash", () => {
         code: "APPROVAL_ENV_BINDING_MISSING",
         message: "approval id missing env binding for requested env overrides",
         details: { envKeys: ["ALPHA"] },
+      },
+    },
+    {
+      name: "reports missing approval env binding when actual env keys are present without hashes",
+      params: {
+        expectedEnvHash: null,
+        actualEnvHash: null,
+        actualEnvKeys: ["ProgramFiles(x86)"],
+      },
+      expected: {
+        ok: false,
+        code: "APPROVAL_ENV_BINDING_MISSING",
+        message: "approval id missing env binding for requested env overrides",
+        details: { envKeys: ["ProgramFiles(x86)"] },
       },
     },
     {

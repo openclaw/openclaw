@@ -593,6 +593,21 @@ describe("device pairing tokens", () => {
     expect(hasEffectivePairedDeviceRole(paired, "node")).toBe(false);
   });
 
+  test("falls back to legacy role fields when tokens map is empty", async () => {
+    const device: PairedDevice = {
+      deviceId: "device-fallback",
+      publicKey: "pk-fallback",
+      role: "node",
+      roles: ["node", "operator"],
+      tokens: {},
+      createdAtMs: Date.now(),
+      approvedAtMs: Date.now(),
+    };
+    expect(listEffectivePairedDeviceRoles(device)).toEqual(["node", "operator"]);
+    expect(hasEffectivePairedDeviceRole(device, "node")).toBe(true);
+    expect(hasEffectivePairedDeviceRole(device, "operator")).toBe(true);
+  });
+
   test("removes paired devices by device id", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);

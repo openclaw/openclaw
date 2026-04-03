@@ -262,6 +262,34 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("approval denied");
   });
 
+  it("does not leak internal runtime context through the task status line", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:status-task-leak",
+      runId: "run-status-task-leak",
+      task: "leaked context task",
+    });
+    failTaskRunByRunId({
+      runId: "run-status-task-leak",
+      endedAt: Date.now(),
+      error: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+    });
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).toContain("📌 Tasks: 1 recent failure");
+    expect(reply?.text).toContain("leaked context task");
+    expect(reply?.text).not.toContain("OpenClaw runtime context (internal):");
+    expect(reply?.text).not.toContain("Internal task completion event");
+  });
+
   it("truncates long task titles and details in the session task line", async () => {
     createRunningTaskRun({
       runtime: "subagent",
