@@ -24,8 +24,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
-import { withProgress } from "../progress.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
+import { withProgress } from "../progress.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
@@ -348,7 +348,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
   const effectiveCfg = snapshot?.valid ? snapshot.config : cfg;
-  const mode = effectiveCfg.gateway?.mode;
+  // Default to "local" when gateway.mode is unset. Prior to v2026.3.24 the
+  // gateway started without an explicit mode; the guard added in 3.24
+  // regressed startup on Windows (and other platforms) when the config file
+  // exists but doesn't contain gateway.mode — e.g. after `openclaw onboard`
+  // writes a minimal config. (#54801)
+  const mode = effectiveCfg.gateway?.mode ?? "local";
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
       defaultRuntime.error(
