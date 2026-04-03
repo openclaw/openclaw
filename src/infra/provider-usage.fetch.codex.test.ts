@@ -147,4 +147,13 @@ describe("fetchCodexUsage", () => {
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
     expect(result.plan).toBe("Plus ($0.00)");
   });
+
+  it("returns error snapshot for malformed JSON body", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "<html>error</html>"));
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+
+    expect(result.error).toBe("Invalid JSON");
+    expect(result.windows).toHaveLength(0);
+    expect(result.provider).toBe("openai-codex");
+  });
 });
