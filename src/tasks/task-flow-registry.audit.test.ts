@@ -134,6 +134,40 @@ describe("task-flow-registry audit", () => {
     });
   });
 
+  it("uses linked task activity to suppress stale-running findings for active managed flows", async () => {
+    await withTaskFlowAuditStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Inspect queue",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+
+      createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:child",
+        runId: "task-flow-audit-active-child",
+        task: "Inspect PR 1",
+        startedAt: 1,
+        lastEventAt: 29 * 60_000,
+      });
+
+      expect(listTaskFlowAuditFindings({ now: 31 * 60_000 })).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "stale_running",
+            flow: expect.objectContaining({ flowId: flow.flowId }),
+          }),
+        ]),
+      );
+    });
+  });
+
   it("does not flag managed flows with active linked tasks as missing", async () => {
     await withTaskFlowAuditStateDir(async () => {
       const flow = createManagedTaskFlow({
