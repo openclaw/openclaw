@@ -1,6 +1,6 @@
 # Claude Memory Optimizer
 
-> Structured memory system for OpenClaw with 4-type classification and automated migration.
+> Structured memory system for OpenClaw with 4-type classification, automated migration, and **PUA-style maintenance checklist**.
 
 ## 🎯 Overview
 
@@ -10,6 +10,9 @@ Based on Claude Code's memory architecture, this skill brings structured, file-b
 - **Frontmatter Metadata**: structured name/description/type
 - **Auto-Migration**: one-command refactor of existing memory files
 - **Log Mode**: optional append-only daily logs
+- **PUA-Style Maintenance**: 7 iron rules + pressure escalation (inspired by [tanweai/pua](https://github.com/tanweai/pua) - 14.8k GitHub stars)
+
+**New in v1.1.0**: Memory PUA maintenance checklist with corporate PUA rhetoric to prevent AI "memory slacking".
 
 ## 📦 Installation
 
@@ -25,14 +28,27 @@ clawhub install claude-memory-optimizer
 node ~/.openclaw/skills/claude-memory-optimizer/scripts/refactor-memory.js
 ```
 
-### 2. Verify Structure
+### 2. Run PUA Maintenance Check
+
+```bash
+# Normal mode (L0 - starts with 3 basic checks)
+node ~/.openclaw/skills/claude-memory-optimizer/scripts/memory-pua.js
+
+# Strict mode (L3 - full 7 checks from start)
+node ~/.openclaw/skills/claude-memory-optimizer/scripts/memory-pua.js --mode strict
+
+# Audit mode (L4 - emergency full audit)
+node ~/.openclaw/skills/claude-memory-optimizer/scripts/memory-pua.js --mode audit
+```
+
+### 3. Verify Structure
 
 ```bash
 ls -la ~/.openclaw/workspace/memory/
 cat ~/.openclaw/workspace/MEMORY.md
 ```
 
-### 3. Configure OpenClaw
+### 4. Configure OpenClaw
 
 Edit your OpenClaw config:
 
@@ -57,7 +73,7 @@ Edit your OpenClaw config:
 }
 ```
 
-### 4. Restart Gateway
+### 5. Restart Gateway
 
 ```bash
 openclaw gateway restart
@@ -152,6 +168,7 @@ type: reference
 **URL:** https://kaggle.com/chenziong
 
 **Achievements:**
+
 - 🥇 Gold: Child Mind Institute (2024.12)
 - 🥉 Bronze: LLM-Detect-AI-Generated-Text
 ```
@@ -175,6 +192,7 @@ node scripts/refactor-memory.js
 ```
 
 **Features:**
+
 - Auto-detects memory type from keywords
 - Generates frontmatter
 - Updates `MEMORY.md` index
@@ -182,13 +200,13 @@ node scripts/refactor-memory.js
 
 ## 📊 Comparison
 
-| Feature | Before | After |
-|---------|--------|-------|
-| Classification | None | 4 types |
-| Metadata | None | Frontmatter |
-| Structure | Flat `memory/*.md` | Categorized `memory/{type}/` |
-| Semantic Search | Basic keyword | LLM-powered (future) |
-| Verification | None | On-recall check (future) |
+| Feature         | Before             | After                        |
+| --------------- | ------------------ | ---------------------------- |
+| Classification  | None               | 4 types                      |
+| Metadata        | None               | Frontmatter                  |
+| Structure       | Flat `memory/*.md` | Categorized `memory/{type}/` |
+| Semantic Search | Basic keyword      | LLM-powered (future)         |
+| Verification    | None               | On-recall check (future)     |
 
 ## 🛠️ Advanced
 

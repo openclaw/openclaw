@@ -1,13 +1,13 @@
 ---
 name: claude-memory-optimizer
-description: Structured memory system with 4-type classification (user/feedback/project/reference), frontmatter metadata, and automated migration. Based on Claude Code memory architecture.
-tags: memory, claude-code, knowledge-management, persistence
-version: 1.0.0
+description: Structured memory system with 4-type classification, frontmatter metadata, automated migration, and PUA-style maintenance checklist. Based on Claude Code memory architecture.
+tags: memory, claude-code, knowledge-management, persistence, pua, maintenance
+version: 1.1.0
 ---
 
 # Claude Memory Optimizer
 
-Structured memory system for OpenClaw with 4-type classification and automated migration.
+Structured memory system for OpenClaw with 4-type classification, automated migration, and **PUA-style maintenance checklist** (inspired by tanweai/pua - 14.8k GitHub stars).
 
 ## When to Use
 
@@ -22,6 +22,7 @@ Structured memory system for OpenClaw with 4-type classification and automated m
 - **Frontmatter Metadata**: structured name/description/type for semantic search
 - **Auto-Migration**: one-command refactor of existing memory files
 - **Log Mode**: optional append-only daily logs (KAIROS style)
+- **PUA-Style Maintenance**: 7 iron rules checklist with pressure escalation (L0-L4)
 
 ## Quick Start
 
@@ -37,6 +38,19 @@ clawhub install claude-memory-optimizer
 node ~/.openclaw/skills/claude-memory-optimizer/scripts/refactor-memory.js
 ```
 
+### Run PUA Maintenance Check
+
+```bash
+# Normal mode (L0 - 3 checks)
+node ~/.openclaw/skills/claude-memory-optimizer/scripts/memory-pua.js
+
+# Strict mode (L3 - full 7 checks)
+node ~/.openclaw/skills/claude-memory-optimizer/scripts/memory-pua.js --mode strict
+
+# Audit mode (L4 - emergency fix)
+node ~/.openclaw/skills/claude-memory-optimizer/scripts/memory-pua.js --mode audit
+```
+
 ### Verify
 
 ```bash
@@ -46,12 +60,12 @@ cat ~/.openclaw/workspace/MEMORY.md
 
 ## Memory Types
 
-| Type | Purpose | Example |
-|------|---------|---------|
-| **user** | User role, preferences, skills | "Data scientist, prefers concise replies" |
-| **feedback** | Behavior corrections/confirmations | "No trailing summaries — user can read diffs" |
-| **project** | Project context, decisions, deadlines | "Thesis deadline: 2026-06-01" |
-| **reference** | External system pointers | "Kaggle: https://kaggle.com/chenziong" |
+| Type          | Purpose                               | Example                                       |
+| ------------- | ------------------------------------- | --------------------------------------------- |
+| **user**      | User role, preferences, skills        | "Data scientist, prefers concise replies"     |
+| **feedback**  | Behavior corrections/confirmations    | "No trailing summaries — user can read diffs" |
+| **project**   | Project context, decisions, deadlines | "Thesis deadline: 2026-06-01"                 |
+| **reference** | External system pointers              | "Kaggle: https://kaggle.com/chenziong"        |
 
 ## Directory Structure
 
@@ -219,6 +233,51 @@ Before recommending from memory:
 - Update long-term goals
 - Check `.learnings/` records
 
+---
+
+## 🔥 PUA-Style Maintenance (NEW in v1.1.0)
+
+Inspired by [tanweai/pua](https://github.com/tanweai/pua) (14.8k GitHub stars) — brings corporate PUA rhetoric to memory maintenance.
+
+### Seven Iron Rules (七项铁律)
+
+| #   | Rule           | Description                                                       |
+| --- | -------------- | ----------------------------------------------------------------- |
+| 1   | **闭环验证**   | Say "memory updated"? Show evidence (file path + content summary) |
+| 2   | **事实驱动**   | Say "memory may be outdated"? Verify first (grep/ls check)        |
+| 3   | **穷尽检索**   | Say "no relevant memory found"? Complete 5-step search process    |
+| 4   | **主动延伸**   | After fixing bug? Check for similar issues in related files       |
+| 5   | **元数据完整** | All memory files must have frontmatter (name/description/type)    |
+| 6   | **分类准确**   | Memory types must be accurate (user/feedback/project/reference)   |
+| 7   | **定期清理**   | Project memories >90 days old need review                         |
+
+### Pressure Escalation (压力升级)
+
+| Level           | Trigger      | Message                                | Action                |
+| --------------- | ------------ | -------------------------------------- | --------------------- |
+| **L0 信任**     | 0 failures   | "记忆系统运行正常，保持当前状态"       | Normal (3 checks)     |
+| **L1 温和提醒** | 1 failure    | "隔壁项目的记忆维护做得比你好"         | Remind (5 checks)     |
+| **L2 灵魂拷问** | 2-3 failures | "你的底层逻辑是什么？闭环在哪？"       | Deep check (7 checks) |
+| **L3 绩效考核** | 4-5 failures | "给你 3.25，这是激励"                  | Full audit (7 checks) |
+| **L4 毕业警告** | 6-7 failures | "别的 AI 的记忆系统都能保持 100% 健康" | Emergency fix         |
+
+### Special Modes
+
+| Mode       | Command         | Description                          |
+| ---------- | --------------- | ------------------------------------ |
+| **Normal** | `memory-pua.js` | L0 start, escalate based on failures |
+| **Strict** | `--mode strict` | Start at L3 (strict maintenance)     |
+| **Audit**  | `--mode audit`  | L4 emergency full audit              |
+
+### Auto-Trigger Conditions
+
+Memory PUA activates when:
+
+- Before major task execution (check relevant memories)
+- After memory write operations (verify closure)
+- User says "memory is wrong" or "you forgot"
+- Weekly heartbeat (scheduled maintenance)
+
 ## Troubleshooting
 
 ### Memory Not Loaded
@@ -244,7 +303,12 @@ Before recommending from memory:
 - Claude Code: `src/memdir/` (memdir.ts, memoryTypes.ts, findRelevantMemories.ts)
 - OpenClaw Docs: `docs/concepts/memory.md`
 - Related Skills: `memory-setup-openclaw`, `elite-longterm-memory`
+- **Inspiration**: [tanweai/pua](https://github.com/tanweai/pua) — PUA debugging skill for AI agents (14.8k GitHub stars)
 
 ## License
 
 MIT-0
+
+---
+
+_Version 1.1.0: Added PUA-style maintenance checklist inspired by tanweai/pua_
