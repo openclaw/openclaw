@@ -33,6 +33,17 @@ let editDiscordComponentMessage: typeof import("./send.components.js").editDisco
 let registerBuiltDiscordComponentMessage: typeof import("./send.components.js").registerBuiltDiscordComponentMessage;
 let sendDiscordComponentMessage: typeof import("./send.components.js").sendDiscordComponentMessage;
 
+function resetClassicMocks(): void {
+  sendMessageDiscordMock.mockReset();
+  sendMessageDiscordMock.mockResolvedValue({ messageId: "msg1", channelId: "chan-1" });
+  loadOutboundMediaFromUrlMock.mockReset();
+  loadOutboundMediaFromUrlMock.mockResolvedValue({
+    buffer: Buffer.from("media"),
+    fileName: "report.pdf",
+  });
+  vi.clearAllMocks();
+}
+
 describe("sendDiscordComponentMessage", () => {
   let registerMock: ReturnType<typeof vi.mocked<typeof registerDiscordComponentEntries>>;
 
@@ -47,14 +58,7 @@ describe("sendDiscordComponentMessage", () => {
 
   beforeEach(() => {
     registerMock = vi.mocked(registerDiscordComponentEntries);
-    sendMessageDiscordMock.mockReset();
-    sendMessageDiscordMock.mockResolvedValue({ messageId: "msg1", channelId: "chan-1" });
-    loadOutboundMediaFromUrlMock.mockReset();
-    loadOutboundMediaFromUrlMock.mockResolvedValue({
-      buffer: Buffer.from("media"),
-      fileName: "report.pdf",
-    });
-    vi.clearAllMocks();
+    resetClassicMocks();
   });
 
   it("keeps direct-channel DM session keys on component entries", async () => {
@@ -138,14 +142,7 @@ describe("sendDiscordComponentMessage", () => {
 
 describe("sendDiscordComponentMessage classic message downgrade", () => {
   beforeEach(() => {
-    sendMessageDiscordMock.mockReset();
-    sendMessageDiscordMock.mockResolvedValue({ messageId: "msg1", channelId: "chan-1" });
-    loadOutboundMediaFromUrlMock.mockReset();
-    loadOutboundMediaFromUrlMock.mockResolvedValue({
-      buffer: Buffer.from("media"),
-      fileName: "report.pdf",
-    });
-    vi.clearAllMocks();
+    resetClassicMocks();
   });
 
   it("forwards mediaReadFile and mediaAccess to sendMessageDiscord", async () => {
@@ -220,6 +217,33 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       {
         text: "report",
         blocks: [{ type: "file", file: "attachment://report.pdf", spoiler: true }],
+      },
+      {
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/report.pdf",
+      },
+    );
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps container-styled messages on the component path", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "report",
+        container: {
+          accentColor: 0x00ff00,
+        },
       },
       {
         rest,
