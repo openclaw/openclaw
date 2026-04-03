@@ -424,6 +424,27 @@ const registryWithDemoLoaderNoOutbound = createTestRegistry([
   { pluginId: "demo-loader", plugin: demoNoOutboundPlugin, source: "test-no-outbound" },
 ]);
 
+const demoRichRepliesPlugin = createChannelTestPluginBase({
+  id: "demo-loader",
+  label: "Demo Loader",
+  capabilities: {
+    chatTypes: ["direct", "thread"],
+    richReplies: {
+      buttons: true,
+      selects: false,
+      commandFallback: true,
+    },
+    interactionResponses: {
+      acknowledge: true,
+      editText: true,
+    },
+  },
+});
+
+const registryWithRichRepliesPlugin = createTestRegistry([
+  { pluginId: "demo-loader", plugin: demoRichRepliesPlugin, source: "test-rich-replies" },
+]);
+
 const demoOriginChannelId = "demo-origin";
 const demoTargetChannelId = "demo-target";
 
@@ -527,6 +548,12 @@ describe("channel plugin loader", () => {
       kind: "missing-outbound" as const,
       registry: registryWithDemoLoaderNoOutbound,
     },
+    {
+      name: "preserves rich reply and interaction capability metadata on loaded plugins",
+      kind: "rich-capabilities" as const,
+      registry: registryWithRichRepliesPlugin,
+      expectedPlugin: demoRichRepliesPlugin,
+    },
   ] as const)("$name", async (testCase) => {
     switch (testCase.kind) {
       case "plugin":
@@ -562,6 +589,23 @@ describe("channel plugin loader", () => {
       case "missing-outbound":
         await expectOutboundAdapterMissingCase(testCase.registry);
         return;
+      case "rich-capabilities": {
+        setActivePluginRegistry(testCase.registry);
+        await expect(loadChannelPlugin("demo-loader")).resolves.toMatchObject({
+          capabilities: {
+            richReplies: {
+              buttons: true,
+              selects: false,
+              commandFallback: true,
+            },
+            interactionResponses: {
+              acknowledge: true,
+              editText: true,
+            },
+          },
+        });
+        return;
+      }
     }
   });
 });

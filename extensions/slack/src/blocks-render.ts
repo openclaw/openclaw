@@ -1,5 +1,9 @@
 import type { Block, KnownBlock } from "@slack/web-api";
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import type { ChannelCapabilities } from "openclaw/plugin-sdk/channel-contract";
+import {
+  projectInteractiveReplyForCapabilities,
+  reduceInteractiveReply,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import type { InteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import { truncateSlackText } from "./truncate.js";
 
@@ -30,13 +34,26 @@ function resolveSlackButtonStyle(
   return undefined;
 }
 
-export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): SlackBlock[] {
+export function buildSlackInteractiveBlocks(
+  interactive?: InteractiveReply,
+  capabilities?: Pick<ChannelCapabilities, "richReplies"> | null,
+): SlackBlock[] {
+  const projected = projectInteractiveReplyForCapabilities({
+    interactive,
+    capabilities: capabilities ?? {
+      richReplies: {
+        buttons: true,
+        selects: true,
+        commandFallback: true,
+      },
+    },
+  }).interactive;
   const initialState = {
     blocks: [] as SlackBlock[],
     buttonIndex: 0,
     selectIndex: 0,
   };
-  return reduceInteractiveReply(interactive, initialState, (state, block) => {
+  return reduceInteractiveReply(projected, initialState, (state, block) => {
     if (block.type === "text") {
       const trimmed = block.text.trim();
       if (!trimmed) {

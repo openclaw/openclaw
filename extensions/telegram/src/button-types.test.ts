@@ -82,4 +82,27 @@ describe("resolveTelegramInlineButtons", () => {
       }),
     ).toEqual([[{ text: "Retry", callback_data: "retry", style: "primary" }]]);
   });
+
+  it("converts selects into inline buttons when button rendering is the supported fallback", () => {
+    expect(
+      buildTelegramInteractiveButtons(
+        {
+          blocks: [
+            {
+              type: "select",
+              placeholder: "Pick one",
+              options: [{ label: "Alpha", value: "alpha", actionId: "choice.alpha" }],
+            },
+          ],
+        },
+        {
+          richReplies: {
+            buttons: true,
+            selects: false,
+            commandFallback: true,
+          },
+        },
+      ),
+    ).toEqual([[{ text: "Alpha", callback_data: "alpha", style: undefined }]]);
+  });
 });

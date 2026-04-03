@@ -1,4 +1,8 @@
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import type { ChannelCapabilities } from "openclaw/plugin-sdk/channel-contract";
+import {
+  projectInteractiveReplyForCapabilities,
+  reduceInteractiveReply,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import type {
   InteractiveButtonStyle,
   InteractiveReply,
@@ -15,9 +19,20 @@ const DISCORD_INTERACTIVE_BUTTON_ROW_SIZE = 5;
 
 export function buildDiscordInteractiveComponents(
   interactive?: InteractiveReply,
+  capabilities?: Pick<ChannelCapabilities, "richReplies"> | null,
 ): DiscordComponentMessageSpec | undefined {
-  const blocks = reduceInteractiveReply(
+  const projected = projectInteractiveReplyForCapabilities({
     interactive,
+    capabilities: capabilities ?? {
+      richReplies: {
+        buttons: true,
+        selects: true,
+        commandFallback: true,
+      },
+    },
+  }).interactive;
+  const blocks = reduceInteractiveReply(
+    projected,
     [] as NonNullable<DiscordComponentMessageSpec["blocks"]>,
     (state, block) => {
       if (block.type === "text") {

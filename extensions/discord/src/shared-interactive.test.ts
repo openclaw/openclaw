@@ -101,4 +101,37 @@ describe("buildDiscordInteractiveComponents", () => {
       ],
     });
   });
+
+  it("falls back to text guidance when widgets are unavailable", () => {
+    expect(
+      buildDiscordInteractiveComponents(
+        {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Retry",
+                  value: "retry",
+                  fallback: { command: "/job retry", text: "Retry the job" },
+                },
+              ],
+            },
+          ],
+          fallbackText: "Use the fallback path.",
+        },
+        {
+          richReplies: {
+            buttons: false,
+            selects: false,
+            commandFallback: true,
+          },
+        },
+      ),
+    ).toEqual({
+      blocks: [
+        { type: "text", text: "Use the fallback path.\n\nRetry: Retry the job (/job retry)" },
+      ],
+    });
+  });
 });

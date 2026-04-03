@@ -107,4 +107,40 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(buttonBlock.elements?.[2]?.style).toBe("primary");
     expect(buttonBlock.elements?.[3]).not.toHaveProperty("style");
   });
+
+  it("falls back to text guidance when the channel cannot render interactive widgets", () => {
+    expect(
+      buildSlackInteractiveBlocks(
+        {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Retry",
+                  value: "retry",
+                  fallback: { command: "/job retry", text: "Retry the job" },
+                },
+              ],
+            },
+          ],
+          fallbackText: "Use the fallback path.",
+        },
+        {
+          richReplies: {
+            buttons: false,
+            selects: false,
+            commandFallback: true,
+          },
+        },
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        type: "section",
+        text: expect.objectContaining({
+          text: "Use the fallback path.\n\nRetry: Retry the job (/job retry)",
+        }),
+      }),
+    ]);
+  });
 });

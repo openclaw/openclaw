@@ -1,4 +1,8 @@
-export { reduceInteractiveReply } from "../channels/plugins/outbound/interactive.js";
+export {
+  projectInteractiveReplyForCapabilities,
+  reduceInteractiveReply,
+  type InteractiveReplyProjection,
+} from "../channels/plugins/outbound/interactive.js";
 export type {
   InteractiveButtonStyle,
   InteractiveReply,

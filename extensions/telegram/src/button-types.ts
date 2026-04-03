@@ -1,4 +1,8 @@
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import type { ChannelCapabilities } from "openclaw/plugin-sdk/channel-contract";
+import {
+  projectInteractiveReplyForCapabilities,
+  reduceInteractiveReply,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import {
   normalizeInteractiveReply,
   type InteractiveReply,
@@ -50,27 +54,34 @@ function chunkInteractiveButtons(
 
 export function buildTelegramInteractiveButtons(
   interactive?: InteractiveReply,
+  capabilities?: Pick<ChannelCapabilities, "richReplies"> | null,
 ): TelegramInlineButtons | undefined {
-  const rows = reduceInteractiveReply(
+  const projected = projectInteractiveReplyForCapabilities({
     interactive,
-    [] as TelegramInlineButton[][],
-    (state, block) => {
-      if (block.type === "buttons") {
-        chunkInteractiveButtons(block.buttons, state);
-        return state;
-      }
-      if (block.type === "select") {
-        chunkInteractiveButtons(
-          block.options.map((option) => ({
-            label: option.label,
-            value: option.value,
-          })),
-          state,
-        );
-      }
-      return state;
+    capabilities: capabilities ?? {
+      richReplies: {
+        buttons: true,
+        selects: true,
+        commandFallback: true,
+      },
     },
-  );
+  }).interactive;
+  const rows = reduceInteractiveReply(projected, [] as TelegramInlineButton[][], (state, block) => {
+    if (block.type === "buttons") {
+      chunkInteractiveButtons(block.buttons, state);
+      return state;
+    }
+    if (block.type === "select") {
+      chunkInteractiveButtons(
+        block.options.map((option) => ({
+          label: option.label,
+          value: option.value,
+        })),
+        state,
+      );
+    }
+    return state;
+  });
   return rows.length > 0 ? rows : undefined;
 }
 

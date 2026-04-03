@@ -42,11 +42,16 @@ describe("captured plugin registration", () => {
           description: "Captured command",
           handler: async () => ({ text: "ok" }),
         });
+        api.registerInteractionHandler({
+          namespace: "captured",
+          handler: async () => {},
+        });
       },
     });
 
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
     expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
+    expect(captured.api.registerInteractionHandler).toBeTypeOf("function");
   });
 });
