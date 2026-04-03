@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../plugin-sdk/browser-config.js";
 import {
   ensureBrowserControlAuth,
@@ -57,6 +58,7 @@ async function ensureSandboxWorkspaceLayout(params: {
           targetWorkspaceDir: sandboxWorkspaceDir,
           config: params.config,
           agentId: params.agentId,
+          eligibility: { remote: getRemoteSkillEligibility() },
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
