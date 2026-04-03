@@ -13,6 +13,8 @@ import {
   createNativeCommandTestParams,
   createPrivateCommandContext,
   deliverReplies,
+  editMessageTelegram,
+  emitTelegramMessageSentHooks,
   listSkillCommandsForAgents,
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
@@ -20,7 +22,6 @@ import {
 
 describe("registerTelegramNativeCommands", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ registerTelegramNativeCommands, parseTelegramNativeCommandCallbackData } =
       await import("./bot-native-commands.js"));
   });
@@ -240,6 +241,251 @@ describe("registerTelegramNativeCommands", () => {
       }),
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+  });
+
+  it("uses plugin command metadata to send and edit a Telegram progress placeholder", async () => {
+    const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "plug",
+        description: "Plugin command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        key: "plug",
+        requireAuth: false,
+        telegramNativeProgressMessage:
+          "Running this command now...\n\nI'll edit this message with the final result when it's ready.",
+      },
+      args: "now",
+    } as never);
+    pluginCommandMocks.executePluginCommand.mockResolvedValue({
+      text: "Command completed successfully",
+    } as never);
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({}, { bot }),
+    });
+
+    const handler = commandHandlers.get("plug");
+    expect(handler).toBeTruthy();
+    await handler?.(
+      createPrivateCommandContext({
+        match: "now",
+      }),
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining("Running this command now"),
+      undefined,
+    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      100,
+      999,
+      expect.stringContaining("Command completed successfully"),
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+    expect(deleteMessage).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(emitTelegramMessageSentHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: "100",
+        content: "Command completed successfully",
+        messageId: 999,
+        success: true,
+      }),
+    );
+  });
+
+  it("preserves Telegram buttons when editing a metadata-driven progress placeholder", async () => {
+    const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "plug",
+        description: "Plugin command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        key: "plug",
+        requireAuth: false,
+        telegramNativeProgressMessage: "Working on it...",
+      },
+      args: "now",
+    } as never);
+    pluginCommandMocks.executePluginCommand.mockResolvedValue({
+      text: "Choose an option",
+      channelData: {
+        telegram: {
+          buttons: [[{ text: "Approve", callback_data: "approve" }]],
+        },
+      },
+    } as never);
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({}, { bot }),
+    });
+
+    const handler = commandHandlers.get("plug");
+    expect(handler).toBeTruthy();
+    await handler?.(createPrivateCommandContext({ match: "now" }));
+
+    expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      100,
+      999,
+      "Choose an option",
+      expect.objectContaining({
+        buttons: [[{ text: "Approve", callback_data: "approve" }]],
+      }),
+    );
+    expect(deleteMessage).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a normal reply when a metadata-driven progress result is not editable", async () => {
+    const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "plug",
+        description: "Plugin command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        key: "plug",
+        requireAuth: false,
+        telegramNativeProgressMessage: "Working on it...",
+      },
+      args: "now",
+    } as never);
+    pluginCommandMocks.executePluginCommand.mockResolvedValue({
+      text: "rich output",
+      mediaUrl: "/tmp/render.png",
+    } as never);
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({}, { bot }),
+    });
+
+    const handler = commandHandlers.get("plug");
+    expect(handler).toBeTruthy();
+    await handler?.(
+      createPrivateCommandContext({
+        match: "now",
+      }),
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deleteMessage).toHaveBeenCalledWith(100, 999);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ mediaUrl: "/tmp/render.png" })],
+      }),
+    );
+  });
+
+  it("cleans up the progress placeholder before falling back after an edit failure", async () => {
+    const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "plug",
+        description: "Plugin command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        key: "plug",
+        requireAuth: false,
+        telegramNativeProgressMessage: "Working on it...",
+      },
+      args: "now",
+    } as never);
+    pluginCommandMocks.executePluginCommand.mockResolvedValue({
+      text: "Command completed successfully",
+    } as never);
+    editMessageTelegram.mockRejectedValueOnce(new Error("message to edit not found"));
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams({}, { bot }),
+    });
+
+    const handler = commandHandlers.get("plug");
+    expect(handler).toBeTruthy();
+    await handler?.(createPrivateCommandContext({ match: "now" }));
+
+    expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(deleteMessage).toHaveBeenCalledWith(100, 999);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Command completed successfully" })],
+      }),
+    );
+  });
+
+  it("cleans up the progress placeholder when Telegram suppresses a local exec approval reply", async () => {
+    const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "plug",
+        description: "Plugin command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        key: "plug",
+        requireAuth: false,
+        telegramNativeProgressMessage: "Working on it...",
+      },
+      args: "now",
+    } as never);
+    pluginCommandMocks.executePluginCommand.mockResolvedValue({
+      text: "Approval required.\n\n```txt\n/approve 7f423fdc allow-once\n```",
+      channelData: {
+        execApproval: {
+          approvalId: "7f423fdc-1111-2222-3333-444444444444",
+          approvalSlug: "7f423fdc",
+          allowedDecisions: ["allow-once", "allow-always", "deny"],
+        },
+      },
+    } as never);
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams(
+        {
+          channels: {
+            telegram: {
+              execApprovals: {
+                enabled: true,
+                approvers: ["12345"],
+                target: "dm",
+              },
+            },
+          },
+        },
+        { bot },
+      ),
+    });
+
+    const handler = commandHandlers.get("plug");
+    expect(handler).toBeTruthy();
+    await handler?.(createPrivateCommandContext({ match: "now" }));
+
+    expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
+    expect(deleteMessage).toHaveBeenCalledWith(100, 999);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("sends plugin command error replies silently when silentErrorReplies is enabled", async () => {

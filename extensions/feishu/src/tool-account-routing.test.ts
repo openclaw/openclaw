@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
@@ -51,8 +51,7 @@ function createConfig(params: {
 }
 
 describe("feishu tool account routing", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ registerFeishuBitableTools, registerFeishuDriveTools, registerFeishuPermTools } =
       await import("./bitable.js").then(async ({ registerFeishuBitableTools }) => ({
         registerFeishuBitableTools,
@@ -61,6 +60,9 @@ describe("feishu tool account routing", () => {
         ...(await import("./wiki.js")),
       })));
     ({ registerFeishuWikiTools } = await import("./wiki.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
   });
 

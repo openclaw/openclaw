@@ -48,6 +48,9 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
     - **MiniMax**: config is auto-written; hosted default is `MiniMax-M2.7`.
     - More detail: [MiniMax](/providers/minimax)
+    - **StepFun**: config is auto-written for StepFun standard or Step Plan on China or global endpoints.
+    - Standard currently includes `step-3.5-flash`, and Step Plan also includes `step-3.5-flash-2603`.
+    - More detail: [StepFun](/providers/stepfun)
     - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
     - More detail: [Synthetic](/providers/synthetic)
     - **Moonshot (Kimi K2)**: config is auto-written.

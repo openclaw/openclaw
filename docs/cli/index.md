@@ -566,7 +566,7 @@ Subcommands:
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
+Gmail Pub/Sub hook setup + runner. See [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration).
 
 Subcommands:
 
@@ -810,7 +810,7 @@ List and manage [background task](/automation/tasks) runs across agents.
 - `tasks notify <id>` — change notification policy for a task run
 - `tasks cancel <id>` — cancel a running task
 - `tasks audit` — surface operational issues (stale, lost, delivery failures)
-- `tasks flow list` — list active and recent TaskFlow flows
+- `tasks flow list` — list active and recent Task Flow flows
 - `tasks flow show <lookup>` — inspect a flow by id or lookup key
 - `tasks flow cancel <lookup>` — cancel a running flow and its active tasks
 

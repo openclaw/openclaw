@@ -6,7 +6,12 @@ import {
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
-import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
+import {
+  clearSentMessageCache,
+  recordSentMessage,
+  resetSentMessageCacheForTest,
+  wasSentByBot,
+} from "./sent-message-cache.js";
 
 installTelegramSendTestHooks();
 
@@ -17,6 +22,7 @@ const {
   loadConfig,
   loadWebMedia,
   maybePersistResolvedTelegramTarget,
+  resolveStorePath,
 } = getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
@@ -121,6 +127,27 @@ describe("sent-message-cache", () => {
 
     clearSentMessageCache();
     expect(wasSentByBot(123, 1)).toBe(false);
+  });
+
+  it("keeps sent-message ownership across restart", async () => {
+    const persistedStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-restart.json`;
+    resolveStorePath.mockReturnValue(persistedStorePath);
+
+    recordSentMessage(123, 1);
+    expect(wasSentByBot(123, 1)).toBe(true);
+
+    resetSentMessageCacheForTest();
+
+    const restartedCache = await importFreshModule<typeof import("./sent-message-cache.js")>(
+      import.meta.url,
+      "./sent-message-cache.js?scope=restart",
+    );
+
+    try {
+      expect(restartedCache.wasSentByBot(123, 1)).toBe(true);
+    } finally {
+      restartedCache.clearSentMessageCache();
+    }
   });
 
   it("shares sent-message state across distinct module instances", async () => {

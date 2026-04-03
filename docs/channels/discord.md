@@ -643,6 +643,8 @@ Default slash command settings:
     - thread config inherits parent channel config unless a thread-specific entry exists
 
     Channel topics are injected as **untrusted** context (not as system prompt).
+    Reply and quoted-message context currently stays as received.
+    Discord allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
 
   </Accordion>
 

@@ -143,8 +143,6 @@ describe("secrets runtime snapshot", () => {
     clearSecretsRuntimeSnapshot();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    resolveBundledPluginWebSearchProvidersMock.mockReset();
-    resolvePluginWebSearchProvidersMock.mockReset();
   });
 
   it("resolves env refs for config and auth profiles", async () => {

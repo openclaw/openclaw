@@ -86,7 +86,6 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 
 describe("deliverWebReply", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ deliverWebReply } = await import("./deliver-reply.js"));
   });
 
