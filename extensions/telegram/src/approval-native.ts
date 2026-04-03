@@ -119,7 +119,7 @@ const resolveTelegramApproveCommandBehavior: NonNullable<
     isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }) &&
     !isTelegramExecApprovalApprover({ cfg, accountId, senderId })
   ) {
-    return { kind: "ignore" };
+    return undefined;
   }
   return {
     kind: "reply",

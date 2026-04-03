@@ -503,7 +503,7 @@ const telegramCommandTestPlugin: ChannelPlugin = {
         isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }) &&
         !getTelegramExecApprovalApprovers({ cfg, accountId }).includes(senderId?.trim() ?? "")
       ) {
-        return { kind: "ignore" } as const;
+        return undefined;
       }
       return {
         kind: "reply",
