@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildVitestArgs, parseTestProjectsArgs } from "../../scripts/test-projects-lib.mjs";
+import {
+  buildVitestArgs,
+  parseTestProjectsArgs,
+} from "../../scripts/test-projects.test-support.mjs";
 
 describe("test-projects args", () => {
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {

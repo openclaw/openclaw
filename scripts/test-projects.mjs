@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { buildVitestArgs } from "./test-projects-lib.mjs";
+import { buildVitestArgs } from "./test-projects.test-support.mjs";
 
 const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const vitestArgs = buildVitestArgs(process.argv.slice(2));

@@ -13,7 +13,7 @@ title: "Tests"
 - `pnpm test:coverage`: Runs the unit suite with V8 coverage (via `vitest.unit.config.ts`). Global thresholds are 70% lines/branches/functions/statements. Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
 - `pnpm test:coverage:changed`: Runs unit coverage only for files changed since `origin/main`.
 - `pnpm test:changed`: runs the native Vitest projects config with `--changed origin/main`. The base config treats the projects/config files as `forceRerunTriggers` so wiring changes still rerun broadly when needed.
-- `pnpm test`: runs the native Vitest projects config (`unit` + `boundary`) through the lightweight wrapper in `scripts/test-projects.mjs`.
+- `pnpm test`: runs the native Vitest projects config (`unit` + `boundary`) via a tiny passthrough wrapper so `pnpm test -- <filter>` keeps working.
 - Unit, channel, and extension configs default to `pool: "forks"`.
 - `pnpm test:channels` runs `vitest.channels.config.ts`.
 - `pnpm test:extensions` runs `vitest.extensions.config.ts`.
