@@ -1,7 +1,7 @@
 import {
   AllowFromListSchema,
   buildNestedDmConfigSchema,
-  DmPolicySchema,
+  ContextVisibilityModeSchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ToolPolicySchema,
@@ -31,8 +31,19 @@ const matrixThreadBindingsSchema = z
   })
   .optional();
 
+const matrixExecApprovalsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    approvers: AllowFromListSchema,
+    agentFilter: z.array(z.string()).optional(),
+    sessionFilter: z.array(z.string()).optional(),
+    target: z.enum(["dm", "channel", "both"]).optional(),
+  })
+  .optional();
+
 const matrixRoomSchema = z
   .object({
+    account: z.string().optional(),
     enabled: z.boolean().optional(),
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
@@ -53,6 +64,7 @@ export const MatrixConfigSchema = z.object({
   markdown: MarkdownConfigSchema,
   homeserver: z.string().optional(),
   allowPrivateNetwork: z.boolean().optional(),
+  proxy: z.string().optional(),
   userId: z.string().optional(),
   accessToken: buildSecretInputSchema().optional(),
   password: buildSecretInputSchema().optional(),
@@ -64,6 +76,8 @@ export const MatrixConfigSchema = z.object({
   allowlistOnly: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   groupPolicy: GroupPolicySchema.optional(),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
+  blockStreaming: z.boolean().optional(),
   streaming: z.union([z.enum(["partial", "off"]), z.boolean()]).optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
@@ -79,10 +93,14 @@ export const MatrixConfigSchema = z.object({
   startupVerification: z.enum(["off", "if-unverified"]).optional(),
   startupVerificationCooldownHours: z.number().optional(),
   mediaMaxMb: z.number().optional(),
+  historyLimit: z.number().int().min(0).optional(),
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: AllowFromListSchema,
   groupAllowFrom: AllowFromListSchema,
-  dm: buildNestedDmConfigSchema(),
+  dm: buildNestedDmConfigSchema({
+    threadReplies: z.enum(["off", "inbound", "always"]).optional(),
+  }),
+  execApprovals: matrixExecApprovalsSchema,
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,

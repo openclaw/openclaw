@@ -49,6 +49,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "discord-runtime-surface",
     source: pluginSource("discord", "runtime-api.js"),
+    // Runtime entrypoints should be blocked until the owning plugin is active.
+    loadPolicy: "activated",
     exports: [
       "addRoleDiscord",
       "auditDiscordChannelPermissions",
@@ -159,6 +161,10 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "discord-thread-bindings",
     source: pluginSource("discord", "runtime-api.js"),
+    loadPolicy: "activated",
+    directExports: {
+      unbindThreadBindingsBySessionKey: "./discord-maintenance.js",
+    },
     exports: [
       "autoBindSpawnedDiscordSubagent",
       "createThreadBindingManager",
@@ -199,6 +205,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "browser",
     source: pluginSource("browser", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "browserHandlers",
       "createBrowserPluginService",
@@ -210,6 +217,23 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "browser-runtime",
     source: pluginSource("browser", "runtime-api.js"),
+    loadPolicy: "activated",
+    directExports: {
+      DEFAULT_AI_SNAPSHOT_MAX_CHARS: "./browser-config.js",
+      DEFAULT_BROWSER_EVALUATE_ENABLED: "./browser-config.js",
+      DEFAULT_OPENCLAW_BROWSER_COLOR: "./browser-config.js",
+      DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: "./browser-config.js",
+      DEFAULT_UPLOAD_DIR: "./browser-config.js",
+      closeTrackedBrowserTabsForSessions: "./browser-maintenance.js",
+      movePathToTrash: "./browser-maintenance.js",
+      parseBrowserMajorVersion: "./browser-host-inspection.js",
+      redactCdpUrl: "./browser-config.js",
+      readBrowserVersion: "./browser-host-inspection.js",
+      resolveBrowserConfig: "./browser-config.js",
+      resolveBrowserControlAuth: "./browser-config.js",
+      resolveGoogleChromeExecutableForPlatform: "./browser-host-inspection.js",
+      resolveProfile: "./browser-config.js",
+    },
     exports: [
       "BrowserBridge",
       "BrowserCreateProfileResult",
@@ -428,21 +452,9 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     ],
   },
   {
-    subpath: "imessage-targets",
-    source: pluginSource("imessage", "api.js"),
-    exports: [
-      "normalizeIMessageHandle",
-      "parseChatAllowTargetPrefixes",
-      "parseChatTargetPrefixesOrThrow",
-      "resolveServicePrefixedAllowTarget",
-      "resolveServicePrefixedTarget",
-      "ParsedChatTarget",
-    ],
-    typeExports: ["ParsedChatTarget"],
-  },
-  {
     subpath: "image-generation-runtime",
     source: pluginSource("image-generation-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "generateImage",
       "listRuntimeImageGenerationProviders",
@@ -476,22 +488,6 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     ],
   },
   {
-    subpath: "imessage-policy",
-    source: pluginSource("imessage", "api.js"),
-    exports: [
-      "normalizeIMessageHandle",
-      "resolveIMessageRuntimeGroupPolicy",
-      "resolveIMessageGroupRequireMention",
-      "resolveIMessageGroupToolPolicy",
-    ],
-  },
-  {
-    subpath: "imessage-runtime",
-    source: pluginSource("imessage", "runtime-api.js"),
-    exports: ["monitorIMessageProvider", "probeIMessage", "sendMessageIMessage"],
-    typeExports: ["IMessageProbe"],
-  },
-  {
     subpath: "irc-surface",
     source: pluginSource("irc", "api.js"),
     exports: [
@@ -505,6 +501,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "media-understanding-runtime",
     source: pluginSource("media-understanding-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "describeImageFile",
       "describeImageFileWithModel",
@@ -519,6 +516,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "memory-core-engine-runtime",
     source: pluginSource("memory-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "BuiltinMemoryEmbeddingProviderDoctorMetadata",
       "getBuiltinMemoryEmbeddingProviderDoctorMetadata",
@@ -548,6 +546,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "line-runtime",
     source: pluginSource("line", "runtime-api.js"),
+    loadPolicy: "activated",
     runtimeApiPreExportsPath: runtimeApiSourcePath("line"),
     typeExports: [
       "Action",
@@ -576,6 +575,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "line-surface",
     source: pluginSource("line", "runtime-api.js"),
+    // This surface is also used by passive reply normalization helpers.
+    // Keep it loadable without requiring the LINE plugin to be activated.
     exports: [
       "CardAction",
       "createActionCard",
@@ -629,6 +630,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "matrix-runtime-surface",
     source: pluginSource("matrix", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: ["resolveMatrixAccountStringValues", "setMatrixRuntime"],
   },
   {
@@ -868,6 +870,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "speech-runtime",
     source: pluginSource("speech-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "_test",
       "buildTtsSystemPromptHint",
@@ -949,6 +952,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "slack-runtime-surface",
     source: pluginSource("slack", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "handleSlackAction",
       "listSlackDirectoryGroupsLive",
@@ -965,6 +969,13 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "slack-surface",
     source: pluginSource("slack", "api.js"),
+    functionExports: [
+      "listSlackAccountIds",
+      "listSlackDirectoryGroupsFromConfig",
+      "listSlackDirectoryPeersFromConfig",
+      "resolveDefaultSlackAccountId",
+      "resolveSlackRuntimeGroupPolicy",
+    ],
     exports: [
       "buildSlackThreadingToolContext",
       "createSlackWebClient",
@@ -1039,41 +1050,6 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     subpath: "telegram-allow-from",
     source: pluginSource("telegram", "api.js"),
     exports: ["isNumericTelegramUserId", "normalizeTelegramAllowFromEntry"],
-  },
-  {
-    subpath: "telegram-runtime-surface",
-    source: pluginSource("telegram", "runtime-api.js"),
-    exports: [
-      "auditTelegramGroupMembership",
-      "buildTelegramExecApprovalPendingPayload",
-      "collectTelegramUnmentionedGroupIds",
-      "createTelegramThreadBindingManager",
-      "createForumTopicTelegram",
-      "deleteMessageTelegram",
-      "editForumTopicTelegram",
-      "editMessageReplyMarkupTelegram",
-      "editMessageTelegram",
-      "monitorTelegramProvider",
-      "pinMessageTelegram",
-      "probeTelegram",
-      "reactMessageTelegram",
-      "renameForumTopicTelegram",
-      "resetTelegramThreadBindingsForTests",
-      "resolveTelegramRuntimeGroupPolicy",
-      "resolveTelegramToken",
-      "sendMessageTelegram",
-      "sendPollTelegram",
-      "sendStickerTelegram",
-      "sendTypingTelegram",
-      "setTelegramThreadBindingIdleTimeoutBySessionKey",
-      "setTelegramThreadBindingMaxAgeBySessionKey",
-      "shouldSuppressTelegramExecApprovalForwardingFallback",
-      "telegramMessageActions",
-      "TelegramApiOverride",
-      "TelegramProbe",
-      "unpinMessageTelegram",
-    ],
-    typeExports: ["TelegramApiOverride", "TelegramProbe"],
   },
   {
     subpath: "telegram-surface",
@@ -1263,6 +1239,16 @@ export const GENERATED_PLUGIN_SDK_FACADES_BY_SUBPATH = Object.fromEntries(
   GENERATED_PLUGIN_SDK_FACADES.map((entry) => [entry.subpath, entry]),
 );
 
+function resolveFacadeLoadPolicy(entry, sourcePath) {
+  // Keep loader policy next to the facade entry itself so additions stay local
+  // and mixed-source facades can opt into per-source behavior later if needed.
+  const sourcePolicy = entry.sourceLoadPolicy?.[sourcePath];
+  if (sourcePolicy) {
+    return sourcePolicy;
+  }
+  return entry.loadPolicy ?? "plain";
+}
+
 export const GENERATED_PLUGIN_SDK_FACADES_LABEL = "plugin-sdk-facades";
 export const GENERATED_PLUGIN_SDK_FACADES_SCRIPT = "scripts/generate-plugin-sdk-facades.mjs";
 export const GENERATED_PLUGIN_SDK_FACADE_TYPES_OUTPUT =
@@ -1282,6 +1268,7 @@ const MODULE_RESOLUTION_OPTIONS = {
   target: ts.ScriptTarget.ESNext,
 };
 const MODULE_RESOLUTION_HOST = ts.createCompilerHost(MODULE_RESOLUTION_OPTIONS, true);
+const moduleResolutionContextCache = new Map();
 const sourceExportKindsCache = new Map();
 
 function listFacadeEntrySourcePaths(entry) {
@@ -1381,6 +1368,48 @@ function resolveFacadeSourceTypescriptPath(repoRoot, sourcePath) {
   return candidates.find((candidate) => fs.existsSync(candidate));
 }
 
+function resolveFacadeModuleResolutionContext(repoRoot) {
+  const cacheKey = repoRoot || "__default__";
+  const cached = moduleResolutionContextCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  let context = {
+    options: MODULE_RESOLUTION_OPTIONS,
+    host: MODULE_RESOLUTION_HOST,
+  };
+
+  if (repoRoot) {
+    const fileExists = (filePath) => ts.sys.fileExists(filePath);
+    const readFile = (filePath) => ts.sys.readFile(filePath);
+    const configPath = ts.findConfigFile(repoRoot, fileExists, "tsconfig.json");
+    if (configPath) {
+      const configFile = ts.readConfigFile(configPath, readFile);
+      if (!configFile.error) {
+        const parsedConfig = ts.parseJsonConfigFileContent(
+          configFile.config,
+          ts.sys,
+          path.dirname(configPath),
+          MODULE_RESOLUTION_OPTIONS,
+          configPath,
+        );
+        const options = {
+          ...MODULE_RESOLUTION_OPTIONS,
+          ...parsedConfig.options,
+        };
+        context = {
+          options,
+          host: ts.createCompilerHost(options, true),
+        };
+      }
+    }
+  }
+
+  moduleResolutionContextCache.set(cacheKey, context);
+  return context;
+}
+
 function resolveFacadeSourceExportKinds(repoRoot, sourcePath) {
   const cacheKey = `${repoRoot}::${sourcePath}`;
   const cached = sourceExportKindsCache.get(cacheKey);
@@ -1395,10 +1424,11 @@ function resolveFacadeSourceExportKinds(repoRoot, sourcePath) {
     return empty;
   }
 
+  const moduleResolutionContext = resolveFacadeModuleResolutionContext(repoRoot);
   const program = ts.createProgram(
     [sourceTsPath],
-    MODULE_RESOLUTION_OPTIONS,
-    MODULE_RESOLUTION_HOST,
+    moduleResolutionContext.options,
+    moduleResolutionContext.host,
   );
   const sourceFile = program.getSourceFile(sourceTsPath);
   if (!sourceFile) {
@@ -1439,6 +1469,8 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
   const sourceExportKinds = params.repoRoot
     ? resolveFacadeSourceExportKinds(params.repoRoot, entry.source)
     : new Map();
+  const explicitFunctionExports = new Set(entry.functionExports ?? []);
+  const directExportSources = entry.directExports ?? {};
   const exportNames = entry.exportAll
     ? Array.from(sourceExportKinds.keys()).toSorted((left, right) => left.localeCompare(right))
     : entry.runtimeApiPreExportsPath
@@ -1452,6 +1484,10 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
   let needsLazyObjectHelper = false;
   for (const exportName of exportNames ?? []) {
     if (explicitTypeExports.has(exportName)) {
+      continue;
+    }
+    if (directExportSources[exportName]) {
+      valueExports.push(exportName);
       continue;
     }
     const kind = sourceExportKinds.get(exportName);
@@ -1491,26 +1527,60 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
       );
     }
   }
+  const directExportsBySource = new Map();
+  for (const exportName of valueExports) {
+    const sourcePath = directExportSources[exportName];
+    if (!sourcePath) {
+      continue;
+    }
+    const exportsForSource = directExportsBySource.get(sourcePath) ?? [];
+    exportsForSource.push(exportName);
+    directExportsBySource.set(sourcePath, exportsForSource);
+  }
+  if (directExportsBySource.size > 0) {
+    for (const [sourcePath, exportNamesForSource] of [...directExportsBySource.entries()].toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      lines.push(
+        `export { ${exportNamesForSource.toSorted((left, right) => left.localeCompare(right)).join(", ")} } from ${JSON.stringify(sourcePath)};`,
+      );
+    }
+  }
   if (valueExports.length) {
-    const runtimeImports = ["loadBundledPluginPublicSurfaceModuleSync"];
+    const runtimeImports = new Set();
     if (needsLazyArrayHelper) {
-      runtimeImports.unshift("createLazyFacadeArrayValue");
+      runtimeImports.add("createLazyFacadeArrayValue");
     }
     if (needsLazyObjectHelper) {
-      runtimeImports.unshift("createLazyFacadeObjectValue");
+      runtimeImports.add("createLazyFacadeObjectValue");
     }
-    lines.push(`import { ${runtimeImports.join(", ")} } from "./facade-runtime.js";`);
+    for (const sourcePath of listFacadeEntrySourcePaths(entry)) {
+      const loadPolicy = resolveFacadeLoadPolicy(entry, sourcePath);
+      runtimeImports.add(
+        loadPolicy === "activated"
+          ? "loadActivatedBundledPluginPublicSurfaceModuleSync"
+          : "loadBundledPluginPublicSurfaceModuleSync",
+      );
+    }
+    lines.push(
+      `import { ${[...runtimeImports].toSorted((left, right) => left.localeCompare(right)).join(", ")} } from "./facade-runtime.js";`,
+    );
     for (const [sourceIndex, sourcePath] of listFacadeEntrySourcePaths(entry).entries()) {
       if (!valueExportsBySource.has(sourcePath)) {
         continue;
       }
       const { dirName: sourceDirName, artifactBasename: sourceArtifactBasename } =
         normalizeFacadeSourceParts(sourcePath);
+      const loadPolicy = resolveFacadeLoadPolicy(entry, sourcePath);
+      const loaderName =
+        loadPolicy === "activated"
+          ? "loadActivatedBundledPluginPublicSurfaceModuleSync"
+          : "loadBundledPluginPublicSurfaceModuleSync";
       const loaderSuffix = sourceIndex === 0 ? "" : String(sourceIndex + 1);
       const moduleTypeName = sourceIndex === 0 ? "FacadeModule" : `FacadeModule${sourceIndex + 1}`;
       lines.push("");
       lines.push(`function loadFacadeModule${loaderSuffix}(): ${moduleTypeName} {`);
-      lines.push(`  return loadBundledPluginPublicSurfaceModuleSync<${moduleTypeName}>({`);
+      lines.push(`  return ${loaderName}<${moduleTypeName}>({`);
       lines.push(`    dirName: ${JSON.stringify(sourceDirName)},`);
       lines.push(`    artifactBasename: ${JSON.stringify(sourceArtifactBasename)},`);
       lines.push("  });");
@@ -1522,12 +1592,16 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
       listFacadeEntrySourcePaths(entry).map((sourcePath, index) => [sourcePath, index]),
     );
     for (const exportName of valueExports) {
+      if (directExportSources[exportName]) {
+        continue;
+      }
       const kind = sourceExportKinds.get(exportName);
+      const isExplicitFunctionExport = explicitFunctionExports.has(exportName);
       const sourcePath = entry.exportSources?.[exportName] ?? entry.source;
       const sourceIndex = sourceIndexByPath.get(sourcePath) ?? 0;
       const loaderSuffix = sourceIndex === 0 ? "" : String(sourceIndex + 1);
       const moduleTypeName = sourceIndex === 0 ? "FacadeModule" : `FacadeModule${sourceIndex + 1}`;
-      if (kind?.functionLike || kind?.callable) {
+      if (isExplicitFunctionExport || kind?.functionLike || kind?.callable) {
         lines.push(
           `export const ${exportName}: ${moduleTypeName}[${JSON.stringify(exportName)}] = ((...args) =>`,
         );

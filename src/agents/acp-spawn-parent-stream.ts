@@ -6,7 +6,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
-import { updateTaskStateByRunId } from "../tasks/task-registry.js";
+import { recordTaskRunProgressByRunId } from "../tasks/task-executor.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -204,8 +204,10 @@ export function startAcpSpawnParentStreamRelay(params: {
     wake();
   };
   const emitStartNotice = () => {
-    updateTaskStateByRunId({
+    recordTaskRunProgressByRunId({
       runId,
+      runtime: "acp",
+      sessionKey: params.childSessionKey,
       lastEventAt: Date.now(),
       eventSummary: "Started.",
     });
@@ -271,8 +273,10 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     stallNotified = true;
-    updateTaskStateByRunId({
+    recordTaskRunProgressByRunId({
       runId,
+      runtime: "acp",
+      sessionKey: params.childSessionKey,
       lastEventAt: Date.now(),
       eventSummary: `No output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for input.`,
     });
@@ -317,8 +321,10 @@ export function startAcpSpawnParentStreamRelay(params: {
 
       if (stallNotified) {
         stallNotified = false;
-        updateTaskStateByRunId({
+        recordTaskRunProgressByRunId({
           runId,
+          runtime: "acp",
+          sessionKey: params.childSessionKey,
           lastEventAt: Date.now(),
           eventSummary: "Resumed output.",
         });

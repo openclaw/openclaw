@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withServer } from "../../../test/helpers/http-test-server.js";
+import type { PluginRuntime } from "../runtime-api.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
   postWebhookReplay,
-  resetLifecycleTestState,
-  setLifecycleRuntimeCore,
-  sendMessageMock,
   settleAsyncWork,
+} from "../test-support/lifecycle-test-support.js";
+import {
+  resetLifecycleTestState,
+  sendMessageMock,
+  setLifecycleRuntimeCore,
   startWebhookLifecycleMonitor,
-} from "../../../test/helpers/plugins/zalo-lifecycle.js";
-import type { PluginRuntime } from "../runtime-api.js";
+} from "../test-support/monitor-mocks-test-support.js";
 
 describe("Zalo reply-once lifecycle", () => {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
@@ -25,8 +27,8 @@ describe("Zalo reply-once lifecycle", () => {
   }));
   const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn();
 
-  beforeEach(() => {
-    resetLifecycleTestState();
+  beforeEach(async () => {
+    await resetLifecycleTestState();
     setLifecycleRuntimeCore({
       routing: {
         resolveAgentRoute:
@@ -45,8 +47,8 @@ describe("Zalo reply-once lifecycle", () => {
     });
   });
 
-  afterEach(() => {
-    resetLifecycleTestState();
+  afterEach(async () => {
+    await resetLifecycleTestState();
   });
 
   function createReplyOnceMonitorSetup() {

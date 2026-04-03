@@ -84,6 +84,50 @@ describe("buildTelegramInteractiveButtons", () => {
       [{ text: "Alpha", callback_data: "alpha", style: undefined }],
     ]);
   });
+
+  it("drops shared buttons whose callback data exceeds Telegram's limit", () => {
+    expect(
+      buildTelegramInteractiveButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Keep", value: "keep" },
+              { label: "Too long", value: `a${"b".repeat(64)}` },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([[{ text: "Keep", callback_data: "keep", style: undefined }]]);
+  });
+
+  it("rewrites /approve allow-always callbacks to always so plugin IDs fit Telegram limits", () => {
+    const pluginApprovalId = `plugin:${"a".repeat(36)}`;
+    expect(
+      buildTelegramInteractiveButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Always",
+                value: `/approve ${pluginApprovalId} allow-always`,
+                style: "primary",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([
+      [
+        {
+          text: "Allow Always",
+          callback_data: `/approve ${pluginApprovalId} always`,
+          style: "primary",
+        },
+      ],
+    ]);
+  });
 });
 
 describe("resolveTelegramInlineButtons", () => {

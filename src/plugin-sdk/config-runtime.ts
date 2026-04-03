@@ -3,14 +3,20 @@
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
+  clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
   loadConfig,
   readConfigFileSnapshotForWrite,
+  setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "../config/io.js";
 export { logConfigUpdated } from "../config/logging.js";
 export { updateConfig } from "../commands/models/shared.js";
 export { resolveChannelModelOverride } from "../channels/model-overrides.js";
+export {
+  resolveChannelContextVisibilityMode,
+  resolveDefaultContextVisibility,
+} from "../config/context-visibility.js";
 export { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 export {
   resolveChannelGroupPolicy,
@@ -63,6 +69,7 @@ export type {
   DiscordIntentsConfig,
   DiscordSlashCommandConfig,
   DmPolicy,
+  ContextVisibilityMode,
   GroupPolicy,
   MarkdownTableMode,
   OpenClawConfig,
@@ -87,9 +94,11 @@ export type {
   TtsProvider,
 } from "../config/types.js";
 export {
+  clearSessionStoreCacheForTest,
   loadSessionStore,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
+  saveSessionStore,
   resolveSessionKey,
   resolveStorePath,
   updateLastRoute,

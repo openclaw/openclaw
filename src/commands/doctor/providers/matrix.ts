@@ -19,6 +19,7 @@ import {
 } from "../../../infra/plugin-install-path-warnings.js";
 import { resolveBundledPluginInstallCommandHint } from "../../../plugins/bundled-sources.js";
 import { removePluginFromConfig } from "../../../plugins/uninstall.js";
+import { isRecord } from "../../../utils.js";
 import type { DoctorConfigMutationResult } from "../shared/config-mutation-state.js";
 
 export function formatMatrixLegacyStatePreview(
@@ -72,6 +73,34 @@ export async function collectMatrixInstallPathWarnings(cfg: OpenClawConfig): Pro
     }),
     formatCommand: formatCliCommand,
   }).map((entry) => `- ${entry}`);
+}
+
+function hasConfiguredMatrixChannel(cfg: OpenClawConfig): boolean {
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  return isRecord(channels?.matrix);
+}
+
+function hasConfiguredMatrixPluginSurface(cfg: OpenClawConfig): boolean {
+  return Boolean(
+    cfg.plugins?.installs?.matrix ||
+    cfg.plugins?.entries?.matrix ||
+    cfg.plugins?.allow?.includes("matrix") ||
+    cfg.plugins?.deny?.includes("matrix"),
+  );
+}
+
+function hasConfiguredMatrixEnv(env: NodeJS.ProcessEnv): boolean {
+  return Object.entries(env).some(
+    ([key, value]) => key.startsWith("MATRIX_") && typeof value === "string" && value.trim(),
+  );
+}
+
+function configMayNeedMatrixDoctorSequence(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  return (
+    hasConfiguredMatrixChannel(cfg) ||
+    hasConfiguredMatrixPluginSurface(cfg) ||
+    hasConfiguredMatrixEnv(env)
+  );
 }
 
 /**
@@ -199,6 +228,16 @@ export async function runMatrixDoctorSequence(params: {
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
 }): Promise<{ changeNotes: string[]; warningNotes: string[] }> {
+  const warningNotes: string[] = [];
+  const changeNotes: string[] = [];
+  const matrixInstallWarnings = await collectMatrixInstallPathWarnings(params.cfg);
+  if (matrixInstallWarnings.length > 0) {
+    warningNotes.push(matrixInstallWarnings.join("\n"));
+  }
+  if (!configMayNeedMatrixDoctorSequence(params.cfg, params.env)) {
+    return { changeNotes, warningNotes };
+  }
+
   const matrixLegacyState = detectLegacyMatrixState({
     cfg: params.cfg,
     env: params.env,
@@ -207,8 +246,6 @@ export async function runMatrixDoctorSequence(params: {
     cfg: params.cfg,
     env: params.env,
   });
-  const warningNotes: string[] = [];
-  const changeNotes: string[] = [];
 
   if (params.shouldRepair) {
     const matrixRepair = await applyMatrixDoctorRepair({
@@ -230,11 +267,6 @@ export async function runMatrixDoctorSequence(params: {
     (matrixLegacyCrypto.warnings.length > 0 || matrixLegacyCrypto.plans.length > 0)
   ) {
     warningNotes.push(...formatMatrixLegacyCryptoPreview(matrixLegacyCrypto));
-  }
-
-  const matrixInstallWarnings = await collectMatrixInstallPathWarnings(params.cfg);
-  if (matrixInstallWarnings.length > 0) {
-    warningNotes.push(matrixInstallWarnings.join("\n"));
   }
 
   return { changeNotes, warningNotes };

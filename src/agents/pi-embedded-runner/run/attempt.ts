@@ -21,11 +21,6 @@ import {
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "../../../plugin-sdk/ollama.js";
-import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
-import {
-  resolveTelegramInlineButtonsScope,
-  resolveTelegramReactionLevel,
-} from "../../../plugin-sdk/telegram-runtime.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -48,7 +43,9 @@ import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstra
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
+  resolveChannelMessageToolCapabilities,
   resolveChannelMessageToolHints,
+  resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
@@ -61,15 +58,16 @@ import { supportsModelTools } from "../../model-tool-support.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
-import { createBundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
+import {
+  getOrCreateSessionMcpRuntime,
+  materializeBundleMcpToolsForRun,
+} from "../../pi-bundle-mcp-tools.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
-  validateAnthropicTurns,
-  validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
@@ -97,7 +95,6 @@ import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
-import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "../../xai-auth-trace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
@@ -108,6 +105,7 @@ import {
   logToolSchemasForGoogle,
   sanitizeSessionHistory,
   sanitizeToolsForGoogle,
+  validateReplayTurns,
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -127,7 +125,11 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import { dropThinkingBlocks } from "../thinking.js";
+import {
+  dropThinkingBlocks,
+  sanitizeThinkingForRecovery,
+  wrapAnthropicStreamWithRecovery,
+} from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
@@ -178,6 +180,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export {
@@ -216,6 +219,10 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
+function shouldEnableAnthropicThinkingRecovery(api: string | null | undefined): boolean {
+  return api === "anthropic-messages" || api === "bedrock-converse-stream";
+}
+
 export function resolveEmbeddedAgentStreamFn(params: {
   currentStreamFn: StreamFn | undefined;
   providerStreamFn?: StreamFn;
@@ -224,9 +231,22 @@ export function resolveEmbeddedAgentStreamFn(params: {
   sessionId: string;
   signal?: AbortSignal;
   model: EmbeddedRunAttemptParams["model"];
+  authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
 }): StreamFn {
   if (params.providerStreamFn) {
-    return params.providerStreamFn;
+    const inner = params.providerStreamFn;
+    // The default pi-coding-agent streamFn injects apiKey from authStorage
+    // into options via modelRegistry.getApiKeyAndHeaders(). Provider-supplied
+    // stream functions bypass that default, so we replicate the injection here
+    // so the resolved credential reaches the provider's HTTP layer.
+    if (params.authStorage) {
+      const { authStorage, model } = params;
+      return async (m, context, options) => {
+        const apiKey = await authStorage.getApiKey(model.provider);
+        return inner(m, context, { ...options, apiKey: apiKey ?? options?.apiKey });
+      };
+    }
+    return inner;
   }
 
   const currentStreamFn = params.currentStreamFn ?? streamSimple;
@@ -417,74 +437,95 @@ export async function runEmbeddedAttempt(
     const modelHasVision = params.model.input?.includes("image") ?? false;
     const toolsRaw = params.disableTools
       ? []
-      : createOpenClawCodingTools({
-          agentId: sessionAgentId,
-          trigger: params.trigger,
-          memoryFlushWritePath: params.memoryFlushWritePath,
-          exec: {
-            ...params.execOverrides,
-            elevated: params.bashElevated,
-          },
-          sandbox,
-          messageProvider: params.messageChannel ?? params.messageProvider,
-          agentAccountId: params.agentAccountId,
-          messageTo: params.messageTo,
-          messageThreadId: params.messageThreadId,
-          groupId: params.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          spawnedBy: params.spawnedBy,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
-          senderIsOwner: params.senderIsOwner,
-          allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-          sessionKey: sandboxSessionKey,
-          sessionId: params.sessionId,
-          runId: params.runId,
-          agentDir,
-          workspaceDir: effectiveWorkspace,
-          // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
-          // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
-          spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+      : (() => {
+          const allTools = createOpenClawCodingTools({
+            agentId: sessionAgentId,
+            trigger: params.trigger,
+            memoryFlushWritePath: params.memoryFlushWritePath,
+            exec: {
+              ...params.execOverrides,
+              elevated: params.bashElevated,
+            },
             sandbox,
-            resolvedWorkspace,
-          }),
-          config: params.config,
-          abortSignal: runAbortController.signal,
-          modelProvider: params.model.provider,
-          modelId: params.modelId,
-          modelCompat: params.model.compat,
-          modelContextWindowTokens: params.model.contextWindow,
-          modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
-          currentChannelId: params.currentChannelId,
-          currentThreadTs: params.currentThreadTs,
-          currentMessageId: params.currentMessageId,
-          replyToMode: params.replyToMode,
-          hasRepliedRef: params.hasRepliedRef,
-          modelHasVision,
-          requireExplicitMessageTarget:
-            params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
-          disableMessageTool: params.disableMessageTool,
-          onYield: (message) => {
-            yieldDetected = true;
-            yieldMessage = message;
-            queueYieldInterruptForSession?.();
-            runAbortController.abort("sessions_yield");
-            abortSessionForYield?.();
-          },
-        });
+            messageProvider: params.messageChannel ?? params.messageProvider,
+            agentAccountId: params.agentAccountId,
+            messageTo: params.messageTo,
+            messageThreadId: params.messageThreadId,
+            groupId: params.groupId,
+            groupChannel: params.groupChannel,
+            groupSpace: params.groupSpace,
+            spawnedBy: params.spawnedBy,
+            senderId: params.senderId,
+            senderName: params.senderName,
+            senderUsername: params.senderUsername,
+            senderE164: params.senderE164,
+            senderIsOwner: params.senderIsOwner,
+            allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+            sessionKey: sandboxSessionKey,
+            sessionId: params.sessionId,
+            runId: params.runId,
+            agentDir,
+            workspaceDir: effectiveWorkspace,
+            // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
+            // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
+            spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+              sandbox,
+              resolvedWorkspace,
+            }),
+            config: params.config,
+            abortSignal: runAbortController.signal,
+            modelProvider: params.model.provider,
+            modelId: params.modelId,
+            modelCompat: params.model.compat,
+            modelApi: params.model.api,
+            modelContextWindowTokens: params.model.contextWindow,
+            modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+            currentChannelId: params.currentChannelId,
+            currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
+            replyToMode: params.replyToMode,
+            hasRepliedRef: params.hasRepliedRef,
+            modelHasVision,
+            requireExplicitMessageTarget:
+              params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+            disableMessageTool: params.disableMessageTool,
+            onYield: (message) => {
+              yieldDetected = true;
+              yieldMessage = message;
+              queueYieldInterruptForSession?.();
+              runAbortController.abort("sessions_yield");
+              abortSessionForYield?.();
+            },
+          });
+          if (params.toolsAllow && params.toolsAllow.length > 0) {
+            const allowSet = new Set(params.toolsAllow);
+            return allTools.filter((tool) => allowSet.has(tool.name));
+          }
+          return allTools;
+        })();
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
       tools: toolsEnabled ? toolsRaw : [],
       provider: params.provider,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
-    const bundleMcpRuntime = toolsEnabled
-      ? await createBundleMcpToolRuntime({
+    const bundleMcpSessionRuntime = toolsEnabled
+      ? await getOrCreateSessionMcpRuntime({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
+        })
+      : undefined;
+    const bundleMcpRuntime = bundleMcpSessionRuntime
+      ? await materializeBundleMcpToolsForRun({
+          runtime: bundleMcpSessionRuntime,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
@@ -511,7 +552,16 @@ export async function runEmbeddedAttempt(
       tools: effectiveTools,
       clientTools,
     });
-    logToolSchemasForGoogle({ tools: effectiveTools, provider: params.provider });
+    logToolSchemasForGoogle({
+      tools: effectiveTools,
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
+    });
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -522,46 +572,45 @@ export async function runEmbeddedAttempt(
           accountId: params.agentAccountId,
         }) ?? [])
       : undefined;
-    if (runtimeChannel === "telegram" && params.config) {
-      const inlineButtonsScope = resolveTelegramInlineButtonsScope({
-        cfg: params.config,
-        accountId: params.agentAccountId ?? undefined,
-      });
-      if (inlineButtonsScope !== "off") {
-        if (!runtimeCapabilities) {
-          runtimeCapabilities = [];
+    const promptCapabilities =
+      runtimeChannel && params.config
+        ? resolveChannelMessageToolCapabilities({
+            cfg: params.config,
+            channel: runtimeChannel,
+            accountId: params.agentAccountId,
+          })
+        : [];
+    if (promptCapabilities.length > 0) {
+      runtimeCapabilities ??= [];
+      const seenCapabilities = new Set(
+        runtimeCapabilities.map((cap) => String(cap).trim().toLowerCase()),
+      );
+      for (const capability of promptCapabilities) {
+        const normalizedCapability = capability.trim().toLowerCase();
+        if (!normalizedCapability || seenCapabilities.has(normalizedCapability)) {
+          continue;
         }
-        if (
-          !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
-        ) {
-          runtimeCapabilities.push("inlineButtons");
-        }
+        seenCapabilities.add(normalizedCapability);
+        runtimeCapabilities.push(capability);
       }
     }
     const reactionGuidance =
       runtimeChannel && params.config
-        ? (() => {
-            if (runtimeChannel === "telegram") {
-              const resolved = resolveTelegramReactionLevel({
-                cfg: params.config,
-                accountId: params.agentAccountId ?? undefined,
-              });
-              const level = resolved.agentReactionGuidance;
-              return level ? { level, channel: "Telegram" } : undefined;
-            }
-            if (runtimeChannel === "signal") {
-              const resolved = resolveSignalReactionLevel({
-                cfg: params.config,
-                accountId: params.agentAccountId ?? undefined,
-              });
-              const level = resolved.agentReactionGuidance;
-              return level ? { level, channel: "Signal" } : undefined;
-            }
-            return undefined;
-          })()
+        ? resolveChannelReactionGuidance({
+            cfg: params.config,
+            channel: runtimeChannel,
+            accountId: params.agentAccountId,
+          })
         : undefined;
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
-    const reasoningTagHint = isReasoningTagProvider(params.provider);
+    const reasoningTagHint = isReasoningTagProvider(params.provider, {
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
+    });
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
       ? listChannelSupportedActions(
@@ -612,6 +661,10 @@ export async function runEmbeddedAttempt(
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode = resolvePromptModeForSession(params.sessionKey);
+
+    // When toolsAllow is set, use minimal prompt and strip skills catalog
+    const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
+    const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
@@ -637,12 +690,12 @@ export async function runEmbeddedAttempt(
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
       reasoningTagHint,
       heartbeatPrompt,
-      skillsPrompt,
+      skillsPrompt: effectiveSkillsPrompt,
       docsPath: docsPath ?? undefined,
       ttsHint,
       workspaceNotes,
       reactionGuidance,
-      promptMode,
+      promptMode: effectivePromptMode,
       acpEnabled: params.config?.acp?.enabled !== false,
       runtimeInfo,
       messageToolHints,
@@ -713,6 +766,10 @@ export async function runEmbeddedAttempt(
         modelApi: params.model?.api,
         provider: params.provider,
         modelId: params.modelId,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        env: process.env,
+        model: params.model,
       });
 
       await prewarmSessionFile(params.sessionFile);
@@ -884,12 +941,6 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      if (shouldTraceProviderAuth(params.provider)) {
-        const runtimeApiKey = await params.authStorage.getApiKey(params.provider).catch(() => "");
-        log.info(
-          `[xai-auth] pre-stream setup: modelApi=${params.model.api} baseUrl=${params.model.baseUrl ?? "default"} runtimeAuthKey=${summarizeProviderAuthKey(runtimeApiKey)} headersAuth=${params.model.headers?.Authorization ? "present" : "absent"} responsesAuthPath=apiKey-argument`,
-        );
-      }
       const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
         provider: params.provider,
         modelApi: params.model.api,
@@ -910,6 +961,7 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         signal: runAbortController.signal,
         model: params.model,
+        authStorage: params.authStorage,
       });
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
@@ -925,6 +977,7 @@ export async function runEmbeddedAttempt(
         sessionAgentId,
         effectiveWorkspace,
         params.model,
+        agentDir,
       );
       const agentTransportOverride = resolveAgentTransportOverride({
         settingsManager,
@@ -999,6 +1052,7 @@ export async function runEmbeddedAttempt(
 
       if (
         params.model.api === "openai-responses" ||
+        params.model.api === "azure-openai-responses" ||
         params.model.api === "openai-codex-responses"
       ) {
         const inner = activeSession.agent.streamFn;
@@ -1059,12 +1113,18 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      if (shouldEnableAnthropicThinkingRecovery(params.model.api)) {
+        activeSession.agent.streamFn = wrapAnthropicStreamWithRecovery(
+          activeSession.agent.streamFn,
+          { id: activeSession.sessionId },
+        );
+      }
+
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
       }
-
       // Anthropic-compatible providers can add new stop reasons before pi-ai maps them.
       // Recover the known "sensitive" stop reason here so a model refusal does not
       // bubble out as an uncaught runner error and stall channel polling.
@@ -1072,7 +1132,41 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn,
       );
 
+      let idleTimeoutTrigger: ((error: Error) => void) | undefined;
+
+      // Wrap stream with idle timeout detection
+      const idleTimeoutMs = resolveLlmIdleTimeoutMs(params.config);
+      if (idleTimeoutMs > 0) {
+        activeSession.agent.streamFn = streamWithIdleTimeout(
+          activeSession.agent.streamFn,
+          idleTimeoutMs,
+          (error) => idleTimeoutTrigger?.(error),
+        );
+      }
+
       try {
+        if (shouldEnableAnthropicThinkingRecovery(params.model.api)) {
+          const originalMessageCount = activeSession.messages.length;
+          const { messages, prefill } = sanitizeThinkingForRecovery(activeSession.messages);
+          if (messages !== activeSession.messages) {
+            activeSession.agent.replaceMessages(messages);
+          }
+          if (messages.length !== originalMessageCount) {
+            log.warn(
+              `[session-recovery] dropped latest assistant message with incomplete thinking: sessionId=${params.sessionId}`,
+            );
+          }
+          if (prefill) {
+            // Keeping the signed-thinking turn intact is a forward-compatibility
+            // signal for future prefill-style recovery; the current fallback
+            // still comes from the one-shot stream wrapper if Anthropic rejects
+            // the replayed payload.
+            log.warn(
+              `[session-recovery] keeping latest assistant message with signed thinking and incomplete text: sessionId=${params.sessionId}`,
+            );
+          }
+        }
+
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
           modelApi: params.model.api,
@@ -1080,17 +1174,26 @@ export async function runEmbeddedAttempt(
           provider: params.provider,
           allowedToolNames,
           config: params.config,
+          workspaceDir: effectiveWorkspace,
+          env: process.env,
+          model: params.model,
           sessionManager,
           sessionId: params.sessionId,
           policy: transcriptPolicy,
         });
         cacheTrace?.recordStage("session:sanitized", { messages: prior });
-        const validatedGemini = transcriptPolicy.validateGeminiTurns
-          ? validateGeminiTurns(prior)
-          : prior;
-        const validated = transcriptPolicy.validateAnthropicTurns
-          ? validateAnthropicTurns(validatedGemini)
-          : validatedGemini;
+        const validated = await validateReplayTurns({
+          messages: prior,
+          modelApi: params.model.api,
+          modelId: params.modelId,
+          provider: params.provider,
+          config: params.config,
+          workspaceDir: effectiveWorkspace,
+          env: process.env,
+          model: params.model,
+          sessionId: params.sessionId,
+          policy: transcriptPolicy,
+        });
         const truncated = limitHistoryTurns(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
@@ -1099,7 +1202,9 @@ export async function runEmbeddedAttempt(
         // limitHistoryTurns can orphan tool_result blocks by removing the
         // assistant message that contained the matching tool_use.
         const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated)
+          ? sanitizeToolUseResultPairing(truncated, {
+              erroredAssistantResultPolicy: "drop",
+            })
           : truncated;
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
@@ -1162,6 +1267,13 @@ export async function runEmbeddedAttempt(
       };
       const makeAbortError = (signal: AbortSignal): Error => {
         const reason = getAbortReason(signal);
+        // If the reason is already an Error, preserve it to keep the original message
+        // (e.g., "LLM idle timeout (60s): no response from model" instead of "aborted")
+        if (reason instanceof Error) {
+          const err = new Error(reason.message, { cause: reason });
+          err.name = "AbortError";
+          return err;
+        }
         const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
         err.name = "AbortError";
         return err;
@@ -1192,6 +1304,9 @@ export async function runEmbeddedAttempt(
         }
         abortCompaction();
         void activeSession.abort();
+      };
+      idleTimeoutTrigger = (error) => {
+        abortRun(true, error);
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
         const signal = runAbortController.signal;
@@ -1460,6 +1575,7 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             model: params.model,
             existingImages: params.images,
+            imageOrder: params.imageOrder,
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
             workspaceOnly: effectiveFsWorkspaceOnly,
@@ -1862,7 +1978,6 @@ export async function runEmbeddedAttempt(
       });
       session?.dispose();
       releaseWsSession(params.sessionId);
-      await bundleMcpRuntime?.dispose();
       await bundleLspRuntime?.dispose();
       await sessionLock.release();
     }

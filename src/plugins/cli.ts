@@ -1,22 +1,66 @@
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { removeCommandByName } from "../cli/program/command-tree.js";
+import { registerLazyCommand } from "../cli/program/register-lazy-command.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import {
+  loadOpenClawPluginCliRegistry,
+  loadOpenClawPlugins,
+  type PluginLoadOptions,
+} from "./loader.js";
+import type { PluginRegistry } from "./registry.js";
 import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
 import type { PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
-function loadPluginCliRegistry(
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
-) {
+type PluginCliRegistrationMode = "eager" | "lazy";
+
+type RegisterPluginCliOptions = {
+  mode?: PluginCliRegistrationMode;
+  primary?: string | null;
+};
+
+function canRegisterPluginCliLazily(entry: {
+  commands: string[];
+  descriptors: OpenClawPluginCliCommandDescriptor[];
+}): boolean {
+  if (entry.descriptors.length === 0) {
+    return false;
+  }
+  const descriptorNames = new Set(entry.descriptors.map((descriptor) => descriptor.name));
+  return entry.commands.every((command) => descriptorNames.has(command));
+}
+
+function hasIgnoredAsyncPluginRegistration(registry: PluginRegistry): boolean {
+  return (registry.diagnostics ?? []).some(
+    (entry) =>
+      entry.message === "plugin register returned a promise; async registration is ignored",
+  );
+}
+
+function mergeCliRegistrars(params: {
+  runtimeRegistry: PluginRegistry;
+  metadataRegistry: PluginRegistry;
+}) {
+  const metadataCommands = new Set(
+    params.metadataRegistry.cliRegistrars.flatMap((entry) => entry.commands),
+  );
+  return [
+    ...params.metadataRegistry.cliRegistrars,
+    ...params.runtimeRegistry.cliRegistrars.filter(
+      (entry) => !entry.commands.some((command) => metadataCommands.has(command)),
+    ),
+  ];
+}
+
+function resolvePluginCliLoadContext(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const config = cfg ?? loadConfig();
-  const resolvedConfig = applyPluginAutoEnable({ config, env: env ?? process.env }).config;
+  const autoEnabled = applyPluginAutoEnable({ config, env: env ?? process.env });
+  const resolvedConfig = autoEnabled.config;
   const workspaceDir = resolveAgentWorkspaceDir(
     resolvedConfig,
     resolveDefaultAgentId(resolvedConfig),
@@ -28,25 +72,92 @@ function loadPluginCliRegistry(
     debug: (msg: string) => log.debug(msg),
   };
   return {
+    rawConfig: config,
     config: resolvedConfig,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     logger,
-    registry: loadOpenClawPlugins({
-      config: resolvedConfig,
-      workspaceDir,
+  };
+}
+
+async function loadPluginCliMetadataRegistry(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+) {
+  const context = resolvePluginCliLoadContext(cfg, env);
+  return {
+    ...context,
+    registry: await loadOpenClawPluginCliRegistry({
+      config: context.config,
+      activationSourceConfig: context.rawConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
+      workspaceDir: context.workspaceDir,
       env,
-      logger,
+      logger: context.logger,
       ...loaderOptions,
     }),
   };
 }
 
-export function getPluginCliCommandDescriptors(
+async function loadPluginCliCommandRegistry(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-): OpenClawPluginCliCommandDescriptor[] {
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+) {
+  const context = resolvePluginCliLoadContext(cfg, env);
+  const runtimeRegistry = loadOpenClawPlugins({
+    config: context.config,
+    activationSourceConfig: context.rawConfig,
+    autoEnabledReasons: context.autoEnabledReasons,
+    workspaceDir: context.workspaceDir,
+    env,
+    logger: context.logger,
+    ...loaderOptions,
+  });
+
+  if (!hasIgnoredAsyncPluginRegistration(runtimeRegistry)) {
+    return {
+      ...context,
+      registry: runtimeRegistry,
+    };
+  }
+
   try {
-    const { registry } = loadPluginCliRegistry(cfg, env);
+    const metadataRegistry = await loadOpenClawPluginCliRegistry({
+      config: context.config,
+      activationSourceConfig: context.rawConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
+      workspaceDir: context.workspaceDir,
+      env,
+      logger: context.logger,
+      ...loaderOptions,
+    });
+    return {
+      ...context,
+      registry: {
+        ...runtimeRegistry,
+        cliRegistrars: mergeCliRegistrars({
+          runtimeRegistry,
+          metadataRegistry,
+        }),
+      },
+    };
+  } catch (error) {
+    log.warn(`plugin CLI metadata fallback failed: ${String(error)}`);
+    return {
+      ...context,
+      registry: runtimeRegistry,
+    };
+  }
+}
+
+export async function getPluginCliCommandDescriptors(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): Promise<OpenClawPluginCliCommandDescriptor[]> {
+  try {
+    const { registry } = await loadPluginCliMetadataRegistry(cfg, env);
     const seen = new Set<string>();
     const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
     for (const entry of registry.cliRegistrars) {
@@ -64,17 +175,44 @@ export function getPluginCliCommandDescriptors(
   }
 }
 
-export function registerPluginCliCommands(
+export async function registerPluginCliCommands(
   program: Command,
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
   loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+  options?: RegisterPluginCliOptions,
 ) {
-  const { config, workspaceDir, logger, registry } = loadPluginCliRegistry(cfg, env, loaderOptions);
+  const { config, workspaceDir, logger, registry } = await loadPluginCliCommandRegistry(
+    cfg,
+    env,
+    loaderOptions,
+  );
+  const mode = options?.mode ?? "eager";
+  const primary = options?.primary ?? null;
 
   const existingCommands = new Set(program.commands.map((cmd) => cmd.name()));
 
   for (const entry of registry.cliRegistrars) {
+    const registerEntry = async () => {
+      await entry.register({
+        program,
+        config,
+        workspaceDir,
+        logger,
+      });
+    };
+
+    if (primary && entry.commands.includes(primary)) {
+      for (const commandName of new Set(entry.commands)) {
+        removeCommandByName(program, commandName);
+      }
+      await registerEntry();
+      for (const command of entry.commands) {
+        existingCommands.add(command);
+      }
+      continue;
+    }
+
     if (entry.commands.length > 0) {
       const overlaps = entry.commands.filter((command) => existingCommands.has(command));
       if (overlaps.length > 0) {
@@ -86,17 +224,27 @@ export function registerPluginCliCommands(
         continue;
       }
     }
+
     try {
-      const result = entry.register({
-        program,
-        config,
-        workspaceDir,
-        logger,
-      });
-      if (result && typeof result.then === "function") {
-        void result.catch((err) => {
-          log.warn(`plugin CLI register failed (${entry.pluginId}): ${String(err)}`);
-        });
+      if (mode === "lazy" && canRegisterPluginCliLazily(entry)) {
+        for (const descriptor of entry.descriptors) {
+          registerLazyCommand({
+            program,
+            name: descriptor.name,
+            description: descriptor.description,
+            removeNames: entry.commands,
+            register: async () => {
+              await registerEntry();
+            },
+          });
+        }
+      } else {
+        if (mode === "lazy" && entry.descriptors.length > 0) {
+          log.debug(
+            `plugin CLI lazy register fallback to eager (${entry.pluginId}): descriptors do not cover all command roots`,
+          );
+        }
+        await registerEntry();
       }
       for (const command of entry.commands) {
         existingCommands.add(command);

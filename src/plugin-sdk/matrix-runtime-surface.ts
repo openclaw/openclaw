@@ -2,13 +2,10 @@
 import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
 type FacadeEntry = PluginSdkFacadeTypeMap["matrix-runtime-surface"];
 type FacadeModule = FacadeEntry["module"];
-import {
-  createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
-} from "./facade-runtime.js";
+import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "matrix",
     artifactBasename: "runtime-api.js",
   });
@@ -19,6 +16,5 @@ export const resolveMatrixAccountStringValues: FacadeModule["resolveMatrixAccoun
   loadFacadeModule()["resolveMatrixAccountStringValues"](
     ...args,
   )) as FacadeModule["resolveMatrixAccountStringValues"];
-export const setMatrixRuntime: FacadeModule["setMatrixRuntime"] = createLazyFacadeObjectValue(
-  () => loadFacadeModule()["setMatrixRuntime"] as object,
-) as FacadeModule["setMatrixRuntime"];
+export const setMatrixRuntime: FacadeModule["setMatrixRuntime"] = ((...args) =>
+  loadFacadeModule()["setMatrixRuntime"](...args)) as FacadeModule["setMatrixRuntime"];
