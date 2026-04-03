@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
+  shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -26,7 +27,6 @@ import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
-  OLLAMA_LOCAL_AUTH_MARKER,
 } from "./model-auth-markers.js";
 import {
   requireApiKey,
@@ -305,13 +305,23 @@ function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
   return { mode: "aws-sdk", source: "aws-sdk default chain" };
 }
 
-function shouldDeferSyntheticOllamaProfileAuth(params: {
+function shouldDeferSyntheticProfileAuth(params: {
+  cfg: OpenClawConfig | undefined;
   provider: string;
   resolvedApiKey: string | undefined;
 }): boolean {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   return (
-    normalizeProviderId(params.provider) === "ollama" &&
-    params.resolvedApiKey?.trim() === OLLAMA_LOCAL_AUTH_MARKER
+    shouldDeferProviderSyntheticProfileAuthWithPlugin({
+      provider: params.provider,
+      config: params.cfg,
+      context: {
+        config: params.cfg,
+        provider: params.provider,
+        providerConfig,
+        resolvedApiKey: params.resolvedApiKey,
+      },
+    }) === true
   );
 }
 
@@ -346,14 +356,15 @@ export async function resolveApiKeyForProvider(params: {
       source: `profile:${profileId}`,
       mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
     };
-    // When the resolved key is the synthetic ollama-local marker and the
-    // caller has not locked this profile, fall through to env/config
-    // resolution so real cloud credentials take precedence. The auth
+    // When the resolved key is a provider-owned synthetic profile marker and
+    // the caller has not locked this profile, fall through to env/config
+    // resolution so provider-owned real credentials take precedence. The auth
     // controller iterates profile candidates and passes each as an explicit
     // profileId, so we cannot assume explicit === user-locked.
     if (
       !params.lockedProfile &&
-      shouldDeferSyntheticOllamaProfileAuth({
+      shouldDeferSyntheticProfileAuth({
+        cfg,
         provider,
         resolvedApiKey: resolved.apiKey,
       })
@@ -395,7 +406,8 @@ export async function resolveApiKeyForProvider(params: {
           mode: resolvedMode,
         };
         if (
-          shouldDeferSyntheticOllamaProfileAuth({
+          shouldDeferSyntheticProfileAuth({
+            cfg,
             provider,
             resolvedApiKey: resolved.apiKey,
           })

@@ -177,6 +177,8 @@ export default definePluginEntry({
           mode: "api-key",
         };
       },
+      shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
+        resolvedApiKey?.trim() === DEFAULT_API_KEY,
       buildUnknownModelHint: () =>
         "Ollama requires authentication to be registered as a provider. " +
         'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +

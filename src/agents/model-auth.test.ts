@@ -22,6 +22,10 @@ import {
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
+    provider: string;
+    context: { resolvedApiKey?: string };
+  }) => params.provider === "ollama" && params.context.resolvedApiKey?.trim() === "ollama-local",
   resolveProviderSyntheticAuthWithPlugin: (params: {
     provider: string;
     config?: {

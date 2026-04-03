@@ -16,6 +16,7 @@ import type {
   ProviderBuiltInModelSuppressionContext,
   ProviderCacheTtlEligibilityContext,
   ProviderCreateEmbeddingProviderContext,
+  ProviderDeferSyntheticProfileAuthContext,
   ProviderResolveSyntheticAuthContext,
   ProviderCreateStreamFnContext,
   ProviderDefaultThinkingPolicyContext,
@@ -673,6 +674,19 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   context: ProviderResolveSyntheticAuthContext;
 }) {
   return resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context) ?? undefined;
+}
+
+export function shouldDeferProviderSyntheticProfileAuthWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderDeferSyntheticProfileAuthContext;
+}) {
+  return (
+    resolveProviderRuntimePlugin(params)?.shouldDeferSyntheticProfileAuth?.(params.context) ??
+    undefined
+  );
 }
 
 export function resolveProviderBuiltInModelSuppression(params: {

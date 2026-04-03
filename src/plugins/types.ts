@@ -912,6 +912,13 @@ export type ProviderSyntheticAuthResult = {
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
 };
 
+export type ProviderDeferSyntheticProfileAuthContext = {
+  config?: OpenClawConfig;
+  provider: string;
+  providerConfig?: ModelProviderConfig;
+  resolvedApiKey?: string;
+};
+
 /** Text-inference provider capability registered by a plugin. */
 export type ProviderPlugin = {
   id: string;
@@ -1310,6 +1317,16 @@ export type ProviderPlugin = {
   resolveSyntheticAuth?: (
     ctx: ProviderResolveSyntheticAuthContext,
   ) => ProviderSyntheticAuthResult | null | undefined;
+  /**
+   * Provider-owned precedence rule for stored synthetic auth profiles.
+   *
+   * Return true when a stored profile API key is only a provider-owned
+   * synthetic placeholder and should yield to env/config-backed auth before
+   * OpenClaw falls back to that stored profile.
+   */
+  shouldDeferSyntheticProfileAuth?: (
+    ctx: ProviderDeferSyntheticProfileAuthContext,
+  ) => boolean | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
