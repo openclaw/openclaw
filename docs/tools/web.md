@@ -163,8 +163,8 @@ first one that is ready:
 6. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
 7. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`
 8. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
-9. **Ollama Web Search** -- key-free fallback via your configured Ollama host; requires Ollama to be reachable and signed in with `ollama signin`
-10. **DuckDuckGo** -- key-free HTML fallback with no account or API key
+9. **DuckDuckGo** -- key-free HTML fallback with no account or API key
+10. **Ollama Web Search** -- key-free fallback via your configured Ollama host; requires Ollama to be reachable and signed in with `ollama signin`
 
 Key-free providers are checked after API-backed providers:
 
