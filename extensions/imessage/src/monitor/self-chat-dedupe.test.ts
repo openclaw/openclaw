@@ -123,7 +123,7 @@ describe("echo cache — backward compat for channels without messageId", () => 
     expect(echoCache.has(scope, { text: "no id message" })).toBe(true);
   });
 
-  it("text-only has returns false after TTL expiry", () => {
+  it("text-only has returns false after the delayed fallback window", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
 
@@ -132,7 +132,7 @@ describe("echo cache — backward compat for channels without messageId", () => 
 
     echoCache.remember(scope, { text: "no id message" });
 
-    vi.advanceTimersByTime(5000);
+    vi.advanceTimersByTime(31_000);
     expect(echoCache.has(scope, { text: "no id message" })).toBe(false);
   });
 
@@ -283,7 +283,7 @@ describe("self-chat dedupe — #47830", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
-  it("drops echo after text TTL expiry (4s TTL: expired at 5s)", () => {
+  it("still catches delayed text echoes after 5 seconds", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
 
@@ -293,35 +293,28 @@ describe("self-chat dedupe — #47830", () => {
     // Agent sends text (no message id available)
     echoCache.remember(scope, { text: "Hello there" });
 
-    // After 5 seconds — beyond the 4s TTL, should NOT match
+    // After 5 seconds, the delayed text echo should still match.
     vi.advanceTimersByTime(5000);
 
     const result = echoCache.has(scope, { text: "Hello there" });
-    expect(result).toBe(false);
+    expect(result).toBe(true);
   });
 
-  // Safe failure mode: TTL expiry causes duplicate delivery (noisy), never message loss (lossy)
-  it("does NOT catch echo after TTL expiry — safe failure mode is duplicate delivery", () => {
+  it("catches delayed echoes with a corrupted leading prefix", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
 
     const echoCache = createSentMessageCache();
     const scope = "default:imessage:+15551234567";
 
-    // Agent sends "Delayed echo test"
     echoCache.remember(scope, { text: "Delayed echo test", messageId: "agent-msg-delayed" });
 
-    // 4.5 seconds later — beyond 4s TTL
-    vi.advanceTimersByTime(4500);
+    vi.advanceTimersByTime(5000);
 
-    // Echo arrives with no messageId (text-only fallback path)
-    const result = echoCache.has(scope, { text: "Delayed echo test" });
-
-    // TTL expired → not caught → duplicate delivery (noisy but safe, not lossy)
-    expect(result).toBe(false);
+    expect(echoCache.has(scope, { text: "\ufffd\ufffdDelayed echo test" })).toBe(true);
   });
 
-  it("still drops text echo within 4s TTL window", () => {
+  it("expires the text fallback after 30 seconds", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
 
@@ -330,11 +323,10 @@ describe("self-chat dedupe — #47830", () => {
 
     echoCache.remember(scope, { text: "Hello there" });
 
-    // After 3 seconds — within the 4s TTL, should still match
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(31_000);
 
     const result = echoCache.has(scope, { text: "Hello there" });
-    expect(result).toBe(true);
+    expect(result).toBe(false);
   });
 });
 

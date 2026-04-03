@@ -26,7 +26,10 @@ function normalizeText(text: string | undefined): string | null {
   if (!text) {
     return null;
   }
-  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  const normalized = text
+    .replace(/\r\n?/g, "\n")
+    .replace(/^[\u0000-\u001f\ufeff\ufffd\ufffe\uffff]+/u, "")
+    .trim();
   return normalized ? normalized : null;
 }
 

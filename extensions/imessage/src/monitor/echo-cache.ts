@@ -17,17 +17,20 @@ export type SentMessageCache = {
   has: (scope: string, lookup: SentMessageLookup, skipIdShortCircuit?: boolean) => boolean;
 };
 
-// Echo arrival observed at ~2.2s on M4 Mac Mini (SQLite poll interval is the bottleneck).
-// 4s provides ~80% margin. If echoes arrive after TTL expiry, the system degrades to
-// duplicate delivery (noisy but not lossy) — never message loss.
-const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
+// Echoes can arrive several seconds after send completion, so keep the text
+// fallback long enough to catch delayed reflections without affecting the
+// longer-lived message-ID path.
+const SENT_MESSAGE_TEXT_TTL_MS = 30_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
     return null;
   }
-  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  const normalized = text
+    .replace(/\r\n?/g, "\n")
+    .replace(/^[\u0000-\u001f\ufeff\ufffd\ufffe\uffff]+/u, "")
+    .trim();
   return normalized ? normalized : null;
 }
 

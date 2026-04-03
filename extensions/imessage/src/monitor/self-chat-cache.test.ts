@@ -28,6 +28,26 @@ describe("createSelfChatCache", () => {
     ).toBe(true);
   });
 
+  it("matches reflected copies with a corrupted leading prefix", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
+
+    const cache = createSelfChatCache();
+    cache.remember({
+      ...directLookup,
+      text: "hello world",
+      createdAt: 123,
+    });
+
+    expect(
+      cache.has({
+        ...directLookup,
+        text: "\ufffd\u0000hello world",
+        createdAt: 123,
+      }),
+    ).toBe(true);
+  });
+
   it("expires entries after the ttl window", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
