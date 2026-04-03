@@ -133,6 +133,12 @@ export function normalizeToolParameterSchema(
       ? "oneOf"
       : null;
   if (!variantKey) {
+    // Handle the proven MCP no-parameter case: a truly empty schema object.
+    // Keep other non-empty shapes unchanged so we do not silently bless
+    // unsupported top-level conditionals like `allOf`.
+    if (Object.keys(schemaRecord).length === 0) {
+      return applyProviderCleaning({ type: "object", properties: {} });
+    }
     return schema;
   }
   const variants = schemaRecord[variantKey] as unknown[];
