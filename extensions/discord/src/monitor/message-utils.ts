@@ -635,26 +635,30 @@ function resolveDiscordMentions(text: string, message: Message): string {
 }
 
 function resolveDiscordForwardedMessagesText(message: Message): string {
-  const snapshots = resolveDiscordMessageSnapshots(message);
-  if (snapshots.length === 0) {
-    return "";
+  return resolveDiscordForwardedMessagesTextFromSnapshots(resolveDiscordMessageSnapshots(message));
+}
+
+function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapshot[] {
+  const rawData = (message as { rawData?: { message_snapshots?: unknown } }).rawData;
+  return normalizeDiscordMessageSnapshots(
+    rawData?.message_snapshots ??
+      (message as { message_snapshots?: unknown }).message_snapshots ??
+      (message as { messageSnapshots?: unknown }).messageSnapshots,
+  );
+}
+
+function normalizeDiscordMessageSnapshots(snapshots: unknown): DiscordMessageSnapshot[] {
+  if (!Array.isArray(snapshots)) {
+    return [];
   }
-  const forwardedBlocks = snapshots
-    .map((snapshot) => {
-      const snapshotMessage = snapshot.message;
-      if (!snapshotMessage) {
-        return null;
-      }
-      const text = resolveDiscordSnapshotMessageText(snapshotMessage);
-      if (!text) {
-        return null;
-      }
-      const authorLabel = formatDiscordSnapshotAuthor(snapshotMessage.author);
-      const heading = authorLabel
-        ? `[Forwarded message from ${authorLabel}]`
-        : "[Forwarded message]";
-      return `${heading}\n${text}`;
-    })
+  return snapshots.filter(
+    (entry): entry is DiscordMessageSnapshot => Boolean(entry) && typeof entry === "object",
+  );
+}
+
+export function resolveDiscordForwardedMessagesTextFromSnapshots(snapshots: unknown): string {
+  const forwardedBlocks = normalizeDiscordMessageSnapshots(snapshots)
+    .map((snapshot) => buildDiscordForwardedMessageBlock(snapshot.message))
     .filter((entry): entry is string => Boolean(entry));
   if (forwardedBlocks.length === 0) {
     return "";
@@ -662,18 +666,19 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
   return forwardedBlocks.join("\n\n");
 }
 
-function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapshot[] {
-  const rawData = (message as { rawData?: { message_snapshots?: unknown } }).rawData;
-  const snapshots =
-    rawData?.message_snapshots ??
-    (message as { message_snapshots?: unknown }).message_snapshots ??
-    (message as { messageSnapshots?: unknown }).messageSnapshots;
-  if (!Array.isArray(snapshots)) {
-    return [];
+function buildDiscordForwardedMessageBlock(
+  snapshotMessage: DiscordSnapshotMessage | null | undefined,
+): string | null {
+  if (!snapshotMessage) {
+    return null;
   }
-  return snapshots.filter(
-    (entry): entry is DiscordMessageSnapshot => Boolean(entry) && typeof entry === "object",
-  );
+  const text = resolveDiscordSnapshotMessageText(snapshotMessage);
+  if (!text) {
+    return null;
+  }
+  const authorLabel = formatDiscordSnapshotAuthor(snapshotMessage.author);
+  const heading = authorLabel ? `[Forwarded message from ${authorLabel}]` : "[Forwarded message]";
+  return `${heading}\n${text}`;
 }
 
 function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {
