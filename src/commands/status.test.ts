@@ -348,8 +348,8 @@ vi.mock("../channels/config-presence.js", async (importOriginal) => {
   };
 });
 vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: () =>
-    [
+  listChannelPlugins: () => {
+    const plugins = [
       {
         id: "whatsapp",
         meta: {
@@ -360,6 +360,7 @@ vi.mock("../channels/plugins/index.js", () => ({
           blurb: "mock",
         },
         config: {
+          hasPersistentAuth: () => true,
           listAccountIds: () => ["default"],
           resolveAccount: () => ({}),
         },
@@ -381,7 +382,44 @@ vi.mock("../channels/plugins/index.js", () => ({
           docsPath: "/platforms/mac",
         }),
       },
-    ] as unknown,
+    ] as const;
+    return plugins as unknown;
+  },
+  getChannelPlugin: (channelId: string) =>
+    [
+      {
+        id: "whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/platforms/whatsapp",
+          blurb: "mock",
+        },
+        config: {
+          hasPersistentAuth: () => true,
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+        },
+        status: {
+          buildChannelSummary: async () => ({ linked: true, authAgeMs: 5000 }),
+        },
+      },
+      {
+        ...createErrorChannelPlugin({
+          id: "signal",
+          label: "Signal",
+          docsPath: "/platforms/signal",
+        }),
+      },
+      {
+        ...createErrorChannelPlugin({
+          id: "imessage",
+          label: "iMessage",
+          docsPath: "/platforms/mac",
+        }),
+      },
+    ].find((plugin) => plugin.id === channelId) as unknown,
 }));
 vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
   webAuthExists: mocks.webAuthExists,
@@ -412,6 +450,7 @@ vi.mock("../gateway/session-utils.js", async (importOriginal) => {
 });
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn().mockResolvedValue("/tmp/openclaw"),
+  resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
 }));
 vi.mock("../infra/os-summary.js", () => ({
   resolveOsSummary: () => ({
@@ -493,6 +532,40 @@ const runtime = {
 };
 
 const runtimeLogMock = runtime.log as Mock<(...args: unknown[]) => void>;
+
+vi.mock("../channels/chat-meta.js", () => {
+  const mockChatChannels = [
+    "telegram",
+    "whatsapp",
+    "discord",
+    "irc",
+    "googlechat",
+    "slack",
+    "signal",
+    "imessage",
+    "line",
+  ] as const;
+  const entries = mockChatChannels.map((id) => ({
+    id,
+    label: id,
+    selectionLabel: id,
+    docsPath: `/channels/${id}`,
+    blurb: "mock",
+  }));
+  const byId = Object.fromEntries(entries.map((entry) => [entry.id, entry]));
+  return {
+    CHAT_CHANNEL_ALIASES: {},
+    listChatChannels: () => entries,
+    listChatChannelAliases: () => [],
+    getChatChannelMeta: (id: (typeof mockChatChannels)[number]) => byId[id],
+    normalizeChatChannelId: (raw?: string | null) => {
+      const value = raw?.trim().toLowerCase();
+      return mockChatChannels.includes(value as (typeof mockChatChannels)[number])
+        ? (value as (typeof mockChatChannels)[number])
+        : null;
+    },
+  };
+});
 
 describe("statusCommand", () => {
   afterEach(() => {
