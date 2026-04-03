@@ -306,6 +306,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
+      let lastRetryFailoverReason: FailoverReason | null = null;
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
@@ -448,6 +449,22 @@ export async function runEmbeddedPiAgent(
                 `provider=${provider}/${modelId} attempts=${runLoopIterations} ` +
                 `maxAttempts=${MAX_RUN_LOOP_ITERATIONS}`,
             );
+            if (
+              fallbackConfigured &&
+              lastRetryFailoverReason &&
+              lastRetryFailoverReason !== "timeout" &&
+              lastRetryFailoverReason !== "model_not_found" &&
+              lastRetryFailoverReason !== "format" &&
+              lastRetryFailoverReason !== "session_expired"
+            ) {
+              throw new FailoverError(message, {
+                reason: lastRetryFailoverReason,
+                provider,
+                model: modelId,
+                profileId: lastProfileId,
+                status: resolveFailoverStatus(lastRetryFailoverReason),
+              });
+            }
             return {
               payloads: [
                 {
@@ -1071,6 +1088,7 @@ export async function runEmbeddedPiAgent(
               promptFailoverReason !== "timeout" &&
               (await advanceAuthProfile())
             ) {
+              lastRetryFailoverReason = promptFailoverReason ?? lastRetryFailoverReason;
               logPromptFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
@@ -1179,7 +1197,8 @@ export async function runEmbeddedPiAgent(
           // Rotate on timeout to try another account/model path in this turn,
           // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
           const shouldRotate =
-            (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
+            (!aborted && (failoverFailure || assistantFailoverReason !== null)) ||
+            (timedOut && !timedOutDuringCompaction);
 
           if (shouldRotate) {
             if (lastProfileId) {
@@ -1244,6 +1263,8 @@ export async function runEmbeddedPiAgent(
 
             const rotated = await advanceAuthProfile();
             if (rotated) {
+              lastRetryFailoverReason =
+                assistantFailoverReason ?? (timedOut ? "timeout" : null) ?? lastRetryFailoverReason;
               logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               continue;
@@ -1389,19 +1410,22 @@ export async function runEmbeddedPiAgent(
               // Mark the failing profile for cooldown so multi-profile setups
               // rotate away from the exhausted credential on the next turn.
               if (lastProfileId) {
-                const failoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
                 await maybeMarkAuthProfileFailure({
                   profileId: lastProfileId,
-                  reason: resolveAuthProfileFailureReason(failoverReason),
+                  reason: resolveAuthProfileFailureReason(assistantFailoverReason),
                 });
               }
 
-              // Warn about potential side-effects when mutating tools executed
-              // before the turn was interrupted, so users don't blindly retry.
+              // Warn about potential side-effects when the interrupted turn may
+              // already have mutated state or sent outbound actions.
               const hadMutatingTools = attempt.toolMetas.some((t) =>
                 isLikelyMutatingToolName(t.toolName),
               );
-              const errorText = hadMutatingTools
+              const hadPotentialSideEffects =
+                hadMutatingTools ||
+                attempt.didSendViaMessagingTool ||
+                (attempt.successfulCronAdds ?? 0) > 0;
+              const errorText = hadPotentialSideEffects
                 ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
                 : "⚠️ Agent couldn't generate a response. Please try again.";
 
