@@ -32,7 +32,7 @@ const CHANNELS = 2;
 const BIT_DEPTH = 16;
 const MIN_SEGMENT_SECONDS = 0.35;
 const SILENCE_DURATION_MS = 1_000;
-const PLAYBACK_READY_TIMEOUT_MS = 15_000;
+const PLAYBACK_READY_TIMEOUT_MS = 60_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
 const DECRYPT_FAILURE_WINDOW_MS = 30_000;
 const DECRYPT_FAILURE_RECONNECT_THRESHOLD = 3;
@@ -939,8 +939,10 @@ export class DiscordVoiceReadyListener extends ReadyListener {
     super();
   }
 
-  async handle() {
-    await this.manager.autoJoin();
+  async handle(_data: unknown, _client: Client): Promise<void> {
+    void this.manager
+      .autoJoin()
+      .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
   }
 }
 
