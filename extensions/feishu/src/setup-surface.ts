@@ -37,7 +37,7 @@ function getScopedFeishuConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): FeishuConfig | FeishuAccountConfig {
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+  const feishuCfg = ((cfg.channels?.feishu as FeishuConfig | undefined) ?? {}) as FeishuConfig;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return feishuCfg ?? {};
   }
@@ -82,7 +82,7 @@ function setFeishuGroupAllowFrom(
 }
 
 function isFeishuConfigured(cfg: OpenClawConfig): boolean {
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+  const feishuCfg = ((cfg.channels?.feishu as FeishuConfig | undefined) ?? {}) as FeishuConfig;
 
   const isAppIdConfigured = (value: unknown): boolean => {
     const asString = normalizeString(value);
@@ -105,7 +105,7 @@ function isFeishuConfigured(cfg: OpenClawConfig): boolean {
     isAppIdConfigured(feishuCfg?.appId) && hasConfiguredSecretInput(feishuCfg?.appSecret),
   );
 
-  const accountConfigured = Object.values(feishuCfg?.accounts ?? {}).some((account) => {
+  const accountConfigured = Object.values(feishuCfg.accounts ?? {}).some((account) => {
     if (!account || typeof account !== "object") {
       return false;
     }

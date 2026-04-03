@@ -28,7 +28,6 @@ import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import type { PluginInteractiveDiscordHandlerContext } from "openclaw/plugin-sdk/plugin-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -93,7 +92,6 @@ import { deliverDiscordReply } from "./reply-delivery.js";
 
 let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
 let componentsRuntimePromise: Promise<typeof import("../components.js")> | undefined;
-let pluginRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/plugin-runtime")> | undefined;
 let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
 let replyPipelineRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>
@@ -108,11 +106,6 @@ async function loadConversationRuntime() {
 async function loadComponentsRuntime() {
   componentsRuntimePromise ??= import("../components.js");
   return await componentsRuntimePromise;
-}
-
-async function loadPluginRuntime() {
-  pluginRuntimePromise ??= import("openclaw/plugin-sdk/plugin-runtime");
-  return await pluginRuntimePromise;
 }
 
 async function loadReplyRuntime() {
@@ -228,7 +221,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       });
     },
     editMessage: async (
-      input: Parameters<PluginInteractiveDiscordHandlerContext["respond"]["editMessage"]>[0],
+      input: Parameters<DiscordInteractiveHandlerContext["respond"]["editMessage"]>[0],
     ) => {
       const { text, components } = input;
       responded = true;
@@ -292,17 +285,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     }
     return "handled";
   }
-<<<<<<< HEAD
-  const { dispatchPluginInteractiveHandler } = await loadConversationRuntime();
-  const dispatched = await dispatchPluginInteractiveHandler({
-    channel: "discord",
-||||||| parent of 75768e4d13 (refactor(plugins): move channel behavior into plugins)
-  const { dispatchPluginInteractiveHandler } = await loadPluginRuntime();
-  const dispatched = await dispatchPluginInteractiveHandler({
-    channel: "discord",
-=======
   const dispatched = await dispatchDiscordPluginInteractiveHandler({
->>>>>>> 75768e4d13 (refactor(plugins): move channel behavior into plugins)
     data: params.data,
     interactionId: resolveDiscordInteractionId(params.interaction),
     ctx: {

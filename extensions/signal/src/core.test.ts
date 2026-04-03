@@ -304,22 +304,20 @@ describe("signal setup parsing", () => {
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
-    const next = signalDmPolicy.setPolicy(
-      {
-        channels: {
-          signal: {
-            allowFrom: ["+15555550123"],
-            accounts: {
-              work: {
-                account: "+15555550999",
-              },
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          allowFrom: ["+15555550123"],
+          accounts: {
+            work: {
+              account: "+15555550999",
             },
           },
         },
       },
-      "open",
-      "work",
-    );
+    };
+
+    const next = signalDmPolicy.setPolicy(cfg, "open", "work");
 
     expect(next.channels?.signal?.dmPolicy).toBeUndefined();
     expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
