@@ -1775,6 +1775,52 @@ describe("handleCommands /config configWrites gating", () => {
     }
   });
 
+  it("honors the configured default account when gating omitted-account /config writes", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...telegramCommandTestPlugin,
+            config: {
+              ...telegramCommandTestPlugin.config,
+              defaultAccountId: (cfg) =>
+                ((cfg.channels?.telegram as { defaultAccount?: string } | undefined)?.defaultAccount ??
+                  DEFAULT_ACCOUNT_ID),
+            },
+          },
+        },
+      ]),
+    );
+
+    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const cfg = {
+      commands: { config: true, text: true },
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          configWrites: true,
+          accounts: {
+            work: { configWrites: false, enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams('/config set messages.ackReaction=":)"', cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      AccountId: undefined,
+    });
+    params.command.senderIsOwner = true;
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
+    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+  });
+
   it("enforces gateway client permissions for /config commands", async () => {
     const baseCfg = {
       commands: { config: true, text: true },
