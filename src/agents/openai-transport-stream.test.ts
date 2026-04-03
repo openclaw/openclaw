@@ -2,6 +2,7 @@ import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   buildOpenAIResponsesParams,
+  buildOpenAICompletionsParams,
   buildTransportAwareSimpleStreamFn,
   isTransportAwareApiSupported,
   parseTransportChunkUsage,
@@ -303,5 +304,56 @@ describe("openai transport stream", () => {
     ) as { input?: Array<{ role?: string }> };
 
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
+  });
+
+  it("uses system role for xAI default-route responses providers without relying on baseUrl host sniffing", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.1-fast",
+        name: "Grok 4.1 Fast",
+        api: "openai-responses",
+        provider: "xai",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { input?: Array<{ role?: string }> };
+
+    expect(params.input?.[0]).toMatchObject({ role: "system" });
+  });
+
+  it("uses max_tokens for Chutes default-route completions providers without relying on baseUrl host sniffing", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "zai-org/GLM-4.7-TEE",
+        name: "GLM 4.7 TEE",
+        api: "openai-completions",
+        provider: "chutes",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 2048,
+      } as never,
+    );
+
+    expect(params.max_tokens).toBe(2048);
+    expect(params).not.toHaveProperty("max_completion_tokens");
   });
 });
