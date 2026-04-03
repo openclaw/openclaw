@@ -4,56 +4,80 @@
 This document provides a reference for OpenClaw CLI commands related to plugin management.
 
 ## **Commands**
-### **1. Load a Plugin**
-Load a plugin into OpenClaw:
+### **1. Install a Plugin**
+Install a plugin into OpenClaw:
 ```bash
-openclaw plugin load <plugin-directory>
+openclaw plugins install <plugin-directory>
 ```
 
-### **2. Unload a Plugin**
-Unload a plugin from OpenClaw:
+### **2. Remove a Plugin**
+Remove a plugin from OpenClaw:
 ```bash
-openclaw plugin unload <plugin-name>
+openclaw plugins remove <plugin-name>
 ```
 
 ### **3. List Plugins**
-List all loaded plugins:
+List all installed plugins:
 ```bash
-openclaw plugin list
+openclaw plugins list
 ```
 
 ### **4. Validate a Plugin**
-Validate a plugin's structure and metadata:
+Validate a plugin's structure and metadata using this skill's script:
 ```bash
-openclaw plugin validate <plugin-directory>
+~/.openclaw/skills/plugin-integration/scripts/validate-plugin.sh <plugin-directory>
 ```
 
 ## **Examples**
-### **Load a Plugin**
+### **Install a Plugin**
 ```bash
-openclaw plugin load ~/.openclaw/plugins/hello-world
+openclaw plugins install ~/.openclaw/plugins/hello-world
 ```
 
-### **Unload a Plugin**
+### **Remove a Plugin**
 ```bash
-openclaw plugin unload hello-world
+openclaw plugins remove hello-world
 ```
 
 ### **List Plugins**
 ```bash
-openclaw plugin list
+openclaw plugins list
 ```
 Output:
 ```
-Loaded Plugins:
+Installed Plugins:
 - hello-world (1.0.0)
 - custom-command (1.0.0)
 ```
 
-## **Best Practices**
-- **Validate Before Loading**: Always validate a plugin before loading it:
+### **Validate a Plugin**
 ```bash
-openclaw plugin validate ~/.openclaw/plugins/<plugin-directory>
-```.
-- **Restart OpenClaw**: Restart OpenClaw after loading or unloading plugins to ensure changes take effect.
-- **Use Absolute Paths**: When loading plugins, use absolute paths to avoid issues.
+~/.openclaw/skills/plugin-integration/scripts/validate-plugin.sh ~/.openclaw/plugins/my-plugin
+```
+
+## **Plugin Manifest**
+OpenClaw plugins use `openclaw.plugin.json` (not `manifest.json` or `manifest.yaml`):
+
+```json
+{
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "description": "A description of your plugin",
+  "main": "index.js",
+  "author": "Your Name",
+  "license": "MIT",
+  "openclaw": {
+    "minVersion": "1.0.0",
+    "permissions": []
+  }
+}
+```
+
+## **Best Practices**
+- **Validate Before Installing**: Always validate a plugin before installing:
+```bash
+~/.openclaw/skills/plugin-integration/scripts/validate-plugin.sh <plugin-directory>
+```
+- **Use Correct Manifest**: Use `openclaw.plugin.json`, not `manifest.json` or `manifest.yaml`
+- **Include Documentation**: Add a `README.md` explaining your plugin's purpose and usage
+- **Use Absolute Paths**: When installing plugins, use absolute paths to avoid issues
