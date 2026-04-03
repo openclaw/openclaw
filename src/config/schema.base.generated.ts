@@ -3068,6 +3068,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               subagents: {
                 type: "object",
                 properties: {
+                  allowAgents: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
                   maxConcurrent: {
                     type: "integer",
                     exclusiveMinimum: 0,
