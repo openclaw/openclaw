@@ -11,6 +11,15 @@ export const DEFAULT_ACCOUNT_ID = "default";
 
 interface QQBotChannelConfig extends QQBotAccountConfig {
   accounts?: Record<string, QQBotAccountConfig>;
+  defaultAccount?: string;
+}
+
+function normalizeConfiguredDefaultAccountId(raw: unknown): string | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim().toLowerCase();
+  return trimmed ? trimmed : null;
 }
 
 function normalizeQQBotAccountConfig(account: QQBotAccountConfig | undefined): QQBotAccountConfig {
@@ -51,6 +60,14 @@ export function listQQBotAccountIds(cfg: OpenClawConfig): string[] {
 /** Resolve the default QQBot account ID. */
 export function resolveDefaultQQBotAccountId(cfg: OpenClawConfig): string {
   const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
+  const configuredDefaultAccountId = normalizeConfiguredDefaultAccountId(qqbot?.defaultAccount);
+  if (
+    configuredDefaultAccountId &&
+    (configuredDefaultAccountId === DEFAULT_ACCOUNT_ID ||
+      Boolean(qqbot?.accounts?.[configuredDefaultAccountId]?.appId))
+  ) {
+    return configuredDefaultAccountId;
+  }
   if (qqbot?.appId || process.env.QQBOT_APP_ID) {
     return DEFAULT_ACCOUNT_ID;
   }
@@ -69,7 +86,7 @@ export function resolveQQBotAccount(
   accountId?: string | null,
   opts?: { allowUnresolvedSecretRef?: boolean },
 ): ResolvedQQBotAccount {
-  const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId = accountId ?? resolveDefaultQQBotAccountId(cfg);
   const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
 
   let accountConfig: QQBotAccountConfig = {};

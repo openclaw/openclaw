@@ -5,7 +5,11 @@ import { validateJsonSchemaValue } from "../../../src/plugins/schema-validator.j
 import { qqbotPlugin } from "./channel.js";
 import { qqbotSetupPlugin } from "./channel.setup.js";
 import { QQBotConfigSchema } from "./config-schema.js";
-import { DEFAULT_ACCOUNT_ID, resolveQQBotAccount } from "./config.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  resolveDefaultQQBotAccountId,
+  resolveQQBotAccount,
+} from "./config.js";
 
 describe("qqbot config", () => {
   it("accepts top-level speech overrides in the manifest schema", () => {
@@ -60,6 +64,23 @@ describe("qqbot config", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("honors configured defaultAccount when resolving the default QQ Bot account id", () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          defaultAccount: "bot2",
+          accounts: {
+            bot2: {
+              appId: "654321",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveDefaultQQBotAccountId(cfg)).toBe("bot2");
   });
 
   it("accepts SecretRef-backed credentials in the runtime schema", () => {
@@ -140,6 +161,30 @@ describe("qqbot config", () => {
     expect(resolved.config.urlDirectUpload).toBe(false);
     expect(resolved.config.upgradeUrl).toBe("https://docs.openclaw.ai/channels/qqbot");
     expect(resolved.config.upgradeMode).toBe("hot-reload");
+  });
+
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          defaultAccount: "bot2",
+          accounts: {
+            bot2: {
+              appId: "654321",
+              clientSecret: "secret-value",
+              name: "Bot Two",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveQQBotAccount(cfg);
+
+    expect(resolved.accountId).toBe("bot2");
+    expect(resolved.appId).toBe("654321");
+    expect(resolved.clientSecret).toBe("secret-value");
+    expect(resolved.name).toBe("Bot Two");
   });
 
   it("rejects unresolved SecretRefs on runtime resolution", () => {
