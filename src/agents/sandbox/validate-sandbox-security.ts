@@ -5,10 +5,6 @@
  * Enforced at runtime when creating sandbox containers.
  */
 
-import os from "node:os";
-import path from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
-import { resolveRequiredHomeDir, resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
@@ -17,9 +13,8 @@ import {
 } from "./host-paths.js";
 import { getBlockedNetworkModeReason } from "./network-mode.js";
 
-// Static portion of the targeted denylist: host paths that should never be exposed
-// inside sandbox containers. The full runtime set also includes sensitive home
-// subdirectories and the resolved OpenClaw state directory.
+// Targeted denylist: host paths that should never be exposed inside sandbox containers.
+// Exported for reuse in security audit collectors.
 export const BLOCKED_HOST_PATHS = [
   "/etc",
   "/private/etc",
@@ -35,24 +30,7 @@ export const BLOCKED_HOST_PATHS = [
   "/var/run/docker.sock",
   "/private/var/run/docker.sock",
   "/run/docker.sock",
-  "/var/lib/docker",
-  "/private/var/lib/docker",
-  "/var/log",
-  "/private/var/log",
 ];
-
-const BLOCKED_HOME_SUBPATHS = [".aws", ".config", ".kube", ".openclaw", ".ssh"] as const;
-let cachedBlockedHostPaths:
-  | {
-      key: string;
-      paths: string[];
-    }
-  | undefined;
-
-type BlockedHostPathAlias = {
-  lexical: string;
-  canonical: string;
-};
 
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
@@ -129,62 +107,13 @@ export function getBlockedReasonForSourcePath(sourceNormalized: string): Blocked
   if (sourceNormalized === "/") {
     return { kind: "covers", blockedPath: "/" };
   }
-  for (const blocked of getBlockedHostPaths()) {
+  for (const blocked of BLOCKED_HOST_PATHS) {
     if (sourceNormalized === blocked || sourceNormalized.startsWith(blocked + "/")) {
       return { kind: "targets", blockedPath: blocked };
     }
   }
 
   return null;
-}
-
-export function getBlockedHostPaths(): string[] {
-  const effectiveHome = normalizeHostPath(resolveRequiredHomeDir(process.env, os.homedir));
-  const osHome = normalizeHostPath(resolveRequiredOsHomeDir(process.env, os.homedir));
-  const stateDir = normalizeHostPath(resolveStateDir());
-  const aliases: BlockedHostPathAlias[] = [];
-  for (const candidate of BLOCKED_HOST_PATHS) {
-    aliases.push(resolveBlockedHostPathAlias(candidate));
-  }
-  for (const home of new Set([effectiveHome, osHome])) {
-    if (home === "/") {
-      continue;
-    }
-    for (const suffix of BLOCKED_HOME_SUBPATHS) {
-      aliases.push(resolveBlockedHostPathAlias(path.posix.join(home, suffix)));
-    }
-  }
-  aliases.push(resolveBlockedHostPathAlias(stateDir));
-
-  const cacheKey = aliases.flatMap(({ lexical, canonical }) => [lexical, canonical]).join("\u0000");
-  if (cachedBlockedHostPaths?.key === cacheKey) {
-    return cachedBlockedHostPaths.paths;
-  }
-
-  const blocked = new Set<string>();
-  for (const alias of aliases) {
-    addBlockedHostPath(blocked, alias);
-  }
-
-  const paths = [...blocked];
-  cachedBlockedHostPaths = { key: cacheKey, paths };
-  return paths;
-}
-
-function resolveBlockedHostPathAlias(candidate: string): BlockedHostPathAlias {
-  const lexical = normalizeHostPath(candidate);
-  return {
-    lexical,
-    canonical: resolveSandboxHostPathViaExistingAncestor(lexical),
-  };
-}
-
-function addBlockedHostPath(blocked: Set<string>, alias: BlockedHostPathAlias): void {
-  blocked.add(alias.lexical);
-
-  if (alias.canonical !== alias.lexical) {
-    blocked.add(alias.canonical);
-  }
 }
 
 function normalizeAllowedRoots(roots: string[] | undefined): string[] {

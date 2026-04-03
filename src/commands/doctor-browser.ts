@@ -3,7 +3,7 @@ import {
   parseBrowserMajorVersion,
   readBrowserVersion,
   resolveGoogleChromeExecutableForPlatform,
-} from "../plugin-sdk/browser-runtime.js";
+} from "../plugin-sdk/browser-host-inspection.js";
 import { note } from "../terminal/note.js";
 
 const CHROME_MCP_MIN_MAJOR = 144;

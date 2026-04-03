@@ -4,6 +4,8 @@ export type {
   BaseTokenResolution,
   ChannelAgentTool,
   ChannelAccountSnapshot,
+  ChannelApprovalAdapter,
+  ChannelApprovalCapability,
   ChannelCommandConversationContext,
   ChannelGroupContext,
   ChannelMessageActionAdapter,

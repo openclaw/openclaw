@@ -349,6 +349,21 @@ describe("subagents utils", () => {
     expect(formatted.endsWith("…")).toBe(true);
   });
 
+  it("sanitizes leaked internal runtime context from formatted run labels", () => {
+    const run = {
+      ...baseRun,
+      label: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+    };
+
+    expect(formatRunLabel(run)).toBe("subagent");
+  });
+
   it("sorts subagent runs by newest start/created time", () => {
     const runs: SubagentRunRecord[] = [
       { ...baseRun, runId: "run-1", createdAt: 1000, startedAt: 1000 },

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(async () => ({ ok: true })),
@@ -8,18 +8,12 @@ vi.mock("../infra/outbound/message.js", () => ({
   sendMessage: vi.fn(async () => ({ ok: true })),
 }));
 
-let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
-let sendMessage: typeof import("../infra/outbound/message.js").sendMessage;
-let buildExecApprovalFollowupPrompt: typeof import("./bash-tools.exec-approval-followup.js").buildExecApprovalFollowupPrompt;
-let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup.js").sendExecApprovalFollowup;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ callGatewayTool } = await import("./tools/gateway.js"));
-  ({ sendMessage } = await import("../infra/outbound/message.js"));
-  ({ buildExecApprovalFollowupPrompt, sendExecApprovalFollowup } =
-    await import("./bash-tools.exec-approval-followup.js"));
-});
+import { sendMessage } from "../infra/outbound/message.js";
+import {
+  buildExecApprovalFollowupPrompt,
+  sendExecApprovalFollowup,
+} from "./bash-tools.exec-approval-followup.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
 afterEach(() => {
   vi.resetAllMocks();
@@ -115,14 +109,14 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("falls back to direct external delivery only when no session exists", async () => {
+  it("falls back to sanitized direct external delivery only when no session exists", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-no-session",
       turnSourceChannel: "discord",
       turnSourceTo: "123",
       turnSourceAccountId: "default",
       turnSourceThreadId: "456",
-      resultText: "discord exec approval smoke",
+      resultText: "Exec finished (gateway id=req-no-session, session=sess_1, code 0)\nall good",
     });
 
     expect(sendMessage).toHaveBeenCalledWith(
@@ -131,11 +125,107 @@ describe("exec approval followup", () => {
         to: "123",
         accountId: "default",
         threadId: "456",
-        content: "discord exec approval smoke",
+        content: "all good",
         idempotencyKey: "exec-approval-followup:req-no-session",
       }),
     );
     expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("falls back to sanitized direct delivery when session resume fails", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
+
+    await sendExecApprovalFollowup({
+      approvalId: "req-session-resume-failed",
+      sessionKey: "agent:main:discord:channel:123",
+      turnSourceChannel: "discord",
+      turnSourceTo: "123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+      resultText:
+        "Exec finished (gateway id=req-session-resume-failed, session=sess_1, code 0)\nall good",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Automatic session resume failed, so sending the status directly.\n\nall good",
+        idempotencyKey: "exec-approval-followup:req-session-resume-failed",
+      }),
+    );
+  });
+
+  it("uses a generic summary when a no-session completion has no user-visible output", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-no-session-empty",
+      turnSourceChannel: "discord",
+      turnSourceTo: "123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+      resultText: "Exec finished (gateway id=req-no-session-empty, session=sess_2, code 0)",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Background command finished.",
+        idempotencyKey: "exec-approval-followup:req-no-session-empty",
+      }),
+    );
+  });
+
+  it("uses safe denied copy when session resume fails", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
+
+    await sendExecApprovalFollowup({
+      approvalId: "req-denied-resume-failed",
+      sessionKey: "agent:main:telegram:-100123",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-100123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "789",
+      resultText: "Exec denied (gateway id=req-denied-resume-failed, approval-timeout): uname -a",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "Automatic session resume failed, so sending the status directly.\n\nCommand did not run: approval timed out.",
+        idempotencyKey: "exec-approval-followup:req-denied-resume-failed",
+      }),
+    );
+  });
+
+  it("suppresses denied followups for subagent sessions", async () => {
+    await expect(
+      sendExecApprovalFollowup({
+        approvalId: "req-denied-subagent",
+        sessionKey: "agent:main:subagent:test",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+        resultText: "Exec denied (gateway id=req-denied-subagent, approval-timeout): uname -a",
+      }),
+    ).resolves.toBe(false);
+
+    expect(callGatewayTool).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "Exec denied (gateway id=req-denied-nosession, approval-timeout): uname -a",
+    "exec denied (gateway id=req-denied-nosession, approval-timeout): uname -a",
+  ])("does not mirror raw denied followups without a session: %s", async (resultText) => {
+    await expect(
+      sendExecApprovalFollowup({
+        approvalId: "req-denied-nosession",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "123",
+        turnSourceAccountId: "default",
+        resultText,
+      }),
+    ).resolves.toBe(false);
+
+    expect(callGatewayTool).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("throws when neither a session nor a deliverable route is available", async () => {

@@ -190,6 +190,24 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
+      name: "exposes canonical runtime.tasks.runs and runtime.tasks.flows while keeping legacy TaskFlow aliases",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expectFunctionKeys(runtime.tasks.runs as Record<string, unknown>, [
+          "bindSession",
+          "fromToolContext",
+        ]);
+        expectFunctionKeys(runtime.tasks.flows as Record<string, unknown>, [
+          "bindSession",
+          "fromToolContext",
+        ]);
+        expectFunctionKeys(runtime.tasks.flow as Record<string, unknown>, [
+          "bindSession",
+          "fromToolContext",
+        ]);
+        expect(runtime.taskFlow).toBe(runtime.tasks.flow);
+      },
+    },
+    {
       name: "exposes runtime.agent host helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expect(runtime.agent.defaults).toEqual({

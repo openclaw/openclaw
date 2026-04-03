@@ -77,7 +77,6 @@ let resolveTarget: NonNullable<
 
 describe("whatsapp resolveTarget", () => {
   beforeAll(async () => {
-    vi.resetModules();
     const outbound = (await import("./channel.js")).whatsappPlugin.outbound;
     if (!outbound?.resolveTarget) {
       throw new Error("expected whatsapp outbound resolveTarget");

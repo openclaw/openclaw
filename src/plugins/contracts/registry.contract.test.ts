@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveBundledWebFetchPluginIds } from "../bundled-web-fetch.js";
 import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import {
@@ -7,8 +8,10 @@ import {
   pluginRegistrationContractRegistry,
   providerContractLoadError,
   providerContractPluginIds,
+  resolveWebFetchProviderContractEntriesForPluginId,
   resolveWebSearchProviderContractEntriesForPluginId,
   speechProviderContractRegistry,
+  webFetchProviderContractRegistry,
 } from "./registry.js";
 import { uniqueSortedStrings } from "./testkit.js";
 
@@ -56,6 +59,10 @@ describe("plugin contract registry", () => {
       ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.providerIds),
     },
     {
+      name: "does not duplicate bundled web fetch provider ids",
+      ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.webFetchProviderIds),
+    },
+    {
       name: "does not duplicate bundled web search provider ids",
       ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.webSearchProviderIds),
     },
@@ -93,6 +100,31 @@ describe("plugin contract registry", () => {
         plugin.origin === "bundled" && (plugin.contracts?.speechProviders?.length ?? 0) > 0,
     });
   });
+
+  it("covers every bundled web fetch plugin from the shared resolver", () => {
+    const bundledWebFetchPluginIds = resolveBundledWebFetchPluginIds({});
+
+    expect(
+      uniqueSortedStrings(
+        pluginRegistrationContractRegistry
+          .filter((entry) => entry.webFetchProviderIds.length > 0)
+          .map((entry) => entry.pluginId),
+      ),
+    ).toEqual(bundledWebFetchPluginIds);
+  });
+
+  it(
+    "loads bundled web fetch providers for each shared-resolver plugin",
+    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
+    () => {
+      for (const pluginId of resolveBundledWebFetchPluginIds({})) {
+        expect(resolveWebFetchProviderContractEntriesForPluginId(pluginId).length).toBeGreaterThan(
+          0,
+        );
+      }
+      expect(webFetchProviderContractRegistry.length).toBeGreaterThan(0);
+    },
+  );
 
   it("covers every bundled web search plugin from the shared resolver", () => {
     const bundledWebSearchPluginIds = resolveBundledWebSearchPluginIds({});

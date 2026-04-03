@@ -140,8 +140,6 @@ describe("secrets runtime snapshot", () => {
     clearSecretsRuntimeSnapshot();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    resolveBundledPluginWebSearchProvidersMock.mockReset();
-    resolvePluginWebSearchProvidersMock.mockReset();
   });
 
   it("resolves env refs for config and auth profiles", async () => {
@@ -1146,11 +1144,10 @@ describe("secrets runtime snapshot", () => {
       provider: "default",
       id: "DISABLED_TELEGRAM_BASE_TOKEN",
     });
-    expect(
-      snapshot.warnings.filter(
-        (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-      ),
-    ).toHaveLength(6);
+    const ignoredInactiveWarnings = snapshot.warnings.filter(
+      (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+    );
+    expect(ignoredInactiveWarnings).toHaveLength(10);
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
         "agents.defaults.memorySearch.remote.apiKey",
@@ -1159,6 +1156,10 @@ describe("secrets runtime snapshot", () => {
         "channels.telegram.accounts.disabled.botToken",
         "plugins.entries.brave.config.webSearch.apiKey",
         "plugins.entries.google.config.webSearch.apiKey",
+        "plugins.entries.xai.config.webSearch.apiKey",
+        "plugins.entries.moonshot.config.webSearch.apiKey",
+        "plugins.entries.perplexity.config.webSearch.apiKey",
+        "plugins.entries.firecrawl.config.webSearch.apiKey",
       ]),
     );
   });
@@ -2714,5 +2715,95 @@ describe("secrets runtime snapshot", () => {
       }
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("migrates legacy x_search SecretRefs into the xai plugin webSearch auth at runtime", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+              model: "grok-4-1-fast",
+            },
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_KEY_REF: "xai-runtime-key",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(snapshot.config.plugins?.entries?.xai?.config).toEqual({
+      webSearch: {
+        apiKey: "xai-runtime-key",
+      },
+    });
+  });
+
+  it("still migrates legacy x_search auth when general legacy migration returns an invalid config", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            groupMentionsOnly: true,
+            groups: [],
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_KEY_REF: "xai-runtime-key-invalid-config",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+    });
+    expect(snapshot.config.plugins?.entries?.xai?.config).toEqual({
+      webSearch: {
+        apiKey: "xai-runtime-key-invalid-config",
+      },
+    });
+  });
+
+  it("does not force-enable xai at runtime for knob-only x_search config", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              enabled: true,
+              model: "grok-4-1-fast",
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(snapshot.config.plugins?.entries?.xai).toBeUndefined();
   });
 });
