@@ -7,7 +7,6 @@ import {
   createTelegramPrivateCommandContext,
   type NativeCommandTestParams as RegisterTelegramNativeCommandsParams,
 } from "./bot-native-commands.fixture-test-support.js";
-import { pluginCommandMocks } from "./test-support/plugin-command.js";
 
 type RegisteredCommand = {
   command: string;
@@ -103,7 +102,6 @@ export function createNativeCommandTestParams(
     dispatchReplyWithBufferedBlockDispatcher: vi.fn(
       async () => dispatchResult,
     ) as TelegramNativeCommandDeps["dispatchReplyWithBufferedBlockDispatcher"],
-    getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
     listSkillCommandsForAgents,
     syncTelegramMenuCommands: vi.fn(({ bot, commandsToRegister }) => {
       if (commandsToRegister.length === 0) {
