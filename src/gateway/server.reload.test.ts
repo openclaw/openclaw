@@ -850,12 +850,13 @@ process.stdin.on("end", () => {
 
     const previousGatewayAuth = testState.gatewayAuth;
     const previousGatewayTokenEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
-    testState.gatewayAuth = undefined;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-
-    const started = await startServerWithClient();
-    const { server, ws, envSnapshot } = started;
+    let started: Awaited<ReturnType<typeof startServerWithClient>> | undefined;
     try {
+      testState.gatewayAuth = undefined;
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+
+      started = await startServerWithClient();
+      const { ws } = started;
       await connectOk(ws, {
         token: tokenValue,
       });
@@ -891,9 +892,9 @@ process.stdin.on("end", () => {
       } else {
         process.env.OPENCLAW_GATEWAY_TOKEN = previousGatewayTokenEnv;
       }
-      envSnapshot.restore();
-      ws.close();
-      await server.close();
+      started?.envSnapshot.restore();
+      started?.ws.close();
+      await started?.server.close();
     }
   });
 
@@ -955,12 +956,13 @@ process.stdin.on("end", () => {
 
     const previousGatewayAuth = testState.gatewayAuth;
     const previousGatewayTokenEnv = process.env.OPENCLAW_GATEWAY_TOKEN;
-    testState.gatewayAuth = undefined;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-
-    const started = await startServerWithClient();
-    const { server, ws, port, envSnapshot } = started;
+    let started: Awaited<ReturnType<typeof startServerWithClient>> | undefined;
     try {
+      testState.gatewayAuth = undefined;
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+
+      started = await startServerWithClient();
+      const { ws, port } = started;
       await connectOk(ws, { token: "token-before-reload" });
 
       await fs.writeFile(tokenPath, "token-after-reload\n", "utf8");
@@ -995,9 +997,9 @@ process.stdin.on("end", () => {
       } else {
         process.env.OPENCLAW_GATEWAY_TOKEN = previousGatewayTokenEnv;
       }
-      envSnapshot.restore();
-      ws.close();
-      await server.close();
+      started?.envSnapshot.restore();
+      started?.ws.close();
+      await started?.server.close();
     }
   });
 });
