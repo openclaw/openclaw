@@ -60,6 +60,7 @@ function buildSlackManifest(botName: string) {
           "files:read",
           "files:write",
           "groups:history",
+          "groups:read",
           "im:history",
           "im:read",
           "im:write",
