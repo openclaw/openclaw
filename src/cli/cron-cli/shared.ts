@@ -231,7 +231,7 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
 
   for (const job of jobs) {
     const idLabel = pad(job.id, CRON_ID_PAD);
-    const nameLabel = pad(truncate(job.name, CRON_NAME_PAD), CRON_NAME_PAD);
+    const nameLabel = pad(truncate(job.name ?? "-", CRON_NAME_PAD), CRON_NAME_PAD);
     const scheduleLabel = pad(
       truncate(formatSchedule(job.schedule), CRON_SCHEDULE_PAD),
       CRON_SCHEDULE_PAD,
