@@ -111,20 +111,29 @@ export async function checkPathGuardStrict(
         // Split at the first glob-magic character supported by minimatch (including braces/extglobs).
         // This avoids trying to realpath a prefix that already contains magic.
         const firstMagic = (() => {
-          const candidates = [
-            normalizedEntryPattern.indexOf("*"),
-            normalizedEntryPattern.indexOf("?"),
-            normalizedEntryPattern.indexOf("["),
-            normalizedEntryPattern.indexOf("]"),
-            normalizedEntryPattern.indexOf("{"),
-            normalizedEntryPattern.indexOf("}"),
-            normalizedEntryPattern.indexOf("("),
-            normalizedEntryPattern.indexOf(")"),
-            normalizedEntryPattern.indexOf("!"),
-            normalizedEntryPattern.indexOf("+"),
-            normalizedEntryPattern.indexOf("@"),
-          ].filter((v) => v >= 0);
-          return candidates.length ? Math.min(...candidates) : -1;
+          // Find the first *actual* glob-magic character.
+          // Avoid treating literal extglob operator chars like '+', '@', '!' as magic when they
+          // occur in normal path text (e.g. /workspace/link+alias/**/*.pem).
+          for (let i = 0; i < normalizedEntryPattern.length; i += 1) {
+            const ch = normalizedEntryPattern[i];
+
+            // minimatch supports escaping via backslash.
+            if (ch === "\\") {
+              i += 1;
+              continue;
+            }
+
+            if (ch === "*" || ch === "?" || ch === "[" || ch === "{") {
+              return i;
+            }
+
+            // extglob operators are only magic when followed by '('
+            // (e.g. +(foo|bar), @(foo), !(foo)).
+            if ((ch === "!" || ch === "+" || ch === "@") && normalizedEntryPattern[i + 1] === "(") {
+              return i;
+            }
+          }
+          return -1;
         })();
         // Canonicalize a *directory* prefix, not a partial path segment.
         // If magic appears mid-segment (e.g. /dir[12]/...), splitting at firstMagic would produce

@@ -216,6 +216,34 @@ describe("PathGuard Exhaustive Tests", () => {
     ).resolves.toBeDefined();
   });
 
+  it("canonicalizes absolute glob prefix even when a segment contains literal extglob chars", async () => {
+    const requested = path.join(workspaceRoot, "link+alias", "secret.pem");
+    const canonicalPrefix = path.join(realWorkspaceRoot, "linked");
+    const canonicalRequested = path.join(canonicalPrefix, "secret.pem");
+
+    vi.spyOn(fs, "realpath").mockImplementation(async (input) => {
+      const normalized = path.resolve(String(input)).replace(/\\/g, "/");
+      if (normalized === path.resolve(workspaceRoot).replace(/\\/g, "/")) {
+        return realWorkspaceRoot;
+      }
+      if (normalized === path.resolve(path.join(workspaceRoot, "link+alias")).replace(/\\/g, "/")) {
+        return canonicalPrefix;
+      }
+      if (normalized === path.resolve(requested).replace(/\\/g, "/")) {
+        return canonicalRequested;
+      }
+      return mapWorkspacePath(normalized);
+    });
+
+    await expect(
+      checkPathGuardStrict(
+        requested,
+        { denyPaths: [`${workspaceRoot}/link+alias/**/*.pem`] },
+        workspaceRoot,
+      ),
+    ).rejects.toThrow(/explicitly denied/);
+  });
+
   it("resolves paths correctly even if they contain redundant separators or dots", async () => {
     const requested = path.join(workspaceRoot, "src/../src/./index.ts");
     const resolved = path.join(realWorkspaceRoot, "src/index.ts");
