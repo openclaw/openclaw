@@ -1769,6 +1769,82 @@ describe("matrix monitor handler semantic bot loop termination", () => {
     expect(mockCalls[1]?.[0]?.turns).toHaveLength(3);
   });
 
+  it("does not hold room ingress while a configured-bot semantic judge is pending", async () => {
+    let resolveJudge:
+      | ((value: {
+          decision: "continue";
+          confidence: number;
+          reasonCode: string;
+          reasonShort: string;
+        }) => void)
+      | undefined;
+    runMatrixSemanticLoopJudgeMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveJudge = resolve;
+        }),
+    );
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { final: 1, block: 0, tool: 0 },
+    }));
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      historyLimit: 5,
+      accountAllowBots: true,
+      accountSemanticBotLoopTermination: true,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      dispatchReplyFromConfig,
+      getMemberDisplayName: async (_roomId, userId) =>
+        userId === "@ops:example.org" ? "ops-bot" : "alice",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$deblock-seed",
+        sender: "@ops:example.org",
+        body: "seed turn",
+      }),
+    );
+
+    const blockedBotTurn = handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$deblock-bot",
+        sender: "@ops:example.org",
+        body: "still looping",
+      }),
+    );
+
+    await Promise.resolve();
+
+    const humanTurn = handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$deblock-human",
+        sender: "@alice:example.org",
+        body: "fresh human context",
+      }),
+    );
+
+    await humanTurn;
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(2);
+
+    resolveJudge?.({
+      decision: "continue",
+      confidence: 0.9,
+      reasonCode: "progress_detected",
+      reasonShort: "Meaningful progress detected.",
+    });
+    await blockedBotTurn;
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(3);
+  });
+
   it("does not clear terminated bot chain when non-bot turn fails to commit", async () => {
     let dispatchCallCount = 0;
     const dispatchReplyFromConfig = vi.fn(async () => {

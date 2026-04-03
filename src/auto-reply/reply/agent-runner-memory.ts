@@ -314,6 +314,9 @@ export async function runPreflightCompactionIfNeeded(params: {
   if (!params.sessionKey) {
     return params.sessionEntry;
   }
+  if (params.followupRun.run.skipSessionPersistence === true) {
+    return params.sessionEntry;
+  }
 
   let entry =
     params.sessionEntry ??

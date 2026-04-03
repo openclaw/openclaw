@@ -554,6 +554,7 @@ export async function runPreparedReply(
       senderE164: sessionCtx.SenderE164?.trim() || undefined,
       senderIsOwner: command.senderIsOwner,
       sessionFile,
+      skipSessionPersistence: opts?.skipSessionPersistence === true,
       workspaceDir,
       config: cfg,
       skillsSnapshot,

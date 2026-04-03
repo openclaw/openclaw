@@ -84,6 +84,12 @@ type MatrixBotChainState = {
   terminatedOrder?: number;
 };
 
+type MatrixBotChainTracking = {
+  key: string;
+  routeKey: string;
+  senderId: string;
+};
+
 export type MatrixMonitorHandlerParams = {
   client: MatrixClient;
   core: PluginRuntime;
@@ -841,20 +847,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           resolveAgentRoute: core.channel.routing.resolveAgentRoute,
         });
         const botChainRouteKey = `${roomId}|${_route.sessionKey}`;
-        const botChainKey = `${botChainRouteKey}|${senderId}`;
-        let activeBotChainState: MatrixBotChainState | undefined;
-        if (shouldTrackConfiguredBotChain) {
-          releaseBotChainLock = await acquireBotChainLock(botChainKey);
-          activeBotChainState = upsertBotChainState(botChainKey);
-          maybeReopenBotChainState(activeBotChainState, botChainRouteKey);
-          if (activeBotChainState.terminated) {
-            logVerboseMessage(
-              `matrix: drop configured bot sender=${senderId} (semantic stop_loop active reason=${activeBotChainState.reasonCode ?? "unknown"})`,
-            );
-            await commitInboundEventIfClaimed();
-            return;
-          }
-        }
+        const botChainTracking = shouldTrackConfiguredBotChain
+          ? {
+              key: `${botChainRouteKey}|${senderId}`,
+              routeKey: botChainRouteKey,
+              senderId,
+            }
+          : undefined;
         const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId);
         const selfDisplayName = content.formatted_body
           ? await getMemberDisplayName(roomId, selfUserId).catch(() => undefined)
@@ -1011,44 +1010,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           await commitInboundEventIfClaimed();
           return;
         }
-        let pendingBotChainTurns: MatrixSemanticLoopTurn[] | undefined;
-        if (activeBotChainState) {
-          const nextTurns = [
-            ...activeBotChainState.turns,
-            {
-              senderId,
-              text: bodyText,
-              timestampMs: eventTs ?? undefined,
-            },
-          ].slice(-MAX_BOT_CHAIN_TURNS);
-          if (nextTurns.length < 2) {
-            pendingBotChainTurns = nextTurns;
-          } else {
-            const semanticDecision = await runMatrixSemanticLoopJudge({
-              core,
-              cfg,
-              agentId: _route.agentId,
-              accountId: _route.accountId,
-              routeSessionKey: _route.sessionKey,
-              roomId,
-              turns: nextTurns,
-            });
-            if (semanticDecision.decision === "stop_loop") {
-              markBotChainTerminated({
-                state: activeBotChainState,
-                routeKey: botChainRouteKey,
-                eventOrder,
-                senderId,
-                roomId,
-                decision: semanticDecision,
-              });
-              await commitInboundEventIfClaimed();
-              return;
-            }
-            // Per-chain locking keeps judged snapshots and later commits aligned.
-            pendingBotChainTurns = nextTurns;
-          }
-        }
         const senderName = await getSenderName();
         if (_configuredBinding) {
           const ensured = await ensureConfiguredAcpBindingReady({
@@ -1091,9 +1052,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           canDetectMention,
           isConfiguredBotSender,
           shouldMarkBotChainRouteReopened,
-          activeBotChainState,
-          pendingBotChainTurns,
           botChainRouteKey,
+          botChainTracking,
           commandAuthorized,
           inboundHistory,
           senderName,
@@ -1148,9 +1108,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         canDetectMention,
         isConfiguredBotSender,
         shouldMarkBotChainRouteReopened,
-        activeBotChainState,
-        pendingBotChainTurns,
         botChainRouteKey,
+        botChainTracking,
         commandAuthorized,
         inboundHistory,
         senderName,
@@ -1164,6 +1123,57 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
       } = resolvedIngressResult;
+
+      let activeBotChainState: MatrixBotChainState | undefined;
+      let pendingBotChainTurns: MatrixSemanticLoopTurn[] | undefined;
+      if (botChainTracking) {
+        releaseBotChainLock = await acquireBotChainLock(botChainTracking.key);
+        activeBotChainState = upsertBotChainState(botChainTracking.key);
+        maybeReopenBotChainState(activeBotChainState, botChainRouteKey);
+        if (activeBotChainState.terminated) {
+          logVerboseMessage(
+            `matrix: drop configured bot sender=${botChainTracking.senderId} (semantic stop_loop active reason=${activeBotChainState.reasonCode ?? "unknown"})`,
+          );
+          await commitInboundEventIfClaimed();
+          return;
+        }
+
+        const nextTurns = [
+          ...activeBotChainState.turns,
+          {
+            senderId,
+            text: bodyText,
+            timestampMs: eventTs ?? undefined,
+          },
+        ].slice(-MAX_BOT_CHAIN_TURNS);
+        if (nextTurns.length < 2) {
+          pendingBotChainTurns = nextTurns;
+        } else {
+          const semanticDecision = await runMatrixSemanticLoopJudge({
+            core,
+            cfg,
+            agentId: _route.agentId,
+            accountId: _route.accountId,
+            routeSessionKey: _route.sessionKey,
+            roomId,
+            turns: nextTurns,
+          });
+          if (semanticDecision.decision === "stop_loop") {
+            markBotChainTerminated({
+              state: activeBotChainState,
+              routeKey: botChainRouteKey,
+              eventOrder,
+              senderId,
+              roomId,
+              decision: semanticDecision,
+            });
+            await commitInboundEventIfClaimed();
+            return;
+          }
+          // Per-chain locking keeps judged snapshots and later commits aligned.
+          pendingBotChainTurns = nextTurns;
+        }
+      }
 
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.

@@ -58,6 +58,7 @@ export type FollowupRun = {
     senderE164?: string;
     senderIsOwner?: boolean;
     sessionFile?: string;
+    skipSessionPersistence?: boolean;
     workspaceDir: string;
     config: OpenClawConfig;
     skillsSnapshot?: SkillSnapshot;
