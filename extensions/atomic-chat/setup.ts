@@ -4,7 +4,11 @@ import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onbo
 import { discoverOpenAICompatibleLocalModels } from "openclaw/plugin-sdk/provider-setup";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { ATOMIC_CHAT_DEFAULT_BASE_URL, ATOMIC_CHAT_PROVIDER_LABEL } from "./defaults.js";
+import {
+  ATOMIC_CHAT_DEFAULT_API_KEY_ENV_VAR,
+  ATOMIC_CHAT_DEFAULT_BASE_URL,
+  ATOMIC_CHAT_PROVIDER_LABEL,
+} from "./defaults.js";
 
 const PROVIDER_ID = "atomic-chat";
 const DEFAULT_API_KEY = "atomic-chat-local";
@@ -73,7 +77,7 @@ export async function promptAndConfigureAtomicChat(params: {
           [PROVIDER_ID]: {
             baseUrl,
             api: "openai-completions",
-            apiKey: "ATOMIC_CHAT_API_KEY",
+            apiKey: ATOMIC_CHAT_DEFAULT_API_KEY_ENV_VAR,
             models,
           },
         },
@@ -112,8 +116,6 @@ export async function configureAtomicChatNonInteractive(params: {
     return params.nextConfig;
   }
 
-  await storeCredential(params.agentDir);
-
   const models = await discoverOpenAICompatibleLocalModels({
     baseUrl,
     label: ATOMIC_CHAT_PROVIDER_LABEL,
@@ -130,6 +132,8 @@ export async function configureAtomicChatNonInteractive(params: {
     return params.nextConfig;
   }
 
+  await storeCredential(params.agentDir);
+
   const defaultModelId = params.opts.customModelId?.trim() || models[0]?.id;
 
   const config: OpenClawConfig = {
@@ -142,7 +146,7 @@ export async function configureAtomicChatNonInteractive(params: {
         [PROVIDER_ID]: {
           baseUrl,
           api: "openai-completions",
-          apiKey: "ATOMIC_CHAT_API_KEY",
+          apiKey: ATOMIC_CHAT_DEFAULT_API_KEY_ENV_VAR,
           models,
         },
       },

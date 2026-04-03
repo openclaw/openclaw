@@ -128,6 +128,8 @@ export default definePluginEntry({
           methodId: "local",
         },
       },
+      shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
+        resolvedApiKey?.trim() === DEFAULT_API_KEY,
       resolveSyntheticAuth: ({ providerConfig }) => {
         const hasApiConfig =
           Boolean(providerConfig?.api?.trim()) ||
