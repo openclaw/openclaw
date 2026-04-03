@@ -1400,6 +1400,71 @@ describe("dispatchReplyFromConfig", () => {
     expect(noticePayload?.text).toContain("acpx session id: acpx-123");
   });
 
+  it("honors the configured default account when resolving plugin-owned binding fallbacks", async () => {
+    setNoAbort();
+    sessionBindingMocks.resolveByConversation.mockImplementation(
+      (ref: {
+        channel: string;
+        accountId: string;
+        conversationId: string;
+        parentConversationId?: string;
+      }) =>
+        ref.channel === "discord" && ref.accountId === "work" && ref.conversationId === "thread-1"
+          ? ({
+              bindingId: "plugin:work:thread-1",
+              targetSessionKey: "plugin-binding:missing-plugin",
+              targetKind: "session",
+              conversation: {
+                channel: "discord",
+                accountId: "work",
+                conversationId: "thread-1",
+              },
+              status: "active",
+              boundAt: Date.now(),
+              metadata: {
+                pluginBindingOwner: "plugin",
+                pluginId: "missing-plugin",
+                pluginRoot: "/plugins/missing-plugin",
+                pluginName: "Missing Plugin",
+              },
+            } satisfies SessionBindingRecord)
+          : null,
+    );
+
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      To: "discord:thread-1",
+      SessionKey: "main",
+      BodyForAgent: "fallback",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "work",
+        conversationId: "thread-1",
+      }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("not currently loaded"),
+      }),
+    );
+    expect(replyResolver).toHaveBeenCalled();
+  });
+
   it("honors send-policy deny before ACP runtime dispatch", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([
