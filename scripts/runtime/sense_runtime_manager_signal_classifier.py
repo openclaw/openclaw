@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 
@@ -8,6 +8,11 @@ def _as_dict(value):
 
 def _as_list(value):
     return value if isinstance(value, list) else []
+
+
+def _append_issue(issues: list[str], issue: str) -> None:
+    if issue not in issues:
+        issues.append(issue)
 
 
 def classify_manager_signal(payload: dict) -> dict:
@@ -95,27 +100,25 @@ def classify_manager_signal(payload: dict) -> dict:
         )
     )
 
-    classified_issue = 'none'
+    candidate_issues: list[str] = []
+    confidence = 0.25
+    priority = 'low'
     classifier_reason = 'no specialized provider/model signal classification matched'
 
     if final_state in {'provider_api_key_missing'} or (
         final_state == 'provider_not_ready' and has_provider_api_signal
     ):
-        classified_issue = 'provider_api_key_issue'
-        classifier_reason = 'provider readiness is blocked by missing API key requirements'
-    elif final_state == 'provider_not_ready' and has_provider_recognition_signal:
-        classified_issue = 'provider_recognition_issue'
-        classifier_reason = 'provider is configured but runtime is not yet recognizing it'
-    elif final_state == 'provider_not_ready' and (
+        _append_issue(candidate_issues, 'provider_api_key_issue')
+    if final_state == 'provider_not_ready' and has_provider_recognition_signal:
+        _append_issue(candidate_issues, 'provider_recognition_issue')
+    if final_state == 'provider_not_ready' and (
         nim_ready is False
         or any(isinstance(item, str) and item == 'nim is not running' for item in provider_missing_requirements)
     ):
-        classified_issue = 'runtime_capability_issue_nim'
-        classifier_reason = 'provider readiness is blocked by NIM runtime availability'
-    elif final_state == 'provider_not_ready' and has_runtime_capability_signal:
-        classified_issue = 'runtime_capability_issue_gpu'
-        classifier_reason = 'provider readiness is blocked by GPU/runtime capability limitations'
-    elif (
+        _append_issue(candidate_issues, 'runtime_capability_issue_nim')
+    if final_state == 'provider_not_ready' and has_runtime_capability_signal and 'runtime_capability_issue_nim' not in candidate_issues:
+        _append_issue(candidate_issues, 'runtime_capability_issue_gpu')
+    if (
         final_state == 'selected_model_not_ready'
         and retry_decision == 'recheck_runtime_status_once'
         and retry.get('retry_allowed') is True
@@ -123,23 +126,58 @@ def classify_manager_signal(payload: dict) -> dict:
         final_state == 'selected_model_mismatch'
         and selected_model_runtime_recognized is False
     ):
-        classified_issue = 'selected_model_retry_issue'
-        classifier_reason = 'selected model needs one runtime confirmation retry before configuration changes'
-    elif final_state == 'selected_model_mismatch' and (
+        _append_issue(candidate_issues, 'selected_model_retry_issue')
+    if final_state == 'selected_model_mismatch' and (
         provider_runtime_recognized is False
         or 'provider runtime not recognizing configured provider' in selected_model_diff_reason.lower()
         or 'provider' in selected_model_diff_reason.lower()
     ):
-        classified_issue = 'selected_model_provider_issue'
+        _append_issue(candidate_issues, 'selected_model_provider_issue')
+    if final_state == 'selected_model_mismatch' and selected_model_runtime_recognized is not False:
+        _append_issue(candidate_issues, 'selected_model_mismatch_issue')
+
+    primary_issue = candidate_issues[0] if candidate_issues else 'none'
+    secondary_issues = candidate_issues[1:] if len(candidate_issues) > 1 else []
+    classified_issue = primary_issue
+
+    if primary_issue == 'provider_api_key_issue':
+        classifier_reason = 'provider readiness is blocked by missing API key requirements'
+        priority = 'high'
+        confidence = 0.92 if bool(provider_missing_api_keys) or provider_api_required is True else 0.78
+    elif primary_issue == 'provider_recognition_issue':
+        classifier_reason = 'provider is configured but runtime is not yet recognizing it'
+        priority = 'high'
+        confidence = 0.82 if provider_config_present is True and provider_runtime_recognized_nested is False else 0.68
+    elif primary_issue == 'runtime_capability_issue_nim':
+        classifier_reason = 'provider readiness is blocked by NIM runtime availability'
+        priority = 'medium'
+        confidence = 0.80 if nim_ready is False else 0.64
+    elif primary_issue == 'runtime_capability_issue_gpu':
+        classifier_reason = 'provider readiness is blocked by GPU/runtime capability limitations'
+        priority = 'medium'
+        confidence = 0.76 if gpu_ready is False else 0.60
+    elif primary_issue == 'selected_model_retry_issue':
+        classifier_reason = 'selected model needs one runtime confirmation retry before configuration changes'
+        priority = 'low'
+        confidence = 0.74 if retry_decision == 'recheck_runtime_status_once' or selected_model_runtime_recognized is False else 0.58
+    elif primary_issue == 'selected_model_provider_issue':
         classifier_reason = 'selected-model mismatch appears to be caused by provider resolution'
-    elif final_state == 'selected_model_mismatch':
-        classified_issue = 'selected_model_mismatch_issue'
+        priority = 'high'
+        confidence = 0.80 if provider_runtime_recognized is False else 0.66
+    elif primary_issue == 'selected_model_mismatch_issue':
         classifier_reason = 'selected-model mismatch appears to be a direct model-name mismatch'
+        priority = 'medium'
+        confidence = 0.78 if selected_model_expected and selected_model_runtime else 0.61
 
     return {
         'classified_issue': classified_issue,
+        'primary_issue': primary_issue,
+        'secondary_issues': secondary_issues,
         'classifier_reason': classifier_reason,
-        'classifier_version': 'v1',
+        'classifier_version': 'v2',
+        'priority': priority,
+        'confidence': confidence,
+        'fallback_action': 'manual_review',
         'final_state': final_state,
         'provider': provider_name,
         'provider_runtime_recognized': provider_runtime_recognized,

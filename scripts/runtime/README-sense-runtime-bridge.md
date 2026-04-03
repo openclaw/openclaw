@@ -551,6 +551,31 @@ The classifier reads manager-visible structured fields from `policy_input` only,
 
 This keeps routing evaluation unchanged while making the manager policy table thinner and easier to extend. The policy table now prefers `classified_issue` when choosing deterministic actions and only falls back to direct `final_state` handling for simpler states.
 
+Classifier output now also includes:
+
+- `primary_issue`
+- `secondary_issues`
+- `priority`
+- `confidence`
+- `fallback_action`
+
+The current classifier uses a simple priority model:
+
+- `provider_api_key_issue` -> `high`
+- `provider_recognition_issue` -> `high`
+- `runtime_capability_issue_nim` -> `medium`
+- `runtime_capability_issue_gpu` -> `medium`
+- `selected_model_retry_issue` -> `low`
+- `selected_model_mismatch_issue` -> `medium`
+- `selected_model_provider_issue` -> `high`
+
+`secondary_issues` are intentionally minimal. They let the manager preserve extra context, such as:
+
+- provider recognition with NIM capability pressure
+- selected-model mismatch with provider-side weakness
+
+Policy now chooses action from `primary_issue`, keeps `secondary_issues` in `policy_trace`, and can fall back to `fallback_action` when no deterministic rule matches.
+
 Routing loop can now stop more specifically as:
 
 - `default_model_missing`

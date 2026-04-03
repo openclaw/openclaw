@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -48,8 +48,13 @@ def build_policy_output(
 def build_classifier_matched_on(classification: dict) -> dict:
     return {
         'classified_issue': classification.get('classified_issue'),
+        'primary_issue': classification.get('primary_issue'),
+        'secondary_issues': classification.get('secondary_issues', []),
         'classifier_reason': classification.get('classifier_reason'),
         'classifier_version': classification.get('classifier_version'),
+        'priority': classification.get('priority'),
+        'confidence': classification.get('confidence'),
+        'fallback_action': classification.get('fallback_action'),
     }
 
 
@@ -63,7 +68,7 @@ def main() -> int:
     repeated_decision_detected = retry.get('repeated_decision_detected') is True
     policy_input = payload.get('policy_input', {})
     classification = classify_manager_signal(payload)
-    classified_issue = classification.get('classified_issue')
+    classified_issue = classification.get('primary_issue') or classification.get('classified_issue')
 
     if classified_issue == 'provider_api_key_issue':
         output = build_policy_output(
@@ -434,7 +439,7 @@ def main() -> int:
         return 0
 
     output = build_policy_output(
-        manager_action='stop',
+        manager_action=str(classification.get('fallback_action') or 'stop'),
         manager_reason='runtime evaluation requires manual review because no deterministic manager policy rule matched',
         next_step=next_step,
         retry_decision=retry_decision,
@@ -445,8 +450,12 @@ def main() -> int:
                 'final_state': final_state,
                 'next_step': next_step,
                 'retry_decision': retry_decision,
+                'primary_issue': classification.get('primary_issue'),
+                'secondary_issues': classification.get('secondary_issues', []),
+                'priority': classification.get('priority'),
+                'confidence': classification.get('confidence'),
             },
-            'selected_action': 'stop',
+            'selected_action': str(classification.get('fallback_action') or 'stop'),
         },
     )
     print(json.dumps(output, ensure_ascii=False, indent=2))
