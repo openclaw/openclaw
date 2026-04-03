@@ -382,6 +382,9 @@ export function resolveEffectiveEnableState(params: {
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
+  sourceConfig?: NormalizedPluginsConfig;
+  sourceRootConfig?: OpenClawConfig;
+  autoEnabledReason?: string;
 }): { enabled: boolean; reason?: string } {
   const state = resolveEffectivePluginActivationState(params);
   return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
