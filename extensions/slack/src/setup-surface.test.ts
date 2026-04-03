@@ -118,3 +118,31 @@ describe("slackSetupWizard.dmPolicy", () => {
     expect(next?.channels?.slack?.accounts?.alerts?.allowFrom).toEqual(["U123", "*"]);
   });
 });
+
+describe("slackSetupWizard.status", () => {
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const configured = await slackSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          slack: {
+            defaultAccount: "work",
+            botToken: "xoxb-root",
+            appToken: "xapp-root",
+            accounts: {
+              alerts: {
+                botToken: "xoxb-alerts",
+                appToken: "xapp-alerts",
+              },
+              work: {
+                botToken: "",
+                appToken: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
+  });
+});
