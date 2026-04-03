@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { createDiscordRuntimeAccountContext } from "../client.js";
 import { readDiscordComponentSpec } from "../components.js";
 import {
   assertMediaNotDataUrl,
@@ -108,6 +109,12 @@ export async function handleDiscordMessagingAction(
     );
   const accountId = readStringParam(params, "accountId");
   const cfgOptions = cfg ? { cfg } : {};
+  const reactionRuntimeOptions = cfg
+    ? createDiscordRuntimeAccountContext({
+        cfg,
+        accountId: accountId ?? "default",
+      })
+    : undefined;
   const normalizeMessage = (message: unknown) => {
     if (!message || typeof message !== "object") {
       return message;
@@ -130,10 +137,9 @@ export async function handleDiscordMessagingAction(
         removeErrorMessage: "Emoji is required to remove a Discord reaction.",
       });
       if (remove) {
-        if (accountId) {
+        if (reactionRuntimeOptions) {
           await discordMessagingActionRuntime.removeReactionDiscord(channelId, messageId, emoji, {
-            ...cfgOptions,
-            accountId,
+            ...reactionRuntimeOptions,
           });
         } else {
           await discordMessagingActionRuntime.removeReactionDiscord(
@@ -146,10 +152,9 @@ export async function handleDiscordMessagingAction(
         return jsonResult({ ok: true, removed: emoji });
       }
       if (isEmpty) {
-        const removed = accountId
+        const removed = reactionRuntimeOptions
           ? await discordMessagingActionRuntime.removeOwnReactionsDiscord(channelId, messageId, {
-              ...cfgOptions,
-              accountId,
+              ...reactionRuntimeOptions,
             })
           : await discordMessagingActionRuntime.removeOwnReactionsDiscord(
               channelId,
@@ -158,10 +163,9 @@ export async function handleDiscordMessagingAction(
             );
         return jsonResult({ ok: true, removed: removed.removed });
       }
-      if (accountId) {
+      if (reactionRuntimeOptions) {
         await discordMessagingActionRuntime.reactMessageDiscord(channelId, messageId, emoji, {
-          ...cfgOptions,
-          accountId,
+          ...reactionRuntimeOptions,
         });
       } else {
         await discordMessagingActionRuntime.reactMessageDiscord(
@@ -187,7 +191,7 @@ export async function handleDiscordMessagingAction(
         messageId,
         {
           ...cfgOptions,
-          ...(accountId ? { accountId } : {}),
+          ...(reactionRuntimeOptions ?? {}),
           limit,
         },
       );

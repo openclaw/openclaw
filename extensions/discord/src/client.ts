@@ -10,6 +10,7 @@ import {
 } from "./accounts.js";
 import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
 import { createDiscordRetryRunner } from "./retry.js";
+import type { DiscordRuntimeAccountContext } from "./send.types.js";
 import { normalizeDiscordToken } from "./token.js";
 
 export type DiscordClientOpts = {
@@ -20,6 +21,16 @@ export type DiscordClientOpts = {
   retry?: RetryConfig;
   verbose?: boolean;
 };
+
+export function createDiscordRuntimeAccountContext(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  accountId: string;
+}): DiscordRuntimeAccountContext {
+  return {
+    cfg: params.cfg,
+    accountId: normalizeAccountId(params.accountId),
+  };
+}
 
 export function resolveDiscordClientAccountContext(
   opts: Pick<DiscordClientOpts, "cfg" | "accountId">,
