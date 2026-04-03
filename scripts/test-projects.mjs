@@ -6,7 +6,6 @@ const vitestArgs = buildVitestArgs(process.argv.slice(2));
 const releaseLock = acquireLocalHeavyCheckLockSync({
   cwd: process.cwd(),
   env: process.env,
-  lockName: "test",
   toolName: "test",
 });
 let lockReleased = false;
