@@ -33,7 +33,9 @@ set -euo pipefail
 STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 EXTENSIONS_DIR="${STATE_DIR}/extensions"
 CONFIG_FILE="${STATE_DIR}/openclaw.json"
-CONFIG_BACKUP="/tmp/openclaw-config-backup-$(date +%Y-%m-%d).json"
+# CONFIG_BACKUP is created later with mktemp (timestamp + random suffix)
+# to avoid overwriting on same-day re-runs.
+CONFIG_BACKUP=""
 
 # ---------------------------------------------------------------------------
 # Colour helpers (disabled when stdout is not a terminal)
@@ -93,15 +95,9 @@ confirm() {
     esac
 }
 
-# Portable version extractor — works on both Linux and macOS
-extract_version() {
-    # Reads JSON on stdin and prints the "version" value
-    python3 -c 'import json,sys; print(json.load(sys.stdin).get("version","unknown"))'
-}
-
-# Portable semver extractor from a string like "openclaw 2026.4.3"
+# Portable semver extractor from a string like "openclaw 2026.4.3" or "2026.4.1-beta.1"
 parse_semver() {
-    echo "$1" | sed -E 's/.*([0-9]{4}\.[0-9]+\.[0-9]+).*/\1/'
+    echo "$1" | sed -E 's/.*([0-9]{4}\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?).*/\1/'
 }
 
 # ---------------------------------------------------------------------------
@@ -151,11 +147,17 @@ fi
 log "Update path: ${CURRENT_VERSION} → ${TARGET_VERSION}"
 echo ""
 
-# Backup config
+# Backup config (skip in dry-run)
 if [[ -f "${CONFIG_FILE}" ]]; then
-    log "Backing up config to ${CONFIG_BACKUP}"
-    cp "${CONFIG_FILE}" "${CONFIG_BACKUP}"
-    success "Config backed up"
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        log "[DRY-RUN] Would back up config (skipped)"
+    else
+        CONFIG_BACKUP="$(mktemp "${STATE_DIR}/openclaw-config-backup-$(date +%Y%m%d-%H%M%S)-XXXX.json")"
+        chmod 600 "${CONFIG_BACKUP}"
+        cp "${CONFIG_FILE}" "${CONFIG_BACKUP}"
+        log "Backing up config to ${CONFIG_BACKUP}"
+        success "Config backed up"
+    fi
 else
     warn "No config file found at ${CONFIG_FILE} — skipping backup"
 fi
@@ -304,7 +306,7 @@ for plugin in "${NPM_PLUGINS[@]}"; do
         OPENCLAW_UPD_PLUGIN_PATH="${plugin_path}" \
         OPENCLAW_UPD_PLUGIN_NAME="${plugin}" \
         python3 <<'PYEOF'
-import json, datetime, os, sys
+import json, datetime, os, sys, tempfile
 
 config_path = os.environ.get("OPENCLAW_UPD_CONFIG", "")
 plugin_path = os.environ.get("OPENCLAW_UPD_PLUGIN_PATH", "")
@@ -314,8 +316,17 @@ if not config_path or not plugin_path or not plugin_name:
     print("Skipping install-record update (missing env vars)", file=sys.stderr)
     sys.exit(0)
 
-with open(config_path) as f:
-    cfg = json.load(f)
+try:
+    with open(config_path) as f:
+        cfg = json.load(f)
+except json.JSONDecodeError as e:
+    # openclaw.json may contain JSON5 (comments, trailing commas) which
+    # Python's strict json module cannot parse. Skip the patch step rather
+    # than corrupting the file.
+    print(f"WARNING: Could not parse {config_path} as strict JSON ({e}). "
+          "Skipping install-record update. If your config uses JSON5 features "
+          "(comments, trailing commas), edit the record manually.", file=sys.stderr)
+    sys.exit(0)
 
 pkg_path = os.path.join(plugin_path, "package.json")
 if not os.path.isfile(pkg_path):
@@ -337,8 +348,12 @@ record["spec"] = f"{npm_name}@{version}"
 record["resolvedSpec"] = f"{npm_name}@{version}"
 record["resolvedAt"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-with open(config_path, "w") as f:
-    json.dump(cfg, f, indent=2)
+# Atomic write: write to temp file then rename to avoid corruption if interrupted
+config_dir = os.path.dirname(config_path)
+with tempfile.NamedTemporaryFile('w', dir=config_dir, delete=False, suffix='.tmp') as tmp_f:
+    json.dump(cfg, tmp_f, indent=2)
+    tmp_path = tmp_f.name
+os.replace(tmp_path, config_path)
 
 print(f"Updated install record: {plugin_name} v{version}")
 PYEOF
@@ -358,8 +373,8 @@ echo -e "${BOLD}           Phase 5: Updating Gateway                           $
 echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-log "Running: openclaw update"
-if openclaw update 2>&1; then
+log "Running: openclaw update --tag ${TARGET_VERSION} --no-restart"
+if openclaw update --tag "${TARGET_VERSION}" --no-restart 2>&1; then
     success "Gateway update completed"
 else
     fail "Gateway update failed"
@@ -418,6 +433,12 @@ if [[ ${VALIDATION_ERRORS} -gt 0 ]]; then
     warn "Validation completed with ${VALIDATION_ERRORS} warning(s)"
 else
     success "All validation checks passed"
+fi
+echo ""
+
+if [[ ${VALIDATION_ERRORS} -gt 0 ]]; then
+    fail "${VALIDATION_ERRORS} validation error(s) detected — review warnings above before restarting"
+    exit 4
 fi
 echo ""
 
