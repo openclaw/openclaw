@@ -31,6 +31,7 @@ export function loadHotspotInputTexts({
     const normalizedName = jobName.toLowerCase();
     return normalizedRunJobMatches.some((match) => normalizedName.includes(match));
   };
+  // Deduplicate explicit and run-derived job ids so repeated inputs do not refetch the same log.
   const ghJobIds = new Set(
     ghJobs
       .map((jobId) => (typeof jobId === "string" ? jobId.trim() : String(jobId ?? "").trim()))
@@ -42,10 +43,18 @@ export function loadHotspotInputTexts({
     if (normalizedRunId.length === 0) {
       continue;
     }
-    const rawJobs = execFileSyncImpl("gh", ["run", "view", normalizedRunId, "--json", "jobs"], {
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-    });
+    let rawJobs;
+    try {
+      rawJobs = execFileSyncImpl("gh", ["run", "view", normalizedRunId, "--json", "jobs"], {
+        encoding: "utf8",
+        maxBuffer: 8 * 1024 * 1024,
+      });
+    } catch (error) {
+      throw new Error(
+        `[test-update-memory-hotspots] failed to fetch gh run ${normalizedRunId} jobs`,
+        { cause: error },
+      );
+    }
     let jobs = [];
     try {
       const parsed = JSON.parse(rawJobs);

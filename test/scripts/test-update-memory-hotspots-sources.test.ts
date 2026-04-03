@@ -53,7 +53,8 @@ describe("test-update-memory-hotspots source loading", () => {
         args[0] === "run" &&
         args[1] === "view" &&
         args[2] === "23933168654" &&
-        args[3] === "--json"
+        args[3] === "--json" &&
+        args[4] === "jobs"
       ) {
         return JSON.stringify({
           jobs: [
