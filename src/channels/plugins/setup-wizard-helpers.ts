@@ -1347,7 +1347,7 @@ export function createTopLevelChannelParsedAllowFromPrompt(params: {
     });
   }
 
-  const defaultAccountId = params.defaultAccountId;
+  const defaultAccountId: string = params.defaultAccountId;
   return createPromptParsedAllowFromForAccount({
     defaultAccountId,
     ...sharedParams,
