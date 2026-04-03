@@ -3,7 +3,8 @@ import {
   createDelegatedSetupWizardProxy,
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
-  createTopLevelChannelDmPolicy,
+  mergeAllowFromEntries,
+  patchChannelConfigForAccount,
   parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
@@ -105,14 +106,45 @@ export async function promptIMessageAllowFrom(params: {
   });
 }
 
-export const imessageDmPolicy = createTopLevelChannelDmPolicy({
+export const imessageDmPolicy = {
   label: "iMessage",
   channel,
   policyKey: "channels.imessage.dmPolicy",
   allowFromKey: "channels.imessage.allowFrom",
-  getCurrent: (cfg: OpenClawConfig) => cfg.channels?.imessage?.dmPolicy ?? "pairing",
+  resolveConfigKeys: (_cfg: OpenClawConfig, accountId?: string) =>
+    accountId && accountId !== resolveDefaultIMessageAccountId(_cfg)
+      ? {
+          policyKey: `channels.imessage.accounts.${accountId}.dmPolicy`,
+          allowFromKey: `channels.imessage.accounts.${accountId}.allowFrom`,
+        }
+      : {
+          policyKey: "channels.imessage.dmPolicy",
+          allowFromKey: "channels.imessage.allowFrom",
+        },
+  getCurrent: (cfg: OpenClawConfig, accountId?: string) =>
+    resolveIMessageAccount({ cfg, accountId }).config.dmPolicy ?? "pairing",
+  setPolicy: (
+    cfg: OpenClawConfig,
+    policy: "pairing" | "allowlist" | "open" | "disabled",
+    accountId?: string,
+  ) =>
+    patchChannelConfigForAccount({
+      cfg,
+      channel,
+      accountId: accountId ?? resolveDefaultIMessageAccountId(cfg),
+      patch:
+        policy === "open"
+          ? {
+              dmPolicy: "open",
+              allowFrom: mergeAllowFromEntries(
+                resolveIMessageAccount({ cfg, accountId }).config.allowFrom,
+                ["*"],
+              ),
+            }
+          : { dmPolicy: policy },
+    }),
   promptAllowFrom: promptIMessageAllowFrom,
-});
+};
 
 function resolveIMessageCliPath(params: { cfg: OpenClawConfig; accountId: string }) {
   return resolveIMessageAccount(params).config.cliPath ?? "imsg";
