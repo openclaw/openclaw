@@ -1,5 +1,5 @@
 import { SAFE_SESSION_ID_RE } from "../config/sessions/paths.js";
-import { sanitizeAgentId } from "../routing/session-key.js";
+import { parseAgentSessionKey, sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import {
   TimeoutSecondsFieldSchema,
@@ -333,7 +333,12 @@ function normalizeSessionTarget(raw: unknown) {
   }
   // Support custom session IDs with "session:" prefix
   if (lower.startsWith("session:")) {
-    const sessionId = normalizeCronCustomSessionId(trimmed.slice(8));
+    const rawSessionId = trimmed.slice(8);
+    const parsedSessionKey = parseAgentSessionKey(rawSessionId);
+    if (parsedSessionKey) {
+      return `session:agent:${parsedSessionKey.agentId}:${parsedSessionKey.rest}`;
+    }
+    const sessionId = normalizeCronCustomSessionId(rawSessionId);
     if (sessionId) {
       return `session:${sessionId}`;
     }

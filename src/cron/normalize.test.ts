@@ -594,6 +594,17 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.sessionTarget).toBe("session:MySessionID");
   });
 
+  it("preserves explicit agent session keys with a session: prefix", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "explicit-agent-session",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "session:agent:main:discord:group:ops",
+      payload: { kind: "agentTurn", message: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("session:agent:main:discord:group:ops");
+  });
+
   it("rejects custom session ids with path separators", () => {
     const normalized = normalizeCronJobCreate({
       name: "custom-session-invalid",
