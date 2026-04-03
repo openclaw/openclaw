@@ -71,6 +71,7 @@ describe("isAuthPermanentErrorMessage", () => {
         "invalid_api_key",
         "api key revoked",
         "api key deactivated",
+        "deactivated_workspace",
         "key has been disabled",
         "key has been revoked",
         "account has been deactivated",
@@ -862,6 +863,7 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("billing");
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
+    expect(classifyFailoverReason("deactivated_workspace")).toBe("auth_permanent");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
     expect(classifyFailoverReason("Connection error.")).toBe("timeout");

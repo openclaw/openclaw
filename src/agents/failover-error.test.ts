@@ -436,6 +436,12 @@ describe("failover-error", () => {
     );
   });
 
+  it("infers permanent auth from deactivated_workspace markers", () => {
+    expect(resolveFailoverReasonFromError({ message: "deactivated_workspace" })).toBe(
+      "auth_permanent",
+    );
+  });
+
   it("treats AbortError reason=abort as timeout", () => {
     const err = Object.assign(new Error("aborted"), {
       name: "AbortError",
