@@ -620,9 +620,12 @@ Use the binary path alone:
 
 ### Cron jobs or headless sessions always require approval
 
-If `defaults` in `exec-approvals.json` is `{}` or missing, exec policy falls back to
-`security: "allowlist"` with `ask: "on-miss"`. In unattended environments where no UI
-can resolve prompts, commands stall until the approval times out and are denied.
+If `defaults` in `exec-approvals.json` is `{}` or missing, omitted fields inherit from
+`tools.exec.*` config or the code-level defaults (`security: "full"`, `ask: "off"`).
+However, the effective policy is the stricter of all sources — host-local approvals state,
+companion app settings, or per-agent overrides can still restrict execution. In unattended
+environments where the effective policy requires a prompt but no UI can resolve it,
+commands stall until the approval times out and are denied.
 
 Fix: set `defaults` explicitly:
 
