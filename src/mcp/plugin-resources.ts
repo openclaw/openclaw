@@ -65,6 +65,8 @@ export function resolvePluginResources(ctx: McpResourceContext): McpResourceDefi
           {
             enabled: plugins.enabled,
             allow: plugins.allow,
+            // NOTE: entry.config is intentionally omitted because it may contain
+            // sensitive values such as API keys, tokens, or secret references.
             entries: plugins.entries
               ? Object.fromEntries(
                   Object.entries(plugins.entries).map(([id, entry]) => [
@@ -96,9 +98,24 @@ export function resolvePluginResources(ctx: McpResourceContext): McpResourceDefi
               return [name, server];
             }
             const entry = { ...server } as Record<string, unknown>;
-            // Redact sensitive fields
+            // Redact sensitive fields that may contain API keys, tokens, or credentials
             if (typeof entry.headers === "object" && entry.headers) {
               entry.headers = "[redacted]";
+            }
+            if (typeof entry.env === "object" && entry.env) {
+              entry.env = "[redacted]";
+            }
+            if (typeof entry.url === "string" && entry.url) {
+              try {
+                const parsed = new URL(entry.url);
+                if (parsed.username || parsed.password) {
+                  parsed.username = parsed.username ? "[redacted]" : "";
+                  parsed.password = parsed.password ? "[redacted]" : "";
+                  entry.url = parsed.toString();
+                }
+              } catch {
+                // Not a valid URL, leave as-is
+              }
             }
             return [name, entry];
           }),
