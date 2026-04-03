@@ -909,6 +909,13 @@
   min-width: 0;
 }
 
+.btn.cron-refresh-btn--loading {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--primary-foreground);
+  box-shadow: 0 1px 3px var(--accent-subtle);
+}
+
 .cron-workspace {
   margin-top: 16px;
   display: grid;
@@ -1307,6 +1314,11 @@
 }
 
 :root[data-theme-mode="light"] .btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+:root[data-theme-mode="light"] .btn.cron-refresh-btn--loading {
   background: var(--accent);
   border-color: var(--accent);
 }

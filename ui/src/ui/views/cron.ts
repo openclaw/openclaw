@@ -419,7 +419,7 @@ export function renderCron(props: CronProps) {
       </div>
       <div class="cron-summary-strip__actions">
         <button
-          class=${props.loading ? "btn primary" : "btn"}
+          class=${props.loading ? "btn cron-refresh-btn--loading" : "btn"}
           ?disabled=${props.loading}
           @click=${props.onRefresh}
         >
