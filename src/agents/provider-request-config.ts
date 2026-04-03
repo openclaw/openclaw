@@ -300,23 +300,10 @@ export function sanitizeConfiguredProviderRequest(
   };
 }
 
-const MODEL_PROVIDER_REQUEST_TRANSPORT_MESSAGE =
-  "models.providers.*.request only supports headers and auth overrides; proxy and TLS transport settings are not wired for model-provider requests";
-
 export function sanitizeConfiguredModelProviderRequest(
   request: ConfiguredModelProviderRequest | ConfiguredProviderRequest | undefined,
 ): ProviderRequestTransportOverrides | undefined {
-  const sanitized = sanitizeConfiguredProviderRequest(request);
-  if (!sanitized) {
-    return undefined;
-  }
-  if (sanitized.proxy || sanitized.tls) {
-    throw new Error(MODEL_PROVIDER_REQUEST_TRANSPORT_MESSAGE);
-  }
-  return {
-    ...(sanitized.headers ? { headers: sanitized.headers } : {}),
-    ...(sanitized.auth ? { auth: sanitized.auth } : {}),
-  };
+  return sanitizeConfiguredProviderRequest(request);
 }
 
 export function mergeProviderRequestOverrides(
@@ -699,4 +686,30 @@ export function resolveProviderRequestHeaders(params: {
     precedence: params.precedence,
     request: params.request,
   }).headers;
+}
+
+const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
+  "openclaw.modelProviderRequestTransport",
+);
+
+type ModelWithProviderRequestTransport = {
+  [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]?: ProviderRequestTransportOverrides;
+};
+
+export function attachModelProviderRequestTransport<TModel extends object>(
+  model: TModel,
+  request: ProviderRequestTransportOverrides | undefined,
+): TModel {
+  if (!request) {
+    return model;
+  }
+  const next = { ...model } as TModel & ModelWithProviderRequestTransport;
+  next[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL] = request;
+  return next;
+}
+
+export function getModelProviderRequestTransport(
+  model: object,
+): ProviderRequestTransportOverrides | undefined {
+  return (model as ModelWithProviderRequestTransport)[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL];
 }
