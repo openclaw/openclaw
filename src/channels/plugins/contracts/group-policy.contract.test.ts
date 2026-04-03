@@ -5,7 +5,43 @@ import {
   resolveZaloRuntimeGroupPolicy,
 } from "../../../../extensions/zalo/api.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../../config/runtime-group-policy.js";
-import { installChannelRuntimeGroupPolicyFallbackSuite } from "./suites.js";
+
+type RuntimeGroupPolicyResolver = (
+  params: Parameters<typeof resolveOpenProviderRuntimeGroupPolicy>[0],
+) => ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;
+
+function installChannelRuntimeGroupPolicyFallbackSuite(params: {
+  configuredLabel: string;
+  defaultGroupPolicyUnderTest: "allowlist" | "disabled" | "open";
+  missingConfigLabel: string;
+  missingDefaultLabel: string;
+  resolve: RuntimeGroupPolicyResolver;
+}) {
+  it(params.missingConfigLabel, () => {
+    const resolved = params.resolve({
+      providerConfigPresent: false,
+    });
+    expect(resolved.groupPolicy).toBe("allowlist");
+    expect(resolved.providerMissingFallbackApplied).toBe(true);
+  });
+
+  it(params.configuredLabel, () => {
+    const resolved = params.resolve({
+      providerConfigPresent: true,
+    });
+    expect(resolved.groupPolicy).toBe("open");
+    expect(resolved.providerMissingFallbackApplied).toBe(false);
+  });
+
+  it(params.missingDefaultLabel, () => {
+    const resolved = params.resolve({
+      providerConfigPresent: false,
+      defaultGroupPolicy: params.defaultGroupPolicyUnderTest,
+    });
+    expect(resolved.groupPolicy).toBe("allowlist");
+    expect(resolved.providerMissingFallbackApplied).toBe(true);
+  });
+}
 
 describe("channel runtime group policy contract", () => {
   type ResolvedGroupPolicy = ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;

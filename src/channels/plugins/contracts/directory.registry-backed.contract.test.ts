@@ -1,6 +1,6 @@
 import { describe } from "vitest";
+import { installChannelDirectoryContractSuite } from "../../../../test/helpers/channels/threading-directory-contract-suites.js";
 import { getDirectoryContractRegistry } from "./registry.js";
-import { installChannelDirectoryContractSuite } from "./suites.js";
 
 for (const entry of getDirectoryContractRegistry()) {
   describe(`${entry.id} directory contract`, () => {
