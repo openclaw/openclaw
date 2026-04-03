@@ -5,6 +5,10 @@ import {
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import {
+  mergeProviderRequestOverrides,
+  sanitizeConfiguredProviderRequest,
+} from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -410,7 +414,11 @@ async function resolveProviderExecutionContext(params: {
     ...sanitizeProviderHeaders(params.entry.headers as Record<string, unknown> | undefined),
   };
   const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
-  return { apiKeys, baseUrl, headers };
+  const request = mergeProviderRequestOverrides(
+    sanitizeConfiguredProviderRequest(params.config?.request),
+    sanitizeConfiguredProviderRequest(params.entry.request),
+  );
+  return { apiKeys, baseUrl, headers, request };
 }
 
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
@@ -528,7 +536,7 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
-    const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
+    const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
       providerId,
       cfg,
       entry,
@@ -552,6 +560,7 @@ export async function runProviderEntry(params: {
           apiKey,
           baseUrl,
           headers,
+          request,
           model,
           language: entry.language ?? params.config?.language ?? cfg.tools?.media?.audio?.language,
           prompt,
@@ -586,7 +595,7 @@ export async function runProviderEntry(params: {
       `Video attachment ${params.attachmentIndex + 1} base64 payload ${estimatedBase64Bytes} exceeds ${maxBase64Bytes}`,
     );
   }
-  const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
+  const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
     providerId,
     cfg,
     entry,
@@ -604,6 +613,7 @@ export async function runProviderEntry(params: {
         apiKey,
         baseUrl,
         headers,
+        request,
         model: entry.model,
         prompt,
         timeoutMs,

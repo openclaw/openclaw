@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildProviderRequestDispatcherPolicy,
+  mergeProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
   resolveProviderRequestConfig,
   resolveProviderRequestHeaders,
+  sanitizeConfiguredProviderRequest,
   sanitizeRuntimeProviderRequestOverrides,
 } from "./provider-request-config.js";
 
@@ -242,6 +244,108 @@ describe("provider request config", () => {
         },
       }),
     ).toThrow(/runtime auth request overrides do not allow proxy or tls/i);
+  });
+
+  it("sanitizes configured request overrides into runtime transport overrides", () => {
+    expect(
+      sanitizeConfiguredProviderRequest({
+        headers: {
+          "X-Tenant": "acme",
+        },
+        auth: {
+          mode: "authorization-bearer",
+          token: "secret",
+        },
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+          tls: {
+            ca: "proxy-ca",
+          },
+        },
+        tls: {
+          cert: "client-cert",
+          key: "client-key",
+          serverName: "gateway.internal",
+        },
+      }),
+    ).toEqual({
+      headers: {
+        "X-Tenant": "acme",
+      },
+      auth: {
+        mode: "authorization-bearer",
+        token: "secret",
+      },
+      proxy: {
+        mode: "explicit-proxy",
+        url: "http://proxy.internal:8443",
+        tls: {
+          ca: "proxy-ca",
+        },
+      },
+      tls: {
+        cert: "client-cert",
+        key: "client-key",
+        serverName: "gateway.internal",
+      },
+    });
+  });
+
+  it("fails fast when configured request overrides still contain unresolved SecretRefs", () => {
+    expect(() =>
+      sanitizeConfiguredProviderRequest({
+        headers: {
+          "X-Tenant": { source: "env", provider: "default", id: "MEDIA_AUDIO_TENANT" },
+        },
+        auth: {
+          mode: "authorization-bearer",
+          token: { source: "env", provider: "default", id: "MEDIA_AUDIO_TOKEN" },
+        },
+        tls: {
+          cert: { source: "env", provider: "default", id: "MEDIA_AUDIO_CERT" },
+        },
+      }),
+    ).toThrow(/request\.(headers\.X-Tenant|auth\.token|tls\.cert): unresolved SecretRef/i);
+  });
+
+  it("merges configured request overrides with later entries winning", () => {
+    expect(
+      mergeProviderRequestOverrides(
+        {
+          headers: {
+            "X-Provider": "1",
+            "X-Shared": "provider",
+          },
+          auth: {
+            mode: "authorization-bearer",
+            token: "provider-token",
+          },
+        },
+        {
+          headers: {
+            "X-Entry": "2",
+            "X-Shared": "entry",
+          },
+          auth: {
+            mode: "header",
+            headerName: "api-key",
+            value: "entry-key",
+          },
+        },
+      ),
+    ).toEqual({
+      headers: {
+        "X-Provider": "1",
+        "X-Shared": "entry",
+        "X-Entry": "2",
+      },
+      auth: {
+        mode: "header",
+        headerName: "api-key",
+        value: "entry-key",
+      },
+    });
   });
 
   it("lets defaults override caller headers when requested", () => {

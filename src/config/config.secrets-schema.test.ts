@@ -100,6 +100,42 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts media request secret refs for auth, headers, and tls material", () => {
+    const result = validateConfigObjectRaw({
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            request: {
+              headers: {
+                "X-Tenant": { source: "env", provider: "default", id: "MEDIA_TENANT_HEADER" },
+              },
+              auth: {
+                mode: "authorization-bearer",
+                token: { source: "env", provider: "default", id: "MEDIA_AUDIO_TOKEN" },
+              },
+              proxy: {
+                mode: "explicit-proxy",
+                url: "http://proxy.example:8080",
+                tls: {
+                  ca: { source: "file", provider: "filemain", id: "/tls/proxy-ca" },
+                },
+              },
+              tls: {
+                cert: { source: "file", provider: "filemain", id: "/tls/client-cert" },
+                key: { source: "file", provider: "filemain", id: "/tls/client-key" },
+                passphrase: { source: "exec", provider: "vault", id: "media/audio/passphrase" },
+              },
+            },
+            models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it('accepts file refs with id "value" for singleValue mode providers', () => {
     const result = validateConfigObjectRaw({
       secrets: {
