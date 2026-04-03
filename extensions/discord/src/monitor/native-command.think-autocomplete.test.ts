@@ -35,7 +35,7 @@ const resolveConfiguredBindingRouteMock = vi.hoisted(() =>
   >(() => null),
 );
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   const { createConfiguredBindingConversationRuntimeModuleMock } =
     await import("../test-support/configured-binding-runtime.js");
   return await createConfiguredBindingConversationRuntimeModuleMock(
@@ -43,7 +43,10 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
       ensureConfiguredBindingRouteReadyMock,
       resolveConfiguredBindingRouteMock,
     },
-    importOriginal,
+    () =>
+      vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+        "openclaw/plugin-sdk/conversation-runtime",
+      ),
   );
 });
 

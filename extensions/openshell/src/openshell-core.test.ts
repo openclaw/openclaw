@@ -74,8 +74,8 @@ describe("openshell cli helpers", () => {
 
 describe("openshell backend manager", () => {
   beforeAll(async () => {
-    vi.doMock("./cli.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./cli.js")>();
+    vi.doMock("./cli.js", async () => {
+      const actual = await vi.importActual<typeof import("./cli.js")>("./cli.js");
       return {
         ...actual,
         runOpenShellCli: cliMocks.runOpenShellCli,

@@ -4,8 +4,10 @@ import { sendWebhookMessageDiscord } from "./send.outbound.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
+  );
   return {
     ...actual,
     makeProxyFetch: makeProxyFetchMock,

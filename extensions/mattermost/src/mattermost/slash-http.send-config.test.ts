@@ -86,8 +86,8 @@ vi.mock("../runtime.js", () => ({
   }),
 }));
 
-vi.mock("./client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./client.js")>();
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
   return {
     ...actual,
     createMattermostClient: mockState.createMattermostClient,
