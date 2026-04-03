@@ -24,8 +24,8 @@ async function buildSnapshotFromAccount<ResolvedAccount>(params: {
     return typeof snapshot.accountId === "string" && snapshot.accountId.trim().length > 0
       ? snapshot
       : {
-          accountId: params.accountId,
           ...snapshot,
+          accountId: params.accountId,
         };
   }
   const enabled = params.plugin.config.isEnabled
