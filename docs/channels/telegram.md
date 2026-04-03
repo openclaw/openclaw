@@ -121,6 +121,10 @@ Token resolution order is account-aware. In practice, config values win over env
 
     For one-owner bots, prefer `dmPolicy: "allowlist"` with explicit numeric `allowFrom` IDs to keep access policy durable in config (instead of depending on previous pairing approvals).
 
+    Common confusion: DM pairing approval does not mean "this sender is authorized everywhere".
+    Pairing grants DM access only. Group sender authorization still comes from explicit config allowlists.
+    If you want "I am authorized once and both DMs and group commands work", put your numeric Telegram user ID in `channels.telegram.allowFrom`.
+
     ### Finding your Telegram user ID
 
     Safer (no third-party bot):
@@ -159,6 +163,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Non-numeric entries are ignored for sender authorization.
     Security boundary (`2026.2.25+`): group sender auth does **not** inherit DM pairing-store approvals.
     Pairing stays DM-only. For groups, set `groupAllowFrom` or per-group/per-topic `allowFrom`.
+    If `groupAllowFrom` is unset, Telegram falls back to config `allowFrom`, not the pairing store.
+    Practical pattern for one-owner bots: set your user ID in `channels.telegram.allowFrom`, leave `groupAllowFrom` unset, and allow the target groups under `channels.telegram.groups`.
     Runtime note: if `channels.telegram` is completely missing, runtime defaults to fail-closed `groupPolicy="allowlist"` unless `channels.defaults.groupPolicy` is explicitly set.
 
     Example: allow any member in one specific group:
