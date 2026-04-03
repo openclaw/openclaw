@@ -1,3 +1,4 @@
+import { streamSimple } from "@mariozechner/pi-ai";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { PROVIDER_LABELS } from "openclaw/plugin-sdk/provider-usage";
 import { applyXiaomiConfig, XIAOMI_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -39,5 +40,28 @@ export default defineSingleProviderPluginEntry({
       displayName: PROVIDER_LABELS.xiaomi,
       windows: [],
     }),
+    wrapStreamFn: (ctx) => {
+      // MiMo reasoning models (mimo-v2-pro, mimo-v2-omni) output the full
+      // response to `reasoning_content` with an empty `content` field, which
+      // causes OpenClaw to emit no visible text to the user. Setting
+      // `enable_thinking: false` in the request payload tells the model to
+      // write its reply to the standard `content` field instead.
+      if (!ctx.model?.reasoning) {
+        return null;
+      }
+      const underlying = ctx.streamFn ?? streamSimple;
+      return (model, context, options) => {
+        const originalOnPayload = options?.onPayload;
+        return underlying(model, context, {
+          ...options,
+          onPayload: (payload) => {
+            if (payload && typeof payload === "object") {
+              (payload as Record<string, unknown>).enable_thinking = false;
+            }
+            return originalOnPayload?.(payload, model);
+          },
+        });
+      };
+    },
   },
 });
