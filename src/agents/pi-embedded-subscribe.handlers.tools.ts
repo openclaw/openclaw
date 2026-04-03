@@ -368,7 +368,11 @@ export function handleToolExecutionStart(
           ? record.path
           : typeof record.file_path === "string"
             ? record.file_path
-            : "";
+            : typeof record.filePath === "string"
+              ? record.filePath
+              : typeof record.file === "string"
+                ? record.file
+                : "";
       const filePath = filePathValue.trim();
       if (!filePath) {
         const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
