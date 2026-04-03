@@ -11,16 +11,16 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../plugins/config-state.js";
-import {
-  loadPluginManifestRegistry,
-  type PluginManifestRecord,
-} from "../plugins/manifest-registry.js";
+import { discoverOpenClawPlugins } from "../plugins/discovery.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
+import { checkMinHostVersion } from "../plugins/min-host-version.js";
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
   resolveLoaderPackageRoot,
   shouldPreferNativeJiti,
 } from "../plugins/sdk-alias.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
@@ -165,20 +165,49 @@ function getFacadeBoundaryResolvedConfig() {
   return resolved;
 }
 
-function resolveBundledPluginManifestRecordByDirName(dirName: string): PluginManifestRecord | null {
+function resolveBundledFacadeIdentityByDirName(dirName: string): {
+  id: string;
+  origin: "bundled";
+  enabledByDefault?: boolean;
+} | null {
   const { config } = getFacadeBoundaryResolvedConfig();
-  return (
-    loadPluginManifestRegistry({
-      config,
-      cache: true,
-    }).plugins.find(
-      (plugin) => plugin.origin === "bundled" && path.basename(plugin.rootDir) === dirName,
-    ) ?? null
+  const normalized = normalizePluginsConfig(config.plugins);
+  const discovery = discoverOpenClawPlugins({
+    extraPaths: normalized.loadPaths,
+    cache: true,
+    env: process.env,
+  });
+
+  const candidate = discovery.candidates.find(
+    (entry) => entry.origin === "bundled" && path.basename(entry.rootDir) === dirName,
   );
+
+  if (!candidate) {
+    return null;
+  }
+
+  const minHostVersionCheck = checkMinHostVersion({
+    currentVersion: resolveCompatibilityHostVersion(process.env),
+    minHostVersion: candidate.packageManifest?.install?.minHostVersion,
+  });
+  if (!minHostVersionCheck.ok) {
+    return null;
+  }
+
+  const manifestRes = loadPluginManifest(candidate.rootDir, false);
+  if (!manifestRes.ok) {
+    return null;
+  }
+
+  return {
+    id: manifestRes.manifest.id,
+    origin: "bundled",
+    enabledByDefault: manifestRes.manifest.enabledByDefault === true ? true : undefined,
+  };
 }
 
 function resolveTrackedFacadePluginId(dirName: string): string {
-  return resolveBundledPluginManifestRecordByDirName(dirName)?.id ?? dirName;
+  return resolveBundledFacadeIdentityByDirName(dirName)?.id ?? dirName;
 }
 
 function resolveBundledPluginPublicSurfaceAccess(params: {
@@ -195,13 +224,6 @@ function resolveBundledPluginPublicSurfaceAccess(params: {
     };
   }
 
-  const manifestRecord = resolveBundledPluginManifestRecordByDirName(params.dirName);
-  if (!manifestRecord) {
-    return {
-      allowed: false,
-      reason: `no bundled plugin manifest found for ${params.dirName}`,
-    };
-  }
   const {
     rawConfig,
     config,
@@ -209,26 +231,35 @@ function resolveBundledPluginPublicSurfaceAccess(params: {
     sourceNormalizedPluginsConfig,
     autoEnabledReasons,
   } = getFacadeBoundaryResolvedConfig();
+
+  const manifestIdentity = resolveBundledFacadeIdentityByDirName(params.dirName);
+  if (!manifestIdentity) {
+    return {
+      allowed: false,
+      reason: `no bundled plugin manifest found for ${params.dirName}`,
+    };
+  }
+
   const activationState = resolveEffectivePluginActivationState({
-    id: manifestRecord.id,
-    origin: manifestRecord.origin,
+    id: manifestIdentity.id,
+    origin: manifestIdentity.origin,
     config: normalizedPluginsConfig,
     rootConfig: config,
-    enabledByDefault: manifestRecord.enabledByDefault,
+    enabledByDefault: manifestIdentity.enabledByDefault,
     sourceConfig: sourceNormalizedPluginsConfig,
     sourceRootConfig: rawConfig,
-    autoEnabledReason: autoEnabledReasons[manifestRecord.id]?.[0],
+    autoEnabledReason: autoEnabledReasons[manifestIdentity.id]?.[0],
   });
   if (activationState.enabled) {
     return {
       allowed: true,
-      pluginId: manifestRecord.id,
+      pluginId: manifestIdentity.id,
     };
   }
 
   return {
     allowed: false,
-    pluginId: manifestRecord.id,
+    pluginId: manifestIdentity.id,
     reason: activationState.reason ?? "plugin runtime is not activated",
   };
 }
