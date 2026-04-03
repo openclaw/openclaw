@@ -78,7 +78,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       return null;
     }
     const channelCfg = cfg.channels?.bluebubbles as BlueBubblesConfig | undefined;
-    const gate = createActionGate(channelCfg?.actions);
+    const gate = createActionGate(account.config.actions ?? channelCfg?.actions);
     const actions = new Set<ChannelMessageActionName>();
     const macOS26 = isMacOS26OrHigher(account.accountId);
     const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
