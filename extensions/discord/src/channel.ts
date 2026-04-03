@@ -115,10 +115,20 @@ function formatDiscordIntents(intents?: {
 }
 
 const discordMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: (ctx) =>
-    getDiscordRuntime().channel.discord.messageActions?.describeMessageTool?.(ctx) ?? null,
-  extractToolSend: (ctx) =>
-    getDiscordRuntime().channel.discord.messageActions?.extractToolSend?.(ctx) ?? null,
+  describeMessageTool: (ctx) => {
+    try {
+      return getDiscordRuntime().channel.discord.messageActions?.describeMessageTool?.(ctx) ?? null;
+    } catch {
+      return null;
+    }
+  },
+  extractToolSend: (ctx) => {
+    try {
+      return getDiscordRuntime().channel.discord.messageActions?.extractToolSend?.(ctx) ?? null;
+    } catch {
+      return null;
+    }
+  },
   handleAction: async (ctx) => {
     const ma = getDiscordRuntime().channel.discord.messageActions;
     if (!ma?.handleAction) {

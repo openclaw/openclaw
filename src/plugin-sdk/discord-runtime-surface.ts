@@ -4,15 +4,17 @@ type FacadeEntry = PluginSdkFacadeTypeMap["discord-runtime-surface"];
 type FacadeModule = FacadeEntry["module"];
 import {
   createLazyFacadeObjectValue,
-  loadActivatedBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {
-  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "discord",
     artifactBasename: "runtime-api.js",
   });
 }
+// Discord cron/message delivery may need the bundled runtime surface even when
+// activated-surface checks are not satisfied in embedded announce flows.
 export const addRoleDiscord: FacadeModule["addRoleDiscord"] = ((...args) =>
   loadFacadeModule()["addRoleDiscord"](...args)) as FacadeModule["addRoleDiscord"];
 export const auditDiscordChannelPermissions: FacadeModule["auditDiscordChannelPermissions"] = ((
