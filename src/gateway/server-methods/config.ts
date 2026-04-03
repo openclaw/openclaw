@@ -408,6 +408,8 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!(await ensureResolvableSecretRefsOrRespond({ config: parsed.config, respond }))) {
       return;
     }
+    // Compare before the write so we invalidate clients authenticated against the
+    // previous shared secret immediately after the config update succeeds.
     const disconnectSharedAuthClients = didSharedGatewayAuthChange(snapshot.config, parsed.config);
     await writeConfigFile(parsed.config, writeOptions);
     respond(
@@ -525,6 +527,8 @@ export const configHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `config.patch write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.patch`,
     );
+    // Compare before the write so we invalidate clients authenticated against the
+    // previous shared secret immediately after the config update succeeds.
     const disconnectSharedAuthClients = didSharedGatewayAuthChange(
       snapshot.config,
       validated.config,
@@ -593,6 +597,8 @@ export const configHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,
     );
+    // Compare before the write so we invalidate clients authenticated against the
+    // previous shared secret immediately after the config update succeeds.
     const disconnectSharedAuthClients = didSharedGatewayAuthChange(snapshot.config, parsed.config);
     await writeConfigFile(parsed.config, writeOptions);
 

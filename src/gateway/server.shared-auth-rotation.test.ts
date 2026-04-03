@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -15,6 +17,7 @@ installGatewayTestHooks({ scope: "suite" });
 const ORIGINAL_GATEWAY_AUTH = testState.gatewayAuth;
 const OLD_TOKEN = "shared-token-old";
 const NEW_TOKEN = "shared-token-new";
+const TEST_METHODS = ["config.set", "config.patch", "config.apply"] as const;
 
 let server: Awaited<ReturnType<typeof startGatewayServer>>;
 let port = 0;
@@ -38,6 +41,44 @@ async function openAuthenticatedWs(token: string): Promise<WebSocket> {
   return ws;
 }
 
+async function openDeviceTokenWs(): Promise<WebSocket> {
+  const identityPath = path.join(os.tmpdir(), `openclaw-shared-auth-${process.pid}-${port}.json`);
+  const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
+    await import("../infra/device-identity.js");
+  const { approveDevicePairing, requestDevicePairing, rotateDeviceToken } =
+    await import("../infra/device-pairing.js");
+
+  const identity = loadOrCreateDeviceIdentity(identityPath);
+  const pending = await requestDevicePairing({
+    deviceId: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    clientId: "test",
+    clientMode: "test",
+    role: "operator",
+    scopes: ["operator.admin"],
+  });
+  await approveDevicePairing(pending.request.requestId, {
+    callerScopes: ["operator.admin"],
+  });
+  const rotated = await rotateDeviceToken({
+    deviceId: identity.deviceId,
+    role: "operator",
+    scopes: ["operator.admin"],
+  });
+  expect(rotated.ok).toBe(true);
+
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  trackConnectChallengeNonce(ws);
+  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await connectOk(ws, {
+    skipDefaultAuth: true,
+    deviceIdentityPath: identityPath,
+    deviceToken: rotated.ok ? rotated.entry.token : "",
+    scopes: ["operator.admin"],
+  });
+  return ws;
+}
+
 async function waitForClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
   return await new Promise((resolve) => {
     ws.once("close", (code, reason) => {
@@ -46,32 +87,63 @@ async function waitForClose(ws: WebSocket): Promise<{ code: number; reason: stri
   });
 }
 
+async function sendAuthChange(
+  ws: WebSocket,
+  method: (typeof TEST_METHODS)[number],
+): Promise<{ ok: boolean }> {
+  const current = await rpcReq<{
+    hash?: string;
+    config?: Record<string, unknown>;
+  }>(ws, "config.get", {});
+  expect(current.ok).toBe(true);
+  expect(typeof current.payload?.hash).toBe("string");
+  const currentConfig = structuredClone(current.payload?.config ?? {});
+  const gateway = (currentConfig.gateway ??= {}) as Record<string, unknown>;
+  const auth = (gateway.auth ??= {}) as Record<string, unknown>;
+  auth.token = NEW_TOKEN;
+
+  if (method === "config.patch") {
+    return await rpcReq(ws, "config.patch", {
+      baseHash: current.payload?.hash,
+      raw: JSON.stringify({ gateway: { auth: { token: NEW_TOKEN } } }),
+      restartDelayMs: 60_000,
+    });
+  }
+
+  return await rpcReq(ws, method, {
+    raw: JSON.stringify(currentConfig, null, 2),
+    ...(method === "config.set" ? { baseHash: current.payload?.hash } : {}),
+  });
+}
+
 describe("gateway shared auth rotation", () => {
-  it("disconnects existing shared-token websocket sessions after config rotation", async () => {
-    const ws = await openAuthenticatedWs(OLD_TOKEN);
+  for (const method of TEST_METHODS) {
+    it(`disconnects existing shared-token websocket sessions after ${method}`, async () => {
+      const ws = await openAuthenticatedWs(OLD_TOKEN);
+      try {
+        const closed = waitForClose(ws);
+        const res = await sendAuthChange(ws, method);
+
+        expect(res.ok).toBe(true);
+        await expect(closed).resolves.toMatchObject({
+          code: 4001,
+          reason: "gateway auth changed",
+        });
+      } finally {
+        ws.close();
+      }
+    });
+  }
+
+  it("keeps existing device-token websocket sessions connected after shared token rotation", async () => {
+    const ws = await openDeviceTokenWs();
     try {
-      const current = await rpcReq<{ hash?: string }>(ws, "config.get", {});
-      expect(current.ok).toBe(true);
-      expect(typeof current.payload?.hash).toBe("string");
-
-      const closed = waitForClose(ws);
-      const res = await rpcReq<{ restart?: { scheduled?: boolean } }>(ws, "config.patch", {
-        baseHash: current.payload?.hash,
-        raw: JSON.stringify({
-          gateway: {
-            auth: {
-              token: NEW_TOKEN,
-            },
-          },
-        }),
-        restartDelayMs: 60_000,
-      });
-
+      const res = await sendAuthChange(ws, "config.patch");
       expect(res.ok).toBe(true);
-      await expect(closed).resolves.toMatchObject({
-        code: 4001,
-        reason: "gateway auth changed",
-      });
+
+      const followUp = await rpcReq<{ hash?: string }>(ws, "config.get", {});
+      expect(followUp.ok).toBe(true);
+      expect(typeof followUp.payload?.hash).toBe("string");
     } finally {
       ws.close();
     }
