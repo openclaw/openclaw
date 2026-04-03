@@ -4,7 +4,6 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -361,14 +360,9 @@ export function handleMessageEnd(
   const rawText = extractAssistantText(assistantMessage);
   const replyText = rawText.replace(/\n+/g, " ").substring(0, 240);
 
-  // Extract requestText from the last user message
-  const userMessages = ctx.params.session.messages.filter((m) => m.role === "user");
-  const lastUserMessage = userMessages.length > 0 ? userMessages[userMessages.length - 1] : null;
-  const userMessageText = lastUserMessage
-    ? (extractTextFromChatContent(lastUserMessage.content, { joinWith: " " }) ?? "")
-    : "";
-  const requestText = userMessageText
-    ? userMessageText.replace(/\n+/g, " ").substring(0, 240)
+  // Extract requestText: prefer triggerText (raw user input) over session messages (LLM prompt).
+  const requestText = ctx.params.triggerText
+    ? ctx.params.triggerText.replace(/\n+/g, " ").substring(0, 240)
     : undefined;
 
   // Emit per-call trace event (model.call) — only if onLlmCallComplete is set.
