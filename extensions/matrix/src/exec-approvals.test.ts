@@ -47,13 +47,13 @@ function buildConfig(
 }
 
 describe("matrix exec approvals", () => {
-  it("requires enablement and an explicit or inferred approver", () => {
+  it("auto-enables when approvers resolve and disables only when forced off", () => {
     expect(isMatrixExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isMatrixExecApprovalClientEnabled({
         cfg: buildConfig(undefined, { dm: { allowFrom: ["@owner:example.org"] } }),
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(isMatrixExecApprovalClientEnabled({ cfg: buildConfig({ enabled: true }) })).toBe(false);
     expect(
       isMatrixExecApprovalClientEnabled({

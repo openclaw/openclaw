@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import "./zalo-js.test-mocks.js";
+import { zalouserPlugin } from "./channel.js";
+import { setZalouserRuntime } from "./runtime.js";
+import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import {
   listZaloFriendsMatchingMock,
   startZaloQrLoginMock,
   waitForZaloQrLoginMock,
 } from "./zalo-js.test-mocks.js";
-import { zalouserPlugin } from "./channel.js";
-import { setZalouserRuntime } from "./runtime.js";
-import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 
 vi.mock("./qr-temp-file.js", () => ({
   writeQrDataUrlToTempFile: vi.fn(async () => null),
@@ -308,7 +309,7 @@ describe("zalouser account resolution", () => {
       } as never,
       inputs: ["Work User"],
       kind: "user",
-      runtime: {},
+      runtime: createNonExitingRuntimeEnv(),
     });
 
     expect(listZaloFriendsMatchingMock).toHaveBeenCalledWith("work-profile", "Work User");
@@ -338,9 +339,7 @@ describe("zalouser account resolution", () => {
       displayName: "Work User",
     } as never);
 
-    const runtime = {
-      log: vi.fn(),
-    };
+    const runtime = createNonExitingRuntimeEnv();
 
     await login({
       cfg: {

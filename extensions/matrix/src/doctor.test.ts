@@ -107,11 +107,17 @@ describe("matrix doctor", () => {
       warnings: [],
     });
 
-    const repair = await applyMatrixDoctorRepair({ cfg: {}, env: process.env });
+    const cfg = {
+      channels: {
+        matrix: {},
+      },
+    } as never;
+
+    const repair = await applyMatrixDoctorRepair({ cfg, env: process.env });
     expect(repair.changes.join("\n")).toContain("Matrix migration snapshot");
 
     const sequence = await runMatrixDoctorSequence({
-      cfg: {},
+      cfg,
       env: process.env,
       shouldRepair: true,
     });
