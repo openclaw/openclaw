@@ -69,11 +69,32 @@ await web_fetch({ url: "https://example.com/article" });
         maxRedirects: 3,
         readability: true, // use Readability extraction
         userAgent: "Mozilla/5.0 ...", // override User-Agent
+        allowRfc2544BenchmarkRange: false, // allow 198.18.0.0/15 (TUN proxy Fake-IP)
       },
     },
   },
 }
 ```
+
+### TUN Proxy Support
+
+If you use TUN-based proxies (like Clash Verge Rev) with Fake-IP DNS that assigns addresses in the 198.18.0.0/15 range, enable `allowRfc2544BenchmarkRange`:
+
+```json5
+{
+  tools: {
+    web: {
+      fetch: {
+        allowRfc2544BenchmarkRange: true,
+      },
+    },
+  },
+}
+```
+
+<Warning>
+**Security Note:** This option allows connections to RFC2544 benchmark addresses (198.18.0.0/15), which are normally blocked for security. Only enable this if you're using a TUN proxy that routes these addresses. Other private IP ranges (127.0.0.0/8, 10.0.0.0/8, 192.168.0.0/16, etc.) remain blocked.
+</Warning>
 
 ## Firecrawl fallback
 

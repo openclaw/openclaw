@@ -7,19 +7,15 @@ import {
 } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 
-const WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
-  dangerouslyAllowPrivateNetwork: true,
-  allowRfc2544BenchmarkRange: true,
-};
-
 type WebToolGuardedFetchOptions = Omit<
   GuardedFetchOptions,
   "mode" | "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
 > & {
   timeoutSeconds?: number;
   useEnvProxy?: boolean;
+  allowRfc2544BenchmarkRange?: boolean;
 };
-type WebToolEndpointFetchOptions = Omit<WebToolGuardedFetchOptions, "policy" | "useEnvProxy">;
+type WebToolEndpointFetchOptions = Omit<WebToolGuardedFetchOptions, "policy" | "useEnvProxy" | "allowRfc2544BenchmarkRange">;
 
 function resolveTimeoutMs(params: {
   timeoutMs?: number;
@@ -37,9 +33,16 @@ function resolveTimeoutMs(params: {
 export async function fetchWithWebToolsNetworkGuard(
   params: WebToolGuardedFetchOptions,
 ): Promise<GuardedFetchResult> {
-  const { timeoutSeconds, useEnvProxy, ...rest } = params;
+  const { timeoutSeconds, useEnvProxy, allowRfc2544BenchmarkRange, ...rest } = params;
+
+  const policy: SsrFPolicy = {
+    ...(useEnvProxy ? { dangerouslyAllowPrivateNetwork: true } : {}),
+    allowRfc2544BenchmarkRange: allowRfc2544BenchmarkRange === true,
+  };
+
   const resolved = {
     ...rest,
+    policy,
     timeoutMs: resolveTimeoutMs({ timeoutMs: rest.timeoutMs, timeoutSeconds }),
   };
   return fetchWithSsrFGuard(
@@ -68,8 +71,8 @@ export async function withTrustedWebToolsEndpoint<T>(
   return await withWebToolsNetworkGuard(
     {
       ...params,
-      policy: WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
       useEnvProxy: true,
+      allowRfc2544BenchmarkRange: true,
     },
     run,
   );

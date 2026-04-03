@@ -149,3 +149,75 @@ describe("web_fetch SSRF protection", () => {
     });
   });
 });
+
+describe("RFC2544 benchmark range (TUN proxy support)", () => {
+  const priorFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
+      resolvePinnedHostname(hostname, lookupMock),
+    );
+  });
+
+  afterEach(() => {
+    global.fetch = priorFetch;
+    lookupMock.mockClear();
+    vi.restoreAllMocks();
+  });
+
+  it("blocks 198.18.0.0/15 by default", async () => {
+    const fetchSpy = setMockFetch();
+    const tool = await createWebFetchToolForTest();
+
+    await expectBlockedUrl(tool, "http://198.18.0.1/test", /private|internal|blocked/i);
+    await expectBlockedUrl(tool, "http://198.19.255.254/test", /private|internal|blocked/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+
+  it("allows 198.18.0.0/15 when allowRfc2544BenchmarkRange is enabled", async () => {
+    lookupMock.mockResolvedValue([{ address: "198.18.0.1", family: 4 }]);
+    setMockFetch().mockResolvedValue(textResponse("ok"));
+
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = await createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              allowRfc2544BenchmarkRange: true,
+            },
+          },
+        },
+      },
+    });
+
+    const result = await tool?.execute?.("call", { url: "http://198.18.0.1/test" });
+    expect(result?.details).toMatchObject({
+      status: 200,
+      extractor: "raw",
+    });
+  });
+
+  it("blocks other private ranges even when RFC2544 is allowed", async () => {
+    const fetchSpy = setMockFetch();
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = await createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              allowRfc2544BenchmarkRange: true,
+            },
+          },
+        },
+      },
+    });
+
+    await expectBlockedUrl(tool, "http://127.0.0.1/test", /private|internal|blocked/i);
+    await expectBlockedUrl(tool, "http://10.0.0.1/test", /private|internal|blocked/i);
+    await expectBlockedUrl(tool, "http://192.168.1.1/test", /private|internal|blocked/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

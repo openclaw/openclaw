@@ -89,6 +89,13 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
   return true;
 }
 
+function resolveFetchAllowRfc2544BenchmarkRange(fetch?: WebFetchConfig): boolean {
+  if (typeof fetch?.allowRfc2544BenchmarkRange === "boolean") {
+    return fetch.allowRfc2544BenchmarkRange;
+  }
+  return false;
+}
+
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
   const raw =
     fetch && "maxCharsCap" in fetch && typeof fetch.maxCharsCap === "number"
@@ -245,6 +252,7 @@ type WebFetchRuntimeParams = {
   userAgent: string;
   readabilityEnabled: boolean;
   providerFallback: ReturnType<typeof resolveWebFetchDefinition>;
+  allowRfc2544BenchmarkRange: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -389,6 +397,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      allowRfc2544BenchmarkRange: params.allowRfc2544BenchmarkRange,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -572,6 +581,7 @@ export function createWebFetchTool(options?: {
     return null;
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
+  const allowRfc2544BenchmarkRange = resolveFetchAllowRfc2544BenchmarkRange(fetch);
   const providerFallback = resolveWebFetchDefinition({
     config: options?.config,
     sandboxed: options?.sandboxed,
@@ -609,6 +619,7 @@ export function createWebFetchTool(options?: {
         userAgent,
         readabilityEnabled,
         providerFallback,
+        allowRfc2544BenchmarkRange,
       });
       return jsonResult(result);
     },
