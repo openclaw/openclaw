@@ -1214,7 +1214,7 @@ async function processOpenAICompletionsStream(
   for await (const chunk of responseStream) {
     output.responseId ||= chunk.id;
     if (chunk.usage) {
-      output.usage = parseChunkUsage(chunk.usage, model);
+      output.usage = parseTransportChunkUsage(chunk.usage, model);
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     if (!choice) {
@@ -1222,7 +1222,7 @@ async function processOpenAICompletionsStream(
     }
     const choiceUsage = (choice as unknown as { usage?: ChatCompletionChunk["usage"] }).usage;
     if (!chunk.usage && choiceUsage) {
-      output.usage = parseChunkUsage(choiceUsage, model);
+      output.usage = parseTransportChunkUsage(choiceUsage, model);
     }
     if (choice.finish_reason) {
       const finishReasonResult = mapStopReason(choice.finish_reason);
@@ -1456,11 +1456,14 @@ function buildOpenAICompletionsParams(
   return params;
 }
 
-function parseChunkUsage(rawUsage: NonNullable<ChatCompletionChunk["usage"]>, model: Model<Api>) {
+export function parseTransportChunkUsage(
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
+  model: Model<Api>,
+) {
   const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
-  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens || 0;
-  const input = (rawUsage.prompt_tokens || 0) - cachedTokens;
-  const outputTokens = (rawUsage.completion_tokens || 0) + reasoningTokens;
+  const promptTokens = rawUsage.prompt_tokens || 0;
+  const input = Math.max(0, promptTokens - cachedTokens);
+  const outputTokens = rawUsage.completion_tokens || 0;
   const usage = {
     input,
     output: outputTokens,

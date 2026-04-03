@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildTransportAwareSimpleStreamFn,
   isTransportAwareApiSupported,
+  parseTransportChunkUsage,
   prepareTransportAwareSimpleModel,
   resolveAzureOpenAIApiVersion,
   resolveTransportAwareSimpleApi,
@@ -65,5 +66,55 @@ describe("openai transport stream", () => {
     expect(resolveAzureOpenAIApiVersion({ AZURE_OPENAI_API_VERSION: "2025-01-01-preview" })).toBe(
       "2025-01-01-preview",
     );
+  });
+
+  it("does not double-count reasoning tokens and clamps uncached prompt usage at zero", () => {
+    const model = {
+      id: "gpt-5",
+      name: "GPT-5",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    expect(
+      parseTransportChunkUsage(
+        {
+          prompt_tokens: 10,
+          completion_tokens: 20,
+          total_tokens: 30,
+          prompt_tokens_details: { cached_tokens: 3 },
+          completion_tokens_details: { reasoning_tokens: 7 },
+        },
+        model,
+      ),
+    ).toMatchObject({
+      input: 7,
+      output: 20,
+      cacheRead: 3,
+      totalTokens: 30,
+    });
+
+    expect(
+      parseTransportChunkUsage(
+        {
+          prompt_tokens: 2,
+          completion_tokens: 5,
+          total_tokens: 7,
+          prompt_tokens_details: { cached_tokens: 4 },
+        },
+        model,
+      ),
+    ).toMatchObject({
+      input: 0,
+      output: 5,
+      cacheRead: 4,
+      totalTokens: 9,
+    });
   });
 });
