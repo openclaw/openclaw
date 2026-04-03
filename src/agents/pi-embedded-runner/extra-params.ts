@@ -51,6 +51,14 @@ type GoogleSafetySetting = {
   threshold: string;
 };
 
+const GOOGLE_SAFETY_WRAPPER_MARKER = Symbol("openclaw.googleSafetyWrapper");
+const GOOGLE_SAFETY_WRAPPER_BASE_STREAM = Symbol("openclaw.googleSafetyWrapperBaseStream");
+
+type GoogleSafetyWrappedStreamFn = StreamFn & {
+  [GOOGLE_SAFETY_WRAPPER_MARKER]?: true;
+  [GOOGLE_SAFETY_WRAPPER_BASE_STREAM]?: StreamFn | undefined;
+};
+
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
   wrapProviderStreamFn: wrapProviderStreamFnRuntime,
@@ -288,7 +296,7 @@ function createGoogleSafetySettingsWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   const normalizedInstalledProvider = normalizeProviderId(installedProvider);
-  return (model, context, options) => {
+  const wrapped: GoogleSafetyWrappedStreamFn = (model, context, options) => {
     const onPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
@@ -317,6 +325,17 @@ function createGoogleSafetySettingsWrapper(
       },
     });
   };
+  wrapped[GOOGLE_SAFETY_WRAPPER_MARKER] = true;
+  wrapped[GOOGLE_SAFETY_WRAPPER_BASE_STREAM] = baseStreamFn;
+  return wrapped;
+}
+
+function stripGoogleSafetySettingsWrapper(streamFn: StreamFn | undefined): StreamFn | undefined {
+  const wrapped = streamFn as GoogleSafetyWrappedStreamFn | undefined;
+  if (wrapped?.[GOOGLE_SAFETY_WRAPPER_MARKER]) {
+    return wrapped[GOOGLE_SAFETY_WRAPPER_BASE_STREAM];
+  }
+  return streamFn;
 }
 function resolveAliasedParamValue(
   sources: Array<Record<string, unknown> | undefined>,
@@ -383,16 +402,6 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
       ctx.agent.streamFn = createOpenAIDefaultTransportWrapper(ctx.agent.streamFn);
     }
     ctx.agent.streamFn = createOpenAIAttributionHeadersWrapper(ctx.agent.streamFn);
-  }
-
-  const googleSafetySettings = resolveConfiguredGoogleSafetySettings(ctx.cfg, ctx.provider);
-  if (googleSafetySettings) {
-    log.debug(`applying Google safety settings for ${ctx.provider}/${ctx.modelId}`);
-    ctx.agent.streamFn = createGoogleSafetySettingsWrapper(
-      ctx.agent.streamFn,
-      ctx.provider,
-      googleSafetySettings,
-    );
   }
 
   const wrappedStreamFn = createStreamFnWithExtraParams(
@@ -539,20 +548,25 @@ function applyPostPluginStreamWrappers(
     "parallel_tool_calls",
     "parallelToolCalls",
   );
-  if (rawParallelToolCalls === undefined) {
-    return;
-  }
   if (typeof rawParallelToolCalls === "boolean") {
     ctx.agent.streamFn = createParallelToolCallsWrapper(ctx.agent.streamFn, rawParallelToolCalls);
-    return;
-  }
-  if (rawParallelToolCalls === null) {
+  } else if (rawParallelToolCalls === null) {
     log.debug("parallel_tool_calls suppressed by null override, skipping injection");
-    return;
+  } else if (rawParallelToolCalls !== undefined) {
+    const summary =
+      typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
+    log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
   }
-  const summary =
-    typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
-  log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
+
+  const googleSafetySettings = resolveConfiguredGoogleSafetySettings(ctx.cfg, ctx.provider);
+  if (googleSafetySettings) {
+    log.debug(`applying Google safety settings for ${ctx.provider}/${ctx.modelId}`);
+    ctx.agent.streamFn = createGoogleSafetySettingsWrapper(
+      ctx.agent.streamFn,
+      ctx.provider,
+      googleSafetySettings,
+    );
+  }
 }
 
 /**
@@ -573,6 +587,8 @@ export function applyExtraParamsToAgent(
   model?: ProviderRuntimeModel,
   agentDir?: string,
 ): { effectiveExtraParams: Record<string, unknown> } {
+  agent.streamFn = stripGoogleSafetySettingsWrapper(agent.streamFn);
+
   const resolvedExtraParams = resolveExtraParams({
     cfg,
     provider,
