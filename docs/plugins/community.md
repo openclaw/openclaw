@@ -34,6 +34,19 @@ commands for resume, planning, review, model selection, compaction, and more.
 openclaw plugins install openclaw-codex-app-server
 ```
 
+### Google Workspace (All-in-One)
+
+All-in-one Google Workspace integration with shared OAuth. One plugin, one
+auth flow — supports Gmail, Calendar, Drive, Contacts, Tasks, and Sheets
+as toggleable services with 24 tools.
+
+- **npm:** `@tensorfold/openclaw-google-workspace`
+- **repo:** [github.com/tensorfold/openclaw-google-workspace](https://github.com/tensorfold/openclaw-google-workspace)
+
+```bash
+openclaw plugins install @tensorfold/openclaw-google-workspace
+```
+
 ### DingTalk
 
 Enterprise robot integration using Stream mode. Supports text, images, and
