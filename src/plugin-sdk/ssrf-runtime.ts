@@ -17,3 +17,4 @@ export {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   ssrfPolicyFromAllowPrivateNetwork,
 } from "./ssrf-policy.js";
+export { isPrivateOrLoopbackHost } from "../gateway/net.js";

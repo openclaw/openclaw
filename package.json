@@ -123,6 +123,18 @@
       "types": "./dist/plugin-sdk/reply-payload.d.ts",
       "default": "./dist/plugin-sdk/reply-payload.js"
     },
+    "./plugin-sdk/agent-media-payload": {
+      "types": "./dist/plugin-sdk/agent-media-payload.d.ts",
+      "default": "./dist/plugin-sdk/agent-media-payload.js"
+    },
+    "./plugin-sdk/inbound-reply-dispatch": {
+      "types": "./dist/plugin-sdk/inbound-reply-dispatch.d.ts",
+      "default": "./dist/plugin-sdk/inbound-reply-dispatch.js"
+    },
+    "./plugin-sdk/inbound-envelope": {
+      "types": "./dist/plugin-sdk/inbound-envelope.d.ts",
+      "default": "./dist/plugin-sdk/inbound-envelope.js"
+    },
     "./plugin-sdk/channel-reply-pipeline": {
       "types": "./dist/plugin-sdk/channel-reply-pipeline.d.ts",
       "default": "./dist/plugin-sdk/channel-reply-pipeline.js"
@@ -194,6 +206,10 @@
     "./plugin-sdk/text-runtime": {
       "types": "./dist/plugin-sdk/text-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-runtime.js"
+    },
+    "./plugin-sdk/text-chunking": {
+      "types": "./dist/plugin-sdk/text-chunking.d.ts",
+      "default": "./dist/plugin-sdk/text-chunking.js"
     },
     "./plugin-sdk/agent-runtime": {
       "types": "./dist/plugin-sdk/agent-runtime.d.ts",
@@ -551,6 +567,10 @@
       "types": "./dist/plugin-sdk/json-store.d.ts",
       "default": "./dist/plugin-sdk/json-store.js"
     },
+    "./plugin-sdk/persistent-dedupe": {
+      "types": "./dist/plugin-sdk/persistent-dedupe.d.ts",
+      "default": "./dist/plugin-sdk/persistent-dedupe.js"
+    },
     "./plugin-sdk/keyed-async-queue": {
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
@@ -807,6 +827,10 @@
       "types": "./dist/plugin-sdk/retry-runtime.d.ts",
       "default": "./dist/plugin-sdk/retry-runtime.js"
     },
+    "./plugin-sdk/run-command": {
+      "types": "./dist/plugin-sdk/run-command.d.ts",
+      "default": "./dist/plugin-sdk/run-command.js"
+    },
     "./plugin-sdk/param-readers": {
       "types": "./dist/plugin-sdk/param-readers.d.ts",
       "default": "./dist/plugin-sdk/param-readers.js"
@@ -882,6 +906,10 @@
     "./plugin-sdk/webhook-ingress": {
       "types": "./dist/plugin-sdk/webhook-ingress.d.ts",
       "default": "./dist/plugin-sdk/webhook-ingress.js"
+    },
+    "./plugin-sdk/webhook-targets": {
+      "types": "./dist/plugin-sdk/webhook-targets.d.ts",
+      "default": "./dist/plugin-sdk/webhook-targets.js"
     },
     "./plugin-sdk/webhook-request-guards": {
       "types": "./dist/plugin-sdk/webhook-request-guards.d.ts",

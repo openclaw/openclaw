@@ -108,13 +108,12 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       }
 
       const keysToMove = Object.entries(rawChannel)
-        .filter(
-          ([key, value]) =>
-            key !== "accounts" &&
-            key !== "enabled" &&
-            value !== undefined &&
-            shouldMoveSingleAccountChannelKey({ channelKey: channelId, key }),
-        )
+        .filter(([key, value]) => {
+          if (key === "accounts" || key === "enabled" || value === undefined) {
+            return false;
+          }
+          return shouldMoveSingleAccountChannelKey({ channelKey: channelId, key });
+        })
         .map(([key]) => key);
       if (keysToMove.length === 0) {
         continue;

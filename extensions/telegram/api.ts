@@ -4,6 +4,7 @@ export * from "./src/action-threading.js";
 export * from "./src/allow-from.js";
 export * from "./src/api-fetch.js";
 export * from "./src/bot/helpers.js";
+export * from "./src/command-config.js";
 export {
   buildCommandsPaginationKeyboard,
   buildTelegramModelsProviderChannelData,
@@ -27,6 +28,7 @@ export * from "./src/security-audit.js";
 export * from "./src/sticker-cache.js";
 export * from "./src/status-issues.js";
 export * from "./src/targets.js";
+export * from "./src/topic-conversation.js";
 export * from "./src/update-offset-store.js";
 export type { TelegramButtonStyle, TelegramInlineButtons } from "./src/button-types.js";
 export type { StickerMetadata } from "./src/bot/types.js";

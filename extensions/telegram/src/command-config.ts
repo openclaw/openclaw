@@ -20,7 +20,7 @@ export function normalizeTelegramCommandName(value: string): string {
   return withoutSlash.trim().toLowerCase().replace(/-/g, "_");
 }
 
-function normalizeTelegramCommandDescription(value: string): string {
+export function normalizeTelegramCommandDescription(value: string): string {
   return value.trim();
 }
 

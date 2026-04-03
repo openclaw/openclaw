@@ -1,10 +1,5 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import {
-  listLineAccountIds,
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-} from "../../../plugin-sdk/line.js";
 import { listBundledChannelPlugins, setBundledChannelRuntime } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
 import { channelPluginSurfaceKeys, type ChannelPluginSurface } from "./manifest.js";
@@ -50,13 +45,15 @@ const sendMessageMatrixMock = vi.hoisted(() =>
   })),
 );
 
+const lineContractApi = await import(buildBundledPluginModuleId("line", "contract-api.js"));
+
 setBundledChannelRuntime("line", {
   channel: {
     line: {
-      listLineAccountIds,
-      resolveDefaultLineAccountId,
+      listLineAccountIds: lineContractApi.listLineAccountIds,
+      resolveDefaultLineAccountId: lineContractApi.resolveDefaultLineAccountId,
       resolveLineAccount: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
-        resolveLineAccount({ cfg, accountId }),
+        lineContractApi.resolveLineAccount({ cfg, accountId }),
     },
   },
 } as never);

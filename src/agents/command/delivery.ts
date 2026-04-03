@@ -87,6 +87,7 @@ export function normalizeAgentCommandReplyPayloads(params: {
   if (!channel) {
     return payloads as ReplyPayload[];
   }
+  const deliveryPlugin = getChannelPlugin(channel);
 
   const sessionKey = params.outboundSession?.key ?? params.opts.sessionKey;
   const agentId =
@@ -112,6 +113,14 @@ export function normalizeAgentCommandReplyPayloads(params: {
   }
   const responsePrefixContext = replyPrefix.responsePrefixContextProvider();
   const applyChannelTransforms = params.applyChannelTransforms ?? true;
+  const transformReplyPayload = deliveryPlugin?.messaging?.transformReplyPayload
+    ? (payload: ReplyPayload) =>
+        deliveryPlugin.messaging?.transformReplyPayload?.({
+          payload,
+          cfg: params.cfg,
+          accountId: params.accountId,
+        }) ?? payload
+    : undefined;
 
   const normalizedPayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
@@ -119,6 +128,7 @@ export function normalizeAgentCommandReplyPayloads(params: {
       responsePrefix: replyPrefix.responsePrefix,
       applyChannelTransforms,
       responsePrefixContext,
+      transformReplyPayload,
     });
     if (normalized) {
       normalizedPayloads.push(normalized);

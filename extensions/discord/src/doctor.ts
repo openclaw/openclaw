@@ -1,15 +1,12 @@
 import {
   type ChannelDoctorAdapter,
   type ChannelDoctorConfigMutation,
+  type ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
-import {
-  resolveDiscordPreviewStreamMode,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import {
-  collectProviderDangerousNameMatchingScopes,
-  isDiscordMutableAllowEntry,
-} from "openclaw/plugin-sdk/runtime";
+import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime";
+import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
+import { isDiscordMutableAllowEntry } from "./security-audit.js";
 
 type DiscordNumericIdHit = { path: string; entry: number; safe: boolean };
 
@@ -517,11 +514,48 @@ function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
   ];
 }
 
+function hasLegacyDiscordStreamingAliases(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  if (!entry) {
+    return false;
+  }
+  return (
+    entry.streamMode !== undefined ||
+    typeof entry.streaming === "boolean" ||
+    (typeof entry.streaming === "string" &&
+      entry.streaming !== resolveDiscordPreviewStreamMode(entry))
+  );
+}
+
+function hasLegacyDiscordAccountStreamingAliases(value: unknown): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasLegacyDiscordStreamingAliases(account));
+}
+
+const DISCORD_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
+  {
+    path: ["channels", "discord"],
+    message:
+      "channels.discord.streamMode and boolean channels.discord.streaming are legacy; use channels.discord.streaming.",
+    match: hasLegacyDiscordStreamingAliases,
+  },
+  {
+    path: ["channels", "discord", "accounts"],
+    message:
+      "channels.discord.accounts.<id>.streamMode and boolean channels.discord.accounts.<id>.streaming are legacy; use channels.discord.accounts.<id>.streaming.",
+    match: hasLegacyDiscordAccountStreamingAliases,
+  },
+];
+
 export const discordDoctor: ChannelDoctorAdapter = {
   dmAllowFromMode: "topOrNested",
   groupModel: "route",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
+  legacyConfigRules: DISCORD_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: ({ cfg }) => normalizeDiscordCompatibilityConfig(cfg),
   collectPreviewWarnings: ({ cfg, doctorFixCommand }) =>
     collectDiscordNumericIdWarnings({

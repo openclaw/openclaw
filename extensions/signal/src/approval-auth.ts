@@ -2,9 +2,9 @@ import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-runtime";
-import { normalizeSignalMessagingTarget } from "openclaw/plugin-sdk/channel-targets";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";
+import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { looksLikeUuid } from "./uuid.js";
 
 function normalizeSignalApproverId(value: string | number): string | undefined {

@@ -77,6 +77,23 @@ export type {
 } from "./plugin-entry.js";
 export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
+export type { OutboundIdentity } from "../infra/outbound/identity.js";
+export type { HistoryEntry } from "../auto-reply/reply/history.js";
+export type { ReplyPayload } from "../auto-reply/types.js";
+export type { AllowlistMatch } from "../channels/allowlist-match.js";
+export type {
+  BaseProbeResult,
+  ChannelAccountSnapshot,
+  ChannelGroupContext,
+  ChannelMessageActionName,
+  ChannelMeta,
+  ChannelSetupInput,
+} from "../channels/plugins/types.js";
+export type { ChatType } from "../channels/chat-type.js";
+export type { NormalizedLocation } from "../channels/location.js";
+export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
+export type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
+export type { PollInput } from "../polls.js";
 export { isSecretRef } from "../config/types.secrets.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 export type {
@@ -109,7 +126,8 @@ export type {
 } from "../infra/provider-usage.types.js";
 export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 export type { ChannelConfigUiHint, ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export type { PluginRuntime } from "../plugins/runtime/types.js";
+export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+export type { WizardPrompter } from "../wizard/prompts.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
 export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
@@ -152,6 +170,19 @@ export type { GatewayBindUrlResult } from "../shared/gateway-bind-url.js";
 export { resolveGatewayPort } from "../config/paths.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { normalizeAtHashSlug, normalizeHyphenSlug } from "../shared/string-normalization.js";
+export { createActionGate } from "../agents/tools/common.js";
+export {
+  jsonResult,
+  readNumberParam,
+  readReactionParams,
+  readStringArrayParam,
+  readStringParam,
+} from "../agents/tools/common.js";
+export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+export { isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
+export { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
+export { ensureConfiguredAcpBindingReady } from "../acp/persistent-bindings.lifecycle.js";
+export { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
 
 export { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 export type {

@@ -72,34 +72,14 @@ export function registerPluginInteractiveHandler(
       error: `Interactive handler namespace "${namespace}" already registered by plugin "${existing.pluginId}"`,
     };
   }
-  if (registration.channel === "telegram") {
-    interactiveHandlers.set(key, {
-      ...registration,
-      namespace,
-      channel: "telegram",
-      pluginId,
-      pluginName: opts?.pluginName,
-      pluginRoot: opts?.pluginRoot,
-    });
-  } else if (registration.channel === "slack") {
-    interactiveHandlers.set(key, {
-      ...registration,
-      namespace,
-      channel: "slack",
-      pluginId,
-      pluginName: opts?.pluginName,
-      pluginRoot: opts?.pluginRoot,
-    });
-  } else {
-    interactiveHandlers.set(key, {
-      ...registration,
-      namespace,
-      channel: "discord",
-      pluginId,
-      pluginName: opts?.pluginName,
-      pluginRoot: opts?.pluginRoot,
-    });
-  }
+  interactiveHandlers.set(key, {
+    ...registration,
+    namespace,
+    channel: registration.channel.trim().toLowerCase(),
+    pluginId,
+    pluginName: opts?.pluginName,
+    pluginRoot: opts?.pluginRoot,
+  });
   return { ok: true };
 }
 

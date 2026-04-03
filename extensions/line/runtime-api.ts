@@ -2,16 +2,19 @@
 // Keep this barrel thin and aligned with the local extension surface.
 
 export type {
+  ChannelAccountSnapshot,
   ChannelPlugin,
   OpenClawConfig,
   OpenClawPluginApi,
   PluginRuntime,
 } from "openclaw/plugin-sdk/core";
+export type {
+  ChannelGatewayContext,
+  ChannelStatusIssue,
+} from "openclaw/plugin-sdk/channel-contract";
 export { clearAccountEntryFields } from "openclaw/plugin-sdk/core";
 export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
-export type { ChannelAccountSnapshot, ChannelGatewayContext } from "openclaw/plugin-sdk/line";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
 export type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 export {
   buildComputedAccountStatusSnapshot,
@@ -46,6 +49,7 @@ export {
   sendMessageLine,
 } from "./src/send.js";
 export { monitorLineProvider } from "./src/monitor.js";
+export { hasLineDirectives, parseLineDirectives } from "./src/reply-payload-transform.js";
 
 export * from "./src/accounts.js";
 export * from "./src/bot-access.js";
@@ -55,6 +59,7 @@ export * from "./src/download.js";
 export * from "./src/group-keys.js";
 export * from "./src/markdown-to-line.js";
 export * from "./src/probe.js";
+export * from "./src/reply-payload-transform.js";
 export * from "./src/send.js";
 export * from "./src/signature.js";
 export * from "./src/template-messages.js";

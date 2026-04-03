@@ -877,16 +877,6 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     ],
   },
   {
-    subpath: "whatsapp-targets",
-    source: pluginSource("whatsapp", "targets.js"),
-    exports: ["isWhatsAppGroupJid", "isWhatsAppUserTarget", "normalizeWhatsAppTarget"],
-    directExports: {
-      isWhatsAppGroupJid: "./whatsapp-targets-shared.js",
-      isWhatsAppUserTarget: "./whatsapp-targets-shared.js",
-      normalizeWhatsAppTarget: "./whatsapp-targets-shared.js",
-    },
-  },
-  {
     subpath: "whatsapp-surface",
     source: pluginSource("whatsapp", "api.js"),
     exportSources: {

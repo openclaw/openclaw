@@ -1,9 +1,7 @@
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  collectProviderDangerousNameMatchingScopes,
-  isZalouserMutableGroupEntry,
-} from "openclaw/plugin-sdk/runtime";
+import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime";
+import { isZalouserMutableGroupEntry } from "./security-audit.js";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)

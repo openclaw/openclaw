@@ -239,7 +239,7 @@ export async function resolveAccountIdForConfigure(params: {
 
 export function setAccountAllowFromForChannel(params: {
   cfg: OpenClawConfig;
-  channel: "imessage" | "signal";
+  channel: string;
   accountId: string;
   allowFrom: string[];
 }): OpenClawConfig {
@@ -535,7 +535,7 @@ export function createTopLevelChannelGroupPolicySetter(params: {
 
 export function setChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
-  channel: "imessage" | "signal" | "telegram";
+  channel: string;
   dmPolicy: DmPolicy;
 }): OpenClawConfig {
   const { cfg, channel, dmPolicy } = params;
@@ -554,9 +554,9 @@ export function setChannelDmPolicyWithAllowFrom(params: {
   };
 }
 
-export function setLegacyChannelDmPolicyWithAllowFrom(params: {
+export function setCompatChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
-  channel: LegacyDmChannel;
+  channel: string;
   dmPolicy: DmPolicy;
 }): OpenClawConfig {
   const channelConfig = (params.cfg.channels?.[params.channel] as
@@ -571,7 +571,7 @@ export function setLegacyChannelDmPolicyWithAllowFrom(params: {
   const existingAllowFrom = channelConfig.allowFrom ?? channelConfig.dm?.allowFrom;
   const allowFrom =
     params.dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
-  return patchLegacyDmChannelConfig({
+  return patchCompatDmChannelConfig({
     cfg: params.cfg,
     channel: params.channel,
     patch: {
@@ -581,12 +581,12 @@ export function setLegacyChannelDmPolicyWithAllowFrom(params: {
   });
 }
 
-export function setLegacyChannelAllowFrom(params: {
+export function setCompatChannelAllowFrom(params: {
   cfg: OpenClawConfig;
-  channel: LegacyDmChannel;
+  channel: string;
   allowFrom: string[];
 }): OpenClawConfig {
-  return patchLegacyDmChannelConfig({
+  return patchCompatDmChannelConfig({
     cfg: params.cfg,
     channel: params.channel,
     patch: { allowFrom: params.allowFrom },
@@ -595,7 +595,7 @@ export function setLegacyChannelAllowFrom(params: {
 
 export function setAccountGroupPolicyForChannel(params: {
   cfg: OpenClawConfig;
-  channel: "discord" | "slack";
+  channel: string;
   accountId: string;
   groupPolicy: GroupPolicy;
 }): OpenClawConfig {
@@ -609,7 +609,7 @@ export function setAccountGroupPolicyForChannel(params: {
 
 export function setAccountDmAllowFromForChannel(params: {
   cfg: OpenClawConfig;
-  channel: "discord" | "slack";
+  channel: string;
   accountId: string;
   allowFrom: string[];
 }): OpenClawConfig {
@@ -621,9 +621,9 @@ export function setAccountDmAllowFromForChannel(params: {
   });
 }
 
-export function createLegacyCompatChannelDmPolicy(params: {
+export function createCompatChannelDmPolicy(params: {
   label: string;
-  channel: LegacyDmChannel;
+  channel: string;
   promptAllowFrom?: ChannelSetupDmPolicy["promptAllowFrom"];
 }): ChannelSetupDmPolicy {
   return {
@@ -716,7 +716,7 @@ export function createLegacyCompatChannelDmPolicy(params: {
                 : {}),
             },
           })
-        : setLegacyChannelDmPolicyWithAllowFrom({
+        : setCompatChannelDmPolicyWithAllowFrom({
             cfg,
             channel: params.channel,
             dmPolicy: policy,
@@ -751,7 +751,7 @@ export async function resolveGroupAllowlistWithLookupNotes<TResolved>(params: {
 }
 
 export function createAccountScopedAllowFromSection(params: {
-  channel: "discord" | "slack";
+  channel: string;
   credentialInputKey?: NonNullable<ChannelSetupWizard["allowFrom"]>["credentialInputKey"];
   helpTitle?: string;
   helpLines?: string[];
@@ -781,7 +781,7 @@ export function createAccountScopedAllowFromSection(params: {
 }
 
 export function createAccountScopedGroupAccessSection<TResolved>(params: {
-  channel: "discord" | "slack";
+  channel: string;
   label: string;
   placeholder: string;
   helpTitle?: string;
@@ -844,20 +844,12 @@ export function createAccountScopedGroupAccessSection<TResolved>(params: {
   };
 }
 
-type AccountScopedChannel =
-  | "bluebubbles"
-  | "discord"
-  | "feishu"
-  | "imessage"
-  | "line"
-  | "signal"
-  | "slack"
-  | "telegram";
-type LegacyDmChannel = "discord" | "slack";
+type AccountScopedChannel = string;
+type CompatDmChannel = string;
 
-export function patchLegacyDmChannelConfig(params: {
+export function patchCompatDmChannelConfig(params: {
   cfg: OpenClawConfig;
-  channel: LegacyDmChannel;
+  channel: string;
   patch: Record<string, unknown>;
 }): OpenClawConfig {
   const { cfg, channel, patch } = params;
@@ -936,9 +928,9 @@ export function patchChannelConfigForAccount(params: {
 
 export function applySingleTokenPromptResult(params: {
   cfg: OpenClawConfig;
-  channel: "discord" | "telegram";
+  channel: string;
   accountId: string;
-  tokenPatchKey: "token" | "botToken";
+  tokenPatchKey: string;
   tokenResult: {
     useEnv: boolean;
     token: SecretInput | null;
@@ -1273,7 +1265,7 @@ export function createPromptParsedAllowFromForAccount<TConfig extends OpenClawCo
 
 export async function promptParsedAllowFromForScopedChannel(params: {
   cfg: OpenClawConfig;
-  channel: "imessage" | "signal";
+  channel: string;
   accountId?: string;
   defaultAccountId: string;
   prompter: Pick<WizardPrompter, "note" | "text">;
@@ -1555,7 +1547,7 @@ export async function promptResolvedAllowFrom(params: {
 
 export async function promptLegacyChannelAllowFrom(params: {
   cfg: OpenClawConfig;
-  channel: LegacyDmChannel;
+  channel: CompatDmChannel;
   prompter: WizardPrompter;
   existing: Array<string | number>;
   token?: string | null;
@@ -1580,7 +1572,7 @@ export async function promptLegacyChannelAllowFrom(params: {
     invalidWithoutTokenNote: params.invalidWithoutTokenNote,
     resolveEntries: params.resolveEntries,
   });
-  return setLegacyChannelAllowFrom({
+  return setCompatChannelAllowFrom({
     cfg: params.cfg,
     channel: params.channel,
     allowFrom: unique,
@@ -1589,7 +1581,7 @@ export async function promptLegacyChannelAllowFrom(params: {
 
 export async function promptLegacyChannelAllowFromForAccount<TAccount>(params: {
   cfg: OpenClawConfig;
-  channel: LegacyDmChannel;
+  channel: CompatDmChannel;
   prompter: WizardPrompter;
   accountId?: string;
   defaultAccountId: string;
@@ -1624,3 +1616,9 @@ export async function promptLegacyChannelAllowFromForAccount<TAccount>(params: {
     resolveEntries: params.resolveEntries,
   });
 }
+
+// Backwards-compatible aliases for existing setup SDK consumers.
+export const patchLegacyDmChannelConfig = patchCompatDmChannelConfig;
+export const setLegacyChannelDmPolicyWithAllowFrom = setCompatChannelDmPolicyWithAllowFrom;
+export const setLegacyChannelAllowFrom = setCompatChannelAllowFrom;
+export const createLegacyCompatChannelDmPolicy = createCompatChannelDmPolicy;

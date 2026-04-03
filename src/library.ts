@@ -19,7 +19,7 @@ import type {
   runCommandWithTimeout as runCommandWithTimeoutRuntime,
   runExec as runExecRuntime,
 } from "./process/exec.js";
-import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
+import { normalizeE164 } from "./utils.js";
 
 type GetReplyFromConfig = typeof getReplyFromConfigRuntime;
 type PromptYesNo = typeof promptYesNoRuntime;
@@ -74,7 +74,6 @@ export const monitorWebChannel: MonitorWebChannel = async (...args) =>
   (await loadWebChannelRuntime()).monitorWebChannel(...args);
 
 export {
-  assertWebChannel,
   applyTemplate,
   createDefaultDeps,
   deriveSessionKey,
@@ -88,6 +87,5 @@ export {
   resolveSessionKey,
   resolveStorePath,
   saveSessionStore,
-  toWhatsappJid,
   waitForever,
 };

@@ -30,10 +30,10 @@ export type {
   OpenClawConfig,
   PluginRuntime,
   RuntimeLogger,
-  RuntimeEnv,
   WizardPrompter,
-} from "openclaw/plugin-sdk/matrix-runtime-shared";
-export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
+} from "openclaw/plugin-sdk/core";
+export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+export { formatZonedTimestamp } from "openclaw/plugin-sdk/core";
 
 export function chunkTextForOutbound(text: string, limit: number): string[] {
   const chunks: string[] = [];

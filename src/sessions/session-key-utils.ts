@@ -1,3 +1,5 @@
+import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
+
 export type ParsedAgentSessionKey = {
   agentId: string;
   rest: string;
@@ -15,6 +17,14 @@ export type RawSessionConversationRef = {
   rawId: string;
   prefix: string;
 };
+
+type LegacySessionChatTypeSurface = {
+  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
+};
+
+function listLegacySessionChatTypeSurfaces(): LegacySessionChatTypeSurface[] {
+  return getBundledChannelContractSurfaces() as LegacySessionChatTypeSurface[];
+}
 
 /**
  * Parse agent-scoped session keys in a canonical, case-insensitive way.
@@ -61,10 +71,11 @@ export function deriveSessionChatType(sessionKey: string | undefined | null): Se
   if (tokens.has("direct") || tokens.has("dm")) {
     return "direct";
   }
-  // Legacy Discord keys can be shaped like:
-  // discord:<accountId>:guild-<guildId>:channel-<channelId>
-  if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/.test(scoped)) {
-    return "channel";
+  for (const surface of listLegacySessionChatTypeSurfaces()) {
+    const derived = surface.deriveLegacySessionChatType?.(scoped);
+    if (derived) {
+      return derived;
+    }
   }
   return "unknown";
 }

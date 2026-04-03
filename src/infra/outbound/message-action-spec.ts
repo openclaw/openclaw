@@ -1,3 +1,4 @@
+import { getBundledChannelContractSurfaceEntries } from "../../channels/plugins/contract-surfaces.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
 
 export type MessageActionTargetMode = "to" | "channelId" | "none";
@@ -64,17 +65,11 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
 
 type ActionTargetAliasSpec = {
   aliases: string[];
-  channels?: string[];
 };
 
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>> = {
-  read: { aliases: ["messageId"], channels: ["feishu"] },
   unsend: { aliases: ["messageId"] },
   edit: { aliases: ["messageId"] },
-  pin: { aliases: ["messageId"], channels: ["feishu"] },
-  unpin: { aliases: ["messageId"], channels: ["feishu"] },
-  "list-pins": { aliases: ["chatId"], channels: ["feishu"] },
-  "channel-info": { aliases: ["chatId"], channels: ["feishu"] },
   react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
   renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
   setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
@@ -82,6 +77,45 @@ const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTarg
   removeParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
   leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
 };
+
+type ChannelMessageActionAliasSurface = {
+  messageActionTargetAliases?: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>>;
+};
+
+function listChannelMessageActionAliasSurfaces(): Array<{
+  pluginId: string;
+  surface: ChannelMessageActionAliasSurface;
+}> {
+  return getBundledChannelContractSurfaceEntries() as Array<{
+    pluginId: string;
+    surface: ChannelMessageActionAliasSurface;
+  }>;
+}
+
+function listActionTargetAliasSpecs(
+  action: ChannelMessageActionName,
+  channel?: string,
+): ActionTargetAliasSpec[] {
+  const specs: ActionTargetAliasSpec[] = [];
+  const coreSpec = ACTION_TARGET_ALIASES[action];
+  if (coreSpec) {
+    specs.push(coreSpec);
+  }
+  const normalizedChannel = channel?.trim().toLowerCase();
+  if (!normalizedChannel) {
+    return specs;
+  }
+  for (const entry of listChannelMessageActionAliasSurfaces()) {
+    if (entry.pluginId !== normalizedChannel) {
+      continue;
+    }
+    const channelSpec = entry.surface.messageActionTargetAliases?.[action];
+    if (channelSpec) {
+      specs.push(channelSpec);
+    }
+  }
+  return specs;
+}
 
 export function actionRequiresTarget(action: ChannelMessageActionName): boolean {
   return MESSAGE_ACTION_TARGET_MODE[action] !== "none";
@@ -100,24 +134,20 @@ export function actionHasTarget(
   if (channelId) {
     return true;
   }
-  const spec = ACTION_TARGET_ALIASES[action];
-  if (!spec) {
+  const specs = listActionTargetAliasSpecs(action, options?.channel);
+  if (specs.length === 0) {
     return false;
   }
-  if (
-    spec.channels &&
-    (!options?.channel || !spec.channels.includes(options.channel.trim().toLowerCase()))
-  ) {
-    return false;
-  }
-  return spec.aliases.some((alias) => {
-    const value = params[alias];
-    if (typeof value === "string") {
-      return value.trim().length > 0;
-    }
-    if (typeof value === "number") {
-      return Number.isFinite(value);
-    }
-    return false;
-  });
+  return specs.some((spec) =>
+    spec.aliases.some((alias) => {
+      const value = params[alias];
+      if (typeof value === "string") {
+        return value.trim().length > 0;
+      }
+      if (typeof value === "number") {
+        return Number.isFinite(value);
+      }
+      return false;
+    }),
+  );
 }

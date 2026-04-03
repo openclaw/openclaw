@@ -18,9 +18,6 @@ export type SetupChannelsOptions = {
   onAccountId?: (channel: ChannelId, accountId: string) => void;
   onResolvedPlugin?: (channel: ChannelId, plugin: ChannelSetupPlugin) => void;
   promptAccountIds?: boolean;
-  whatsappAccountId?: string;
-  promptWhatsAppAccountId?: boolean;
-  onWhatsAppAccountId?: (accountId: string) => void;
   forceAllowFromChannels?: ChannelId[];
   skipStatusNote?: boolean;
   skipDmPolicyPrompt?: boolean;

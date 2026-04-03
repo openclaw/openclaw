@@ -28,6 +28,7 @@ import {
   type ResolvedIrcAccount,
 } from "./accounts.js";
 import { IrcChannelConfigSchema } from "./config-schema.js";
+import { collectIrcMutableAllowlistWarnings } from "./doctor.js";
 import { monitorIrcProvider } from "./monitor.js";
 import {
   normalizeIrcMessagingTarget,
@@ -186,6 +187,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
             passwordSource: account.passwordSource,
           },
         }),
+    },
+    doctor: {
+      groupAllowFromFallbackToAllowFrom: false,
+      collectMutableAllowlistWarnings: collectIrcMutableAllowlistWarnings,
     },
     groups: {
       resolveRequireMention: ({ cfg, accountId, groupId }) => {
