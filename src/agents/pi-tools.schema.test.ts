@@ -4,6 +4,22 @@ import { normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 describe("normalizeToolParameters", () => {
+  it("normalizes truly empty schemas to type:object with properties:{} (MCP parameter-free tools)", () => {
+    const tool: AnyAgentTool = {
+      name: "get_flux_instance",
+      label: "get_flux_instance",
+      description: "Get current Flux instance status",
+      parameters: {},
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    const parameters = normalized.parameters as Record<string, unknown>;
+    expect(parameters.type).toBe("object");
+    expect(parameters.properties).toEqual({});
+  });
+
   it("injects properties:{} for type:object schemas missing properties (MCP no-param tools)", () => {
     const tool: AnyAgentTool = {
       name: "list_regions",
