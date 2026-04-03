@@ -11,6 +11,8 @@ export type ExecApprovalsDefaults = {
 export type ExecApprovalsAllowlistEntry = {
   id?: string;
   pattern: string;
+  argPattern?: string;
+  source?: "allow-always";
   lastUsedAt?: number;
   lastUsedCommand?: string;
   lastResolvedPath?: string;
