@@ -1,475 +1,309 @@
-# OpenClaw Installation Guide: Railway + Telegram Setup
+---
+summary: "Deploy OpenClaw on Railway and use it from Telegram and the Control UI"
+read_when:
+  - You want a hosted Railway plus Telegram setup
+  - You want the exact Railway and Telegram flow validated in a live deployment
+title: "Railway with Telegram"
+---
 
-This comprehensive guide walks you through deploying OpenClaw on Railway with Telegram integration, including mobile device pairing and troubleshooting.
+Deploy OpenClaw on Railway, connect it to Telegram, and use either the web Control UI or Telegram DMs as your main chat surface.
 
-## 📋 Prerequisites
+This guide is the detailed companion to [Railway](/install/railway). It focuses on the setup that was validated end to end in a live Railway deployment, including the Control UI, Telegram DM access, and the most common Railway-specific fixes.
 
-- **Railway account** (free tier available)
-- **Telegram account**
-- **Mobile device** (Android/iOS) with OpenClaw app
-- **Basic terminal/command line knowledge**
+If you already know the flow and only need the short version, use [Railway plus Telegram Quick Reference](/install/railway-telegram-quick-ref).
 
-## 🚀 Step 1: Railway Deployment
+## Before you start
 
-### 1.1 Deploy OpenClaw Template
+You need:
 
-1. **Go to Railway**: Visit [railway.app](https://railway.app)
-2. **Login/Signup**: Create account or login
-3. **Deploy Template**:
-   - Click "Deploy Now" on OpenClaw template
-   - Or use: `https://railway.app/template/openclaw`
-4. **Configure Project**:
-   - Choose project name (e.g., `my-openclaw-bot`)
-   - Select region closest to you
-   - Click "Deploy"
+- a Railway account
+- a Telegram account
+- a Telegram bot token from `@BotFather`
+- one model provider key, such as Groq
 
-### 1.2 Get Railway CLI (Optional but Recommended)
+For the fastest personal setup, use:
 
-```bash
-# Install Railway CLI
-npm install -g @railway/cli
+- Railway for hosting
+- Telegram for chat
+- `dmPolicy: "allowlist"` for one-owner bots
 
-# Login to Railway
-railway login
+## 1. Deploy OpenClaw on Railway
 
-# Link to your project
-railway link
-```
+Start with [Railway](/install/railway), then make sure these Railway settings are correct.
 
-## 🤖 Step 2: Telegram Bot Setup
+### Required Railway settings
 
-### 2.1 Create Telegram Bot
-
-1. **Open Telegram** and search for `@BotFather`
-2. **Start conversation** with BotFather
-3. **Create bot**: Send `/newbot`
-4. **Choose bot name**: e.g., "My OpenClaw Assistant"
-5. **Choose username**: e.g., "myopenclaw_bot" (must end with 'bot')
-6. **Save the token**: You'll get something like `1234567890:ABCdefGHIjklMNOpqrSTUvwxyz`
-
-### 2.2 Configure Bot Permissions
-
-Send these commands to @BotFather:
-
-```
-/setprivacy
-# Select your bot
-# Choose "Disable" to allow bot to read all messages
-
-/setcommands
-# Select your bot
-# Add these commands:
-help - Show available commands
-status - Check bot status
-start - Initialize conversation
-```
-
-## ⚙️ Step 3: Environment Configuration
-
-### 3.1 Required Environment Variables
-
-In your Railway dashboard, go to your project → Variables tab and add:
+- Attach a Volume mounted at `/data`
+- Enable public networking on port `8080`
+- Set these variables:
 
 ```bash
-# Core OpenClaw Configuration
-OPENCLAW_GATEWAY_TOKEN=your-secure-token-here
-OPENCLAW_GATEWAY_MODE=local
-
-# Telegram Bot Configuration
-TELEGRAM_BOT_TOKEN=1234567890:your-bot-token-from-botfather
-
-# Optional: Custom Configuration
-OPENCLAW_LOG_LEVEL=info
-OPENCLAW_DEVICE_AUTO_APPROVE=false
+OPENCLAW_GATEWAY_PORT=8080
+OPENCLAW_GATEWAY_TOKEN=<64-char-hex-token>
+OPENCLAW_STATE_DIR=/data/.openclaw
+OPENCLAW_WORKSPACE_DIR=/data/workspace
+TELEGRAM_BOT_TOKEN=<telegram-bot-token>
 ```
 
-### 3.2 Generate Gateway Token
-
-**Option 1 - Use Railway CLI:**
+If you are using Groq, also set:
 
 ```bash
-railway run node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+GROQ_API_KEY=<your-groq-key>
 ```
 
-**Option 2 - Generate locally:**
+If your provider key is invalid, OpenClaw still boots, but model requests fail later with provider auth errors.
+
+### Generate a gateway token
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-**Option 3 - Online generator:**
+## 2. Open the Control UI
 
-- Visit any secure random string generator
-- Generate 64-character hex string
+After deploy, open:
 
-### 3.3 Set Environment Variables
+- `https://<your-railway-domain>/openclaw`
 
-**Via Railway Dashboard:**
+Log in with `OPENCLAW_GATEWAY_TOKEN`.
 
-1. Go to your project → Variables
-2. Click "New Variable"
-3. Add each variable name and value
+### If the dashboard says `pairing required`
 
-**Via Railway CLI:**
+That means the browser device identity reached the gateway, but the device was not approved yet.
 
-```bash
-railway variables set OPENCLAW_GATEWAY_TOKEN=your-token-here
-railway variables set TELEGRAM_BOT_TOKEN=your-bot-token-here
-```
-
-## 📱 Step 4: Mobile Device Connection
-
-### 4.1 Get Connection Information
-
-Your Railway app URL format:
-
-```
-https://your-project-name-production-xxxxx.up.railway.app
-```
-
-**Find your URL:**
-
-- Railway Dashboard → Your Project → Deployments → Domain
-- Or via CLI: `railway status`
-
-### 4.2 Mobile App Setup
-
-**For Android OpenClaw App:**
-
-**Method 1 - Setup Code:**
+Approve it from the gateway host:
 
 ```bash
-# Generate setup code (run in terminal with your details)
-echo -n 'https://your-app-url|your-gateway-token' | base64 -w 0
+openclaw devices list
+openclaw devices approve <requestId>
 ```
 
-**Method 2 - Manual Configuration:**
+Then reload the dashboard.
 
-- Gateway URL: `your-app-url` (without https://)
-- Token: `your-gateway-token`
+If you are opening the dashboard from mobile, generate the URL on a trusted desktop first and keep the full URL, including `#token=...`, when transferring it.
 
-**Method 3 - QR Code URL:**
+### If the dashboard says `origin not allowed`
 
-```
-https://your-app-url?mobile-code=<base64-encoded-token>
-```
+Add your public Railway domains to:
 
-### 4.3 Device Pairing Process
+- `gateway.controlUi.allowedOrigins`
 
-1. **Open OpenClaw mobile app**
-2. **Navigate to connection settings** (Connect/Setup tab)
-3. **Enter configuration**:
-   - Paste setup code, OR
-   - Enter URL and token manually
-4. **Connect**: App will show "Pairing Required"
-5. **Approve device** (see Step 5)
+Example:
 
-## 🔐 Step 5: Device Approval
-
-### 5.1 Automatic Approval Script
-
-Create this script to auto-approve devices:
-
-```javascript
-// auto-approve.js
-const WebSocket = require("ws");
-
-const TOKEN = "your-gateway-token";
-const GATEWAY = "wss://your-app-url";
-
-console.log("🚀 OpenClaw Auto-Approval Service Starting...");
-
-function createConnection() {
-  const ws = new WebSocket(GATEWAY);
-  let authenticated = false;
-  let checkInterval;
-
-  ws.on("open", () => {
-    console.log("✅ Connected to OpenClaw Gateway");
-  });
-
-  ws.on("message", (data) => {
-    const msg = JSON.parse(data.toString());
-
-    // Handle authentication
-    if (msg.type === "event" && msg.event === "connect.challenge") {
-      ws.send(
-        JSON.stringify({
-          id: "auth-" + Date.now(),
-          method: "auth.token",
-          params: { token: TOKEN, nonce: msg.payload.nonce },
-        }),
-      );
-    }
-
-    // Start monitoring after auth
-    else if (msg.result !== undefined && !authenticated) {
-      authenticated = true;
-      console.log("🎯 Authenticated! Monitoring for devices...");
-
-      checkInterval = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              id: "list-" + Date.now(),
-              method: "device.list",
-              params: {},
-            }),
-          );
-        }
-      }, 3000);
-    }
-
-    // Auto-approve pending devices
-    else if (msg.result && msg.result.pending && msg.result.pending.length > 0) {
-      console.log("📱 Device found! Auto-approving...");
-      msg.result.pending.forEach((device) => {
-        ws.send(
-          JSON.stringify({
-            id: "approve-" + Date.now(),
-            method: "device.approve",
-            params: { requestId: device.requestId },
-          }),
-        );
-      });
-    }
-
-    // Confirm approval
-    else if (msg.result !== undefined && msg.id && msg.id.startsWith("approve-")) {
-      console.log("🎉 Device approved successfully!");
-    }
-  });
-
-  ws.on("close", () => {
-    console.log("Connection closed, reconnecting...");
-    if (checkInterval) clearInterval(checkInterval);
-    setTimeout(createConnection, 5000);
-  });
+```json5
+{
+  gateway: {
+    controlUi: {
+      allowedOrigins: [
+        "https://your-service-production-a123.up.railway.app",
+        "https://your-service-production-b456.up.railway.app",
+      ],
+    },
+  },
 }
-
-createConnection();
 ```
 
-### 5.2 Run Approval Script
+This is required for public Control UI use behind Railway's proxy.
+
+## 3. Create the Telegram bot
+
+In Telegram, talk to `@BotFather` and run:
+
+```text
+/newbot
+```
+
+Save the bot token and put it in `TELEGRAM_BOT_TOKEN`.
+
+If you want the bot to read all group messages, adjust privacy mode with `@BotFather`. For DM-only use, the default bot settings are fine.
+
+## 4. Choose your Telegram DM access model
+
+Telegram DMs can use one of these policies:
+
+- `pairing`
+- `allowlist`
+- `open`
+- `disabled`
+
+For a one-owner Railway bot, prefer `allowlist` with your numeric Telegram user ID. It is more durable than re-approving pairing codes after environment resets.
+
+Example:
+
+```json5
+{
+  channels: {
+    telegram: {
+      enabled: true,
+      dmPolicy: "allowlist",
+      allowFrom: ["<your-telegram-user-id>"],
+    },
+  },
+}
+```
+
+If you prefer the default pairing flow instead, keep:
+
+```json5
+{
+  channels: {
+    telegram: {
+      enabled: true,
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+Then approve the first DM with:
 
 ```bash
-# Install WebSocket dependency
-npm install ws
-
-# Run the script
-node auto-approve.js
+openclaw pairing list telegram
+openclaw pairing approve telegram <CODE>
 ```
 
-### 5.3 Manual Approval (Alternative)
+## 5. Find your Telegram user ID
 
-**Via Railway CLI:**
+You can get your numeric Telegram user ID by messaging your bot and calling the Bot API:
 
 ```bash
-railway connect
-# Then use OpenClaw admin commands to approve devices
+curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 ```
 
-**Via Web Interface:**
+Read `from.id` from the update payload.
 
-- Access your Railway app URL directly
-- Login with gateway token
-- Go to device management
-- Approve pending devices
+This ID is what you put in `channels.telegram.allowFrom`.
 
-## 🧪 Step 6: Testing Your Setup
+## 6. Start chatting from Telegram
 
-### 6.1 Test Telegram Bot
+Once Telegram access is configured:
+
+1. open the bot chat
+2. send `/start` or a plain message such as `hello`
+3. wait for the bot reply
+4. continue the conversation normally
+
+Examples:
+
+- `summarize this text`
+- `write a short reply in English`
+- `explain this error`
+
+## 7. Validate the deployment
+
+Use these checks after deploy or after config changes.
+
+### Railway and Control UI checks
+
+Open:
+
+- `https://<your-domain>/healthz`
+- `https://<your-domain>/openclaw`
+
+Expected results:
+
+- `/healthz` returns `200`
+- `/openclaw` loads the dashboard login screen or dashboard itself
+
+### Telegram checks
+
+Expected runtime state:
+
+- Telegram configured
+- Telegram running
+- mode `polling` or webhook if you configured webhook mode
+- no `lastError`
+
+## Railway-specific troubleshooting
+
+### Public domain returns `502 Application failed to respond`
+
+On Railway, OpenClaw's public wrapper listens on port `8080`.
+
+Check:
+
+- Railway public networking targets port `8080`
+- every generated Railway service domain also targets port `8080`
+
+If an older generated Railway domain still points at `3000`, it can stay broken while a newer one works. Update the stale domain or remove it.
+
+### `HTTP 401: Invalid API Key`
+
+This is usually your model provider key, not the gateway token.
+
+Common example:
+
+- invalid `GROQ_API_KEY`
+
+Fix the provider key in Railway Variables, redeploy or restart, and test again.
+
+### Telegram says `OpenClaw: access not configured`
+
+That means Telegram DM access is still blocked by policy.
+
+Use one of these:
+
+- keep `dmPolicy: "pairing"` and approve the code with `openclaw pairing approve telegram <CODE>`
+- or switch to `dmPolicy: "allowlist"` and add your numeric Telegram user ID to `allowFrom`
+
+For personal bots on Railway, `allowlist` is the simpler long-term choice.
+
+### Telegram bot is healthy but does not reply
+
+Check these in order:
+
+1. `TELEGRAM_BOT_TOKEN` is valid
+2. your Telegram user ID is approved by pairing or allowlist
+3. your model provider key is valid
+4. the gateway shows Telegram `running: true`
+
+### Dashboard pairing comes back after a redeploy
+
+If the browser creates a new device identity or the old identity is not reused, the dashboard can request pairing again.
+
+Approve the new request with:
 
 ```bash
-# Send test message to your bot
-curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-  -H 'Content-Type: application/json' \
-  -d '{"chat_id": "your-chat-id", "text": "Test message from OpenClaw!"}'
+openclaw devices list
+openclaw devices approve <requestId>
 ```
 
-### 6.2 Test Mobile Connection
+## Recommended production baseline
 
-1. **Open OpenClaw mobile app**
-2. **Send test message** to your Telegram bot
-3. **Verify message appears** in mobile app
-4. **Reply from mobile** and check Telegram
+For a single-owner Railway plus Telegram deployment, this is a practical baseline:
 
-### 6.3 Test Commands
-
-Try these in Telegram:
-
-```
-/start
-/help
-/status
-@your_bot_username Hello from Telegram!
-```
-
-## 🐛 Troubleshooting
-
-### Common Issues & Solutions
-
-#### ❌ "Pairing Required" Error
-
-**Problem:** Mobile app shows pairing required
-**Solutions:**
-
-1. Run auto-approval script
-2. Check gateway token matches
-3. Verify Railway app is running
-4. Check device approval in logs
-
-#### ❌ Telegram Bot Not Responding
-
-**Problem:** Bot doesn't reply to messages
-**Solutions:**
-
-1. Verify `TELEGRAM_BOT_TOKEN` is correct
-2. Check Railway app logs: `railway logs`
-3. Ensure bot privacy is disabled
-4. Test bot token with Telegram API
-
-#### ❌ Mobile App Connection Failed
-
-**Problem:** Cannot connect mobile app
-**Solutions:**
-
-1. Verify Railway app URL is accessible
-2. Check gateway token format (64 hex chars)
-3. Try different connection methods (manual vs. setup code)
-4. Check Railway app is deployed and running
-
-#### ❌ Railway Deployment Failed
-
-**Problem:** Deployment fails or crashes
-**Solutions:**
-
-1. Check Railway logs for errors
-2. Verify environment variables are set
-3. Ensure proper resource limits
-4. Redeploy with correct configuration
-
-### Debug Commands
-
-```bash
-# Check Railway status
-railway status
-
-# View live logs
-railway logs
-
-# Check environment variables
-railway variables
-
-# Connect to Railway service
-railway connect
-
-# Test connectivity
-curl -I https://your-app-url
+```json5
+{
+  agents: {
+    defaults: {
+      workspace: "/data/workspace",
+      model: {
+        primary: "groq/llama-3.3-70b-versatile",
+      },
+    },
+  },
+  channels: {
+    telegram: {
+      enabled: true,
+      dmPolicy: "allowlist",
+      allowFrom: ["<your-telegram-user-id>"],
+    },
+  },
+  gateway: {
+    controlUi: {
+      allowedOrigins: ["https://<your-railway-domain>"],
+    },
+  },
+}
 ```
 
-## 📊 Monitoring & Maintenance
+Replace the Telegram user ID and domain with your own values.
 
-### 6.1 Check Health Status
+## Related docs
 
-**Via Railway Dashboard:**
-
-- Monitor CPU/Memory usage
-- Check deployment status
-- Review error logs
-
-**Via CLI:**
-
-```bash
-# Service status
-railway status
-
-# Resource usage
-railway logs --tail
-
-# Environment check
-railway variables
-```
-
-### 6.2 Update Configuration
-
-**Add new environment variables:**
-
-```bash
-railway variables set NEW_VARIABLE=value
-```
-
-**Update existing variables:**
-
-```bash
-railway variables set TELEGRAM_BOT_TOKEN=new-token
-```
-
-### 6.3 Scaling & Limits
-
-**Free Tier Limits:**
-
-- 500 hours/month runtime
-- 1GB RAM
-- 1GB storage
-- No custom domain
-
-**Upgrade for:**
-
-- More resources
-- Custom domains
-- Priority support
-- Advanced monitoring
-
-## 🔒 Security Best Practices
-
-### 7.1 Token Security
-
-- **Never commit tokens** to version control
-- **Use Railway environment variables** only
-- **Rotate tokens** regularly
-- **Monitor access logs**
-
-### 7.2 Bot Security
-
-- **Enable bot privacy** when appropriate
-- **Use webhooks** instead of polling for production
-- **Implement rate limiting**
-- **Validate all inputs**
-
-### 7.3 Network Security
-
-- **Use HTTPS** for all connections
-- **Validate SSL certificates**
-- **Monitor for suspicious activity**
-- **Keep dependencies updated**
-
-## 📚 Additional Resources
-
-- **OpenClaw Documentation**: [docs.openclaw.ai](https://docs.openclaw.ai)
-- **Railway Docs**: [docs.railway.app](https://docs.railway.app)
-- **Telegram Bot API**: [core.telegram.org/bots](https://core.telegram.org/bots)
-- **GitHub Repository**: [github.com/openclaw/openclaw](https://github.com/openclaw/openclaw)
-
-## 🆘 Getting Help
-
-**If you encounter issues:**
-
-1. **Check logs first**: `railway logs`
-2. **Review this guide** step by step
-3. **Search existing issues**: GitHub Issues
-4. **Ask in community**: Discord/Telegram groups
-5. **Create new issue**: Provide logs and configuration details
-
----
-
-**⚡ Quick Start Summary:**
-
-1. Deploy Railway template
-2. Create Telegram bot with @BotFather
-3. Set environment variables in Railway
-4. Connect mobile app with generated setup code
-5. Run auto-approval script for device pairing
-6. Test end-to-end functionality
-
-**🎉 You're now ready to use OpenClaw with Railway and Telegram!**
+- [Railway plus Telegram Quick Reference](/install/railway-telegram-quick-ref)
+- [Railway](/install/railway)
+- [Telegram](/channels/telegram)
+- [Pairing](/channels/pairing)
+- [Devices CLI](/cli/devices)
+- [Gateway troubleshooting](/gateway/troubleshooting)

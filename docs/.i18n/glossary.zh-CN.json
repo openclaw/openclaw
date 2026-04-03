@@ -4,6 +4,34 @@
     "target": "OpenClaw"
   },
   {
+    "source": "Railway",
+    "target": "Railway"
+  },
+  {
+    "source": "Railway plus Telegram Quick Reference",
+    "target": "Railway 与 Telegram 快速参考"
+  },
+  {
+    "source": "Railway with Telegram",
+    "target": "Railway 与 Telegram"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Pairing",
+    "target": "配对"
+  },
+  {
+    "source": "Devices CLI",
+    "target": "设备 CLI"
+  },
+  {
+    "source": "Gateway troubleshooting",
+    "target": "Gateway 故障排除"
+  },
+  {
     "source": "Gateway",
     "target": "Gateway 网关"
   },

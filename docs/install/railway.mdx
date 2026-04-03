@@ -34,6 +34,8 @@ Then open:
 
 - `https://<your-railway-domain>/openclaw` — Control UI
 
+If you specifically want Railway plus Telegram, follow the detailed [Railway with Telegram](/install/railway-telegram-setup) guide.
+
 ## What you get
 
 - Hosted OpenClaw Gateway + Control UI
@@ -69,6 +71,12 @@ Use the Control UI at `/openclaw` or run `openclaw onboard` via Railway's shell 
 - [Telegram](/channels/telegram) (fastest — just a bot token)
 - [Discord](/channels/discord)
 - [All channels](/channels)
+
+## Common Railway fixes
+
+- If your Railway domain returns `502 Application failed to respond`, make sure public networking targets `8080` and any generated service domains also target `8080`.
+- If `/openclaw` loads but the browser shows `origin not allowed`, add your public Railway domain to `gateway.controlUi.allowedOrigins`.
+- If the dashboard shows `pairing required`, approve the pending browser device with `openclaw devices list` and `openclaw devices approve <requestId>`.
 
 ## Backups & migration
 
