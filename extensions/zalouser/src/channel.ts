@@ -200,9 +200,12 @@ const resolveZalouserDmPolicy = createScopedDmSecurityResolver<ResolvedZalouserA
 });
 
 const zalouserMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
-    const accounts = listZalouserAccountIds(cfg)
-      .map((accountId) => resolveZalouserAccountSync({ cfg, accountId }))
+  describeMessageTool: ({ cfg, accountId }) => {
+    const accounts = (accountId
+      ? [resolveZalouserAccountSync({ cfg, accountId })]
+      : listZalouserAccountIds(cfg).map((listedAccountId) =>
+          resolveZalouserAccountSync({ cfg, accountId: listedAccountId }),
+        ))
       .filter((account) => account.enabled);
     if (accounts.length === 0) {
       return null;

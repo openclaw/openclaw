@@ -240,4 +240,29 @@ describe("zalouser channel policies", () => {
       },
     });
   });
+
+  it("honors the selected Zalouser account during discovery", () => {
+    const actions = zalouserPlugin.actions;
+    const cfg = {
+      channels: {
+        zalouser: {
+          enabled: true,
+          profile: "default",
+          accounts: {
+            default: {
+              enabled: false,
+              profile: "default",
+            },
+            work: {
+              enabled: true,
+              profile: "work",
+            },
+          },
+        },
+      },
+    };
+
+    expect(actions?.describeMessageTool?.({ cfg, accountId: "default" })).toBeNull();
+    expect(actions?.describeMessageTool?.({ cfg, accountId: "work" })?.actions).toEqual(["react"]);
+  });
 });
