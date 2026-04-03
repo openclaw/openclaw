@@ -1,16 +1,5 @@
-import {
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/core";
-import { buildAccountScopedDmSecurityPolicy, type ChannelSecurityDmPolicyCompat } from "./openclaw-compat.js";
 import type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
-
-import { formatPairingApproveHint, DEFAULT_ACCOUNT_ID } from './openclaw-compat.js'
-import { getWeComRuntime } from "./runtime.js";
-import { monitorWeComProvider } from "./monitor.js";
-import { getWeComWebSocket } from "./state-manager.js";
-import { wecomSetupWizard, wecomSetupAdapter } from "./onboarding.js";
-import type { WeComConfig, ResolvedWeComAccount } from "./utils.js";
+import { type ChannelPlugin, type OpenClawConfig } from "openclaw/plugin-sdk/core";
 import {
   listWeComAccountIds,
   resolveWeComAccountMulti,
@@ -18,11 +7,25 @@ import {
   hasMultiAccounts,
 } from "./accounts.js";
 import type { WeComMultiAccountConfig } from "./accounts.js";
+import {
+  sendText as sendAgentText,
+  sendMedia as sendAgentMedia,
+  uploadMedia as uploadAgentMedia,
+} from "./agent/api-client.js";
+import { registerAgentWebhookTarget, deregisterAgentWebhookTarget } from "./agent/webhook.js";
 import { CHANNEL_ID, TEXT_CHUNK_LIMIT, WEBHOOK_PATHS } from "./const.js";
 import { uploadAndSendMedia } from "./media-uploader.js";
-import { registerAgentWebhookTarget, deregisterAgentWebhookTarget } from "./agent/webhook.js";
+import { monitorWeComProvider } from "./monitor.js";
+import { wecomSetupWizard, wecomSetupAdapter } from "./onboarding.js";
+import {
+  buildAccountScopedDmSecurityPolicy,
+  type ChannelSecurityDmPolicyCompat,
+} from "./openclaw-compat.js";
+import { formatPairingApproveHint, DEFAULT_ACCOUNT_ID } from "./openclaw-compat.js";
+import { getWeComRuntime } from "./runtime.js";
+import { getWeComWebSocket } from "./state-manager.js";
 import { resolveWecomTarget } from "./target.js";
-import { sendText as sendAgentText, sendMedia as sendAgentMedia, uploadMedia as uploadAgentMedia } from "./agent/api-client.js";
+import type { WeComConfig, ResolvedWeComAccount } from "./utils.js";
 import { startWebhookGateway, stopWebhookGateway } from "./webhook/index.js";
 import type { ResolvedWebhookAccount, WebhookGatewayContext } from "./webhook/index.js";
 
@@ -31,11 +34,11 @@ import type { ResolvedWebhookAccount, WebhookGatewayContext } from "./webhook/in
  * 优先 Bot WebSocket，不可用时自动回退到 Agent HTTP API
  */
 async function sendWeComMessage({
-                                  to,
-                                  content,
-                                  accountId,
-                                  cfg,
-                                }: {
+  to,
+  content,
+  accountId,
+  cfg,
+}: {
   to: string;
   content: string;
   accountId?: string;
@@ -51,7 +54,7 @@ async function sendWeComMessage({
   const wsClient = getWeComWebSocket(resolvedAccountId);
   if (wsClient?.isConnected) {
     const result = await wsClient.sendMessage(chatId, {
-      msgtype: 'markdown',
+      msgtype: "markdown",
       markdown: { content },
     });
     const messageId = result?.headers?.req_id ?? `wecom-${Date.now()}`;
@@ -60,14 +63,16 @@ async function sendWeComMessage({
 
   // ── 回退到 Agent HTTP API ──
   if (!cfg) {
-    throw new Error(`WSClient not connected for account ${resolvedAccountId} and no config available for Agent fallback`);
+    throw new Error(
+      `WSClient not connected for account ${resolvedAccountId} and no config available for Agent fallback`,
+    );
   }
   const account = resolveWeComAccountMulti({ cfg, accountId: resolvedAccountId });
   const agent = account.agent;
   if (!agent?.configured) {
     throw new Error(
       `WSClient not connected for account ${resolvedAccountId} and Agent mode is not configured. ` +
-      `Please configure either Bot (botId + secret) or Agent (corpId + corpSecret + agentId) for this account.`
+        `Please configure either Bot (botId + secret) or Agent (corpId + corpSecret + agentId) for this account.`,
     );
   }
 
@@ -76,7 +81,9 @@ async function sendWeComMessage({
     throw new Error(`Cannot resolve outbound target from "${to}"`);
   }
 
-  console.log(`[wecom-outbound] Bot WS unavailable, sending via Agent HTTP API to ${JSON.stringify(target)} (accountId=${resolvedAccountId})`);
+  console.log(
+    `[wecom-outbound] Bot WS unavailable, sending via Agent HTTP API to ${JSON.stringify(target)} (accountId=${resolvedAccountId})`,
+  );
   await sendAgentText({
     agent,
     toUser: target.touser,
@@ -96,12 +103,12 @@ async function sendWeComMessage({
 // 企业微信频道元数据
 const meta = {
   id: CHANNEL_ID,
-  label: "企业微信",
-  selectionLabel: "企业微信 (WeCom)",
-  detailLabel: "企业微信智能机器人",
+  label: "WeCom",
+  selectionLabel: "WeCom (企业微信)",
+  detailLabel: "WeCom Bot（Official API）",
   docsPath: `/channels/${CHANNEL_ID}`,
   docsLabel: CHANNEL_ID,
-  blurb: "企业微信智能机器人接入插件",
+  blurb: "connect to WeCom via official Wecom Bot API with document/meeting/messaging skills.",
   systemImage: "message.fill",
 };
 export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
@@ -112,7 +119,8 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
   },
   pairing: {
     idLabel: "wecomUserId",
-    normalizeAllowEntry: (entry) => entry.replace(new RegExp(`^(${CHANNEL_ID}|user):`, "i"), "").trim(),
+    normalizeAllowEntry: (entry) =>
+      entry.replace(new RegExp(`^(${CHANNEL_ID}|user):`, "i"), "").trim(),
     notifyApproval: async ({ cfg, id }) => {
       // sendWeComMessage({
       //   to: id,
@@ -132,7 +140,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
     nativeCommands: false,
     blockStreaming: true,
   },
-  reload: {configPrefixes: [`channels.${CHANNEL_ID}`]},
+  reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
   config: {
     // 多账号：列出所有账户 ID
     listAccountIds: (cfg) => listWeComAccountIds(cfg),
@@ -144,7 +152,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
     defaultAccountId: (cfg) => resolveDefaultWeComAccountId(cfg),
 
     // 多账号：设置账户启用状态
-    setAccountEnabled: ({cfg, accountId, enabled}) => {
+    setAccountEnabled: ({ cfg, accountId, enabled }) => {
       if (!hasMultiAccounts(cfg)) {
         // 单账号模式：设置顶层 enabled
         const wecomConfig = (cfg.channels?.[CHANNEL_ID] ?? {}) as WeComConfig;
@@ -180,7 +188,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
     },
 
     // 多账号：删除账户
-    deleteAccount: ({cfg, accountId}) => {
+    deleteAccount: ({ cfg, accountId }) => {
       if (!hasMultiAccounts(cfg)) {
         // 单账号模式：删除整个 wecom 配置
         const next = { ...cfg } as OpenClawConfig;
@@ -222,26 +230,26 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.botId?.trim() && account.secret?.trim()) || Boolean(account.agent?.configured),
+      configured:
+        Boolean(account.botId?.trim() && account.secret?.trim()) ||
+        Boolean(account.agent?.configured),
       botId: account.botId,
       websocketUrl: account.websocketUrl,
       agentConfigured: Boolean(account.agent?.configured),
     }),
 
     // 解析允许来源列表（多账号：按 accountId 解析）
-    resolveAllowFrom: ({cfg, accountId}) => {
+    resolveAllowFrom: ({ cfg, accountId }) => {
       const account = resolveWeComAccountMulti({ cfg, accountId });
       return (account.config.allowFrom ?? []).map((entry) => String(entry));
     },
 
     // 格式化允许来源列表
-    formatAllowFrom: ({allowFrom}) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean),
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
   },
   security: {
-    resolveDmPolicy: ({cfg, accountId, account}) => {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
       const result = buildAccountScopedDmSecurityPolicy({
         cfg,
         channelKey: CHANNEL_ID,
@@ -256,21 +264,22 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
       });
       return result as ChannelSecurityDmPolicyCompat;
     },
-    collectWarnings: ({cfg, accountId}) => {
+    collectWarnings: ({ cfg, accountId }) => {
       const account = resolveWeComAccountMulti({ cfg, accountId });
       const warnings: string[] = [];
 
       // 动态构造配置路径（区分单账号 / 多账号）
       const isMulti = hasMultiAccounts(cfg);
-      const basePath = isMulti && accountId
-        ? `channels.${CHANNEL_ID}.accounts.${accountId}.`
-        : `channels.${CHANNEL_ID}.`;
+      const basePath =
+        isMulti && accountId
+          ? `channels.${CHANNEL_ID}.accounts.${accountId}.`
+          : `channels.${CHANNEL_ID}.`;
 
       // DM 策略警告
       const dmPolicy = account.config.dmPolicy ?? "open";
       if (dmPolicy === "open") {
         const hasWildcard = (account.config.allowFrom ?? []).some(
-          (entry) => String(entry).trim() === "*"
+          (entry) => String(entry).trim() === "*",
         );
         if (!hasWildcard) {
           warnings.push(
@@ -314,17 +323,17 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
     deliveryMode: "gateway",
     chunker: (text, limit) => getWeComRuntime().channel.text.chunkMarkdownText(text, limit),
     textChunkLimit: TEXT_CHUNK_LIMIT,
-    sendText: async ({to, text, accountId, cfg}) => {
-      return sendWeComMessage({to, content: text, accountId: accountId ?? undefined, cfg});
+    sendText: async ({ to, text, accountId, cfg }) => {
+      return sendWeComMessage({ to, content: text, accountId: accountId ?? undefined, cfg });
     },
-    sendMedia: async ({to, text, mediaUrl, mediaLocalRoots, accountId, cfg}) => {
+    sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, cfg }) => {
       const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
       const channelPrefix = new RegExp(`^${CHANNEL_ID}:`, "i");
       const chatId = to.replace(channelPrefix, "");
 
       // 如果没有 mediaUrl，fallback 为纯文本
       if (!mediaUrl) {
-        return sendWeComMessage({to, content: text || "", accountId: resolvedAccountId, cfg});
+        return sendWeComMessage({ to, content: text || "", accountId: resolvedAccountId, cfg });
       }
 
       // ── 尝试 Bot WebSocket ──
@@ -338,21 +347,34 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         });
 
         if (result.rejected) {
-          return sendWeComMessage({to, content: `⚠️ ${result.rejectReason}`, accountId: resolvedAccountId, cfg});
+          return sendWeComMessage({
+            to,
+            content: `⚠️ ${result.rejectReason}`,
+            accountId: resolvedAccountId,
+            cfg,
+          });
         }
 
         if (!result.ok) {
-          const fallbackContent = text
-            ? `${text}\n📎 ${mediaUrl}`
-            : `📎 ${mediaUrl}`;
-          return sendWeComMessage({to, content: fallbackContent, accountId: resolvedAccountId, cfg});
+          const fallbackContent = text ? `${text}\n📎 ${mediaUrl}` : `📎 ${mediaUrl}`;
+          return sendWeComMessage({
+            to,
+            content: fallbackContent,
+            accountId: resolvedAccountId,
+            cfg,
+          });
         }
 
         if (text) {
-          await sendWeComMessage({to, content: text, accountId: resolvedAccountId, cfg});
+          await sendWeComMessage({ to, content: text, accountId: resolvedAccountId, cfg });
         }
         if (result.downgradeNote) {
-          await sendWeComMessage({to, content: `ℹ️ ${result.downgradeNote}`, accountId: resolvedAccountId, cfg});
+          await sendWeComMessage({
+            to,
+            content: `ℹ️ ${result.downgradeNote}`,
+            accountId: resolvedAccountId,
+            cfg,
+          });
         }
 
         return {
@@ -364,14 +386,16 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
 
       // ── 回退到 Agent HTTP API ──
       if (!cfg) {
-        throw new Error(`WSClient not connected for account ${resolvedAccountId} and no config available for Agent fallback`);
+        throw new Error(
+          `WSClient not connected for account ${resolvedAccountId} and no config available for Agent fallback`,
+        );
       }
       const account = resolveWeComAccountMulti({ cfg, accountId: resolvedAccountId });
       const agent = account.agent;
       if (!agent?.configured) {
         throw new Error(
           `WSClient not connected for account ${resolvedAccountId} and Agent mode is not configured. ` +
-          `Please configure either Bot (botId + secret) or Agent (corpId + corpSecret + agentId).`
+            `Please configure either Bot (botId + secret) or Agent (corpId + corpSecret + agentId).`,
         );
       }
 
@@ -381,17 +405,19 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         throw new Error(`Cannot resolve outbound target from "${to}"`);
       }
 
-      console.log(`[wecom-outbound] Bot WS unavailable, sending media via Agent HTTP API to ${JSON.stringify(target)}`);
+      console.log(
+        `[wecom-outbound] Bot WS unavailable, sending media via Agent HTTP API to ${JSON.stringify(target)}`,
+      );
 
       // 尝试下载并上传媒体到企微
       try {
         const mediaResponse = await fetch(mediaUrl);
         if (mediaResponse.ok) {
           const buffer = Buffer.from(await mediaResponse.arrayBuffer());
-          const filename = mediaUrl.split('/').pop() || 'file.bin';
+          const filename = mediaUrl.split("/").pop() || "file.bin";
           const mediaId = await uploadAgentMedia({
             agent,
-            type: 'file',
+            type: "file",
             buffer,
             filename,
           });
@@ -402,10 +428,17 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
             toTag: target.totag,
             chatId: target.chatid,
             mediaId,
-            mediaType: 'file',
+            mediaType: "file",
           });
           if (text) {
-            await sendAgentText({ agent, toUser: target.touser, toParty: target.toparty, toTag: target.totag, chatId: target.chatid, text });
+            await sendAgentText({
+              agent,
+              toUser: target.touser,
+              toParty: target.toparty,
+              toTag: target.totag,
+              chatId: target.chatid,
+              text,
+            });
           }
           return { channel: CHANNEL_ID, messageId: `agent-media-${Date.now()}`, chatId };
         }
@@ -415,7 +448,14 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
 
       // 媒体上传失败，降级为文本 + URL
       const fallbackContent = text ? `${text}\n📎 ${mediaUrl}` : `📎 ${mediaUrl}`;
-      await sendAgentText({ agent, toUser: target.touser, toParty: target.toparty, toTag: target.totag, chatId: target.chatid, text: fallbackContent });
+      await sendAgentText({
+        agent,
+        toUser: target.touser,
+        toParty: target.toparty,
+        toTag: target.totag,
+        chatId: target.chatid,
+        text: fallbackContent,
+      });
       return { channel: CHANNEL_ID, messageId: `agent-${Date.now()}`, chatId };
     },
   },
@@ -447,7 +487,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         }
         return issues;
       }),
-    buildChannelSummary: ({snapshot}) => ({
+    buildChannelSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       running: snapshot.running ?? false,
       lastStartAt: snapshot.lastStartAt ?? null,
@@ -455,13 +495,12 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
       lastError: snapshot.lastError ?? null,
     }),
     probeAccount: async () => {
-      return {ok: true, status: 200};
+      return { ok: true, status: 200 };
     },
-    buildAccountSnapshot: ({account, runtime}) => {
-      const configured = Boolean(
-        account.botId?.trim() &&
-        account.secret?.trim()
-      ) || Boolean(account.agent?.configured);
+    buildAccountSnapshot: ({ account, runtime }) => {
+      const configured =
+        Boolean(account.botId?.trim() && account.secret?.trim()) ||
+        Boolean(account.agent?.configured);
       return {
         accountId: account.accountId,
         name: account.name,
@@ -528,12 +567,14 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         ctx.log?.info(`[${ctx.accountId}] wecom agent webhook registered at ${paths.join(", ")}`);
 
         // 账号生命周期结束时清理
-        ctx.abortSignal.addEventListener("abort", () => {
-          deregisterAgentWebhookTarget(agent.accountId);
-        }, { once: true });
+        ctx.abortSignal.addEventListener(
+          "abort",
+          () => {
+            deregisterAgentWebhookTarget(agent.accountId);
+          },
+          { once: true },
+        );
       }
-
-      
 
       // ── Bot WebSocket 监听（需要 botId + secret）──────────────────
       const hasBotCredentials = Boolean(account.botId?.trim() && account.secret?.trim());
@@ -576,10 +617,14 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
             resolve();
             return;
           }
-          ctx.abortSignal.addEventListener("abort", () => {
-            stopWebhookGateway(gatewayCtx);
-            resolve();
-          }, { once: true });
+          ctx.abortSignal.addEventListener(
+            "abort",
+            () => {
+              stopWebhookGateway(gatewayCtx);
+              resolve();
+            },
+            { once: true },
+          );
         });
         return;
       }
@@ -589,17 +634,17 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
       });
     },
-    logoutAccount: async ({cfg, accountId}) => {
+    logoutAccount: async ({ cfg, accountId }) => {
       const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
       const isMulti = hasMultiAccounts(cfg);
-      let nextCfg = {...cfg} as OpenClawConfig;
+      let nextCfg = { ...cfg } as OpenClawConfig;
       let cleared = false;
       let changed = false;
 
       if (!isMulti) {
         // 单账号模式：删除顶层 botId/secret
         const wecomConfig = (cfg.channels?.[CHANNEL_ID] ?? {}) as WeComConfig;
-        const nextWecom = {...wecomConfig};
+        const nextWecom = { ...wecomConfig };
 
         if (nextWecom.botId || nextWecom.secret) {
           delete nextWecom.botId;
@@ -610,9 +655,9 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
 
         if (changed) {
           if (Object.keys(nextWecom).length > 0) {
-            nextCfg.channels = {...nextCfg.channels, [CHANNEL_ID]: nextWecom};
+            nextCfg.channels = { ...nextCfg.channels, [CHANNEL_ID]: nextWecom };
           } else {
-            const nextChannels = {...nextCfg.channels};
+            const nextChannels = { ...nextCfg.channels };
             delete (nextChannels as Record<string, unknown>)[CHANNEL_ID];
             if (Object.keys(nextChannels).length > 0) {
               nextCfg.channels = nextChannels;
@@ -627,7 +672,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         const accountCfg = wecomConfig.accounts?.[resolvedAccountId];
 
         if (accountCfg?.botId || accountCfg?.secret) {
-          const nextAccount = {...accountCfg};
+          const nextAccount = { ...accountCfg };
           delete nextAccount.botId;
           delete nextAccount.secret;
           cleared = true;
@@ -657,10 +702,13 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         await getWeComRuntime().config.writeConfigFile(nextCfg);
       }
 
-      const resolved = resolveWeComAccountMulti({ cfg: changed ? nextCfg : cfg, accountId: resolvedAccountId });
+      const resolved = resolveWeComAccountMulti({
+        cfg: changed ? nextCfg : cfg,
+        accountId: resolvedAccountId,
+      });
       const loggedOut = !resolved.botId && !resolved.secret;
 
-      return {cleared, envToken: false, loggedOut};
+      return { cleared, envToken: false, loggedOut };
     },
   },
 };

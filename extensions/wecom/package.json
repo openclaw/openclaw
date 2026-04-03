@@ -3,13 +3,20 @@
   "version": "2026.4.3",
   "private": true,
   "description": "OpenClaw WeCom Bot channel plugin",
-  "type": "module",
   "files": [
     "dist",
     "skills",
     "openclaw.plugin.json",
     "README.md"
   ],
+  "type": "module",
+  "dependencies": {
+    "@wecom/aibot-node-sdk": "^1.0.6",
+    "fast-xml-parser": "^5.5.9",
+    "file-type": "^21.3.0",
+    "undici": "^7.24.6",
+    "zod": "^4.3.6"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
@@ -22,12 +29,5 @@
       "docsLabel": "wecom",
       "blurb": "connect to WeCom via official Wecom Bot API with document/meeting/messaging skills."
     }
-  },
-  "dependencies": {
-    "@wecom/aibot-node-sdk": "1.0.6-beta.2",
-    "fast-xml-parser": "^5.5.9",
-    "file-type": "^21.3.0",
-    "undici": "^7.24.6",
-    "zod": "^4.3.6"
   }
 }
