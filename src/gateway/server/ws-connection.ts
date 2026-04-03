@@ -233,7 +233,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     // Health probes connect from loopback, immediately stop after receiving the
     // RPC response, and always close with code 1000. Logging these as WARN
     // generates hundreds of false-positive entries per day and drowns out real
-    // connection errors. Reviewed and validated by AI-assisted analysis.
+    // connection errors.
+    const effectiveProbeHost =
+      !gatewayHost || gatewayHost === "0.0.0.0" || gatewayHost === "::" ? "127.0.0.1" : gatewayHost;
     const isInternalProbeClose = (
       remote: string | undefined,
       origin: string | undefined,
@@ -241,7 +243,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     ) =>
       closeCode === 1000 &&
       isLoopbackAddress(remote) &&
-      origin === `http://${gatewayHost ?? "127.0.0.1"}:${port}`;
+      origin === `http://${effectiveProbeHost}:${port}`;
 
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;
