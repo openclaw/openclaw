@@ -5,6 +5,17 @@ const getDefaultMediaLocalRootsMock = vi.hoisted(() => vi.fn(() => []));
 const dispatchChannelMessageActionMock = vi.hoisted(() => vi.fn());
 const sendMessageMock = vi.hoisted(() => vi.fn());
 const sendPollMock = vi.hoisted(() => vi.fn());
+
+const runMessageSendingMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<Record<string, unknown> | undefined> => undefined),
+);
+const hasHooksMock = vi.hoisted(() => vi.fn((name: string) => name === "message_sending"));
+const getGlobalHookRunnerMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    hasHooks: hasHooksMock,
+    runMessageSending: runMessageSendingMock,
+  })),
+);
 const getAgentScopedMediaLocalRootsForSourcesMock = vi.hoisted(() =>
   vi.fn<(params: { cfg: unknown; agentId?: string; mediaSources?: readonly string[] }) => string[]>(
     () => ["/tmp/agent-roots"],
@@ -46,6 +57,9 @@ const mocks = {
   createAgentScopedHostMediaReadFile: createAgentScopedHostMediaReadFileMock,
   resolveAgentScopedOutboundMediaAccess: resolveAgentScopedOutboundMediaAccessMock,
   appendAssistantMessageToSessionTranscript: appendAssistantMessageToSessionTranscriptMock,
+  getGlobalHookRunner: getGlobalHookRunnerMock,
+  runMessageSending: runMessageSendingMock,
+  hasHooks: hasHooksMock,
 };
 
 vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
@@ -73,6 +87,10 @@ vi.mock("../../media/local-roots.js", async (importOriginal) => {
 
 vi.mock("../../config/sessions.js", () => ({
   appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: mocks.getGlobalHookRunner,
 }));
 
 type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
@@ -145,6 +163,11 @@ describe("executeSendAction", () => {
     mocks.createAgentScopedHostMediaReadFile.mockClear();
     mocks.resolveAgentScopedOutboundMediaAccess.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    mocks.runMessageSending.mockClear();
+    mocks.hasHooks.mockClear();
+    // Default: no hooks registered (existing tests are hook-agnostic)
+    mocks.hasHooks.mockReturnValue(false);
+    mocks.runMessageSending.mockResolvedValue(undefined);
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
@@ -398,6 +421,58 @@ describe("executeSendAction", () => {
         threadId: "thread-1",
         isAnonymous: true,
       }),
+    );
+  });
+
+  it("passes skipMessageSendingHook:true to sendMessage when message_sending hooks are registered (B1 double-fire prevention)", async () => {
+    mocks.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    mocks.runMessageSending.mockResolvedValue(undefined);
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ skipMessageSendingHook: true }),
+    );
+  });
+
+  it("writes hook-modified text to mirror transcript on plugin-handled path (Branch A)", async () => {
+    mocks.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    mocks.runMessageSending.mockResolvedValue({ content: "hook rewrite" });
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-hook"));
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: { to: "channel:123", message: "original" },
+        dryRun: false,
+        mirror: {
+          sessionKey: "agent:main:demo-outbound:channel:123",
+          agentId: "agent-hook",
+        },
+      },
+      to: "channel:123",
+      message: "original",
+    });
+
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hook rewrite" }),
     );
   });
 

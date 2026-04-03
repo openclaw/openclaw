@@ -96,6 +96,7 @@ export type MessageActionRunResult =
       toolResult?: AgentToolResult<unknown>;
       sendResult?: MessageSendResult;
       dryRun: boolean;
+      cancelled?: true;
     }
   | {
       kind: "broadcast";
@@ -108,6 +109,7 @@ export type MessageActionRunResult =
           to: string;
           ok: boolean;
           error?: string;
+          cancelled?: true;
           result?: MessageSendResult;
         }>;
       };
@@ -348,11 +350,13 @@ async function handleBroadcastAction(
             target: resolved.target.to,
           },
         });
+        const wasCancelled = sendResult.kind === "send" && sendResult.cancelled === true;
         results.push({
           channel: targetChannel,
           to: resolved.target.to,
-          ok: true,
-          result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
+          ok: !wasCancelled,
+          ...(wasCancelled ? { cancelled: true as const } : {}),
+          result: !wasCancelled && sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });
       } catch (err) {
         if (isAbortError(err)) {
@@ -556,6 +560,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     toolResult: send.toolResult,
     sendResult: send.sendResult,
     dryRun,
+    ...(send.cancelled ? { cancelled: true as const } : {}),
   };
 }
 
