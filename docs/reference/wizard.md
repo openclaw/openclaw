@@ -100,8 +100,8 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
   </Step>
   <Step title="Web search">
-    - Pick a provider: Perplexity, Brave, Gemini, Grok, or Kimi (or skip).
-    - Paste your API key (QuickStart auto-detects keys from env vars or existing config).
+    - Pick a supported provider such as Brave, Firecrawl, Gemini, Grok, Kimi, Ollama Web Search, Perplexity, or Tavily (or skip).
+    - API-backed providers can use env vars or existing config for quick setup; key-free providers use their provider-specific prerequisites instead.
     - Skip with `--skip-search`.
     - Configure later: `openclaw configure --section web`.
   </Step>

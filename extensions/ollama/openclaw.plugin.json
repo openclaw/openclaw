@@ -17,6 +17,9 @@
       "groupHint": "Cloud and local open models"
     }
   ],
+  "contracts": {
+    "webSearchProviders": ["ollama"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

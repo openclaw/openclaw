@@ -216,6 +216,10 @@
     "target": "常见问题"
   },
   {
+    "source": "Ollama Web Search",
+    "target": "Ollama Web 搜索"
+  },
+  {
     "source": "onboarding",
     "target": "新手引导"
   },
