@@ -134,16 +134,17 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const model = normalizeGoogleImageModel(req.model);
-      const { baseUrl, allowPrivateNetwork, headers } = resolveProviderHttpRequestConfig({
-        baseUrl: resolveGoogleBaseUrl(req.cfg),
-        defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
-        allowPrivateNetwork: Boolean(req.cfg?.models?.providers?.google?.baseUrl?.trim()),
-        defaultHeaders: parseGeminiAuth(auth.apiKey).headers,
-        provider: "google",
-        api: "google-generative-ai",
-        capability: "image",
-        transport: "http",
-      });
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        resolveProviderHttpRequestConfig({
+          baseUrl: resolveGoogleBaseUrl(req.cfg),
+          defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
+          allowPrivateNetwork: Boolean(req.cfg?.models?.providers?.google?.baseUrl?.trim()),
+          defaultHeaders: parseGeminiAuth(auth.apiKey).headers,
+          provider: "google",
+          api: "google-generative-ai",
+          capability: "image",
+          transport: "http",
+        });
       const imageConfig = mapSizeToImageConfig(req.size);
       const inputParts = (req.inputImages ?? []).map((image) => ({
         inlineData: {
@@ -177,6 +178,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         timeoutMs: 60_000,
         fetchFn: fetch,
         allowPrivateNetwork,
+        dispatcherPolicy,
       });
 
       try {

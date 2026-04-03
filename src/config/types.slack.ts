@@ -1,5 +1,6 @@
 import type {
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -52,8 +53,8 @@ export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
 export type SlackLegacyStreamMode = "replace" | "status_final" | "append";
 export type SlackExecApprovalTarget = "dm" | "channel" | "both";
 export type SlackExecApprovalConfig = {
-  /** Enable Slack exec approvals for this account. Default: false. */
-  enabled?: boolean;
+  /** Enable mode for Slack exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
+  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
   /** Slack user IDs allowed to approve exec requests. Optional: falls back to commands.ownerAllowFrom when possible. */
   approvers?: Array<string | number>;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
@@ -142,6 +143,8 @@ export type SlackAccountConfig = {
    * - "allowlist": only allow channels present in channels.slack.channels
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Max channel messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */

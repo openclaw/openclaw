@@ -61,11 +61,17 @@ const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
 const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
 
+type DisconnectContext = {
+  generation: number;
+  reason: string;
+};
+
 type PendingPrompt = {
   sessionId: string;
   sessionKey: string;
   idempotencyKey: string;
   sendAccepted?: boolean;
+  disconnectContext?: DisconnectContext;
   resolve: (response: PromptResponse) => void;
   reject: (err: Error) => void;
   sentTextLength?: number;
@@ -409,8 +415,8 @@ export class AcpGatewayAgent implements Agent {
   private sessionStore: AcpSessionStore;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
-  private disconnectDeadlineRunIds = new Map<string, string>();
   private disconnectTimer: NodeJS.Timeout | null = null;
+  private activeDisconnectContext: DisconnectContext | null = null;
   private disconnectGeneration = 0;
 
   private getPendingPrompt(sessionId: string, runId: string): PendingPrompt | undefined {
@@ -449,27 +455,29 @@ export class AcpGatewayAgent implements Agent {
 
   handleGatewayReconnect(): void {
     this.log("gateway reconnected");
-    void this.reconcilePendingPromptsOnReconnect(this.disconnectGeneration);
+    const disconnectContext = this.activeDisconnectContext;
+    this.activeDisconnectContext = null;
+    if (!disconnectContext) {
+      return;
+    }
+    void this.reconcilePendingPrompts(disconnectContext.generation, false);
   }
 
   handleGatewayDisconnect(reason: string): void {
     this.log(`gateway disconnected: ${reason}`);
+    const disconnectContext = {
+      generation: this.disconnectGeneration + 1,
+      reason,
+    };
+    this.disconnectGeneration = disconnectContext.generation;
+    this.activeDisconnectContext = disconnectContext;
     if (this.pendingPrompts.size === 0) {
       return;
     }
-    this.disconnectGeneration += 1;
-    this.disconnectDeadlineRunIds = new Map(
-      [...this.pendingPrompts.entries()].map(([sessionId, pending]) => [
-        sessionId,
-        pending.idempotencyKey,
-      ]),
-    );
-    this.clearDisconnectTimer();
-    this.disconnectTimer = setTimeout(() => {
-      this.disconnectTimer = null;
-      void this.expireDisconnectDeadline(new Error(`Gateway disconnected: ${reason}`));
-    }, ACP_GATEWAY_DISCONNECT_GRACE_MS);
-    this.disconnectTimer.unref?.();
+    for (const pending of this.pendingPrompts.values()) {
+      pending.disconnectContext = disconnectContext;
+    }
+    this.armDisconnectTimer(disconnectContext);
   }
 
   async handleGatewayEvent(evt: EventFrame): Promise<void> {
@@ -706,9 +714,13 @@ export class AcpGatewayAgent implements Agent {
         sessionId: params.sessionId,
         sessionKey: session.sessionKey,
         idempotencyKey: runId,
+        disconnectContext: this.activeDisconnectContext ?? undefined,
         resolve,
         reject,
       });
+      if (this.activeDisconnectContext && !this.disconnectTimer) {
+        this.armDisconnectTimer(this.activeDisconnectContext);
+      }
 
       const sendWithProvenanceFallback = async () => {
         try {
@@ -746,7 +758,6 @@ export class AcpGatewayAgent implements Agent {
           return;
         }
         this.pendingPrompts.delete(params.sessionId);
-        this.disconnectDeadlineRunIds.delete(params.sessionId);
         this.sessionStore.clearActiveRun(params.sessionId);
         if (this.pendingPrompts.size === 0) {
           this.clearDisconnectTimer();
@@ -1009,7 +1020,6 @@ export class AcpGatewayAgent implements Agent {
     stopReason: StopReason,
   ): Promise<void> {
     this.pendingPrompts.delete(sessionId);
-    this.disconnectDeadlineRunIds.delete(sessionId);
     this.sessionStore.clearActiveRun(sessionId);
     if (this.pendingPrompts.size === 0) {
       this.clearDisconnectTimer();
@@ -1046,68 +1056,52 @@ export class AcpGatewayAgent implements Agent {
     this.disconnectTimer = null;
   }
 
-  private rejectPendingPrompts(
-    error: Error,
-    promptRuns: Iterable<readonly [string, string]>,
+  private armDisconnectTimer(disconnectContext: DisconnectContext): void {
+    this.clearDisconnectTimer();
+    this.disconnectTimer = setTimeout(() => {
+      this.disconnectTimer = null;
+      void this.reconcilePendingPrompts(disconnectContext.generation, true);
+    }, ACP_GATEWAY_DISCONNECT_GRACE_MS);
+    this.disconnectTimer.unref?.();
+  }
+
+  private rejectPendingPrompt(pending: PendingPrompt, error: Error): void {
+    const currentPending = this.getPendingPrompt(pending.sessionId, pending.idempotencyKey);
+    if (currentPending !== pending) {
+      return;
+    }
+    this.pendingPrompts.delete(pending.sessionId);
+    this.sessionStore.clearActiveRun(pending.sessionId);
+    if (this.pendingPrompts.size === 0) {
+      this.clearDisconnectTimer();
+    }
+    pending.reject(error);
+  }
+
+  private clearPendingDisconnectState(
+    pending: PendingPrompt,
+    disconnectContext: DisconnectContext,
   ): void {
-    for (const [sessionId, runId] of promptRuns) {
-      const pending = this.getPendingPrompt(sessionId, runId);
-      if (!pending) {
-        continue;
-      }
-      pending.reject(error);
-      this.sessionStore.clearActiveRun(pending.sessionId);
-      this.pendingPrompts.delete(sessionId);
-      this.disconnectDeadlineRunIds.delete(sessionId);
+    if (pending.disconnectContext !== disconnectContext) {
+      return;
     }
+    pending.disconnectContext = undefined;
   }
 
-  private async expireDisconnectDeadline(error: Error): Promise<void> {
-    const deadlinePromptRuns = [...this.disconnectDeadlineRunIds.entries()];
-    for (const [sessionId, runId] of deadlinePromptRuns) {
-      const pending = this.getPendingPrompt(sessionId, runId);
-      if (!pending) {
-        this.disconnectDeadlineRunIds.delete(sessionId);
-        continue;
-      }
-      if (!pending.sendAccepted) {
-        this.rejectPendingPrompts(error, [[sessionId, runId]]);
-        continue;
-      }
-
-      let result: AgentWaitResult | undefined;
-      try {
-        result = await this.gateway.request<AgentWaitResult>(
-          "agent.wait",
-          {
-            runId,
-            timeoutMs: 0,
-          },
-          { timeoutMs: null },
-        );
-      } catch {
-        this.rejectPendingPrompts(error, [[sessionId, runId]]);
-        continue;
-      }
-
-      const currentPending = this.getPendingPrompt(sessionId, runId);
-      if (!currentPending) {
-        continue;
-      }
-      if (result?.status === "ok") {
-        await this.finishPrompt(sessionId, currentPending, "end_turn");
-        continue;
-      }
-      if (result?.status === "error") {
-        void this.finishPrompt(sessionId, currentPending, "end_turn");
-        continue;
-      }
-      this.rejectPendingPrompts(error, [[sessionId, runId]]);
-    }
+  private shouldRejectPendingAtDisconnectDeadline(
+    pending: PendingPrompt,
+    disconnectContext: DisconnectContext,
+  ): boolean {
+    return (
+      pending.disconnectContext === disconnectContext &&
+      (!pending.sendAccepted ||
+        this.activeDisconnectContext?.generation === disconnectContext.generation)
+    );
   }
 
-  private async reconcilePendingPromptsOnReconnect(
+  private async reconcilePendingPrompts(
     observedDisconnectGeneration: number,
+    deadlineExpired: boolean,
   ): Promise<void> {
     if (this.pendingPrompts.size === 0) {
       if (this.disconnectGeneration === observedDisconnectGeneration) {
@@ -1118,52 +1112,91 @@ export class AcpGatewayAgent implements Agent {
 
     const pendingEntries = [...this.pendingPrompts.entries()];
     let keepDisconnectTimer = false;
-    const nextDisconnectDeadlineRunIds = new Map<string, string>();
     for (const [sessionId, pending] of pendingEntries) {
       if (this.pendingPrompts.get(sessionId) !== pending) {
         continue;
       }
-      let result: AgentWaitResult | undefined;
-      try {
-        result = await this.gateway.request<AgentWaitResult>(
-          "agent.wait",
-          {
-            runId: pending.idempotencyKey,
-            timeoutMs: 0,
-          },
-          { timeoutMs: null },
-        );
-      } catch (err) {
-        this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
+      if (pending.disconnectContext?.generation !== observedDisconnectGeneration) {
+        continue;
+      }
+      const shouldKeepPending = await this.reconcilePendingPrompt(
+        sessionId,
+        pending,
+        deadlineExpired,
+      );
+      if (shouldKeepPending) {
         keepDisconnectTimer = true;
-        nextDisconnectDeadlineRunIds.set(sessionId, pending.idempotencyKey);
-        continue;
-      }
-
-      if (this.pendingPrompts.get(sessionId) !== pending) {
-        continue;
-      }
-      if (result?.status === "ok") {
-        await this.finishPrompt(sessionId, pending, "end_turn");
-        continue;
-      }
-      if (result?.status === "error") {
-        void this.finishPrompt(sessionId, pending, "end_turn");
-        continue;
-      }
-      if (result?.status === "timeout") {
-        keepDisconnectTimer = true;
-        nextDisconnectDeadlineRunIds.set(sessionId, pending.idempotencyKey);
-        continue;
       }
     }
 
-    if (this.disconnectGeneration === observedDisconnectGeneration) {
-      this.disconnectDeadlineRunIds = nextDisconnectDeadlineRunIds;
-    }
     if (!keepDisconnectTimer && this.disconnectGeneration === observedDisconnectGeneration) {
       this.clearDisconnectTimer();
     }
+  }
+
+  private async reconcilePendingPrompt(
+    sessionId: string,
+    pending: PendingPrompt,
+    deadlineExpired: boolean,
+  ): Promise<boolean> {
+    const disconnectContext = pending.disconnectContext;
+    if (!disconnectContext) {
+      return false;
+    }
+    let result: AgentWaitResult | undefined;
+    try {
+      result = await this.gateway.request<AgentWaitResult>(
+        "agent.wait",
+        {
+          runId: pending.idempotencyKey,
+          timeoutMs: 0,
+        },
+        { timeoutMs: null },
+      );
+    } catch (err) {
+      this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
+      if (deadlineExpired) {
+        if (this.shouldRejectPendingAtDisconnectDeadline(pending, disconnectContext)) {
+          this.rejectPendingPrompt(
+            pending,
+            new Error(`Gateway disconnected: ${disconnectContext.reason}`),
+          );
+          return false;
+        }
+        this.clearPendingDisconnectState(pending, disconnectContext);
+        return false;
+      }
+      return true;
+    }
+
+    const currentPending = this.getPendingPrompt(sessionId, pending.idempotencyKey);
+    if (!currentPending) {
+      return false;
+    }
+    if (result?.status === "ok") {
+      await this.finishPrompt(sessionId, currentPending, "end_turn");
+      return false;
+    }
+    if (result?.status === "error") {
+      void this.finishPrompt(sessionId, currentPending, "end_turn");
+      return false;
+    }
+    if (deadlineExpired) {
+      if (this.shouldRejectPendingAtDisconnectDeadline(currentPending, disconnectContext)) {
+        const currentDisconnectContext = currentPending.disconnectContext;
+        if (!currentDisconnectContext) {
+          return false;
+        }
+        this.rejectPendingPrompt(
+          currentPending,
+          new Error(`Gateway disconnected: ${currentDisconnectContext.reason}`),
+        );
+        return false;
+      }
+      this.clearPendingDisconnectState(currentPending, disconnectContext);
+      return false;
+    }
+    return true;
   }
 
   private async sendAvailableCommands(sessionId: string): Promise<void> {

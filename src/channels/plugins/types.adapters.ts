@@ -512,6 +512,7 @@ export type ChannelApprovalDeliveryAdapter = {
   hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
   shouldSuppressForwardingFallback?: (params: {
     cfg: OpenClawConfig;
+    approvalKind: ChannelApprovalKind;
     target: ChannelApprovalForwardTarget;
     request: ExecApprovalRequest;
   }) => boolean;

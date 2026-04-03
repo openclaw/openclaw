@@ -302,6 +302,8 @@ The action is gated by `channels.msteams.actions.memberInfo` (default: enabled w
 - `channels.msteams.historyLimit` controls how many recent channel/group messages are wrapped into the prompt.
 - Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 - Fetched thread history is filtered by sender allowlists (`allowFrom` / `groupAllowFrom`), so thread context seeding only includes messages from allowed senders.
+- Quoted attachment context (`ReplyTo*` derived from Teams reply HTML) is currently passed as received.
+- In other words, allowlists gate who can trigger the agent; only specific supplemental context paths are filtered today.
 - DM history can be limited with `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
 
 ## Current Teams RSC Permissions (Manifest)
