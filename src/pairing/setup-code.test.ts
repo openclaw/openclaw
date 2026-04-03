@@ -414,6 +414,36 @@ describe("pairing setup code", () => {
         urlSource: "gateway.bind=custom",
       },
     },
+    {
+      name: "allows lan ip cleartext setup urls",
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "192.168.1.20",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      expected: {
+        authLabel: "token",
+        url: "ws://192.168.1.20:18789",
+        urlSource: "gateway.bind=custom",
+      },
+    },
+    {
+      name: "allows mdns hostname cleartext setup urls",
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      expected: {
+        authLabel: "token",
+        url: "ws://gateway.local:18789",
+        urlSource: "gateway.bind=custom",
+      },
+    },
   ] as const)("$name", async ({ config, options, expected }) => {
     await expectResolvedSetupSuccessCase({
       config,
@@ -424,15 +454,15 @@ describe("pairing setup code", () => {
 
   it.each([
     {
-      name: "rejects custom bind remote ws setup urls for mobile pairing",
+      name: "rejects custom bind public ws setup urls for mobile pairing",
       config: {
         gateway: {
           bind: "custom",
-          customBindHost: "gateway.local",
+          customBindHost: "gateway.example",
           auth: { mode: "token", token: "tok_123" },
         },
       } satisfies ResolveSetupConfig,
-      expectedError: "Mobile pairing requires a secure remote gateway URL",
+      expectedError: "Tailscale and public mobile pairing require a secure gateway URL",
     },
     {
       name: "rejects tailnet bind remote ws setup urls for mobile pairing",
@@ -447,8 +477,16 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupOptions,
       expectedError: "prefer gateway.tailscale.mode=serve",
     },
-    {
-      name: "rejects lan bind remote ws setup urls for mobile pairing",
+  ] as const)("$name", async ({ config, options, expectedError }) => {
+    await expectResolvedSetupFailureCase({
+      config,
+      options,
+      expectedError,
+    });
+  });
+
+  it("allows lan bind cleartext setup urls for mobile pairing", async () => {
+    await expectResolvedSetupSuccessCase({
       config: {
         gateway: {
           bind: "lan",
@@ -458,13 +496,11 @@ describe("pairing setup code", () => {
       options: {
         networkInterfaces: () => createIpv4NetworkInterfaces("192.168.1.20"),
       } satisfies ResolveSetupOptions,
-      expectedError: "ws:// is only valid for localhost or the Android emulator",
-    },
-  ] as const)("$name", async ({ config, options, expectedError }) => {
-    await expectResolvedSetupFailureCase({
-      config,
-      options,
-      expectedError,
+      expected: {
+        authLabel: "password",
+        url: "ws://192.168.1.20:18789",
+        urlSource: "gateway.bind=lan",
+      },
     });
   });
 

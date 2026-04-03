@@ -16,7 +16,13 @@ import {
 } from "../infra/network-interfaces.js";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
-import { isCarrierGradeNatIpv4Address, isRfc1918Ipv4Address } from "../shared/net/ip.js";
+import {
+  isCarrierGradeNatIpv4Address,
+  isIpv4Address,
+  isIpv6Address,
+  isRfc1918Ipv4Address,
+  parseCanonicalIpAddress,
+} from "../shared/net/ip.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 
 export type PairingSetupPayload = {
@@ -66,15 +72,50 @@ type ResolveUrlResult = {
 function describeSecureMobilePairingFix(source?: string): string {
   const sourceNote = source ? ` Resolved source: ${source}.` : "";
   return (
-    "Mobile pairing requires a secure remote gateway URL (wss://) or Tailscale Serve/Funnel." +
+    "Tailscale and public mobile pairing require a secure gateway URL (wss://) or Tailscale Serve/Funnel." +
     sourceNote +
-    " Fix: prefer gateway.tailscale.mode=serve, or set gateway.remote.url / " +
-    "plugins.entries.device-pair.config.publicUrl to a wss:// URL. ws:// is only valid for localhost or the Android emulator."
+    " Fix: use a private LAN host/address, prefer gateway.tailscale.mode=serve, or set " +
+    "gateway.remote.url / plugins.entries.device-pair.config.publicUrl to a wss:// URL. " +
+    "ws:// is only valid for localhost, private LAN, or the Android emulator."
+  );
+}
+
+function isPrivateLanHostname(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/\.+$/, "");
+  if (!normalized) {
+    return false;
+  }
+  return normalized.endsWith(".local") || (!normalized.includes(".") && !normalized.includes(":"));
+}
+
+function isPrivateLanIpHost(host: string): boolean {
+  if (isRfc1918Ipv4Address(host)) {
+    return true;
+  }
+  const parsed = parseCanonicalIpAddress(host);
+  if (!parsed) {
+    return false;
+  }
+  if (isIpv4Address(parsed)) {
+    const normalized = parsed.toString();
+    return normalized.startsWith("169.254.") && !isCarrierGradeNatIpv4Address(normalized);
+  }
+  if (!isIpv6Address(parsed)) {
+    return false;
+  }
+  const normalized = parsed.toString().toLowerCase();
+  return (
+    normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")
   );
 }
 
 function isMobilePairingCleartextAllowedHost(host: string): boolean {
-  return isLoopbackHost(host) || host === "10.0.2.2";
+  return (
+    isLoopbackHost(host) ||
+    host === "10.0.2.2" ||
+    isPrivateLanIpHost(host) ||
+    isPrivateLanHostname(host)
+  );
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {

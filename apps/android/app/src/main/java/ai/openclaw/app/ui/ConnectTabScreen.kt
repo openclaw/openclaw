@@ -401,7 +401,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           CommandBlock("openclaw qr --setup-code-only")
           CommandBlock("openclaw qr --json")
           Text(
-            "Remote mobile nodes require wss:// or Tailscale Serve. ws:// is only for localhost or the Android emulator.",
+            "For Tailscale or public hosts, use wss:// or Tailscale Serve. Private LAN ws:// remains supported.",
             style = mobileCaption1,
             color = mobileTextSecondary,
           )
@@ -488,7 +488,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("Use TLS", style = mobileHeadline, color = mobileText)
                 Text(
-                  "Required for remote hosts. Use Tailscale Serve or a wss:// gateway URL.",
+                  "Turn this on for Tailscale or public hosts. Private LAN ws:// remains supported.",
                   style = mobileCallout,
                   color = mobileTextSecondary,
                 )

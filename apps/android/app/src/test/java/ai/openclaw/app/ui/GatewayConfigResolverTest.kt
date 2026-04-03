@@ -32,6 +32,13 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun parseGatewayEndpointRejectsTailnetCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://100.64.0.9:18789")
+
+    assertNull(parsed)
+  }
+
+  @Test
   fun parseGatewayEndpointOmitsExplicitDefaultTlsPortFromDisplayUrl() {
     val parsed = parseGatewayEndpoint("https://gateway.example:443")
 
@@ -86,6 +93,36 @@ class GatewayConfigResolverTest {
         port = 18789,
         tls = false,
         displayUrl = "http://10.0.2.2:18789",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsPrivateLanCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://192.168.1.20:18789")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "192.168.1.20",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://192.168.1.20:18789",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsMdnsCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://gateway.local:18789")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "gateway.local",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://gateway.local:18789",
       ),
       parsed,
     )
@@ -377,7 +414,7 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun resolveGatewayConnectConfigRejectsNonLoopbackManualCleartextEndpoint() {
+  fun resolveGatewayConnectConfigAllowsPrivateLanManualCleartextEndpoint() {
     val resolved =
       resolveGatewayConnectConfig(
         useSetupCode = false,
@@ -393,7 +430,9 @@ class GatewayConfigResolverTest {
         fallbackPassword = "",
       )
 
-    assertNull(resolved)
+    assertEquals("192.168.31.100", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
   }
 
   private fun encodeSetupCode(payloadJson: String): String {
