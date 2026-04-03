@@ -7,7 +7,7 @@ import {
   resolveConversationBindingRecord,
   unbindConversationBindingRecord,
 } from "../bindings/records.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
+import { resolveStateDir } from "../config/paths.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -23,7 +23,6 @@ import type {
 
 const log = createSubsystemLogger("plugins/binding");
 
-const APPROVALS_PATH = "~/.openclaw/plugin-binding-approvals.json";
 const PLUGIN_BINDING_CUSTOM_ID_PREFIX = "pluginbind";
 const PLUGIN_BINDING_OWNER = "plugin";
 const PLUGIN_BINDING_SESSION_PREFIX = "plugin-binding";
@@ -132,7 +131,7 @@ function getPluginBindingGlobalState(): PluginBindingGlobalState {
 }
 
 function resolveApprovalsPath(): string {
-  return expandHomePrefix(APPROVALS_PATH);
+  return path.join(resolveStateDir(process.env), "plugin-binding-approvals.json");
 }
 
 function normalizeChannel(value: string): string {

@@ -188,8 +188,10 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
   for (const path of changedPaths) {
     const rule = matchRule(path);
     if (!rule) {
-      plan.restartGateway = true;
-      plan.restartReasons.push(path);
+      // Unrecognized config paths are treated as safe no-ops rather than
+      // triggering a full gateway restart.  New config sections are typically
+      // read lazily at use-time, so a restart is unnecessary.
+      plan.noopPaths.push(path);
       continue;
     }
     if (rule.kind === "restart") {

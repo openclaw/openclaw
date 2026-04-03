@@ -115,10 +115,31 @@ function countJsonlLines(filePath: string): number {
   }
 }
 
+export function resolveStateDirScanRoots(
+  currentHome: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const roots = new Set<string>();
+  if (platform === "darwin") {
+    roots.add("/Users");
+  } else if (platform === "linux") {
+    roots.add("/home");
+  }
+
+  const resolvedHome = path.resolve(currentHome);
+  const homeParent = path.dirname(resolvedHome);
+  const fsRoot = path.parse(resolvedHome).root;
+  if (homeParent !== fsRoot && homeParent !== resolvedHome) {
+    roots.add(homeParent);
+  }
+
+  return Array.from(roots);
+}
+
 function findOtherStateDirs(stateDir: string): string[] {
-  const resolvedState = path.resolve(stateDir);
-  const roots =
-    process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
+  const resolvedState = canonicalizePathForComparison(stateDir);
+  const currentHome = resolveRequiredHomeDir(process.env, os.homedir);
+  const roots = resolveStateDirScanRoots(currentHome);
   const found: string[] = [];
   for (const root of roots) {
     let entries: fs.Dirent[] = [];
@@ -136,7 +157,7 @@ function findOtherStateDirs(stateDir: string): string[] {
       }
       const candidates = [".openclaw"].map((dir) => path.resolve(root, entry.name, dir));
       for (const candidate of candidates) {
-        if (candidate === resolvedState) {
+        if (canonicalizePathForComparison(candidate) === resolvedState) {
           continue;
         }
         if (existsDir(candidate)) {
@@ -159,6 +180,15 @@ function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
     normalizedTarget === normalizedRoot ||
     normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
   );
+}
+
+function canonicalizePathForComparison(targetPath: string): string {
+  const resolved = path.resolve(targetPath);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
 }
 
 function tryResolveRealPath(targetPath: string): string | null {
@@ -694,7 +724,7 @@ export async function noteStateIntegrity(
   }
 
   const extraStateDirs = new Set<string>();
-  if (path.resolve(stateDir) !== path.resolve(defaultStateDir)) {
+  if (canonicalizePathForComparison(stateDir) !== canonicalizePathForComparison(defaultStateDir)) {
     if (existsDir(defaultStateDir)) {
       extraStateDirs.add(defaultStateDir);
     }

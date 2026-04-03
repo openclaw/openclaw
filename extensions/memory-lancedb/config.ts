@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 export type MemoryConfig = {
   embedding: {
@@ -23,9 +23,21 @@ const DEFAULT_MODEL = "text-embedding-3-small";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 const LEGACY_STATE_DIRS: string[] = [];
 
+function resolveStateDirFromEnv(): string | undefined {
+  const override = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (!override) {
+    return undefined;
+  }
+  if (override === "~" || override.startsWith("~/") || override.startsWith("~\\")) {
+    return resolve(join(homedir(), override.slice(2)));
+  }
+  return resolve(override);
+}
+
 function resolveDefaultDbPath(): string {
   const home = homedir();
-  const preferred = join(home, ".openclaw", "memory", "lancedb");
+  const preferredRoot = resolveStateDirFromEnv() ?? join(home, ".openclaw");
+  const preferred = join(preferredRoot, "memory", "lancedb");
   try {
     if (fs.existsSync(preferred)) {
       return preferred;
@@ -159,7 +171,7 @@ export const memoryConfigSchema = {
     },
     dbPath: {
       label: "Database Path",
-      placeholder: "~/.openclaw/memory/lancedb",
+      placeholder: DEFAULT_DB_PATH,
       advanced: true,
     },
     autoCapture: {

@@ -150,6 +150,29 @@ describe("memory plugin e2e", () => {
     delete process.env.TEST_MEMORY_API_KEY;
   });
 
+  test("config schema prefers OPENCLAW_STATE_DIR for the default db path", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(getDbPath(), "..", "state-root");
+
+    try {
+      vi.resetModules();
+      const { default: memoryPlugin } = await import("./index.js");
+      const config = memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+        },
+      }) as MemoryPluginTestConfig | undefined;
+
+      expect(config?.dbPath).toBe(path.join(process.env.OPENCLAW_STATE_DIR, "memory", "lancedb"));
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+  });
+
   test("config schema rejects missing apiKey", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 

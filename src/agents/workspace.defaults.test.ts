@@ -16,4 +16,11 @@ describe("DEFAULT_AGENT_WORKSPACE_DIR", () => {
       path.join(path.resolve(home), ".openclaw", "workspace"),
     );
   });
+
+  it("prefers OPENCLAW_STATE_DIR when resolving the default workspace dir", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/srv/openclaw-state");
+    expect(resolveDefaultAgentWorkspaceDir()).toBe(
+      path.join(path.resolve("/srv/openclaw-state"), "workspace"),
+    );
+  });
 });

@@ -211,9 +211,10 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toContain("gateway.auth.mode");
   });
 
-  it("defaults unknown paths to restart", () => {
+  it("defaults unknown paths to no-op", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
-    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("unknownField");
   });
 
   it.each([
@@ -247,8 +248,8 @@ describe("buildGatewayReloadPlan", () => {
     },
     {
       path: "unknownField",
-      expectRestartGateway: true,
-      expectRestartReason: "unknownField",
+      expectRestartGateway: false,
+      expectNoopPath: "unknownField",
     },
   ])("classifies reload path: $path", (testCase) => {
     const plan = buildGatewayReloadPlan([testCase.path]);
@@ -258,9 +259,6 @@ describe("buildGatewayReloadPlan", () => {
     }
     if (testCase.expectNoopPath) {
       expect(plan.noopPaths).toContain(testCase.expectNoopPath);
-    }
-    if (testCase.expectRestartReason) {
-      expect(plan.restartReasons).toContain(testCase.expectRestartReason);
     }
     if (testCase.expectRestartHealthMonitor) {
       expect(plan.restartHealthMonitor).toBe(true);
