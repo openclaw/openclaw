@@ -85,6 +85,10 @@ const {
   sanitizeTtsErrorForLog,
 } = _test;
 
+function asLegacyTtsConfig(value: unknown): OpenClawConfig {
+  return value as OpenClawConfig;
+}
+
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
   role: "assistant",
   content,
@@ -124,7 +128,7 @@ function asLegacyOpenClawConfig(value: Record<string, unknown>): OpenClawConfig 
 }
 
 function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawConfig {
-  return asLegacyOpenClawConfig({
+  return asLegacyTtsConfig({
     messages: {
       tts: {
         provider: "openai",
@@ -382,7 +386,7 @@ describe("tts", () => {
               edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
             },
           },
-        } as OpenClawConfig,
+        } as unknown as OpenClawConfig,
         expected: "audio-24khz-96kbitrate-mono-mp3",
       },
     ] as const)("$name", ({ cfg, expected, name }) => {
@@ -646,6 +650,7 @@ describe("tts", () => {
 
   describe("resolveTtsConfig provider normalization", () => {
     it("normalizes legacy edge provider ids to microsoft", () => {
+<<<<<<< HEAD
       const config = resolveTtsConfig(
         asLegacyOpenClawConfig({
           agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
@@ -655,6 +660,25 @@ describe("tts", () => {
               edge: {
                 enabled: true,
               },
+||||||| parent of 82b78a0a86 (fix: align config and plugin test types)
+      const config = resolveTtsConfig({
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            provider: "edge",
+            edge: {
+              enabled: true,
+=======
+      const config = resolveTtsConfig(
+        asLegacyTtsConfig({
+          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+          messages: {
+            tts: {
+              provider: "edge",
+              edge: {
+                enabled: true,
+              },
+>>>>>>> 82b78a0a86 (fix: align config and plugin test types)
             },
           },
         }),
@@ -890,7 +914,7 @@ describe("tts", () => {
           messages: {
             tts: { ...baseCfg.messages!.tts, openai: { baseUrl: "http://my-server:9000/v1" } },
           },
-        } as OpenClawConfig,
+        } as unknown as OpenClawConfig,
         env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
         expected: "http://my-server:9000/v1",
       },
@@ -901,7 +925,7 @@ describe("tts", () => {
           messages: {
             tts: { ...baseCfg.messages!.tts, openai: { baseUrl: "http://my-server:9000/v1///" } },
           },
-        } as OpenClawConfig,
+        } as unknown as OpenClawConfig,
         env: { OPENAI_TTS_BASE_URL: undefined },
         expected: "http://my-server:9000/v1",
       },
@@ -984,7 +1008,13 @@ describe("tts", () => {
           },
         },
       },
+<<<<<<< HEAD
     });
+||||||| parent of 82b78a0a86 (fix: align config and plugin test types)
+    };
+=======
+    } as unknown as OpenClawConfig;
+>>>>>>> 82b78a0a86 (fix: align config and plugin test types)
 
     const withMockedAutoTtsFetch = async (
       run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
