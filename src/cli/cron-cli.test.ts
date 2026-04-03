@@ -152,6 +152,8 @@ function mockCronEditJobLookup(schedule: unknown): void {
 function mockCronEditPagedJobLookup(params: {
   schedule?: unknown;
   delivery?: { channel?: string; to?: string; mode?: string };
+  sessionTarget?: "main" | "isolated";
+  payload?: { kind?: "systemEvent" | "agentTurn"; text?: string; message?: string };
 }): void {
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, callParams?: unknown) => {
@@ -163,7 +165,15 @@ function mockCronEditPagedJobLookup(params: {
         if ((p.offset ?? 0) >= 200) {
           return {
             ok: true,
-            jobs: [{ id: "job-1", schedule: params.schedule, delivery: params.delivery }],
+            jobs: [
+              {
+                id: "job-1",
+                schedule: params.schedule,
+                delivery: params.delivery,
+                sessionTarget: params.sessionTarget ?? "isolated",
+                payload: params.payload ?? { kind: "agentTurn", message: "hello" },
+              },
+            ],
             hasMore: false,
             nextOffset: null,
           };
@@ -604,14 +614,27 @@ describe("cron cli", () => {
   });
 
   it("applies --thread-id on cron edit with explicit telegram delivery target", async () => {
-    const patch = await runCronEditAndGetPatch([
-      "--channel",
-      "telegram",
-      "--to",
-      "-1001234567890",
-      "--thread-id",
-      "48",
-    ]);
+    resetGatewayMock();
+    mockCronEditPagedJobLookup({
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      delivery: { channel: "telegram", to: "-1001234567890" },
+    });
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--channel",
+        "telegram",
+        "--to",
+        "-1001234567890",
+        "--thread-id",
+        "48",
+      ],
+      { from: "user" },
+    );
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("-1001234567890:topic:48");
@@ -641,6 +664,20 @@ describe("cron cli", () => {
       "--thread-id",
       "48",
     ]);
+  });
+
+  it("rejects --thread-id for existing main/systemEvent jobs without explicit conversion", async () => {
+    resetGatewayMock();
+    mockCronEditPagedJobLookup({
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      delivery: { channel: "telegram", to: "-1001234567890" },
+    });
+    const program = buildProgram();
+    await expect(
+      program.parseAsync(["cron", "edit", "job-1", "--thread-id", "48"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
   });
 
   it("rejects --thread-id with --no-deliver on cron edit", async () => {

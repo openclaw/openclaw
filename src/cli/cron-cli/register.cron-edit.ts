@@ -230,14 +230,34 @@ export function registerCronEditCommand(cron: Command) {
           const hasDeliveryAccount = typeof opts.account === "string";
           const hasThreadId = typeof opts.threadId === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
-          const hasAgentTurnPatch =
+          const hasExplicitAgentTurnPayloadPatch =
             typeof opts.message === "string" ||
             Boolean(model) ||
             Boolean(thinking) ||
             hasTimeoutSeconds ||
             typeof opts.lightContext === "boolean" ||
             typeof opts.tools === "string" ||
-            opts.clearTools ||
+            opts.clearTools;
+          if (hasThreadId) {
+            const existing = await getExistingJob();
+            if (!existing) {
+              throw new Error(`Cron job ${id} not found`);
+            }
+            const effectiveSessionTarget =
+              typeof opts.session === "string" ? opts.session : existing.sessionTarget;
+            const existingPayloadKind =
+              (existing.payload as { kind?: string } | undefined)?.kind ?? undefined;
+            const effectivePayloadKind = hasSystemEventPatch
+              ? "systemEvent"
+              : hasExplicitAgentTurnPayloadPatch
+                ? "agentTurn"
+                : existingPayloadKind;
+            if (effectiveSessionTarget !== "isolated" || effectivePayloadKind !== "agentTurn") {
+              throw new Error("--thread-id is only supported for non-main agentTurn jobs");
+            }
+          }
+          const hasAgentTurnPatch =
+            hasExplicitAgentTurnPayloadPatch ||
             hasDeliveryModeFlag ||
             hasDeliveryTarget ||
             hasDeliveryAccount ||
