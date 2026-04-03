@@ -13,6 +13,36 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
 });
 
 describe("sendWebhookMessageDiscord proxy support", () => {
+  it("falls back to global fetch when the Discord proxy URL is invalid", async () => {
+    makeProxyFetchMock.mockImplementation(() => {
+      throw new Error("bad proxy");
+    });
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ id: "msg-0" }), { status: 200 }));
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+          proxy: "bad-proxy",
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendWebhookMessageDiscord("hello", {
+      cfg,
+      accountId: "default",
+      webhookId: "123",
+      webhookToken: "abc",
+      wait: true,
+    });
+
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("bad-proxy");
+    expect(globalFetchMock).toHaveBeenCalledOnce();
+    globalFetchMock.mockRestore();
+  });
+
   it("uses proxy fetch when a Discord proxy is configured", async () => {
     const proxiedFetch = vi
       .fn()

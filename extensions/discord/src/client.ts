@@ -3,6 +3,7 @@ import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { makeProxyFetch } from "openclaw/plugin-sdk/infra-runtime";
 import type { RetryConfig, RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   mergeDiscordAccountConfig,
   resolveDiscordAccount,
@@ -46,24 +47,41 @@ function resolveDiscordProxyUrl(
   return trimmed || undefined;
 }
 
+function resolveDiscordProxyFetchByUrl(
+  proxyUrl: string | undefined,
+  runtime?: Pick<RuntimeEnv, "error">,
+): typeof fetch | undefined {
+  const proxy = proxyUrl?.trim();
+  if (!proxy) {
+    return undefined;
+  }
+  try {
+    return makeProxyFetch(proxy);
+  } catch (err) {
+    runtime?.error?.(danger(`discord: invalid rest proxy: ${String(err)}`));
+    return undefined;
+  }
+}
+
 export function resolveDiscordProxyFetchForAccount(
   account: Pick<ResolvedDiscordAccount, "config">,
   cfg?: ReturnType<typeof loadConfig>,
+  runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
-  const proxy = resolveDiscordProxyUrl(account, cfg);
-  return proxy ? makeProxyFetch(proxy) : undefined;
+  return resolveDiscordProxyFetchByUrl(resolveDiscordProxyUrl(account, cfg), runtime);
 }
 
 export function resolveDiscordProxyFetch(
   opts: Pick<DiscordClientOpts, "cfg" | "accountId">,
   cfg?: ReturnType<typeof loadConfig>,
+  runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
   const resolvedCfg = opts.cfg ?? cfg ?? loadConfig();
   const account = resolveAccountWithoutToken({
     cfg: resolvedCfg,
     accountId: opts.accountId,
   });
-  return resolveDiscordProxyFetchForAccount(account, resolvedCfg);
+  return resolveDiscordProxyFetchForAccount(account, resolvedCfg, runtime);
 }
 
 function resolveRest(
