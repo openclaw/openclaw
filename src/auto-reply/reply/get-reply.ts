@@ -203,7 +203,8 @@ export async function getReplyFromConfig(
 
   const finalized = finalizeInboundContext(ctx);
 
-  if (!isFastTestEnv) {
+  const shouldRunPreAgentUnderstanding = !isFastTestEnv && resolvedOpts?.skipHooks !== true;
+  if (shouldRunPreAgentUnderstanding) {
     await applyMediaUnderstandingIfNeeded({
       ctx: finalized,
       cfg,

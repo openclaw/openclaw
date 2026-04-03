@@ -189,6 +189,8 @@ describe("getReplyFromConfig message hooks", () => {
   it("skips pre-agent hooks and requests ephemeral session init when skipHooks is set", async () => {
     await getReplyFromConfig(buildCtx(), { skipHooks: true, skipSessionPersistence: true }, {});
 
+    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
     expect(mocks.createInternalHookEvent).not.toHaveBeenCalled();
     expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
     expect(mocks.initSessionState).toHaveBeenCalledWith(
