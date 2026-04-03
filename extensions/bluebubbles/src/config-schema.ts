@@ -71,7 +71,7 @@ const bluebubblesAccountSchema = z
 
 export const BlueBubblesConfigSchema = buildCatchallMultiAccountChannelSchema(
   bluebubblesAccountSchema,
-).extend({
+).safeExtend({
   actions: bluebubblesActionSchema,
 });
 
