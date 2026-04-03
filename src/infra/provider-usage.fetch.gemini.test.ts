@@ -71,4 +71,13 @@ describe("fetchGeminiUsage", () => {
       { label: "Flash", usedPercent: 0 },
     ]);
   });
+
+  it("returns error snapshot for malformed JSON body", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "<html>error</html>"));
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
+
+    expect(result.error).toBe("Invalid JSON");
+    expect(result.windows).toHaveLength(0);
+    expect(result.provider).toBe("google-gemini-cli");
+  });
 });
