@@ -1,6 +1,6 @@
 import { describe } from "vitest";
+import { installChannelSurfaceContractSuite } from "../../../../test/helpers/channels/surface-contract-suite.js";
 import { getSurfaceContractRegistry } from "./registry.js";
-import { installChannelSurfaceContractSuite } from "./suites.js";
 
 for (const entry of getSurfaceContractRegistry()) {
   for (const surface of entry.surfaces) {
