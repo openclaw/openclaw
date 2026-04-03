@@ -27,6 +27,7 @@ export {
   doesApprovalRequestMatchChannelAccount,
   resolveApprovalRequestOriginTarget,
   resolveApprovalRequestAccountId,
+  resolveApprovalRequestChannelAccountId,
   resolveApprovalRequestSessionTarget,
   resolveExecApprovalSessionTarget,
   type ExecApprovalSessionTarget,

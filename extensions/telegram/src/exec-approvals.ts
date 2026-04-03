@@ -2,14 +2,15 @@ import {
   createChannelExecApprovalProfile,
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
-  resolveApprovalRequestAccountId,
+  resolveApprovalRequestChannelAccountId,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { resolveTelegramAccount } from "./accounts.js";
+import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramInlineButtonsConfigScope } from "./inline-buttons.js";
 import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
 
@@ -64,23 +65,45 @@ export function isTelegramExecApprovalTargetRecipient(params: {
   });
 }
 
+function countTelegramExecApprovalHandlerAccounts(cfg: OpenClawConfig): number {
+  return listTelegramAccountIds(cfg).filter((accountId) => {
+    const account = resolveTelegramAccount({ cfg, accountId });
+    if (!account.enabled || account.tokenSource === "none") {
+      return false;
+    }
+    return isChannelExecApprovalClientEnabledFromConfig({
+      enabled: resolveTelegramExecApprovalConfig({ cfg, accountId })?.enabled,
+      approverCount: getTelegramExecApprovalApprovers({ cfg, accountId }).length,
+    });
+  }).length;
+}
+
+function matchesTelegramRequestAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  request: ExecApprovalRequest | PluginApprovalRequest;
+}): boolean {
+  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const boundAccountId = resolveApprovalRequestChannelAccountId({
+    cfg: params.cfg,
+    request: params.request,
+    channel: "telegram",
+  });
+  if (turnSourceChannel && turnSourceChannel !== "telegram" && !boundAccountId) {
+    return countTelegramExecApprovalHandlerAccounts(params.cfg) <= 1;
+  }
+  return (
+    !boundAccountId ||
+    !params.accountId ||
+    normalizeAccountId(boundAccountId) === normalizeAccountId(params.accountId)
+  );
+}
+
 const telegramExecApprovalProfile = createChannelExecApprovalProfile({
   resolveConfig: resolveTelegramExecApprovalConfig,
   resolveApprovers: getTelegramExecApprovalApprovers,
   isTargetRecipient: isTelegramExecApprovalTargetRecipient,
-  matchesRequestAccount: ({ cfg, accountId, request }) => {
-    const boundAccountId = resolveApprovalRequestAccountId({
-      cfg,
-      request,
-      channel:
-        request.request.turnSourceChannel?.trim().toLowerCase() === "telegram" ? null : "telegram",
-    });
-    return (
-      !boundAccountId ||
-      !accountId ||
-      normalizeAccountId(boundAccountId) === normalizeAccountId(accountId)
-    );
-  },
+  matchesRequestAccount: matchesTelegramRequestAccount,
   // Telegram session keys often carry the only stable agent ID for approval routing.
   fallbackAgentIdFromSessionKey: true,
   requireClientEnabledForLocalPromptSuppression: false,

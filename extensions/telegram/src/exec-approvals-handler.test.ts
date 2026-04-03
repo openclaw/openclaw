@@ -187,6 +187,50 @@ describe("TelegramExecApprovalHandler", () => {
     expect(sendMessage.mock.calls.map((call) => call[0])).toEqual(["111", "222"]);
   });
 
+  it("does not send foreign-channel approvals from unbound multi-account telegram configs", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              execApprovals: {
+                enabled: true,
+                approvers: ["111"],
+                target: "channel",
+              },
+            },
+            secondary: {
+              execApprovals: {
+                enabled: true,
+                approvers: ["222"],
+                target: "channel",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const defaultHandler = createHandler(cfg, "default");
+    const secondaryHandler = createHandler(cfg, "secondary");
+    const request = {
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        sessionKey: "agent:main:missing",
+        turnSourceChannel: "slack",
+        turnSourceTo: "U1",
+        turnSourceAccountId: null,
+        turnSourceThreadId: null,
+      },
+    };
+
+    await defaultHandler.handler.handleRequested(request);
+    await secondaryHandler.handler.handleRequested(request);
+
+    expect(defaultHandler.sendMessage).not.toHaveBeenCalled();
+    expect(secondaryHandler.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("does not double-send in direct chats when the origin chat is the approver DM", async () => {
     const cfg = {
       channels: {

@@ -20,6 +20,9 @@ export const pluginSdkDocMetadata = {
   core: {
     category: "core",
   },
+  "approval-runtime": {
+    category: "runtime",
+  },
   "plugin-entry": {
     category: "core",
   },

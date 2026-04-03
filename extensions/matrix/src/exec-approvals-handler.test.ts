@@ -121,6 +121,58 @@ describe("MatrixExecApprovalHandler", () => {
     );
   });
 
+  it("does not send foreign-channel approvals from unbound multi-account matrix configs", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-default:example.org",
+              accessToken: "tok-default",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+                target: "channel",
+              },
+            },
+            ops: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-ops:example.org",
+              accessToken: "tok-ops",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+                target: "channel",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const defaultHandler = createHandler(cfg, "default");
+    const opsHandler = createHandler(cfg, "ops");
+    const request = {
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        sessionKey: "agent:main:missing",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C1",
+        turnSourceAccountId: null,
+        turnSourceThreadId: null,
+      },
+    };
+
+    await defaultHandler.handler.handleRequested(request);
+    await opsHandler.handler.handleRequested(request);
+
+    expect(defaultHandler.sendMessage).not.toHaveBeenCalled();
+    expect(opsHandler.sendMessage).not.toHaveBeenCalled();
+    expect(defaultHandler.repairDirectRooms).not.toHaveBeenCalled();
+    expect(opsHandler.repairDirectRooms).not.toHaveBeenCalled();
+  });
+
   it("does not double-send when the origin room is the approver dm", async () => {
     const cfg = {
       channels: {
