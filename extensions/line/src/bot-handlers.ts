@@ -1,12 +1,4 @@
-import type {
-  FollowEvent,
-  JoinEvent,
-  LeaveEvent,
-  MessageEvent,
-  PostbackEvent,
-  UnfollowEvent,
-  WebhookEvent,
-} from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
@@ -66,7 +58,7 @@ const LINE_DOWNLOADABLE_MESSAGE_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 function isDownloadableLineMessageType(
-  messageType: MessageEvent["message"]["type"],
+  messageType: webhook.MessageEvent["message"]["type"],
 ): messageType is "image" | "video" | "audio" | "file" {
   return LINE_DOWNLOADABLE_MESSAGE_TYPES.has(messageType);
 }
@@ -121,7 +113,7 @@ function pruneLineWebhookReplayCache(cache: LineWebhookReplayCache, nowMs: numbe
 }
 
 function buildLineWebhookReplayKey(
-  event: WebhookEvent,
+  event: webhook.Event,
   accountId: string,
 ): { key: string; eventId: string } | null {
   if (event.type === "message") {
@@ -166,7 +158,7 @@ type LineInFlightReplayResult = {
 };
 
 function getLineReplayCandidate(
-  event: WebhookEvent,
+  event: webhook.Event,
   context: LineHandlerContext,
 ): LineReplayCandidate | null {
   const replay = buildLineWebhookReplayKey(event, context.account.accountId);
@@ -285,7 +277,7 @@ async function sendLinePairingReply(params: {
 }
 
 async function shouldProcessLineEvent(
-  event: MessageEvent | PostbackEvent,
+  event: webhook.MessageEvent | webhook.PostbackEvent,
   context: LineHandlerContext,
 ): Promise<{ allowed: boolean; commandAuthorized: boolean }> {
   const denied = { allowed: false, commandAuthorized: false };
@@ -418,7 +410,7 @@ async function shouldProcessLineEvent(
 }
 
 function getLineMentionees(
-  message: MessageEvent["message"],
+  message: webhook.MessageEvent["message"],
 ): Array<{ type?: string; isSelf?: boolean }> {
   if (message.type !== "text") {
     return [];
@@ -431,15 +423,15 @@ function getLineMentionees(
   return Array.isArray(mentionees) ? mentionees : [];
 }
 
-function isLineBotMentioned(message: MessageEvent["message"]): boolean {
+function isLineBotMentioned(message: webhook.MessageEvent["message"]): boolean {
   return getLineMentionees(message).some((m) => m.isSelf === true || m.type === "all");
 }
 
-function hasAnyLineMention(message: MessageEvent["message"]): boolean {
+function hasAnyLineMention(message: webhook.MessageEvent["message"]): boolean {
   return getLineMentionees(message).length > 0;
 }
 
-function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
+function resolveEventRawText(event: webhook.MessageEvent | webhook.PostbackEvent): string {
   if (event.type === "message") {
     const msg = event.message;
     if (msg.type === "text") {
@@ -455,7 +447,7 @@ function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
 
 function resolveLineCommandAuthorized(params: {
   cfg: OpenClawConfig;
-  event: MessageEvent | PostbackEvent;
+  event: webhook.MessageEvent | webhook.PostbackEvent;
   senderId?: string;
   allow: NormalizedAllowFrom;
 }): boolean {
@@ -474,7 +466,7 @@ function resolveLineCommandAuthorized(params: {
   return commandGate.commandAuthorized;
 }
 
-async function handleMessageEvent(event: MessageEvent, context: LineHandlerContext): Promise<void> {
+async function handleMessageEvent(event: webhook.MessageEvent, context: LineHandlerContext): Promise<void> {
   const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
   const message = event.message;
 
@@ -581,33 +573,33 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 }
 
-async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {
+async function handleFollowEvent(event: webhook.FollowEvent, _context: LineHandlerContext): Promise<void> {
   const userId = event.source.type === "user" ? event.source.userId : undefined;
   logVerbose(`line: user ${userId ?? "unknown"} followed`);
 }
 
 async function handleUnfollowEvent(
-  event: UnfollowEvent,
+  event: webhook.UnfollowEvent,
   _context: LineHandlerContext,
 ): Promise<void> {
   const userId = event.source.type === "user" ? event.source.userId : undefined;
   logVerbose(`line: user ${userId ?? "unknown"} unfollowed`);
 }
 
-async function handleJoinEvent(event: JoinEvent, _context: LineHandlerContext): Promise<void> {
+async function handleJoinEvent(event: webhook.JoinEvent, _context: LineHandlerContext): Promise<void> {
   const groupId = event.source.type === "group" ? event.source.groupId : undefined;
   const roomId = event.source.type === "room" ? event.source.roomId : undefined;
   logVerbose(`line: bot joined ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
 }
 
-async function handleLeaveEvent(event: LeaveEvent, _context: LineHandlerContext): Promise<void> {
+async function handleLeaveEvent(event: webhook.LeaveEvent, _context: LineHandlerContext): Promise<void> {
   const groupId = event.source.type === "group" ? event.source.groupId : undefined;
   const roomId = event.source.type === "room" ? event.source.roomId : undefined;
   logVerbose(`line: bot left ${groupId ? `group ${groupId}` : `room ${roomId}`}`);
 }
 
 async function handlePostbackEvent(
-  event: PostbackEvent,
+  event: webhook.PostbackEvent,
   context: LineHandlerContext,
 ): Promise<void> {
   const data = event.postback.data;
@@ -632,7 +624,7 @@ async function handlePostbackEvent(
 }
 
 export async function handleLineWebhookEvents(
-  events: WebhookEvent[],
+  events: webhook.Event[],
   context: LineHandlerContext,
 ): Promise<void> {
   let firstError: unknown;
@@ -674,7 +666,7 @@ export async function handleLineWebhookEvents(
           await handlePostbackEvent(event, context);
           break;
         default:
-          logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
+          logVerbose(`line: unhandled event type: ${(event as webhook.Event).type}`);
       }
       if (replayCandidate) {
         rememberLineReplayEvent(replayCandidate);

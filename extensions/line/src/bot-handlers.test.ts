@@ -1,4 +1,4 @@
-import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
@@ -104,12 +104,12 @@ function createReplayMessageEvent(params: {
     mode: "active",
     webhookEventId: params.webhookEventId,
     deliveryContext: { isRedelivery: params.isRedelivery },
-  } as MessageEvent;
+  } as webhook.MessageEvent;
 }
 
 function createTestMessageEvent(params: {
-  message: MessageEvent["message"];
-  source: MessageEvent["source"];
+  message: webhook.MessageEvent["message"];
+  source: webhook.MessageEvent["source"];
   webhookEventId: string;
   timestamp?: number;
   replyToken?: string;
@@ -124,7 +124,7 @@ function createTestMessageEvent(params: {
     mode: "active",
     webhookEventId: params.webhookEventId,
     deliveryContext: { isRedelivery: params.isRedelivery ?? false },
-  } as MessageEvent;
+  } as webhook.MessageEvent;
 }
 
 function createLineWebhookTestContext(params: {
@@ -176,7 +176,7 @@ function createOpenGroupReplayContext(
 
 async function expectGroupMessageBlocked(params: {
   processMessage: LineWebhookContext["processMessage"];
-  event: MessageEvent;
+  event: webhook.MessageEvent;
   context: Parameters<typeof handleLineWebhookEvents>[1];
 }) {
   await handleLineWebhookEvents([params.event], params.context);
@@ -184,7 +184,7 @@ async function expectGroupMessageBlocked(params: {
   expect(buildLineMessageContextMock).not.toHaveBeenCalled();
 }
 
-async function expectRequireMentionGroupMessageProcessed(event: MessageEvent) {
+async function expectRequireMentionGroupMessageProcessed(event: webhook.MessageEvent) {
   const processMessage = vi.fn();
   await handleLineWebhookEvents(
     [event],
@@ -199,7 +199,7 @@ async function expectRequireMentionGroupMessageProcessed(event: MessageEvent) {
 }
 
 async function startInflightReplayDuplicate(params: {
-  event: MessageEvent;
+  event: webhook.MessageEvent;
   processMessage: LineWebhookContext["processMessage"];
 }) {
   const context = createOpenGroupReplayContext(
@@ -244,7 +244,7 @@ describe("handleLineWebhookEvents", () => {
       mode: "active",
       webhookEventId: "evt-1",
       deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
+    } as webhook.MessageEvent;
 
     await handleLineWebhookEvents([event], {
       cfg: { channels: { line: { groupPolicy: "disabled" } } },
@@ -292,7 +292,7 @@ describe("handleLineWebhookEvents", () => {
       mode: "active",
       webhookEventId: "evt-3",
       deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
+    } as webhook.MessageEvent;
 
     await handleLineWebhookEvents([event], {
       cfg: {
@@ -331,7 +331,7 @@ describe("handleLineWebhookEvents", () => {
       mode: "active",
       webhookEventId: "evt-5",
       deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
+    } as webhook.MessageEvent;
 
     await handleLineWebhookEvents([event], {
       cfg: {
@@ -366,7 +366,7 @@ describe("handleLineWebhookEvents", () => {
       mode: "active",
       webhookEventId: "evt-5a",
       deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
+    } as webhook.MessageEvent;
 
     await handleLineWebhookEvents([event], {
       cfg: {
@@ -432,7 +432,7 @@ describe("handleLineWebhookEvents", () => {
       mode: "active",
       webhookEventId: "evt-4",
       deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
+    } as webhook.MessageEvent;
 
     await handleLineWebhookEvents([event], {
       cfg: { channels: { line: { groupPolicy: "open" } } },
@@ -464,7 +464,7 @@ describe("handleLineWebhookEvents", () => {
       mode: "active",
       webhookEventId: "evt-5",
       deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
+    } as webhook.MessageEvent;
 
     await handleLineWebhookEvents([event], {
       cfg: { channels: { line: { dmPolicy: "pairing" } } },
@@ -511,7 +511,7 @@ describe("handleLineWebhookEvents", () => {
       mode: "active",
       webhookEventId: "evt-6",
       deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
+    } as webhook.MessageEvent;
 
     await handleLineWebhookEvents([event], {
       cfg: { channels: { line: { dmPolicy: "pairing" } } },
@@ -615,7 +615,7 @@ describe("handleLineWebhookEvents", () => {
       mode: "active",
       webhookEventId: "evt-dup-1",
       deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
+    } as webhook.MessageEvent;
 
     const context: Parameters<typeof handleLineWebhookEvents>[1] = {
       cfg: {
@@ -646,7 +646,7 @@ describe("handleLineWebhookEvents", () => {
           ...event,
           webhookEventId: "evt-dup-redelivery",
           deliveryContext: { isRedelivery: true },
-        } as MessageEvent,
+        } as webhook.MessageEvent,
       ],
       context,
     );
@@ -672,7 +672,7 @@ describe("handleLineWebhookEvents", () => {
       mode: "active",
       webhookEventId: "evt-postback-1",
       deliveryContext: { isRedelivery: false },
-    } as PostbackEvent;
+    } as webhook.PostbackEvent;
 
     const context: Parameters<typeof handleLineWebhookEvents>[1] = {
       cfg: { channels: { line: { dmPolicy: "open" } } },
@@ -697,7 +697,7 @@ describe("handleLineWebhookEvents", () => {
           ...event,
           replyToken: "reply-token-2",
           deliveryContext: { isRedelivery: true },
-        } as PostbackEvent,
+        } as webhook.PostbackEvent,
       ],
       context,
     );
@@ -787,7 +787,7 @@ describe("handleLineWebhookEvents", () => {
         mention: {
           mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }],
         },
-      } as unknown as MessageEvent["message"],
+      } as unknown as webhook.MessageEvent["message"],
       source: { type: "group", groupId: "group-mention", userId: "user-mention" },
       webhookEventId: "evt-mention-2",
     });
@@ -814,7 +814,7 @@ describe("handleLineWebhookEvents", () => {
         mention: {
           mentionees: [{ index: 0, length: 4, type: "all" }],
         },
-      } as MessageEvent["message"],
+      } as webhook.MessageEvent["message"],
       source: { type: "group", groupId: "group-mention", userId: "user-mention" },
       webhookEventId: "evt-mention-3",
     });
@@ -868,7 +868,7 @@ describe("handleLineWebhookEvents", () => {
         type: "text",
         text: "@other !status",
         mention: { mentionees: [{ index: 0, length: 6, type: "user", isSelf: false }] },
-      } as unknown as MessageEvent["message"],
+      } as unknown as webhook.MessageEvent["message"],
       source: { type: "group", groupId: "group-1", userId: "user-other" },
       webhookEventId: "evt-mention-other",
     });

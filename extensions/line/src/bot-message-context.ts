@@ -1,4 +1,4 @@
-import type { EventSource, MessageEvent, PostbackEvent, StickerEventMessage } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import {
   formatInboundEnvelope,
   formatLocationText,
@@ -32,7 +32,7 @@ interface MediaRef {
 }
 
 interface BuildLineMessageContextParams {
-  event: MessageEvent;
+  event: webhook.MessageEvent;
   allMedia: MediaRef[];
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -48,7 +48,7 @@ export type LineSourceInfo = {
   isGroup: boolean;
 };
 
-export function getLineSourceInfo(source: EventSource): LineSourceInfo {
+export function getLineSourceInfo(source: webhook.Source): LineSourceInfo {
   const userId =
     source.type === "user"
       ? source.userId
@@ -64,7 +64,7 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
   return { userId, groupId, roomId, isGroup };
 }
 
-function buildPeerId(source: EventSource): string {
+function buildPeerId(source: webhook.Source): string {
   const groupKey = resolveLineGroupHistoryKey({
     groupId: source.type === "group" ? source.groupId : undefined,
     roomId: source.type === "room" ? source.roomId : undefined,
@@ -79,7 +79,7 @@ function buildPeerId(source: EventSource): string {
 }
 
 async function resolveLineInboundRoute(params: {
-  source: EventSource;
+  source: webhook.Source;
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
 }): Promise<{
@@ -178,21 +178,19 @@ const STICKER_PACKAGES: Record<string, string> = {
   "11539": "Moon",
 };
 
-function describeStickerKeywords(sticker: StickerEventMessage): string {
-  const keywords = (sticker as StickerEventMessage & { keywords?: string[] }).keywords;
-  if (keywords && keywords.length > 0) {
-    return keywords.slice(0, 3).join(", ");
+function describeStickerKeywords(sticker: webhook.StickerMessageContent): string {
+  if (sticker.keywords && sticker.keywords.length > 0) {
+    return sticker.keywords.slice(0, 3).join(", ");
   }
 
-  const stickerText = (sticker as StickerEventMessage & { text?: string }).text;
-  if (stickerText) {
-    return stickerText;
+  if (sticker.text) {
+    return sticker.text;
   }
 
   return "";
 }
 
-function extractMessageText(message: MessageEvent["message"]): string {
+function extractMessageText(message: webhook.MessageEvent["message"]): string {
   if (message.type === "text") {
     return message.text;
   }
@@ -220,7 +218,7 @@ function extractMessageText(message: MessageEvent["message"]): string {
   return "";
 }
 
-function extractMediaPlaceholder(message: MessageEvent["message"]): string {
+function extractMediaPlaceholder(message: webhook.MessageEvent["message"]): string {
   switch (message.type) {
     case "image":
       return "<media:image>";
@@ -286,7 +284,7 @@ function resolveLineGroupSystemPrompt(
 async function finalizeLineInboundContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
-  event: MessageEvent | PostbackEvent;
+  event: webhook.MessageEvent | webhook.PostbackEvent;
   route: LineRouteInfo;
   source: LineSourceInfoWithPeerId;
   rawBody: string;
@@ -510,7 +508,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
 }
 
 export async function buildLinePostbackContext(params: {
-  event: PostbackEvent;
+  event: webhook.PostbackEvent;
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;

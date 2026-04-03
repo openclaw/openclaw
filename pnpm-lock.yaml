@@ -45,8 +45,8 @@ importers:
         specifier: ^1.3.6
         version: 1.3.6
       '@line/bot-sdk':
-        specifier: ^10.6.0
-        version: 10.6.0
+        specifier: ^11.0.0
+        version: 11.0.0
       '@lydell/node-pty':
         specifier: 1.2.0-beta.3
         version: 1.2.0-beta.3
@@ -603,6 +603,8 @@ importers:
         version: 7.15.0
 
   extensions/speech-core: {}
+
+  extensions/stepfun: {}
 
   extensions/synology-chat: {}
 
@@ -1784,8 +1786,8 @@ packages:
   '@larksuiteoapi/node-sdk@1.60.0':
     resolution: {integrity: sha512-MS1eXx7K6HHIyIcCBkJLb21okoa8ZatUGQWZaCCUePm6a37RWFmT6ZKlKvHxAanSX26wNuNlwP0RhgscsE+T6g==}
 
-  '@line/bot-sdk@10.6.0':
-    resolution: {integrity: sha512-4hSpglL/G/cW2JCcohaYz/BS0uOSJNV9IEYdMm0EiPEvDLayoI2hGq2D86uYPQFD2gvgkyhmzdShpWLG3P5r3w==}
+  '@line/bot-sdk@11.0.0':
+    resolution: {integrity: sha512-3NZJjeFm2BikwVRgA8osIVbgKhuL0CzphQOdrB8okXIC40qMRE4RRfHFN3G8/qTb/34RtB95mD4J/KW5MD+b8g==}
     engines: {node: '>=20'}
 
   '@lit-labs/signals@0.2.0':
@@ -8126,13 +8128,9 @@ snapshots:
       - debug
       - utf-8-validate
 
-  '@line/bot-sdk@10.6.0':
+  '@line/bot-sdk@11.0.0':
     dependencies:
       '@types/node': 24.12.0
-    optionalDependencies:
-      axios: 1.13.6
-    transitivePeerDependencies:
-      - debug
 
   '@lit-labs/signals@0.2.0':
     dependencies:

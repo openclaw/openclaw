@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
@@ -30,9 +30,9 @@ describe("buildLineMessageContext", () => {
   };
 
   const createMessageEvent = (
-    source: MessageEvent["source"],
-    overrides?: Partial<MessageEvent>,
-  ): MessageEvent =>
+    source: webhook.MessageEvent["source"],
+    overrides?: Partial<webhook.MessageEvent>,
+  ): webhook.MessageEvent =>
     ({
       type: "message",
       message: { id: "1", type: "text", text: "hello" },
@@ -43,12 +43,12 @@ describe("buildLineMessageContext", () => {
       webhookEventId: "evt-1",
       deliveryContext: { isRedelivery: false },
       ...overrides,
-    }) as MessageEvent;
+    }) as webhook.MessageEvent;
 
   const createPostbackEvent = (
-    source: PostbackEvent["source"],
-    overrides?: Partial<PostbackEvent>,
-  ): PostbackEvent =>
+    source: webhook.PostbackEvent["source"],
+    overrides?: Partial<webhook.PostbackEvent>,
+  ): webhook.PostbackEvent =>
     ({
       type: "postback",
       postback: { data: "action=select" },
@@ -59,7 +59,7 @@ describe("buildLineMessageContext", () => {
       webhookEventId: "evt-2",
       deliveryContext: { isRedelivery: false },
       ...overrides,
-    }) as PostbackEvent;
+    }) as webhook.PostbackEvent;
 
   beforeEach(async () => {
     setActivePluginRegistry(
@@ -184,7 +184,7 @@ describe("buildLineMessageContext", () => {
     const event = createMessageEvent(
       { type: "user", userId: "user-audio" },
       {
-        message: { id: "audio-1", type: "audio", duration: 1000 } as MessageEvent["message"],
+        message: { id: "audio-1", type: "audio", duration: 1000 } as webhook.MessageEvent["message"],
       },
     );
 
@@ -265,7 +265,7 @@ describe("buildLineMessageContext", () => {
       mode: "active",
       webhookEventId: "evt-1",
       deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
+    } as webhook.MessageEvent;
 
     const context = await buildLineMessageContext({
       event,
@@ -303,7 +303,7 @@ describe("buildLineMessageContext", () => {
       mode: "active",
       webhookEventId: "evt-2",
       deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
+    } as webhook.MessageEvent;
 
     const context = await buildLineMessageContext({
       event,
