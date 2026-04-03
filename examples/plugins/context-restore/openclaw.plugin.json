@@ -1,0 +1,25 @@
+{
+  "id": "context-restore",
+  "name": "Context Restore",
+  "version": "1.0.0",
+  "description": "Two-layer context protection: (1) appends a configurable static anchor to the system prompt every turn (Anthropic cache-eligible, zero marginal cost); (2) after LCM compaction, enqueues a system event to re-read a configurable list of files. Prevents identity and context drift in long-running agents.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "anchorText": {
+        "type": "string",
+        "description": "Text appended to the system prompt on every turn."
+      },
+      "restoreFiles": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Files to re-read after compaction (relative to agent workspace)."
+      },
+      "sessionPrefix": {
+        "type": "string",
+        "description": "Only apply to sessions whose key starts with this value. Empty = all sessions."
+      }
+    }
+  }
+}
