@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { createJiti } from "jiti";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { normalizeChatChannelId } from "../channels/registry.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -1167,12 +1166,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       config: normalized,
       rootConfig: cfg,
       enabledByDefault: manifestRecord.enabledByDefault,
-      ...(normalizeChatChannelId(pluginId)
-        ? {
-            sourceConfig: activationSourceNormalized,
-            sourceRootConfig: activationSourceConfig,
-          }
-        : {}),
+      sourceConfig: activationSourceNormalized,
+      sourceRootConfig: activationSourceConfig,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
@@ -1724,12 +1719,8 @@ export async function loadOpenClawPluginCliRegistry(
       config: normalized,
       rootConfig: cfg,
       enabledByDefault: manifestRecord.enabledByDefault,
-      ...(normalizeChatChannelId(pluginId)
-        ? {
-            sourceConfig: activationSourceNormalized,
-            sourceRootConfig: activationSourceConfig,
-          }
-        : {}),
+      sourceConfig: activationSourceNormalized,
+      sourceRootConfig: activationSourceConfig,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({

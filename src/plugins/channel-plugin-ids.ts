@@ -75,6 +75,7 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
 
 export function resolveGatewayStartupPluginIds(params: {
   config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
@@ -82,6 +83,9 @@ export function resolveGatewayStartupPluginIds(params: {
     listPotentialConfiguredChannelIds(params.config, params.env).map((id) => id.trim()),
   );
   const pluginsConfig = normalizePluginsConfig(params.config.plugins);
+  const sourcePluginsConfig = normalizePluginsConfig(
+    (params.activationSourceConfig ?? params.config).plugins,
+  );
   return loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -100,6 +104,8 @@ export function resolveGatewayStartupPluginIds(params: {
         config: pluginsConfig,
         rootConfig: params.config,
         enabledByDefault: plugin.enabledByDefault,
+        sourceConfig: sourcePluginsConfig,
+        sourceRootConfig: params.activationSourceConfig ?? params.config,
       });
       if (!activationState.enabled) {
         return false;

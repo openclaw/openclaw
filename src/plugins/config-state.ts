@@ -287,7 +287,8 @@ export function resolvePluginActivationState(params: {
   });
   const explicitlyConfiguredBundledChannel =
     params.origin === "bundled" &&
-    isBundledChannelEnabledByChannelConfig(params.sourceRootConfig ?? params.rootConfig, params.id);
+    explicitSelection.explicitlyEnabled &&
+    explicitSelection.reason === "channel enabled in config";
 
   if (!params.config.enabled) {
     return {

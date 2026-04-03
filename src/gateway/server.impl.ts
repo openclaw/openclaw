@@ -602,6 +602,7 @@ export async function startGatewayServer(
     ? []
     : resolveGatewayStartupPluginIds({
         config: gatewayPluginConfigAtStart,
+        activationSourceConfig: cfgAtStart,
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
       });
