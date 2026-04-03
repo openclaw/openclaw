@@ -108,7 +108,7 @@ export function createTelegramPluginBase(params: {
   setup: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setup"]>;
 }): Pick<
   ChannelPlugin<ResolvedTelegramAccount>,
-  "id" | "meta" | "setupWizard" | "capabilities" | "reload" | "configSchema" | "config" | "setup"
+  "id" | "meta" | "setupWizard" | "capabilities" | "reload" | "configSchema" | "config" | "setup" | "streaming"
 > {
   return createChannelPluginBase({
     id: TELEGRAM_CHANNEL,
@@ -125,6 +125,9 @@ export function createTelegramPluginBase(params: {
       polls: true,
       nativeCommands: true,
       blockStreaming: true,
+    },
+    streaming: {
+      blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.telegram"] },
     configSchema: TelegramChannelConfigSchema,
