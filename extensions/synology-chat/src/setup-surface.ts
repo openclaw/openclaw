@@ -144,6 +144,23 @@ function resolveExistingAllowedUserIds(cfg: OpenClawConfig, accountId: string): 
     .filter(Boolean);
 }
 
+function resolveAllowInsecureSslSetupPatch(params: {
+  accountId: string;
+  allowInsecureSsl: boolean;
+}): {
+  patch: Record<string, unknown>;
+  clearFields?: string[];
+} {
+  if (params.allowInsecureSsl) {
+    return { patch: { allowInsecureSsl: true } };
+  }
+  if (params.accountId !== DEFAULT_ACCOUNT_ID) {
+    // Named accounts can inherit channel-level allowInsecureSsl, so persist false explicitly.
+    return { patch: { allowInsecureSsl: false } };
+  }
+  return { patch: {}, clearFields: ["allowInsecureSsl"] };
+}
+
 export const synologyChatSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID,
   validateInput: ({ accountId, input }) => {
@@ -203,13 +220,14 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
       message: INSECURE_SSL_PROMPT,
       initialValue: getRawAccountConfig(cfg, accountId).allowInsecureSsl === true,
     });
+    const sslPatch = resolveAllowInsecureSslSetupPatch({ accountId, allowInsecureSsl });
     return {
       cfg: patchSynologyChatAccountConfig({
         cfg,
         accountId,
         enabled: true,
-        clearFields: allowInsecureSsl ? undefined : ["allowInsecureSsl"],
-        patch: allowInsecureSsl ? { allowInsecureSsl: true } : {},
+        clearFields: sslPatch.clearFields,
+        patch: sslPatch.patch,
       }),
       credentialValues,
     };

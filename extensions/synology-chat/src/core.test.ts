@@ -4,6 +4,7 @@ import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
+  runSetupWizardPrepare,
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import { listAccountIds, resolveAccount } from "./accounts.js";
@@ -172,6 +173,56 @@ describe("synology-chat core", () => {
     });
 
     expect(result.cfg.channels?.["synology-chat"]?.allowInsecureSsl).toBe(true);
+  });
+
+  it("persists explicit allowInsecureSsl: false for named accounts when prompt is declined", async () => {
+    const prepare = synologyChatPlugin.setupWizard?.prepare;
+    if (!prepare) {
+      throw new Error("setupWizard.prepare is required");
+    }
+    const confirm = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Allow insecure SSL for trusted self-signed NAS certificates?") {
+        return false;
+      }
+      throw new Error(`Unexpected confirm prompt: ${message}`);
+    });
+
+    const prepared = await runSetupWizardPrepare({
+      prepare,
+      cfg: {
+        channels: {
+          "synology-chat": {
+            allowInsecureSsl: true,
+            accounts: {
+              work: {
+                token: "work-token",
+                incomingUrl: "https://nas.example.com/webapi/entry.cgi?method=incoming",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+      credentialValues: {},
+      prompter: createTestWizardPrompter({
+        confirm: confirm as WizardPrompter["confirm"],
+      }),
+    });
+    if (!prepared) {
+      throw new Error("Expected prepare to return updated config");
+    }
+    const nextCfg = prepared.cfg;
+    if (!nextCfg) {
+      throw new Error("Expected prepare to include cfg");
+    }
+
+    const channelConfig = nextCfg.channels?.["synology-chat"] as
+      | {
+          accounts?: Record<string, { allowInsecureSsl?: boolean }>;
+        }
+      | undefined;
+    expect(channelConfig?.accounts?.work?.allowInsecureSsl).toBe(false);
+    expect(resolveAccount(nextCfg, "work").allowInsecureSsl).toBe(false);
   });
 });
 
