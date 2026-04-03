@@ -61,6 +61,22 @@ describe("printCronList", () => {
     expect(logs.some((line) => line.includes("test-job-id"))).toBe(true);
   });
 
+  it("handles job with undefined name from persisted legacy data", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({ id: "missing-name-job", name: undefined as unknown as string });
+
+    expect(() => printCronList([job], runtime)).not.toThrow();
+    expect(logs.some((line) => line.includes("missing-name-job"))).toBe(true);
+  });
+
+  it("handles job with undefined id from persisted legacy data", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({ id: undefined as unknown as string, name: "Missing ID" });
+
+    expect(() => printCronList([job], runtime)).not.toThrow();
+    expect(logs.length).toBeGreaterThan(1);
+  });
+
   it("handles job with defined sessionTarget", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const jobWithTarget = createBaseJob({

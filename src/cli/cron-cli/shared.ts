@@ -138,16 +138,26 @@ const CRON_TARGET_PAD = 9;
 const CRON_AGENT_PAD = 10;
 const CRON_MODEL_PAD = 20;
 
-const pad = (value: string, width: number) => value.padEnd(width);
+const displayText = (value: unknown, fallback = "-") => {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const trimmed = value.trim();
+  return trimmed || fallback;
+};
 
-const truncate = (value: string, width: number) => {
-  if (value.length <= width) {
-    return value;
+const pad = (value: unknown, width: number, fallback = "-") =>
+  displayText(value, fallback).padEnd(width);
+
+const truncate = (value: unknown, width: number, fallback = "-") => {
+  const text = displayText(value, fallback);
+  if (text.length <= width) {
+    return text;
   }
   if (width <= 3) {
-    return value.slice(0, width);
+    return text.slice(0, width);
   }
-  return `${value.slice(0, width - 3)}...`;
+  return `${text.slice(0, width - 3)}...`;
 };
 
 const formatIsoMinute = (iso: string) => {
@@ -182,14 +192,24 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
-const formatSchedule = (schedule: CronSchedule) => {
+const formatSchedule = (schedule: CronSchedule | null | undefined) => {
+  if (!schedule || typeof schedule !== "object") {
+    return "-";
+  }
   if (schedule.kind === "at") {
-    return `at ${formatIsoMinute(schedule.at)}`;
+    return `at ${formatIsoMinute(displayText(schedule.at))}`;
   }
   if (schedule.kind === "every") {
-    return `every ${formatDurationHuman(schedule.everyMs)}`;
+    return typeof schedule.everyMs === "number"
+      ? `every ${formatDurationHuman(schedule.everyMs)}`
+      : "every -";
   }
-  const base = schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
+  if (schedule.kind !== "cron") {
+    return "-";
+  }
+  const expr = displayText(schedule.expr, "?");
+  const tz = typeof schedule.tz === "string" && schedule.tz.trim() ? schedule.tz.trim() : "";
+  const base = tz ? `cron ${expr} @ ${tz}` : `cron ${expr}`;
   const staggerMs = resolveCronStaggerMs(schedule);
   if (staggerMs <= 0) {
     return `${base} (exact)`;
@@ -201,10 +221,10 @@ const formatStatus = (job: CronJob) => {
   if (!job.enabled) {
     return "disabled";
   }
-  if (job.state.runningAtMs) {
+  if (job.state?.runningAtMs) {
     return "running";
   }
-  return job.state.lastStatus ?? "idle";
+  return job.state?.lastStatus ?? "idle";
 };
 
 export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRuntime) {
@@ -230,6 +250,7 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
   const now = Date.now();
 
   for (const job of jobs) {
+    // Stored legacy jobs can be malformed; keep `cron list` readable instead of crashing.
     const idLabel = pad(job.id, CRON_ID_PAD);
     const nameLabel = pad(truncate(job.name, CRON_NAME_PAD), CRON_NAME_PAD);
     const scheduleLabel = pad(
@@ -237,10 +258,10 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
       CRON_SCHEDULE_PAD,
     );
     const nextLabel = pad(
-      job.enabled ? formatRelative(job.state.nextRunAtMs, now) : "-",
+      job.enabled ? formatRelative(job.state?.nextRunAtMs, now) : "-",
       CRON_NEXT_PAD,
     );
-    const lastLabel = pad(formatRelative(job.state.lastRunAtMs, now), CRON_LAST_PAD);
+    const lastLabel = pad(formatRelative(job.state?.lastRunAtMs, now), CRON_LAST_PAD);
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
