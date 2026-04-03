@@ -210,16 +210,11 @@ describe("feishu setup wizard", () => {
     });
 
     const setupWizard = feishuPlugin.setupWizard;
-    if (
-      !setupWizard ||
-      !("finalize" in setupWizard) ||
-      typeof setupWizard.finalize !== "function"
-    ) {
-      throw new Error("Expected Feishu setup wizard finalize hook");
+    if (!setupWizard || !("finalize" in setupWizard) || !setupWizard.finalize) {
+      throw new Error("feishu setupWizard.finalize unavailable");
     }
 
-    const result = await runSetupWizardFinalize({
-      finalize: setupWizard.finalize,
+    const result = await setupWizard.finalize({
       cfg: {
         channels: {
           feishu: {
