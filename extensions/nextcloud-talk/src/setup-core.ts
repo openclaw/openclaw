@@ -169,11 +169,11 @@ export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
   channel,
   policyKey: "channels.nextcloud-talk.dmPolicy",
   allowFromKey: "channels.nextcloud-talk.allowFrom",
-  resolveConfigKeys: (_cfg, accountId) =>
-    accountId && accountId !== DEFAULT_ACCOUNT_ID
+  resolveConfigKeys: (cfg, accountId) =>
+    (accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)) !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.nextcloud-talk.accounts.${accountId}.dmPolicy`,
-          allowFromKey: `channels.nextcloud-talk.accounts.${accountId}.allowFrom`,
+          policyKey: `channels.nextcloud-talk.accounts.${accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)}.dmPolicy`,
+          allowFromKey: `channels.nextcloud-talk.accounts.${accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)}.allowFrom`,
         }
       : {
           policyKey: "channels.nextcloud-talk.dmPolicy",
@@ -182,10 +182,10 @@ export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
   getCurrent: (cfg, accountId) =>
     resolveNextcloudTalkAccount({
       cfg: cfg as CoreConfig,
-      accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+      accountId: accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig),
     }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) => {
-    const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+    const resolvedAccountId = accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig);
     const resolved = resolveNextcloudTalkAccount({
       cfg: cfg as CoreConfig,
       accountId: resolvedAccountId,

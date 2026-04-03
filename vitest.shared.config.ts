@@ -1,11 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
-} from "./scripts/lib/bundled-plugin-paths.mjs";
-import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
+} from "./vitest.bundled-plugin-paths.ts";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));

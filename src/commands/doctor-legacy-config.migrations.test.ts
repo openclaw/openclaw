@@ -5,10 +5,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 
-function asLegacyConfig(value: Record<string, unknown>): OpenClawConfig {
-  return value as unknown as OpenClawConfig;
+function asLegacyConfig(value: unknown): OpenClawConfig {
+  return value as OpenClawConfig;
 }
 
+function getLegacyProperty(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return (value as Record<string, unknown>)[key];
+}
 describe("normalizeCompatibilityConfigValues", () => {
   let previousOauthDir: string | undefined;
   let tempOauthDir: string | undefined;
@@ -200,13 +206,10 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
 
     expect(res.config.channels?.discord?.streaming).toBe("partial");
-    expect(
-      (res.config.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
+    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
     expect(res.config.channels?.discord?.accounts?.work?.streaming).toBe("off");
     expect(
-      (res.config.channels?.discord?.accounts?.work as Record<string, unknown> | undefined)
-        ?.streamMode,
+      getLegacyProperty(res.config.channels?.discord?.accounts?.work, "streamMode"),
     ).toBeUndefined();
     expect(res.changes).toContain(
       "Normalized channels.discord.streaming boolean → enum (partial).",
@@ -229,9 +232,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
 
     expect(res.config.channels?.discord?.streaming).toBe("block");
-    expect(
-      (res.config.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
+    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.discord.streamMode → channels.discord.streaming (block).",
       "Normalized channels.discord.streaming boolean → enum (block).",
@@ -250,9 +251,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
 
     expect(res.config.channels?.telegram?.streaming).toBe("block");
-    expect(
-      (res.config.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
+    expect(getLegacyProperty(res.config.channels?.telegram, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.telegram.streamMode → channels.telegram.streaming (block).",
     ]);
@@ -272,9 +271,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     expect(res.config.channels?.slack?.streaming).toBe("progress");
     expect(res.config.channels?.slack?.nativeStreaming).toBe(false);
-    expect(
-      (res.config.channels?.slack as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
+    expect(getLegacyProperty(res.config.channels?.slack, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.slack.streamMode → channels.slack.streaming (progress).",
       "Moved channels.slack.streaming (boolean) → channels.slack.nativeStreaming (false).",
@@ -327,7 +324,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           allowedHostnames: ["localhost"],
         },
       },
-    });
+    } as unknown as OpenClawConfig);
 
     expect(
       (res.config.browser?.ssrfPolicy as Record<string, unknown> | undefined)?.allowPrivateNetwork,
@@ -347,7 +344,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           dangerouslyAllowPrivateNetwork: false,
         },
       },
-    });
+    } as unknown as OpenClawConfig);
 
     expect(
       (res.config.browser?.ssrfPolicy as Record<string, unknown> | undefined)?.allowPrivateNetwork,
@@ -661,7 +658,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         interruptOnSpeech: false,
         silenceTimeoutMs: 1500,
       },
-    });
+    } as unknown as OpenClawConfig);
 
     expect(res.config.talk).toEqual({
       providers: {
@@ -692,7 +689,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
         apiKey: "secret-key",
       },
-    });
+    } as unknown as OpenClawConfig);
 
     expect(res.config.talk).toEqual({
       provider: "elevenlabs",

@@ -250,6 +250,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
         "openai/gpt-5.2": { alias: "gpt" },
       },
+      skills: ["github", "weather"], // inherited by agents that omit list[].skills
       thinkingDefault: "low",
       verboseDefault: "off",
       elevatedDefault: "on",
@@ -308,12 +309,14 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       {
         id: "main",
         default: true,
+        // inherits defaults.skills -> github, weather
         thinkingDefault: "high", // per-agent thinking override
         reasoningDefault: "on", // per-agent reasoning visibility
         fastModeDefault: false, // per-agent fast mode
       },
       {
         id: "quick",
+        skills: [], // no skills for this agent
         fastModeDefault: true, // this agent always runs fast
         thinkingDefault: "off",
       },
@@ -461,6 +464,27 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 ```
 
 ## Common patterns
+
+### Shared skill baseline with one override
+
+```json5
+{
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      skills: ["github", "weather"],
+    },
+    list: [
+      { id: "main", default: true },
+      { id: "docs", workspace: "~/.openclaw/workspace-docs", skills: ["docs-search"] },
+    ],
+  },
+}
+```
+
+- `agents.defaults.skills` is the shared baseline.
+- `agents.list[].skills` replaces that baseline for one agent.
+- Use `skills: []` when an agent should see no skills.
 
 ### Multi-platform setup
 

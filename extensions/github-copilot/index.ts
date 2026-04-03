@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { githubCopilotLoginCommand } from "openclaw/plugin-sdk/provider-auth-login";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
+import { wrapCopilotAnthropicStream } from "./stream.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
@@ -152,6 +153,7 @@ export default definePluginEntry({
         },
       },
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
+      wrapStreamFn: (ctx) => wrapCopilotAnthropicStream(ctx.streamFn),
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       supportsXHighThinking: ({ modelId }) =>
         COPILOT_XHIGH_MODEL_IDS.includes(modelId.trim().toLowerCase() as never),

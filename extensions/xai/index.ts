@@ -1,4 +1,8 @@
 import { Type } from "@sinclair/typebox";
+import type {
+  ProviderReplayPolicy,
+  ProviderReplayPolicyContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   coerceSecretRef,
   resolveNonEnvSecretRefApiKeyMarker,
@@ -30,6 +34,33 @@ import {
 import { createXaiWebSearchProvider } from "./web-search.js";
 
 const PROVIDER_ID = "xai";
+
+function buildXaiReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy | undefined {
+  if (
+    ctx.modelApi !== "openai-completions" &&
+    ctx.modelApi !== "openai-responses" &&
+    ctx.modelApi !== "openai-codex-responses" &&
+    ctx.modelApi !== "azure-openai-responses"
+  ) {
+    return undefined;
+  }
+
+  return {
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict",
+    ...(ctx.modelApi === "openai-completions"
+      ? {
+          applyAssistantFirstOrderingFix: true,
+          validateGeminiTurns: true,
+          validateAnthropicTurns: true,
+        }
+      : {
+          applyAssistantFirstOrderingFix: false,
+          validateGeminiTurns: false,
+          validateAnthropicTurns: false,
+        }),
+  };
+}
 
 function readConfiguredOrManagedApiKey(value: unknown): string | undefined {
   const literal = normalizeSecretInputString(value);
@@ -250,6 +281,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildXaiProvider,
     },
+    buildReplayPolicy: (ctx) => buildXaiReplayPolicy(ctx),
     prepareExtraParams: (ctx) => {
       if (ctx.extraParams?.tool_stream !== undefined) {
         return ctx.extraParams;

@@ -46,8 +46,9 @@ Sender labels:
 example
 <<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`;
 
-vi.mock("../session-utils.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../session-utils.js")>();
+vi.mock("../session-utils.js", async () => {
+  const original =
+    await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...original,
     loadSessionEntry: (rawKey: string) => ({
@@ -116,8 +117,9 @@ vi.mock("../../sessions/transcript-events.js", () => ({
   ),
 }));
 
-vi.mock("../../media/store.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../media/store.js")>();
+vi.mock("../../media/store.js", async () => {
+  const original =
+    await vi.importActual<typeof import("../../media/store.js")>("../../media/store.js");
   return {
     ...original,
     saveMediaBuffer: vi.fn(async (buffer: Buffer, contentType?: string, subdir?: string) => {

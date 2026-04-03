@@ -3,19 +3,19 @@ import {
   formatDocsLink,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import { listMattermostAccountIds } from "./mattermost/accounts.js";
-import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import {
   applySetupAccountConfigPatch,
   DEFAULT_ACCOUNT_ID,
   type OpenClawConfig,
 } from "./runtime-api.js";
-import { hasConfiguredSecretInput } from "./secret-input.js";
 import {
   isMattermostConfigured,
   mattermostSetupAdapter,
   resolveMattermostAccountWithSecrets,
 } from "./setup-core.js";
+import { listMattermostAccountIds } from "./setup.accounts.runtime.js";
+import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
+import { hasConfiguredSecretInput } from "./setup.secret-input.runtime.js";
 
 const channel = "mattermost" as const;
 export { mattermostSetupAdapter } from "./setup-core.js";
@@ -31,11 +31,9 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
     configuredScore: 2,
     unconfiguredScore: 1,
     resolveConfigured: ({ cfg, accountId }) =>
-      accountId
-        ? isMattermostConfigured(resolveMattermostAccountWithSecrets(cfg, accountId))
-        : listMattermostAccountIds(cfg).some((resolvedAccountId) =>
-            isMattermostConfigured(resolveMattermostAccountWithSecrets(cfg, resolvedAccountId)),
-          ),
+      isMattermostConfigured(
+        resolveMattermostAccountWithSecrets(cfg, accountId ?? DEFAULT_ACCOUNT_ID),
+      ),
   }),
   introNote: {
     title: "Mattermost bot token",

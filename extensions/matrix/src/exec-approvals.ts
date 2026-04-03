@@ -1,15 +1,17 @@
 import {
   createChannelExecApprovalProfile,
   getExecApprovalReplyMetadata,
+  isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
-  resolveApprovalRequestAccountId,
+  matchesApprovalRequestFilters,
+  resolveApprovalRequestChannelAccountId,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { resolveMatrixAccount } from "./matrix/accounts.js";
+import { listMatrixAccountIds, resolveMatrixAccount } from "./matrix/accounts.js";
 import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
@@ -28,14 +30,77 @@ function resolveMatrixExecApprovalConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
-  const config = resolveMatrixAccount(params).config.execApprovals;
+  const account = resolveMatrixAccount(params);
+  const config = account.config.execApprovals;
   if (!config) {
-    return { enabled: false } as const;
+    return undefined;
   }
   return {
     ...config,
-    enabled: config.enabled === true,
+    enabled: account.enabled && account.configured ? config.enabled : false,
   };
+}
+
+function countMatrixExecApprovalEligibleAccounts(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequest;
+}): number {
+  return listMatrixAccountIds(params.cfg).filter((accountId) => {
+    const account = resolveMatrixAccount({ cfg: params.cfg, accountId });
+    if (!account.enabled || !account.configured) {
+      return false;
+    }
+    const config = resolveMatrixExecApprovalConfig({
+      cfg: params.cfg,
+      accountId,
+    });
+    const filters = config?.enabled
+      ? {
+          agentFilter: config.agentFilter,
+          sessionFilter: config.sessionFilter,
+        }
+      : {
+          agentFilter: undefined,
+          sessionFilter: undefined,
+        };
+    return (
+      isChannelExecApprovalClientEnabledFromConfig({
+        enabled: config?.enabled,
+        approverCount: getMatrixExecApprovalApprovers({ cfg: params.cfg, accountId }).length,
+      }) &&
+      matchesApprovalRequestFilters({
+        request: params.request.request,
+        agentFilter: filters.agentFilter,
+        sessionFilter: filters.sessionFilter,
+      })
+    );
+  }).length;
+}
+
+function matchesMatrixRequestAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  request: ApprovalRequest;
+}): boolean {
+  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const boundAccountId = resolveApprovalRequestChannelAccountId({
+    cfg: params.cfg,
+    request: params.request,
+    channel: "matrix",
+  });
+  if (turnSourceChannel && turnSourceChannel !== "matrix" && !boundAccountId) {
+    return (
+      countMatrixExecApprovalEligibleAccounts({
+        cfg: params.cfg,
+        request: params.request,
+      }) <= 1
+    );
+  }
+  return (
+    !boundAccountId ||
+    !params.accountId ||
+    normalizeAccountId(boundAccountId) === normalizeAccountId(params.accountId)
+  );
 }
 
 export function getMatrixExecApprovalApprovers(params: {
@@ -69,19 +134,7 @@ const matrixExecApprovalProfile = createChannelExecApprovalProfile({
   resolveApprovers: getMatrixExecApprovalApprovers,
   normalizeSenderId: normalizeMatrixApproverId,
   isTargetRecipient: isMatrixExecApprovalTargetRecipient,
-  matchesRequestAccount: (params) => {
-    const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
-    const boundAccountId = resolveApprovalRequestAccountId({
-      cfg: params.cfg,
-      request: params.request,
-      channel: turnSourceChannel === "matrix" ? null : "matrix",
-    });
-    return (
-      !boundAccountId ||
-      !params.accountId ||
-      normalizeAccountId(boundAccountId) === normalizeAccountId(params.accountId)
-    );
-  },
+  matchesRequestAccount: matchesMatrixRequestAccount,
 });
 
 export const isMatrixExecApprovalClientEnabled = matrixExecApprovalProfile.isClientEnabled;

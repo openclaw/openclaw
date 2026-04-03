@@ -171,8 +171,10 @@ export function installFreshDirectiveBehaviorReplyMocks(params?: {
     loadModelCatalog: loadModelCatalogMock,
   }));
   if (params?.runPreparedReply || params?.onActualRunPreparedReply) {
-    vi.doMock("./reply/get-reply-run.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./reply/get-reply-run.js")>();
+    vi.doMock("./reply/get-reply-run.js", async () => {
+      const actual = await vi.importActual<typeof import("./reply/get-reply-run.js")>(
+        "./reply/get-reply-run.js",
+      );
       params.onActualRunPreparedReply?.(actual.runPreparedReply);
       return {
         ...actual,

@@ -15,6 +15,8 @@ Docs: https://docs.openclaw.ai
 - Plugins/browser seams: split browser and WhatsApp plugin-sdk seams into narrower browser, approval-auth, and target-helper facades so hot paths and owner tests avoid broader runtime fan-out. (#60376) Thanks @shakkernerd.
 - Tests/runtime: trim local unit-test import/runtime fan-out across browser, WhatsApp, cron, task, and reply flows so owner suites start faster with lower shared-worker overhead while preserving the same focused behavior coverage. (#60249) Thanks @shakkernerd.
 - Tests/secrets runtime: restore split secrets suite cache and env isolation cleanup so broader runs do not leak stale plugin or provider snapshot state. (#60395) Thanks @shakkernerd.
+- Providers/Ollama: add bundled Ollama Web Search provider for key-free web_search via your configured Ollama host and `ollama signin`. (#59318) Thanks @BruceMacD.
+- Plugins/install: add `openclaw plugins install --force` to overwrite existing plugin and hook-pack install targets without using the dangerous-code override flag. (#60544) Thanks @gumadeiras.
 
 ### Fixes
 
@@ -38,6 +40,8 @@ Docs: https://docs.openclaw.ai
 - Channels/passive hooks: emit passive message hooks for mention-skipped Telegram and Signal group messages when `ingest` is enabled, including wildcard/default fallback and per-group override handling. (#60018) Thanks @obviyus.
 - Plugins/manifest registry: stop warning when an explicit manifest `id` intentionally differs from the discovery hint. (#59185) Thanks @samzong.
 - WhatsApp/streaming: honor `channels.whatsapp.blockStreaming` again for inbound auto-replies so progressive block replies can be enabled explicitly instead of being forced to final-only delivery. Thanks @mcaxtr.
+- Auth/failover: shorten `auth_permanent` lockouts, add dedicated config knobs for permanent-auth backoff, and downgrade ambiguous auth-ish upstream incidents to retryable auth failures so providers recover automatically after transient outages. (#60404) Thanks @extrasmall0.
+- Providers/GitHub Copilot: route Claude models through Anthropic Messages with Copilot-compatible headers and Anthropic prompt-cache markers instead of forcing the OpenAI Responses transport.
 - Plugins/runtime: reuse compatible active registries for `web_search` and `web_fetch` provider snapshot resolution so repeated runtime reads do not re-import the same bundled plugin set on each agent message. Related #48380.
 - Infra/tailscale: ignore `OPENCLAW_TEST_TAILSCALE_BINARY` outside explicit test environments and block it from workspace `.env`, so test-only binary overrides cannot be injected through trusted repository state. (#58468) Thanks @eleqtrizit.
 - Plugins/OpenAI: enable reference-image edits for `gpt-image-1` by routing edit calls to `/images/edits` with multipart image uploads, and update image-generation capability/docs metadata accordingly. Thanks @steipete.
@@ -75,10 +79,23 @@ Docs: https://docs.openclaw.ai
 - Plugins/allowlists: let explicit bundled chat channel enablement bypass `plugins.allow`, while keeping auto-enabled channel activation and startup sidecars behind restrictive allowlists. (#60233) Thanks @dorukardahan.
 - Allowlist/commands: require owner access for `/allowlist add` and `/allowlist remove` so command-authorized non-owners cannot mutate persisted allowlists. (#59836) Thanks @eleqtrizit.
 - Control UI/skills: clear stale ClawHub results immediately when the search query changes, so debounced searches cannot keep outdated install targets visible. Related #60134.
+- Fetch/redirects: normalize guarded redirect method rewriting and loop detection so SSRF-guarded requests match platform redirect behavior without missing loops back to the original URL. (#59121) Thanks @eleqtrizit.
 - Discord/ack reactions: keep automatic ACK reaction auth on the active hydrated Discord account so SecretRef-backed and non-default-account reactions stop falling back to stale default config resolution. (#60081) Thanks @FunJim.
 - Telegram/model switching: render non-default `/model` callback confirmations with HTML formatting so Telegram shows the selected model in bold instead of raw `**...**` markers. (#60042) Thanks @GitZhangChi.
 - Plugins/update: allow `openclaw plugins update` to use `--dangerously-force-unsafe-install` for built-in dangerous-code false positives during plugin updates. (#60066) Thanks @huntharo.
+- Gateway/auth: disconnect shared-auth websocket sessions only for effective auth rotations on restart-capable config writes, and keep `config.set` auth edits from dropping still-valid live sessions. (#60387) Thanks @mappel-nv.
 - Control UI/chat: keep the Stop button visible during tool-only execution so abortable runs do not fall back to Send while tools are still running. (#54528) thanks @chziyue.
+- Discord/voice: make READY auto-join fire-and-forget while keeping the shorter initial voice-connect timeout separate from the longer playback-start wait. (#60345) Thanks @geekhuashan.
+- Agents/skills: add inherited `agents.defaults.skills` allowlists, make per-agent `agents.list[].skills` replace defaults instead of merging, and scope embedded, session, sandbox, and cron skill snapshots through the effective runtime agent. (#59992) Thanks @gumadeiras.
+- Matrix/Telegram exec approvals: recover stored same-channel account bindings even when session reply state drifted to another channel, so foreign-channel approvals route to the bound account instead of fanning out or being rejected as ambiguous. (#60417) thanks @gumadeiras.
+- Slack/app manifest: set `bot_user.always_online` to `true` in the onboarding and example Slack app manifest so the Slack app appears ready to respond.
+- Gateway/websocket auth: refresh auth on new websocket connects after secrets reload so rotated gateway tokens take effect immediately without requiring a restart. (#60323) Thanks @mappel-nv.
+- Onboarding/plugins: keep non-interactive auth-choice inference scoped to bundled and already-trusted plugins so untrusted workspace manifests cannot hijack built-in provider API-key flows. (#59120) Thanks @eleqtrizit.
+- Agents/workspace: respect `agents.defaults.workspace` for non-default agents by resolving them under the configured base path instead of falling back to `workspace-<id>`. (#59858) Thanks @joelnishanth.
+- Config/All Settings: keep the raw config view intact when sensitive fields are blank instead of corrupting or dropping the snapshot during redaction. (#28214) thanks @solodmd.
+- Plugins/runtime: honor explicit capability allowlists during fallback speech, media-understanding, and image-generation provider loading so bundled capability plugins do not bypass restrictive `plugins.allow` config. (#52262) Thanks @PerfectPan.
+- Hooks/tool policy: block tool calls when a `before_tool_call` hook crashes so hook failures fail closed instead of silently allowing execution. (#59822) Thanks @pgondhi987.
+- Matrix/media: surface a dedicated `[matrix <kind> attachment too large]` marker for oversized inbound media instead of the generic unavailable marker, and classify size-limit failures with a typed Matrix error. (#60289) Thanks @efe-arv.
 
 ## 2026.4.2
 
@@ -188,6 +205,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/local Bot API: preserve media MIME types for absolute-path downloads so local audio files still trigger transcription and other MIME-based handling. (#54603) Thanks @jzakirov
 - Channels/WhatsApp: pass inbound message timestamp to model context so the AI can see when WhatsApp messages were sent. (#58590) Thanks @Maninae
 - QQBot/voice: lazy-load `silk-wasm` in `audio-convert.ts` so qqbot still starts when the optional voice dependency is missing, while voice encode/decode degrades gracefully instead of crashing at module load time. (#58829) Thanks @WideLee.
+- WhatsApp/groups: fix bot waking up on self-number quoted replies in groups with `selfChatMode` enabled. (#60148) Thanks @lurebat
 
 ## 2026.3.31
 

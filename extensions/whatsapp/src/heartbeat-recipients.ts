@@ -1,4 +1,4 @@
-import { resolveWhatsAppAccount } from "./accounts.js";
+import { resolveDefaultWhatsAppAccountId, resolveWhatsAppAccount } from "./accounts.js";
 import {
   DEFAULT_ACCOUNT_ID,
   loadSessionStore,
@@ -56,7 +56,8 @@ export function resolveWhatsAppHeartbeatRecipients(
   }
 
   const sessionRecipients = getSessionRecipients(cfg);
-  const resolvedAccountId = opts.accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId =
+    opts.accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg) || DEFAULT_ACCOUNT_ID;
   const configuredAllowFrom = (
     resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? []
   )

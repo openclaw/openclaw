@@ -9,6 +9,7 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
+  resolveAgentSkillsFilter,
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
@@ -431,6 +432,40 @@ describe("resolveAgentConfig", () => {
     const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
     expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
   });
+
+  it("non-default agent uses agents.defaults.workspace as base (#59789)", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [{ id: "main" }, { id: "work", default: true, workspace: "/work-ws" }],
+      },
+    };
+    const workspace = resolveAgentWorkspaceDir(cfg, "main");
+    expect(workspace).toBe(path.resolve("/shared-ws/main"));
+  });
+
+  it("default agent without per-agent workspace uses agents.defaults.workspace directly", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/shared-ws" },
+        list: [{ id: "main" }, { id: "work", default: true }],
+      },
+    };
+    const workspace = resolveAgentWorkspaceDir(cfg, "work");
+    expect(workspace).toBe(path.resolve("/shared-ws"));
+  });
+
+  it("non-default agent without defaults.workspace falls back to stateDir", () => {
+    const stateDir = path.join(path.sep, "tmp", "test-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main" }, { id: "work", default: true, workspace: "/work-ws" }],
+      },
+    };
+    const workspace = resolveAgentWorkspaceDir(cfg, "main");
+    expect(workspace).toBe(path.join(stateDir, "workspace-main"));
+  });
 });
 
 describe("resolveAgentIdByWorkspacePath", () => {
@@ -519,5 +554,46 @@ describe("resolveAgentIdsByWorkspacePath", () => {
       "ops",
       "main",
     ]);
+  });
+});
+
+describe("resolveAgentSkillsFilter", () => {
+  it("inherits agents.defaults.skills when the agent omits skills", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["github", "weather"],
+        },
+        list: [{ id: "writer" }],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["github", "weather"]);
+  });
+
+  it("uses agents.list[].skills as a full replacement", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["github", "weather"],
+        },
+        list: [{ id: "writer", skills: ["docs-search"] }],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["docs-search"]);
+  });
+
+  it("keeps explicit empty agent skills as no skills", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["github", "weather"],
+        },
+        list: [{ id: "writer", skills: [] }],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual([]);
   });
 });

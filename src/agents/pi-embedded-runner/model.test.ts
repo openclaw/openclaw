@@ -992,6 +992,17 @@ describe("resolveModel", () => {
     );
   });
 
+  it("resolves github-copilot Claude dynamic models to anthropic-messages by default", () => {
+    const result = resolveModelForTest("github-copilot", "claude-sonnet-4.6", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "github-copilot",
+      id: "claude-sonnet-4.6",
+      api: "anthropic-messages",
+    });
+  });
+
   it("builds an openai fallback for gpt-5.4 mini from the gpt-5-mini template", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",
@@ -1147,6 +1158,7 @@ describe("resolveModel", () => {
       runtimeHooks: {
         applyProviderResolvedModelCompatWithPlugins: () => undefined,
         buildProviderUnknownModelHintWithPlugin: () => undefined,
+        clearProviderRuntimeHookCache: () => {},
         prepareProviderDynamicModel: async () => {},
         runProviderDynamicModel: () => undefined,
         applyProviderResolvedTransportWithPlugin: ({ provider, context }) =>
