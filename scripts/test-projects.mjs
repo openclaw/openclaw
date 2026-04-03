@@ -1,10 +1,8 @@
-import { spawn } from "node:child_process";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
-import { resolvePnpmRunner } from "./pnpm-runner.mjs";
+import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import { buildVitestArgs } from "./test-projects.test-support.mjs";
 
 const vitestArgs = buildVitestArgs(process.argv.slice(2));
-const pnpmRunner = resolvePnpmRunner({ pnpmArgs: vitestArgs });
 const releaseLock = acquireLocalHeavyCheckLockSync({
   cwd: process.cwd(),
   env: process.env,
@@ -21,11 +19,9 @@ const releaseLockOnce = () => {
   releaseLock();
 };
 
-const child = spawn(pnpmRunner.command, pnpmRunner.args, {
-  stdio: "inherit",
-  env: pnpmRunner.env ?? process.env,
-  shell: pnpmRunner.shell,
-  windowsVerbatimArguments: pnpmRunner.windowsVerbatimArguments,
+const child = spawnPnpmRunner({
+  pnpmArgs: vitestArgs,
+  env: process.env,
 });
 
 child.on("exit", (code, signal) => {

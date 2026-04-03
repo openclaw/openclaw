@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import path from "node:path";
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
@@ -50,4 +51,23 @@ export function resolvePnpmRunner(params = {}) {
     args: pnpmArgs,
     shell: false,
   };
+}
+
+export function createPnpmRunnerSpawnSpec(params = {}) {
+  const runner = resolvePnpmRunner(params);
+  return {
+    command: runner.command,
+    args: runner.args,
+    options: {
+      stdio: params.stdio ?? "inherit",
+      env: params.env ?? runner.env ?? process.env,
+      shell: runner.shell,
+      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+    },
+  };
+}
+
+export function spawnPnpmRunner(params = {}) {
+  const spawnSpec = createPnpmRunnerSpawnSpec(params);
+  return spawn(spawnSpec.command, spawnSpec.args, spawnSpec.options);
 }

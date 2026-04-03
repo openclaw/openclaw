@@ -14,6 +14,16 @@ export type CommandRunner = (
   options: { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
+export type ResolvedGlobalInstallCommand = {
+  manager: GlobalInstallManager;
+  command: string;
+};
+
+export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
+  globalRoot: string | null;
+  packageRoot: string | null;
+};
+
 const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
@@ -221,17 +231,36 @@ function resolvePreferredGlobalManagerCommand(
   return resolvePreferredNpmCommand(pkgRoot) ?? manager;
 }
 
-export async function resolveGlobalRoot(
+export function resolveGlobalInstallCommand(
   manager: GlobalInstallManager,
+  pkgRoot?: string | null,
+): ResolvedGlobalInstallCommand {
+  return {
+    manager,
+    command: resolvePreferredGlobalManagerCommand(manager, pkgRoot),
+  };
+}
+
+function normalizeGlobalInstallCommand(
+  managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
+  pkgRoot?: string | null,
+): ResolvedGlobalInstallCommand {
+  return typeof managerOrCommand === "string"
+    ? resolveGlobalInstallCommand(managerOrCommand, pkgRoot)
+    : managerOrCommand;
+}
+
+export async function resolveGlobalRoot(
+  managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   runCommand: CommandRunner,
   timeoutMs: number,
   pkgRoot?: string | null,
 ): Promise<string | null> {
-  if (manager === "bun") {
+  const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
+  if (resolved.manager === "bun") {
     return resolveBunGlobalRoot();
   }
-  const command = resolvePreferredGlobalManagerCommand(manager, pkgRoot);
-  const argv = [command, "root", "-g"];
+  const argv = [resolved.command, "root", "-g"];
   const res = await runCommand(argv, { timeoutMs }).catch(() => null);
   if (!res || res.code !== 0) {
     return null;
@@ -241,16 +270,36 @@ export async function resolveGlobalRoot(
 }
 
 export async function resolveGlobalPackageRoot(
-  manager: GlobalInstallManager,
+  managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   runCommand: CommandRunner,
   timeoutMs: number,
   pkgRoot?: string | null,
 ): Promise<string | null> {
-  const root = await resolveGlobalRoot(manager, runCommand, timeoutMs, pkgRoot);
+  const root = await resolveGlobalRoot(managerOrCommand, runCommand, timeoutMs, pkgRoot);
   if (!root) {
     return null;
   }
   return path.join(root, PRIMARY_PACKAGE_NAME);
+}
+
+export async function resolveGlobalInstallTarget(params: {
+  manager: GlobalInstallManager | ResolvedGlobalInstallCommand;
+  runCommand: CommandRunner;
+  timeoutMs: number;
+  pkgRoot?: string | null;
+}): Promise<ResolvedGlobalInstallTarget> {
+  const command = normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
+  const globalRoot = await resolveGlobalRoot(
+    command,
+    params.runCommand,
+    params.timeoutMs,
+    params.pkgRoot,
+  );
+  return {
+    ...command,
+    globalRoot,
+    packageRoot: globalRoot ? path.join(globalRoot, PRIMARY_PACKAGE_NAME) : null,
+  };
 }
 
 export async function detectGlobalInstallManagerForRoot(
@@ -330,30 +379,30 @@ export async function detectGlobalInstallManagerByPresence(
 }
 
 export function globalInstallArgs(
-  manager: GlobalInstallManager,
+  managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   spec: string,
   pkgRoot?: string | null,
 ): string[] {
-  const command = resolvePreferredGlobalManagerCommand(manager, pkgRoot);
-  if (manager === "pnpm") {
-    return [command, "add", "-g", spec];
+  const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
+  if (resolved.manager === "pnpm") {
+    return [resolved.command, "add", "-g", spec];
   }
-  if (manager === "bun") {
-    return [command, "add", "-g", spec];
+  if (resolved.manager === "bun") {
+    return [resolved.command, "add", "-g", spec];
   }
-  return [command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
+  return [resolved.command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
 }
 
 export function globalInstallFallbackArgs(
-  manager: GlobalInstallManager,
+  managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   spec: string,
   pkgRoot?: string | null,
 ): string[] | null {
-  if (manager !== "npm") {
+  const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
+  if (resolved.manager !== "npm") {
     return null;
   }
-  const command = resolvePreferredGlobalManagerCommand(manager, pkgRoot);
-  return [command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
+  return [resolved.command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
 }
 
 export async function cleanupGlobalRenameDirs(params: {
