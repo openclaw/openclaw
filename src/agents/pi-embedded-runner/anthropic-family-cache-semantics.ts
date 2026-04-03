@@ -16,6 +16,21 @@ export function isOpenRouterAnthropicModelRef(provider: string, modelId: string)
   return provider.trim().toLowerCase() === "openrouter" && isAnthropicModelRef(modelId);
 }
 
+export function isAnthropicFamilyCacheTtlEligible(params: {
+  provider: string;
+  modelApi?: string;
+  modelId: string;
+}): boolean {
+  const normalizedProvider = params.provider.trim().toLowerCase();
+  if (normalizedProvider === "anthropic") {
+    return true;
+  }
+  if (normalizedProvider === "amazon-bedrock") {
+    return isAnthropicBedrockModel(params.modelId);
+  }
+  return params.modelApi === "anthropic-messages";
+}
+
 export function resolveAnthropicCacheRetentionFamily(params: {
   provider: string;
   modelApi?: string;
@@ -35,7 +50,6 @@ export function resolveAnthropicCacheRetentionFamily(params: {
     return "anthropic-bedrock";
   }
   if (
-    normalizedProvider !== "anthropic" &&
     normalizedProvider !== "amazon-bedrock" &&
     params.hasExplicitCacheConfig &&
     params.modelApi === "anthropic-messages"
