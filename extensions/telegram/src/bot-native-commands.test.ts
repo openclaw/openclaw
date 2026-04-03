@@ -22,7 +22,6 @@ import {
 
 describe("registerTelegramNativeCommands", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ registerTelegramNativeCommands, parseTelegramNativeCommandCallbackData } =
       await import("./bot-native-commands.js"));
   });

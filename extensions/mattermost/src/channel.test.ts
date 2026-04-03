@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createChannelReplyPipeline } from "../runtime-api.js";
 
@@ -108,10 +108,12 @@ function createMattermostActionContext(
 }
 
 describe("mattermostPlugin", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ mattermostPlugin } = await import("./channel.js"));
     ({ resetMattermostReactionBotUserCacheForTests } = await import("./mattermost/reactions.js"));
+  });
+
+  beforeEach(() => {
     sendMessageMattermostMock.mockReset();
     sendMessageMattermostMock.mockResolvedValue({
       messageId: "post-1",
