@@ -235,6 +235,35 @@ describe("scripts/docker/setup.sh", () => {
     expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
   });
 
+  it("defaults Docker-managed state to repo-local volumes directories", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: undefined,
+      OPENCLAW_WORKSPACE_DIR: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain(
+      `OPENCLAW_CONFIG_DIR=${join(activeSandbox.rootDir, "volumes", "config")}`,
+    );
+    expect(envFile).toContain(
+      `OPENCLAW_WORKSPACE_DIR=${join(activeSandbox.rootDir, "volumes", "workspace")}`,
+    );
+    expect(
+      (await stat(join(activeSandbox.rootDir, "volumes", "config", "identity"))).isDirectory(),
+    ).toBe(true);
+    expect(
+      (
+        await stat(join(activeSandbox.rootDir, "volumes", "config", "agents", "main", "agent"))
+      ).isDirectory(),
+    ).toBe(true);
+    expect((await stat(join(activeSandbox.rootDir, "volumes", "workspace"))).isDirectory()).toBe(
+      true,
+    );
+  });
+
   it("avoids shared-network openclaw-cli before the gateway is started", async () => {
     const activeSandbox = requireSandbox(sandbox);
 

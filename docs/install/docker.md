@@ -173,6 +173,11 @@ Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and
 `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths
 survive container replacement.
 
+When you run `scripts/docker/setup.sh`, those host-side paths default to
+`./volumes/config` and `./volumes/workspace` under the repository root. Override
+them with `OPENCLAW_CONFIG_DIR` / `OPENCLAW_WORKSPACE_DIR` if you want the data
+stored elsewhere.
+
 That mounted config directory is where OpenClaw keeps:
 
 - `openclaw.json` for behavior config
