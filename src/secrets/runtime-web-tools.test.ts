@@ -261,7 +261,6 @@ function expectInactiveWebFetchProviderSecretRef(params: {
 
 describe("runtime web tools resolution", () => {
   beforeAll(async () => {
-    vi.resetModules();
     bundledWebSearchProviders = await import("../plugins/web-search-providers.js");
     runtimeWebSearchProviders = await import("../plugins/web-search-providers.runtime.js");
     bundledWebFetchProviders = await import("../plugins/web-fetch-providers.js");
