@@ -37,7 +37,6 @@ describe("firecrawl tools", () => {
   let firecrawlClientTesting: typeof import("./firecrawl-client.js").__testing;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ fetchFirecrawlContent } = await import("../api.js"));
     ({ createFirecrawlWebFetchProvider } = await import("./firecrawl-fetch-provider.js"));
     ({ createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js"));
@@ -260,7 +259,6 @@ describe("firecrawl tools", () => {
   });
 
   it("passes proxy and storeInCache through the fetch provider tool", async () => {
-    const { createFirecrawlWebFetchProvider } = await import("./firecrawl-fetch-provider.js");
     const provider = createFirecrawlWebFetchProvider();
     const tool = provider.createTool({
       config: { test: true },

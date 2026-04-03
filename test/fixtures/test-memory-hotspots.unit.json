@@ -8,10 +8,6 @@
       "deltaKb": 1111491,
       "sources": ["openclaw-test-memory-trace:unit-heavy-2"]
     },
-    "src/media/fetch.telegram-network.test.ts": {
-      "deltaKb": 1101005,
-      "sources": ["openclaw-test-memory-trace:unit-heavy-1"]
-    },
     "src/cron/isolated-agent/run.skill-filter.test.ts": {
       "deltaKb": 1069548,
       "sources": ["openclaw-test-memory-trace:unit-run.skill-filter-memory-isolated"]

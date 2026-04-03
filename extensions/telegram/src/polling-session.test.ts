@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runMock = vi.hoisted(() => vi.fn());
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
@@ -22,14 +22,11 @@ vi.mock("./api-logging.js", () => ({
   withTelegramApiErrorLogging: async ({ fn }: { fn: () => Promise<unknown> }) => await fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    computeBackoff: computeBackoffMock,
-    sleepWithAbort: sleepWithAbortMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  computeBackoff: computeBackoffMock,
+  formatDurationPrecise: vi.fn((ms: number) => `${ms}ms`),
+  sleepWithAbort: sleepWithAbortMock,
+}));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
 
@@ -135,14 +132,16 @@ function createPollingSessionWithTransportRestart(params: {
 }
 
 describe("TelegramPollingSession", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ TelegramPollingSession } = await import("./polling-session.js"));
+  });
+
+  beforeEach(() => {
     runMock.mockReset();
     createTelegramBotMock.mockReset();
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
-    ({ TelegramPollingSession } = await import("./polling-session.js"));
   });
 
   it("uses backoff helpers for recoverable polling retries", async () => {

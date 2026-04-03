@@ -7,7 +7,7 @@ import {
   resolveSlackUserAllowlist as resolveSlackUserAllowlistImpl,
   sendMessageSlack as sendMessageSlackImpl,
   handleSlackAction as handleSlackActionImpl,
-} from "../../plugin-sdk/slack.js";
+} from "../../plugin-sdk/slack-runtime-surface.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 type RuntimeSlackOps = Pick<

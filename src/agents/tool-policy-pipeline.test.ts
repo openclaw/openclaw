@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import {
   applyToolPolicyPipeline,
+  buildDefaultToolPolicyPipelineSteps,
   resetToolPolicyWarningCacheForTest,
 } from "./tool-policy-pipeline.js";
+import { resolveToolProfilePolicy } from "./tool-policy.js";
 
 type DummyTool = { name: string };
 
@@ -10,6 +12,7 @@ function runAllowlistWarningStep(params: {
   allow: string[];
   label: string;
   suppressUnavailableCoreToolWarning?: boolean;
+  suppressUnavailableCoreToolWarningAllowlist?: string[];
 }) {
   const warnings: string[] = [];
   const tools = [{ name: "exec" }] as unknown as DummyTool[];
@@ -25,6 +28,8 @@ function runAllowlistWarningStep(params: {
         label: params.label,
         stripPluginOnlyAllowlist: true,
         suppressUnavailableCoreToolWarning: params.suppressUnavailableCoreToolWarning,
+        suppressUnavailableCoreToolWarningAllowlist:
+          params.suppressUnavailableCoreToolWarningAllowlist,
       },
     ],
   });
@@ -81,19 +86,20 @@ describe("tool-policy-pipeline", () => {
     const warnings = runAllowlistWarningStep({
       allow: ["apply_patch"],
       label: "tools.profile (coding)",
-      suppressUnavailableCoreToolWarning: true,
+      suppressUnavailableCoreToolWarningAllowlist: ["apply_patch"],
     });
     expect(warnings).toEqual([]);
   });
 
   test("still warns for profile steps when explicit alsoAllow entries are present", () => {
     const warnings = runAllowlistWarningStep({
-      allow: ["apply_patch"],
+      allow: ["apply_patch", "browser"],
       label: "tools.profile (coding)",
-      suppressUnavailableCoreToolWarning: false,
+      suppressUnavailableCoreToolWarningAllowlist: ["apply_patch"],
     });
     expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain("unknown entries (apply_patch)");
+    expect(warnings[0]).toContain("unknown entries (browser)");
+    expect(warnings[0]).not.toContain("apply_patch");
     expect(warnings[0]).toContain(
       "shipped core tools but unavailable in the current runtime/provider/model/config",
     );
@@ -111,6 +117,25 @@ describe("tool-policy-pipeline", () => {
     );
     expect(warnings[0]).not.toContain("Allowlist contains only plugin entries");
     expect(warnings[0]).not.toContain("unless the plugin is enabled");
+  });
+
+  test("default profile steps suppress unavailable baseline profile entries", () => {
+    const warnings: string[] = [];
+    const profilePolicy = resolveToolProfilePolicy("coding");
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: [{ name: "exec" }] as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      steps: buildDefaultToolPolicyPipelineSteps({
+        profile: "coding",
+        profilePolicy,
+        profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
+      }),
+    });
+
+    expect(warnings).toEqual([]);
   });
 
   test("dedupes identical unknown-allowlist warnings across repeated runs", () => {

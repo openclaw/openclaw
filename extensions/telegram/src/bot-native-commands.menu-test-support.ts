@@ -1,4 +1,3 @@
-import type { SkillCommandSpec } from "openclaw/plugin-sdk/command-auth";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -18,32 +17,28 @@ type CreateCommandBotResult = {
   bot: RegisterTelegramNativeCommandsParams["bot"];
   commandHandlers: Map<string, (ctx: unknown) => Promise<void>>;
   sendMessage: ReturnType<typeof vi.fn>;
+  deleteMessage: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
 };
 
 const skillCommandMocks = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn<
-    (params: { cfg: OpenClawConfig; agentIds?: string[] }) => SkillCommandSpec[]
-  >(() => []),
+  listSkillCommandsForAgents: vi.fn<TelegramBotDeps["listSkillCommandsForAgents"]>(() => []),
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn(async () => ({ delivered: true })),
+  editMessageTelegram: vi.fn(async () => ({ ok: true as const, messageId: "999", chatId: "100" })),
+  emitTelegramMessageSentHooks: vi.fn(),
 }));
 
 export const listSkillCommandsForAgents = skillCommandMocks.listSkillCommandsForAgents;
 export const deliverReplies = deliveryMocks.deliverReplies;
-
-vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
-  return {
-    ...actual,
-    listSkillCommandsForAgents,
-  };
-});
+export const editMessageTelegram = deliveryMocks.editMessageTelegram;
+export const emitTelegramMessageSentHooks = deliveryMocks.emitTelegramMessageSentHooks;
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
+  emitTelegramMessageSentHooks,
 }));
 
 vi.mock("./bot/delivery.replies.js", () => ({
@@ -64,22 +59,27 @@ export function resetNativeCommandMenuMocks() {
   listSkillCommandsForAgents.mockReturnValue([]);
   deliverReplies.mockClear();
   deliverReplies.mockResolvedValue({ delivered: true });
+  editMessageTelegram.mockClear();
+  editMessageTelegram.mockResolvedValue({ ok: true as const, messageId: "999", chatId: "100" });
+  emitTelegramMessageSentHooks.mockClear();
 }
 
 export function createCommandBot(): CreateCommandBotResult {
   const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
-  const sendMessage = vi.fn().mockResolvedValue(undefined);
+  const sendMessage = vi.fn().mockResolvedValue({ message_id: 999 });
+  const deleteMessage = vi.fn().mockResolvedValue(true);
   const setMyCommands = vi.fn().mockResolvedValue(undefined);
   const bot = {
     api: {
       setMyCommands,
       sendMessage,
+      deleteMessage,
     },
     command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
       commandHandlers.set(name, cb);
     }),
   } as unknown as RegisterTelegramNativeCommandsParams["bot"];
-  return { bot, commandHandlers, sendMessage, setMyCommands };
+  return { bot, commandHandlers, sendMessage, deleteMessage, setMyCommands };
 }
 
 export function createNativeCommandTestParams(
@@ -122,6 +122,7 @@ export function createNativeCommandTestParams(
       return bot.api.setMyCommands(commandsToRegister);
     }) as TelegramBotDeps["syncTelegramMenuCommands"],
     wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
+    editMessageTelegram,
   };
   return createBaseNativeCommandTestParams({
     cfg,

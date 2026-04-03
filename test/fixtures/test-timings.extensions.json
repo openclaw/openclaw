@@ -1,6 +1,6 @@
 {
   "config": "vitest.extensions.config.ts",
-  "generatedAt": "2026-03-31T06:24:09.128Z",
+  "generatedAt": "2026-04-03T10:15:21.663Z",
   "defaultDurationMs": 1000,
   "files": {
     "extensions/bluebubbles/src/monitor.webhook-auth.test.ts": {
@@ -1046,6 +1046,14 @@
     "extensions/mattermost/src/mattermost/probe.test.ts": {
       "durationMs": 2.155517578125,
       "testCount": 5
+    },
+    "extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts": {
+      "durationMs": 2720,
+      "testCount": 27
+    },
+    "extensions/telegram/src/fetch.test.ts": {
+      "durationMs": 269,
+      "testCount": 23
     }
   }
 }
