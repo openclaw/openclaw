@@ -355,7 +355,7 @@ export function installTestEnv(options?: { loadProfileEnv?: boolean }): {
   const realHome = process.env.HOME ?? os.homedir();
   const liveEnvSnapshot = { ...process.env };
 
-  if (options?.loadProfileEnv ?? true) {
+  if (options?.loadProfileEnv ?? live) {
     loadProfileEnv(realHome);
   }
 

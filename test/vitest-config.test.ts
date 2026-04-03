@@ -218,4 +218,8 @@ describe("base vitest config", () => {
   it("excludes fixture trees from test collection", () => {
     expect(baseConfig.test?.exclude).toContain("test/fixtures/**");
   });
+
+  it("keeps the base setup file minimal", () => {
+    expect(baseConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+  });
 });

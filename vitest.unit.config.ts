@@ -8,7 +8,9 @@ import {
 } from "./vitest.unit-paths.mjs";
 
 const base = baseConfig as unknown as Record<string, unknown>;
-const baseTest = (baseConfig as { test?: { include?: string[]; exclude?: string[] } }).test ?? {};
+const baseTest =
+  (baseConfig as { test?: { include?: string[]; exclude?: string[]; setupFiles?: string[] } })
+    .test ?? {};
 const exclude = baseTest.exclude ?? [];
 
 export function loadIncludePatternsFromEnv(
@@ -36,6 +38,7 @@ export function createUnitVitestConfigWithOptions(
       ...baseTest,
       isolate: resolveVitestIsolation(env),
       runner: "./test/non-isolated-runner.ts",
+      setupFiles: [...new Set([...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"])],
       include:
         loadIncludePatternsFromEnv(env) ?? options.includePatterns ?? unitTestIncludePatterns,
       exclude: [
