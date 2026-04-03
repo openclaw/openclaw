@@ -261,8 +261,10 @@ export function capEntryCount(
 
   const toRemove = sorted.slice(maxEntries);
   let removed = 0;
+  let skippedProtected = 0;
   for (const key of toRemove) {
     if (opts.excludeKeys?.has(key)) {
+      skippedProtected++;
       continue;
     }
     const entry = store[key];
@@ -274,6 +276,9 @@ export function capEntryCount(
   }
   if (removed > 0 && opts.log !== false) {
     log.info("capped session entry count", { removed, maxEntries });
+  }
+  if (skippedProtected > 0 && opts.log !== false) {
+    log.info("protected active sessions from capping", { count: skippedProtected });
   }
   return removed;
 }
