@@ -434,8 +434,15 @@ Current deterministic manager action matrix:
 - `selected_model_mismatch` + repeated mismatch / `skip_restart_repeated_mismatch`
   - `manager_action = stop_and_surface_diff`
 - `selected_model_mismatch` without repeated mismatch
-  - `manager_action = configure_model`
-  - `next_step = check_selected_model_config`
+  - provider-oriented mismatch
+    - `manager_action = configure_provider`
+    - `next_step = check_provider_config`
+  - runtime confirmation still incomplete
+    - `manager_action = retry_once`
+    - `next_step = check_selected_model_config`
+  - model-name mismatch
+    - `manager_action = configure_model`
+    - `next_step = check_selected_model_config`
 - `gpu_not_ready`
   - `manager_action = configure_gpu_runtime`
 - `nim_not_ready`
@@ -472,13 +479,26 @@ For model remediation, the manager now distinguishes:
 - `selected_model_not_ready` when retry is not allowed
   - `configure_model`
 - `selected_model_mismatch` when the mismatch is not yet repeated
-  - `configure_model`
+  - `configure_provider` when provider recognition signals are missing or the diff reason points at provider resolution
+  - `retry_once` when runtime has not yet confirmed the selected model
+  - `configure_model` for direct model-name mismatch
 - `selected_model_mismatch` when the same diff repeats
   - `stop_and_surface_diff`
 - `model_not_ready`
   - `configure_model`
 
 This keeps retry behavior explicit while pushing persistent model issues back into model remediation instead of leaving them in the generic fallback.
+
+Current selected-model mismatch split is intentionally minimal and uses manager-visible signals only:
+
+- `selected_model_diff_reason`
+- `selected_model_expected`
+- `selected_model_runtime`
+- `selected_model_runtime_recognized`
+- `provider`
+- `provider_runtime_recognized`
+
+This keeps the routing evaluator unchanged while letting manager policy distinguish provider-side mismatch, model-name mismatch, and runtime-confirmation mismatch.
 
 Routing loop can now stop more specifically as:
 

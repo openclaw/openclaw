@@ -51,6 +51,36 @@ def main() -> int:
     repeated_decision_detected = retry.get('repeated_decision_detected') is True
 
     policy_input = payload.get('policy_input', {})
+    selected_model_diff_reason = str(
+        policy_input.get('selected_model_diff_reason')
+        or payload.get('selected_model_diff_reason')
+        or ''
+    )
+    selected_model_runtime_recognized = (
+        policy_input.get('selected_model_runtime_recognized')
+        if 'selected_model_runtime_recognized' in policy_input
+        else payload.get('selected_model_runtime_recognized')
+    )
+    provider_runtime_recognized = (
+        policy_input.get('provider_runtime_recognized')
+        if 'provider_runtime_recognized' in policy_input
+        else payload.get('provider_runtime_recognized')
+    )
+    selected_model_expected = (
+        policy_input.get('selected_model_expected')
+        if 'selected_model_expected' in policy_input
+        else payload.get('selected_model_expected')
+    )
+    selected_model_runtime = (
+        policy_input.get('selected_model_runtime')
+        if 'selected_model_runtime' in policy_input
+        else payload.get('selected_model_runtime')
+    )
+    provider_name = (
+        policy_input.get('provider')
+        if 'provider' in policy_input
+        else payload.get('provider')
+    )
 
     if final_state == 'provider_api_key_missing':
         output = build_policy_output(
@@ -287,6 +317,52 @@ def main() -> int:
         return 0
 
     if final_state == 'selected_model_mismatch':
+        if selected_model_runtime_recognized is False:
+            output = build_policy_output(
+                manager_action='retry_once',
+                manager_reason='selected model mismatch is still not runtime-confirmed, so manager should retry runtime confirmation once before changing configuration',
+                next_step='check_selected_model_config',
+                retry_decision=retry_decision,
+                policy_input=policy_input,
+                policy_trace={
+                    'rule_id': 'selected_model_mismatch_retry_runtime_confirmation',
+                    'matched_on': {
+                        'final_state': final_state,
+                        'selected_model_runtime_recognized': False,
+                        'selected_model_expected': selected_model_expected,
+                        'selected_model_runtime': selected_model_runtime,
+                    },
+                    'selected_action': 'retry_once',
+                },
+            )
+            print(json.dumps(output, ensure_ascii=False, indent=2))
+            return 0
+
+        if (
+            provider_runtime_recognized is False
+            or 'provider runtime not recognizing configured provider' in selected_model_diff_reason.lower()
+            or 'provider' in selected_model_diff_reason.lower()
+        ):
+            output = build_policy_output(
+                manager_action='configure_provider',
+                manager_reason='selected model mismatch appears to come from provider resolution, so provider remediation should continue before runtime work',
+                next_step='check_provider_config',
+                retry_decision=retry_decision,
+                policy_input=policy_input,
+                policy_trace={
+                    'rule_id': 'selected_model_mismatch_configure_provider',
+                    'matched_on': {
+                        'final_state': final_state,
+                        'provider_runtime_recognized': provider_runtime_recognized,
+                        'selected_model_diff_reason': selected_model_diff_reason,
+                        'provider': provider_name,
+                    },
+                    'selected_action': 'configure_provider',
+                },
+            )
+            print(json.dumps(output, ensure_ascii=False, indent=2))
+            return 0
+
         output = build_policy_output(
             manager_action='configure_model',
             manager_reason='selected model differs from configured selected model and model remediation should continue before runtime work',
@@ -297,6 +373,9 @@ def main() -> int:
                 'rule_id': 'selected_model_mismatch_configure_model',
                 'matched_on': {
                     'final_state': final_state,
+                    'selected_model_diff_reason': selected_model_diff_reason,
+                    'selected_model_expected': selected_model_expected,
+                    'selected_model_runtime': selected_model_runtime,
                 },
                 'selected_action': 'configure_model',
             },
