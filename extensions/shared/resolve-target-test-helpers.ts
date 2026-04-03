@@ -1,1 +1,1 @@
-export { installCommonResolveTargetErrorCases } from "../../src/test-helpers/resolve-target-error-cases.js";
+export { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/testing";

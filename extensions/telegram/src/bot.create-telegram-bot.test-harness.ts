@@ -1,11 +1,14 @@
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  createReplyDispatcher,
+  resetInboundDedupe,
+  type GetReplyOptions,
+  type MsgContext,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
-import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
-import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
-import { createReplyDispatcher } from "../../../src/auto-reply/reply/reply-dispatcher.js";
-import type { MsgContext } from "../../../src/auto-reply/templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../../../src/auto-reply/types.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
