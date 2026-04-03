@@ -16,6 +16,7 @@ import {
 import {
   inspectFeishuCredentials,
   listFeishuAccountIds,
+  resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
 } from "./accounts.js";
 import { probeFeishu } from "./probe.js";
@@ -36,9 +37,9 @@ function getScopedFeishuConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): FeishuConfig | FeishuAccountConfig {
-  const feishuCfg = (cfg.channels?.feishu as FeishuConfig | undefined) ?? {};
+  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    return feishuCfg;
+    return feishuCfg ?? {};
   }
   return (feishuCfg.accounts?.[accountId] as FeishuAccountConfig | undefined) ?? {};
 }
@@ -190,23 +191,25 @@ const feishuDmPolicy: ChannelSetupDmPolicy = {
   channel,
   policyKey: "channels.feishu.dmPolicy",
   allowFromKey: "channels.feishu.allowFrom",
-  resolveConfigKeys: (_cfg, accountId) =>
-    accountId && accountId !== DEFAULT_ACCOUNT_ID
+  resolveConfigKeys: (_cfg, accountId) => {
+    const resolvedAccountId = accountId ?? resolveDefaultFeishuAccountId(_cfg);
+    return resolvedAccountId !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.feishu.accounts.${accountId}.dmPolicy`,
-          allowFromKey: `channels.feishu.accounts.${accountId}.allowFrom`,
+          policyKey: `channels.feishu.accounts.${resolvedAccountId}.dmPolicy`,
+          allowFromKey: `channels.feishu.accounts.${resolvedAccountId}.allowFrom`,
         }
       : {
           policyKey: "channels.feishu.dmPolicy",
           allowFromKey: "channels.feishu.allowFrom",
-        },
+        };
+  },
   getCurrent: (cfg, accountId) =>
     resolveFeishuAccount({
       cfg,
-      accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+      accountId: accountId ?? resolveDefaultFeishuAccountId(cfg),
     }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) => {
-    const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+    const resolvedAccountId = accountId ?? resolveDefaultFeishuAccountId(cfg);
     const currentAllowFrom = resolveFeishuAccount({
       cfg,
       accountId: resolvedAccountId,
@@ -219,7 +222,7 @@ const feishuDmPolicy: ChannelSetupDmPolicy = {
   promptAllowFrom: async ({ cfg, accountId, prompter }) =>
     await promptFeishuAllowFrom({
       cfg,
-      accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+      accountId: accountId ?? resolveDefaultFeishuAccountId(cfg),
       prompter,
     }),
 };

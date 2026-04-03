@@ -4,11 +4,10 @@ import { configHandlers, resolveConfigOpenCommand } from "./config.js";
 import { createConfigHandlerHarness } from "./config.test-helpers.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
+  const { mockNodeBuiltinModule } = await import("../../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(importOriginal, {
     execFile: vi.fn(),
-  };
+  });
 });
 
 function invokeExecFileCallback(args: unknown[], error: Error | null) {

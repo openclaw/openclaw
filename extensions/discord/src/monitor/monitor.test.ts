@@ -14,9 +14,14 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
 import {
   buildPluginBindingResolvedTextMock,
+  dispatchPluginInteractiveHandlerMock,
+  dispatchReplyMock,
+  enqueueSystemEventMock,
   readAllowFromStoreMock,
+  readSessionUpdatedAtMock,
   recordInboundSessionMock,
   resetDiscordComponentRuntimeMocks,
+  resolveStorePathMock,
   resolvePluginConversationBindingApprovalMock,
   upsertPairingRequestMock,
 } from "../test-support/component-runtime.js";
@@ -57,51 +62,7 @@ let resolveDiscordComponentEntry: typeof import("../components-registry.js").res
 let resolveDiscordModalEntry: typeof import("../components-registry.js").resolveDiscordModalEntry;
 let sendComponents: typeof import("../send.components.js");
 
-const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
-const dispatchReplyMock = vi.hoisted(() => vi.fn());
-const readSessionUpdatedAtMock = vi.hoisted(() => vi.fn());
-const resolveStorePathMock = vi.hoisted(() => vi.fn());
-const dispatchPluginInteractiveHandlerMock = vi.hoisted(() => vi.fn());
 let lastDispatchCtx: Record<string, unknown> | undefined;
-
-async function createChannelRuntimeMock(
-  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/infra-runtime")>,
-) {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-  };
-}
-
-vi.mock("openclaw/plugin-sdk/infra-runtime", createChannelRuntimeMock);
-vi.mock("openclaw/plugin-sdk/infra-runtime.js", createChannelRuntimeMock);
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
-    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
-  return {
-    ...actual,
-    dispatchPluginInteractiveHandler: (...args: unknown[]) =>
-      dispatchPluginInteractiveHandlerMock(...args),
-  };
-});
 
 describe("discord component interactions", () => {
   let editDiscordComponentMessageMock: ReturnType<typeof vi.spyOn>;

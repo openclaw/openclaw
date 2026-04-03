@@ -111,38 +111,44 @@ export const imessageDmPolicy = {
   channel,
   policyKey: "channels.imessage.dmPolicy",
   allowFromKey: "channels.imessage.allowFrom",
-  resolveConfigKeys: (_cfg: OpenClawConfig, accountId?: string) =>
-    accountId && accountId !== resolveDefaultIMessageAccountId(_cfg)
+  resolveConfigKeys: (_cfg: OpenClawConfig, accountId?: string) => {
+    const targetAccountId = accountId ?? resolveDefaultIMessageAccountId(_cfg);
+    return targetAccountId !== "default"
       ? {
-          policyKey: `channels.imessage.accounts.${accountId}.dmPolicy`,
-          allowFromKey: `channels.imessage.accounts.${accountId}.allowFrom`,
+          policyKey: `channels.imessage.accounts.${targetAccountId}.dmPolicy`,
+          allowFromKey: `channels.imessage.accounts.${targetAccountId}.allowFrom`,
         }
       : {
           policyKey: "channels.imessage.dmPolicy",
           allowFromKey: "channels.imessage.allowFrom",
-        },
-  getCurrent: (cfg: OpenClawConfig, accountId?: string) =>
-    resolveIMessageAccount({ cfg, accountId }).config.dmPolicy ?? "pairing",
+        };
+  },
+  getCurrent: (cfg: OpenClawConfig, accountId?: string) => {
+    const targetAccountId = accountId ?? resolveDefaultIMessageAccountId(cfg);
+    return resolveIMessageAccount({ cfg, accountId: targetAccountId }).config.dmPolicy ?? "pairing";
+  },
   setPolicy: (
     cfg: OpenClawConfig,
     policy: "pairing" | "allowlist" | "open" | "disabled",
     accountId?: string,
-  ) =>
-    patchChannelConfigForAccount({
+  ) => {
+    const targetAccountId = accountId ?? resolveDefaultIMessageAccountId(cfg);
+    return patchChannelConfigForAccount({
       cfg,
       channel,
-      accountId: accountId ?? resolveDefaultIMessageAccountId(cfg),
+      accountId: targetAccountId,
       patch:
         policy === "open"
           ? {
               dmPolicy: "open",
               allowFrom: mergeAllowFromEntries(
-                resolveIMessageAccount({ cfg, accountId }).config.allowFrom,
+                resolveIMessageAccount({ cfg, accountId: targetAccountId }).config.allowFrom,
                 ["*"],
               ),
             }
           : { dmPolicy: policy },
-    }),
+    });
+  },
   promptAllowFrom: promptIMessageAllowFrom,
 };
 
@@ -186,17 +192,12 @@ export const imessageSetupStatusBase = {
   unconfiguredHint: "imsg missing",
   configuredScore: 1,
   unconfiguredScore: 0,
-  resolveConfigured: ({
-    cfg,
-    accountId,
-  }: {
-    cfg: OpenClawConfig;
-    accountId?: string;
-  }) =>
+  resolveConfigured: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
     accountId
       ? resolveIMessageAccount({ cfg, accountId }).configured
-      : listIMessageAccountIds(cfg).some((listedAccountId) =>
-          resolveIMessageAccount({ cfg, accountId: listedAccountId }).configured,
+      : listIMessageAccountIds(cfg).some(
+          (listedAccountId) =>
+            resolveIMessageAccount({ cfg, accountId: listedAccountId }).configured,
         ),
 };
 

@@ -4,6 +4,7 @@ import {
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
+  DEFAULT_ACCOUNT_ID,
   mergeAllowFromEntries,
   patchChannelConfigForAccount,
   parseSetupEntriesAllowingWildcard,
@@ -126,18 +127,19 @@ export const signalDmPolicy = {
   channel,
   policyKey: "channels.signal.dmPolicy",
   allowFromKey: "channels.signal.allowFrom",
-  resolveConfigKeys: (_cfg: OpenClawConfig, accountId?: string) =>
-    accountId && accountId !== resolveDefaultSignalAccountId(_cfg)
+  resolveConfigKeys: (cfg: OpenClawConfig, accountId?: string) =>
+    (accountId ?? resolveDefaultSignalAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.signal.accounts.${accountId}.dmPolicy`,
-          allowFromKey: `channels.signal.accounts.${accountId}.allowFrom`,
+          policyKey: `channels.signal.accounts.${accountId ?? resolveDefaultSignalAccountId(cfg)}.dmPolicy`,
+          allowFromKey: `channels.signal.accounts.${accountId ?? resolveDefaultSignalAccountId(cfg)}.allowFrom`,
         }
       : {
           policyKey: "channels.signal.dmPolicy",
           allowFromKey: "channels.signal.allowFrom",
         },
   getCurrent: (cfg: OpenClawConfig, accountId?: string) =>
-    resolveSignalAccount({ cfg, accountId }).config.dmPolicy ?? "pairing",
+    resolveSignalAccount({ cfg, accountId: accountId ?? resolveDefaultSignalAccountId(cfg) }).config
+      .dmPolicy ?? "pairing",
   setPolicy: (cfg: OpenClawConfig, policy: "pairing" | "allowlist" | "open" | "disabled", accountId?: string) =>
     patchChannelConfigForAccount({
       cfg,
@@ -148,7 +150,10 @@ export const signalDmPolicy = {
           ? {
               dmPolicy: "open",
               allowFrom: mergeAllowFromEntries(
-                resolveSignalAccount({ cfg, accountId }).config.allowFrom,
+                resolveSignalAccount({
+                  cfg,
+                  accountId: accountId ?? resolveDefaultSignalAccountId(cfg),
+                }).config.allowFrom,
                 ["*"],
               ),
             }

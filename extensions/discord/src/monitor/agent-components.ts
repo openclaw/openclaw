@@ -26,14 +26,12 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { type PluginInteractiveDiscordHandlerContext } from "openclaw/plugin-sdk/plugin-runtime";
+import type { PluginInteractiveDiscordHandlerContext } from "openclaw/plugin-sdk/plugin-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import {
@@ -73,6 +71,11 @@ import {
   type DiscordUser,
 } from "./agent-components-helpers.js";
 import {
+  enqueueSystemEvent,
+  readSessionUpdatedAt,
+  resolveStorePath,
+} from "./agent-components.deps.runtime.js";
+import {
   type DiscordGuildEntryResolved,
   normalizeDiscordAllowList,
   resolveDiscordChannelConfigWithFallback,
@@ -88,8 +91,6 @@ import { deliverDiscordReply } from "./reply-delivery.js";
 
 let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
 let componentsRuntimePromise: Promise<typeof import("../components.js")> | undefined;
-let pluginRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/plugin-runtime")> | undefined;
-let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
 let replyPipelineRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>
   | undefined;
@@ -103,16 +104,6 @@ async function loadConversationRuntime() {
 async function loadComponentsRuntime() {
   componentsRuntimePromise ??= import("../components.js");
   return await componentsRuntimePromise;
-}
-
-async function loadPluginRuntime() {
-  pluginRuntimePromise ??= import("openclaw/plugin-sdk/plugin-runtime");
-  return await pluginRuntimePromise;
-}
-
-async function loadReplyRuntime() {
-  replyRuntimePromise ??= import("openclaw/plugin-sdk/reply-runtime");
-  return await replyRuntimePromise;
 }
 
 async function loadReplyPipelineRuntime() {
@@ -223,7 +214,9 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
         ephemeral,
       });
     },
-    editMessage: async (input) => {
+    editMessage: async (
+      input: Parameters<PluginInteractiveDiscordHandlerContext["respond"]["editMessage"]>[0],
+    ) => {
       const { text, components } = input;
       responded = true;
       await updateOriginalMessage({
@@ -286,7 +279,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     }
     return "handled";
   }
-  const { dispatchPluginInteractiveHandler } = await loadPluginRuntime();
+  const { dispatchPluginInteractiveHandler } = await loadConversationRuntime();
   const dispatched = await dispatchPluginInteractiveHandler({
     channel: "discord",
     data: params.data,
@@ -434,11 +427,9 @@ async function dispatchDiscordComponentEvent(params: {
     resolveTextChunkLimit,
     recordInboundSession,
   } = await (async () => {
-    const replyRuntime = await loadReplyRuntime();
     const conversationRuntime = await loadConversationRuntime();
     return {
-      ...replyRuntime,
-      recordInboundSession: conversationRuntime.recordInboundSession,
+      ...conversationRuntime,
     };
   })();
 

@@ -220,6 +220,39 @@ describe("feishu setup wizard status", () => {
     expect(status.statusLines).toEqual(["Feishu: needs app credentials"]);
   });
 
+  it("uses configured defaultAccount for omitted DM policy account context", async () => {
+    const { feishuSetupWizard } = await import("./setup-surface.js");
+    const cfg = {
+      channels: {
+        feishu: {
+          allowFrom: ["ou_root"],
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              appId: "work-app",
+              appSecret: "work-secret", // pragma: allowlist secret
+              dmPolicy: "allowlist",
+              allowFrom: ["ou_work"],
+            },
+          },
+        },
+      },
+    } as const;
+
+    expect(feishuSetupWizard.dmPolicy?.getCurrent?.(cfg as never)).toBe("allowlist");
+    expect(feishuSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg as never)).toEqual({
+      policyKey: "channels.feishu.accounts.work.dmPolicy",
+      allowFromKey: "channels.feishu.accounts.work.allowFrom",
+    });
+
+    const next = feishuSetupWizard.dmPolicy?.setPolicy?.(cfg as never, "open");
+
+    expect(next?.channels?.feishu?.dmPolicy).toBeUndefined();
+    expect(next?.channels?.feishu?.allowFrom).toEqual(["ou_root"]);
+    expect(next?.channels?.feishu?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next?.channels?.feishu?.accounts?.work?.allowFrom).toEqual(["ou_work", "*"]);
+  });
+
   it("treats env SecretRef appId as not configured when env var is missing", async () => {
     const appIdKey = "FEISHU_APP_ID_STATUS_MISSING_TEST";
     const appSecretKey = "FEISHU_APP_CREDENTIAL_STATUS_MISSING_TEST"; // pragma: allowlist secret

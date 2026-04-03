@@ -192,7 +192,7 @@ describe("telegramSetupWizard.dmPolicy", () => {
   });
 
   it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       channels: {
         telegram: {
           defaultAccount: "alerts",

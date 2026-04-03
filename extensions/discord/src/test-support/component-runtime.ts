@@ -4,15 +4,26 @@ import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../../src/security/
 
 const runtimeMocks = vi.hoisted(() => ({
   buildPluginBindingResolvedTextMock: vi.fn(),
+  dispatchPluginInteractiveHandlerMock: vi.fn(),
+  dispatchReplyMock: vi.fn(),
+  enqueueSystemEventMock: vi.fn(),
   readAllowFromStoreMock: vi.fn(),
+  readSessionUpdatedAtMock: vi.fn(),
   recordInboundSessionMock: vi.fn(),
+  resolveStorePathMock: vi.fn(),
   resolvePluginConversationBindingApprovalMock: vi.fn(),
   upsertPairingRequestMock: vi.fn(),
 }));
 
 export const readAllowFromStoreMock = runtimeMocks.readAllowFromStoreMock;
+export const dispatchPluginInteractiveHandlerMock =
+  runtimeMocks.dispatchPluginInteractiveHandlerMock;
+export const dispatchReplyMock = runtimeMocks.dispatchReplyMock;
+export const enqueueSystemEventMock = runtimeMocks.enqueueSystemEventMock;
 export const upsertPairingRequestMock = runtimeMocks.upsertPairingRequestMock;
 export const recordInboundSessionMock = runtimeMocks.recordInboundSessionMock;
+export const readSessionUpdatedAtMock = runtimeMocks.readSessionUpdatedAtMock;
+export const resolveStorePathMock = runtimeMocks.resolveStorePathMock;
 export const resolvePluginConversationBindingApprovalMock =
   runtimeMocks.resolvePluginConversationBindingApprovalMock;
 export const buildPluginBindingResolvedTextMock = runtimeMocks.buildPluginBindingResolvedTextMock;
@@ -41,17 +52,71 @@ vi.mock("../monitor/agent-components.runtime.js", () => {
   return {
     buildPluginBindingResolvedText: (...args: unknown[]) =>
       buildPluginBindingResolvedTextMock(...args),
+    createReplyReferencePlanner: vi.fn(
+      (params: {
+        existingId?: string;
+        hasReplied?: boolean;
+        replyToMode?: "off" | "first" | "all";
+        startId?: string;
+      }) => {
+        let hasReplied = params.hasReplied ?? false;
+        let nextId = params.existingId ?? params.startId;
+        return {
+          hasReplied() {
+            return hasReplied;
+          },
+          markSent() {
+            hasReplied = true;
+          },
+          use() {
+            if (params.replyToMode === "off") {
+              return undefined;
+            }
+            if (params.replyToMode === "first" && hasReplied) {
+              return undefined;
+            }
+            const value = nextId;
+            hasReplied = true;
+            nextId = undefined;
+            return value;
+          },
+        };
+      },
+    ),
+    dispatchPluginInteractiveHandler: (...args: unknown[]) =>
+      dispatchPluginInteractiveHandlerMock(...args),
+    dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
+    finalizeInboundContext: vi.fn((ctx) => ctx),
     parsePluginBindingApprovalCustomId,
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+    resolveChunkMode: vi.fn(() => "sentences"),
     resolvePluginConversationBindingApproval: (...args: unknown[]) =>
       resolvePluginConversationBindingApprovalMock(...args),
+    resolveTextChunkLimit: vi.fn(() => 2000),
+  };
+});
+
+vi.mock("../monitor/agent-components.deps.runtime.js", () => {
+  return {
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
+    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
   };
 });
 
 export function resetDiscordComponentRuntimeMocks() {
+  dispatchPluginInteractiveHandlerMock.mockReset().mockResolvedValue({
+    matched: false,
+    handled: false,
+    duplicate: false,
+  });
+  dispatchReplyMock.mockClear();
+  enqueueSystemEventMock.mockClear();
   readAllowFromStoreMock.mockClear().mockResolvedValue([]);
+  readSessionUpdatedAtMock.mockClear().mockReturnValue(undefined);
   upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
   recordInboundSessionMock.mockClear().mockResolvedValue(undefined);
+  resolveStorePathMock.mockClear().mockReturnValue("/tmp/openclaw-sessions-test.json");
   resolvePluginConversationBindingApprovalMock.mockReset().mockResolvedValue({
     status: "approved",
     binding: {

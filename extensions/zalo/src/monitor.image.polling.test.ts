@@ -5,6 +5,7 @@ import {
   createImageUpdate,
   createLifecycleMonitorSetup,
   expectImageLifecycleDelivery,
+  settleAsyncWork,
 } from "../test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
@@ -95,11 +96,12 @@ describe("Zalo polling image handling", () => {
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1));
+    await settleAsyncWork();
     expect(fetchRemoteMediaMock).not.toHaveBeenCalled();
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
     expect(finalizeInboundContextMock).not.toHaveBeenCalled();
     expect(recordInboundSessionMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
 
     abort.abort();
     await run;
