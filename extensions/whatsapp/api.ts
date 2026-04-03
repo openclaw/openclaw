@@ -2,6 +2,7 @@ export * from "./src/accounts.js";
 export * from "./src/auto-reply/constants.js";
 export { whatsappCommandPolicy } from "./src/command-policy.js";
 export * from "./src/group-policy.js";
+export { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./src/outbound-send-deps.js";
 export type * from "./src/auto-reply/types.js";
 export type * from "./src/inbound/types.js";
 export {

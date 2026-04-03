@@ -9,6 +9,10 @@ export * from "./src/directory-config.js";
 export * from "./src/exec-approval-forwarding.js";
 export * from "./src/exec-approvals.js";
 export * from "./src/group-policy.js";
+export type {
+  TelegramInteractiveHandlerContext,
+  TelegramInteractiveHandlerRegistration,
+} from "./src/interactive-dispatch.js";
 export * from "./src/inline-buttons.js";
 export * from "./src/model-buttons.js";
 export * from "./src/normalize.js";

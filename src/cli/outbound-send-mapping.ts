@@ -32,14 +32,8 @@ function resolveLegacyDepKeysForChannel(channelId: string): string[] {
   }
   const pascal = compact.charAt(0).toUpperCase() + compact.slice(1);
   const keys = new Set<string>();
-  if (compact === "whatsapp") {
-    keys.add("sendWhatsApp");
-  } else if (compact === "imessage") {
-    keys.add("sendIMessage");
-  } else {
-    keys.add(`send${pascal}`);
-  }
-  if (compact !== "imessage" && pascal.startsWith("I") && pascal.length > 1) {
+  keys.add(`send${pascal}`);
+  if (pascal.startsWith("I") && pascal.length > 1) {
     keys.add(`sendI${pascal.slice(1)}`);
   }
   if (pascal.startsWith("Ms") && pascal.length > 2) {

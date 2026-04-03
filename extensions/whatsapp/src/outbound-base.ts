@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveOutboundSendDep, sanitizeForPlainText } from "openclaw/plugin-sdk/infra-runtime";
+import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 
 type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
 type WhatsAppSendTextOptions = {
@@ -77,7 +78,9 @@ export function createWhatsAppOutboundBase({
           return { messageId: "" };
         }
         const send =
-          resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
+          resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp", {
+            legacyKeys: WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS,
+          }) ?? sendMessageWhatsApp;
         return await send(to, normalizedText, {
           verbose: false,
           cfg,
@@ -98,7 +101,9 @@ export function createWhatsAppOutboundBase({
         gifPlayback,
       }) => {
         const send =
-          resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
+          resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp", {
+            legacyKeys: WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS,
+          }) ?? sendMessageWhatsApp;
         return await send(to, normalizeText(text), {
           verbose: false,
           cfg,

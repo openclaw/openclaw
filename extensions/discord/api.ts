@@ -6,6 +6,10 @@ export * from "./src/components.js";
 export * from "./src/directory-config.js";
 export * from "./src/exec-approvals.js";
 export * from "./src/group-policy.js";
+export type {
+  DiscordInteractiveHandlerContext,
+  DiscordInteractiveHandlerRegistration,
+} from "./src/interactive-dispatch.js";
 export * from "./src/normalize.js";
 export * from "./src/pluralkit.js";
 export * from "./src/probe.js";
