@@ -70,8 +70,6 @@ function countMatrixExecApprovalEligibleAccounts(params: {
       }) &&
       matchesApprovalRequestFilters({
         request: params.request.request,
-        agentFilter: config?.agentFilter,
-        sessionFilter: config?.sessionFilter,
         agentFilter: filters.agentFilter,
         sessionFilter: filters.sessionFilter,
       })
