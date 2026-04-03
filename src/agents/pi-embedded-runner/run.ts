@@ -12,6 +12,7 @@ import { sanitizeForLog } from "../../terminal/ansi.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
+import { resolveSessionKeyForRequest } from "../command/session.js";
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
@@ -97,9 +98,45 @@ import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
+/**
+ * Backfill sessionKey from sessionId when not explicitly provided.
+ * This prevents null session_key propagation to hooks, LCM, and compaction.
+ * See: https://github.com/openclaw/openclaw/issues/60552
+ */
+function backfillSessionKey(params: {
+  config: RunEmbeddedPiAgentParams["config"];
+  sessionId: string;
+  sessionKey?: string;
+  agentId?: string;
+}): string | undefined {
+  if (params.sessionKey?.trim()) return params.sessionKey;
+  if (!params.config || !params.sessionId) return params.sessionKey;
+  try {
+    const resolved = resolveSessionKeyForRequest({
+      cfg: params.config,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+    });
+    return resolved.sessionKey ?? params.sessionKey;
+  } catch {
+    return params.sessionKey;
+  }
+}
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
+  // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
+  // receive a non-null key even when callers omit it. See #60552.
+  const effectiveSessionKey = backfillSessionKey({
+    config: params.config,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (effectiveSessionKey && effectiveSessionKey !== params.sessionKey) {
+    params = { ...params, sessionKey: effectiveSessionKey };
+  }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
