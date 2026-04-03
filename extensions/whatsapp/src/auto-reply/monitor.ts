@@ -2,10 +2,8 @@ import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { waitForever } from "openclaw/plugin-sdk/cli-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
-import { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
@@ -26,6 +24,7 @@ import {
   sleepWithAbort,
 } from "../reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
+import { loadConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
@@ -64,15 +63,27 @@ function createActiveConnectionRun(lastInboundAt: number | null): ActiveConnecti
   };
 }
 
+type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
+
+let replyResolverRuntimePromise: Promise<typeof import("./reply-resolver.runtime.js")> | null =
+  null;
+
+function loadReplyResolverRuntime() {
+  replyResolverRuntimePromise ??= import("./reply-resolver.runtime.js");
+  return replyResolverRuntimePromise;
+}
+
 export async function monitorWebChannel(
   verbose: boolean,
   listenerFactory: typeof monitorWebInbox | undefined = monitorWebInbox,
   keepAlive = true,
-  replyResolver: typeof getReplyFromConfig | undefined = getReplyFromConfig,
+  replyResolver?: ReplyResolver,
   runtime: RuntimeEnv = defaultRuntime,
   abortSignal?: AbortSignal,
   tuning: WebMonitorTuning = {},
 ) {
+  const activeReplyResolver =
+    replyResolver ?? (await loadReplyResolverRuntime()).getReplyFromConfig;
   const runId = newConnectionId();
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
@@ -177,7 +188,7 @@ export async function monitorWebChannel(
       groupMemberNames,
       echoTracker,
       backgroundTasks: active.backgroundTasks,
-      replyResolver: replyResolver ?? getReplyFromConfig,
+      replyResolver: activeReplyResolver,
       replyLogger,
       baseMentionConfig,
       account,
