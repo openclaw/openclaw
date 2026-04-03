@@ -24,15 +24,16 @@ export function createSlackActions(
 ): ChannelMessageActionAdapter {
   function describeMessageTool({
     cfg,
+    accountId,
   }: Parameters<
     NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
   >[0]): ChannelMessageToolDiscovery {
-    const actions = listSlackMessageActions(cfg);
+    const actions = listSlackMessageActions(cfg, accountId);
     const capabilities = new Set<"blocks" | "interactive">();
     if (actions.includes("send")) {
       capabilities.add("blocks");
     }
-    if (isSlackInteractiveRepliesEnabled({ cfg })) {
+    if (isSlackInteractiveRepliesEnabled({ cfg, accountId })) {
       capabilities.add("interactive");
     }
     return {
