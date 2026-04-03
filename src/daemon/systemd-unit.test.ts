@@ -24,6 +24,17 @@ describe("buildSystemdUnit", () => {
     expect(unit).toContain("SuccessExitStatus=0 143");
   });
 
+  it("includes crash-loop circuit-breaker directives", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environment: {},
+    });
+    expect(unit).toContain("StartLimitBurst=5");
+    expect(unit).toContain("StartLimitIntervalSec=60");
+    expect(unit).toContain("RestartPreventExitStatus=78");
+  });
+
   it("rejects environment values with line breaks", () => {
     expect(() =>
       buildSystemdUnit({
