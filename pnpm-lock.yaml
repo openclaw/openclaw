@@ -610,6 +610,8 @@ importers:
 
   extensions/speech-core: {}
 
+  extensions/stepfun: {}
+
   extensions/synology-chat: {}
 
   extensions/synthetic: {}
@@ -10941,7 +10943,7 @@ snapshots:
 
   gigachat@0.0.18:
     dependencies:
-      axios: 1.13.5
+      axios: 1.13.6
       uuid: 11.1.0
     transitivePeerDependencies:
       - debug
