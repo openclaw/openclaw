@@ -1,6 +1,7 @@
 import {
   approveDevicePairing,
   getPairedDevice,
+  listApprovedPairedDeviceRoles,
   listDevicePairing,
   removePairedDevice,
   type DeviceAuthToken,
@@ -196,6 +197,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       role: string;
       scopes?: string[];
     };
+    const normalizedRole = role.trim();
     const pairedDevice = await getPairedDevice(deviceId);
     if (!pairedDevice) {
       logDeviceTokenRotationDenied({
@@ -211,9 +213,23 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (!listApprovedPairedDeviceRoles(pairedDevice).includes(normalizedRole)) {
+      logDeviceTokenRotationDenied({
+        log: context.logGateway,
+        deviceId,
+        role,
+        reason: "unknown-device-or-role",
+      });
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_TOKEN_ROTATION_DENIED_MESSAGE),
+      );
+      return;
+    }
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     const requestedScopes = normalizeDeviceAuthScopes(
-      scopes ?? pairedDevice.tokens?.[role.trim()]?.scopes ?? pairedDevice.scopes,
+      scopes ?? pairedDevice.tokens?.[normalizedRole]?.scopes ?? pairedDevice.scopes,
     );
     const missingScope = resolveMissingRequestedScope({
       role,
