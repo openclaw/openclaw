@@ -1,8 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
-import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
@@ -72,6 +72,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionRetryResolve: undefined,
     compactionRetryReject: undefined,
     compactionRetryPromise: null,
+    compactionCleanupResolve: undefined,
     unsubscribed: false,
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
@@ -665,7 +666,37 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
 
-  const unsubscribe = () => {
+  /**
+   * Wait for compaction cleanup to complete after abort.
+   * This ensures the compaction end event is processed before removing listeners.
+   */
+  const waitForCompactionCleanup = async (timeoutMs: number): Promise<void> => {
+    if (!state.compactionInFlight && state.pendingCompactionRetry === 0) {
+      return; // Compaction already finished
+    }
+
+    // Create a promise that resolves when compaction end is handled
+    const cleanupPromise = new Promise<void>((resolve) => {
+      state.compactionCleanupResolve = resolve;
+    });
+
+    // Race between cleanup completion and timeout
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      setTimeout(() => reject(new Error("Compaction cleanup timeout")), timeoutMs);
+    });
+
+    try {
+      await Promise.race([cleanupPromise, timeoutPromise]);
+    } catch {
+      // Timeout or error - log but don't block cleanup
+      log.debug(`waitForCompactionCleanup: timeout after ${timeoutMs}ms runId=${params.runId}`);
+    } finally {
+      // Always clear the resolve function to prevent memory leaks
+      state.compactionCleanupResolve = undefined;
+    }
+  };
+
+  const unsubscribe = async () => {
     if (state.unsubscribed) {
       return;
     }
@@ -691,6 +722,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       log.debug(`unsubscribe: aborting in-flight compaction runId=${params.runId}`);
       try {
         params.session.abortCompaction();
+        // Wait for compaction end event to be processed before removing listeners
+        // This ensures the frontend receives the compaction end event
+        await waitForCompactionCleanup(5000);
       } catch (err) {
         log.warn(`unsubscribe: compaction abort failed runId=${params.runId} err=${String(err)}`);
       }
