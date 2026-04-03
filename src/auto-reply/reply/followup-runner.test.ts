@@ -795,6 +795,23 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects non-user-visible queued followup display payloads at outbound boundary", async () => {
+    const onBlockReply = createAsyncReplySpy();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: {},
+      payloads: [{ text: "hello world!" }],
+    });
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await expect(
+      runner(
+        createQueuedRun({
+          display: { visibility: "summary-only", summaryLine: "hidden summary" },
+        }),
+      ),
+    ).rejects.toThrow(/expected visibility=user-visible/);
+  });
+
   it("suppresses replies when a messaging tool sent via the same provider + target", async () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
