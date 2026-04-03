@@ -27,7 +27,6 @@ const {
   telegramBotDepsForTest,
   telegramBotRuntimeForTest,
   wasSentByBot,
-  hasSentMessagesInChat,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 
 let listNativeCommandSpecs: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
@@ -2686,43 +2685,10 @@ describe("createTelegramBot", () => {
     expect(sessionKey).not.toContain(":topic:");
   });
 
-  it("allows reaction in own mode when sent-message cache is cold (post-restart)", async () => {
-    onSpy.mockClear();
-    enqueueSystemEventSpy.mockClear();
-    wasSentByBot.mockReturnValue(false);
-    hasSentMessagesInChat.mockReturnValue(false);
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 600 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 99,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
-      },
-    });
-
-    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-  });
-
   it("blocks reaction in own mode when cache is warm and message not sent by bot", async () => {
     onSpy.mockClear();
     enqueueSystemEventSpy.mockClear();
     wasSentByBot.mockReturnValue(false);
-    hasSentMessagesInChat.mockReturnValue(true);
 
     loadConfig.mockReturnValue({
       channels: {
@@ -2748,51 +2714,5 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
-  });
-
-  it("own mode per-chat: warm chat blocks, cold chat allows", async () => {
-    onSpy.mockClear();
-    enqueueSystemEventSpy.mockClear();
-    wasSentByBot.mockReturnValue(false);
-    hasSentMessagesInChat.mockImplementation(
-      ((chatId: number | string) => chatId === 1234) as unknown as () => boolean,
-    );
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 700 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 50,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
-      },
-    });
-    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
-
-    await handler({
-      update: { update_id: 701 },
-      messageReaction: {
-        chat: { id: 5678, type: "private" },
-        message_id: 50,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
-      },
-    });
-    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
   });
 });

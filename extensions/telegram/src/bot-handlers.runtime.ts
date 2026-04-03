@@ -793,15 +793,10 @@ export const registerTelegramHandlers = ({
         return;
       }
       if (reactionMode === "own" && !telegramDeps.wasSentByBot(chatId, messageId)) {
-        if (telegramDeps.hasSentMessagesInChat?.(chatId) ?? true) {
-          logVerbose(
-            `telegram: skipped reaction on msg ${messageId} in chat ${chatId} (own mode, not sent by bot)`,
-          );
-          return;
-        }
         logVerbose(
-          `telegram: allowing reaction on msg ${messageId} in chat ${chatId} (own mode, cache cold for chat)`,
+          `telegram: skipped reaction on msg ${messageId} in chat ${chatId} (own mode, not sent by bot)`,
         );
+        return;
       }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId,

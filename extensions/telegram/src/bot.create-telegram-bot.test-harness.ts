@@ -306,14 +306,11 @@ vi.doMock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
 
 const sentMessageCacheHoisted = vi.hoisted(() => ({
   wasSentByBot: vi.fn(() => false),
-  hasSentMessagesInChat: vi.fn(() => true),
 }));
 export const wasSentByBot = sentMessageCacheHoisted.wasSentByBot;
-export const hasSentMessagesInChat = sentMessageCacheHoisted.hasSentMessagesInChat;
 
 vi.doMock("./sent-message-cache.js", () => ({
   wasSentByBot: sentMessageCacheHoisted.wasSentByBot,
-  hasSentMessagesInChat: sentMessageCacheHoisted.hasSentMessagesInChat,
   recordSentMessage: vi.fn(),
   clearSentMessageCache: vi.fn(),
 }));
@@ -441,7 +438,6 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
-  hasSentMessagesInChat: hasSentMessagesInChat as TelegramBotDeps["hasSentMessagesInChat"],
   resolveExecApproval: resolveExecApprovalSpy as NonNullable<
     TelegramBotDeps["resolveExecApproval"]
   >,
@@ -584,8 +580,6 @@ beforeEach(() => {
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);
-  hasSentMessagesInChat.mockReset();
-  hasSentMessagesInChat.mockReturnValue(true);
   listSkillCommandsForAgents.mockReset();
   listSkillCommandsForAgents.mockReturnValue([]);
   buildModelsProviderData.mockReset();
