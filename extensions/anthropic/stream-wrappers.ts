@@ -161,7 +161,10 @@ export function createAnthropicFastModeWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   const serviceTier = resolveAnthropicFastServiceTier(enabled);
   return (model, context, options) => {
-    if (!allowsAnthropicServiceTier(model)) {
+    // OAuth tokens (sk-ant-oat*) use a different auth path that does not support
+    // the service_tier payload field. Injecting it causes Anthropic to reject
+    // the request with HTTP 401 "OAuth authentication is currently not supported".
+    if (!allowsAnthropicServiceTier(model) || isAnthropicOAuthApiKey(options?.apiKey)) {
       return underlying(model, context, options);
     }
 
@@ -179,7 +182,10 @@ export function createAnthropicServiceTierWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!allowsAnthropicServiceTier(model)) {
+    // OAuth tokens (sk-ant-oat*) use a different auth path that does not support
+    // the service_tier payload field. Injecting it causes Anthropic to reject
+    // the request with HTTP 401 "OAuth authentication is currently not supported".
+    if (!allowsAnthropicServiceTier(model) || isAnthropicOAuthApiKey(options?.apiKey)) {
       return underlying(model, context, options);
     }
 

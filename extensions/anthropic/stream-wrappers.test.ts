@@ -1,6 +1,11 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing, createAnthropicBetaHeadersWrapper } from "./stream-wrappers.js";
+import {
+  __testing,
+  createAnthropicBetaHeadersWrapper,
+  createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
+} from "./stream-wrappers.js";
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const OAUTH_BETA = "oauth-2025-04-20";
@@ -40,5 +45,102 @@ describe("anthropic stream wrappers", () => {
     expect(headers?.["anthropic-beta"]).toBeDefined();
     expect(headers?.["anthropic-beta"]).toContain(CONTEXT_1M_BETA);
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("createAnthropicFastModeWrapper", () => {
+  function runFastModeWrapper(params: {
+    apiKey?: string;
+    provider?: string;
+    api?: string;
+    baseUrl?: string;
+    enabled?: boolean;
+  }): Record<string, unknown> | undefined {
+    const captured: { payload?: Record<string, unknown> } = {};
+    const base: StreamFn = (_model, _context, options) => {
+      // Record the payload passed via onPayload
+      if (options?.onPayload) {
+        const payload: Record<string, unknown> = {};
+        options.onPayload(payload, _model);
+        captured.payload = payload;
+      }
+      return {} as never;
+    };
+    const wrapper = createAnthropicFastModeWrapper(base, params.enabled ?? true);
+    wrapper(
+      {
+        provider: params.provider ?? "anthropic",
+        api: params.api ?? "anthropic-messages",
+        baseUrl: params.baseUrl,
+        id: "claude-sonnet-4-6",
+      } as never,
+      {} as never,
+      { apiKey: params.apiKey } as never,
+    );
+    return captured.payload;
+  }
+
+  it("does not inject service_tier for OAuth setup-token", () => {
+    const payload = runFastModeWrapper({ apiKey: "sk-ant-oat01-test-token" });
+    expect(payload?.service_tier).toBeUndefined();
+  });
+
+  it("injects service_tier for regular API keys", () => {
+    const payload = runFastModeWrapper({ apiKey: "sk-ant-api03-test-key" });
+    expect(payload?.service_tier).toBe("auto");
+  });
+
+  it("injects service_tier=standard_only when disabled for API keys", () => {
+    const payload = runFastModeWrapper({ apiKey: "sk-ant-api03-test-key", enabled: false });
+    expect(payload?.service_tier).toBe("standard_only");
+  });
+
+  it("does not inject service_tier for non-anthropic provider", () => {
+    const payload = runFastModeWrapper({
+      apiKey: "sk-ant-api03-test-key",
+      provider: "openai",
+      api: "openai-completions",
+    });
+    expect(payload?.service_tier).toBeUndefined();
+  });
+});
+
+describe("createAnthropicServiceTierWrapper", () => {
+  function runServiceTierWrapper(params: {
+    apiKey?: string;
+    provider?: string;
+    api?: string;
+    serviceTier?: "auto" | "standard_only";
+  }): Record<string, unknown> | undefined {
+    const captured: { payload?: Record<string, unknown> } = {};
+    const base: StreamFn = (_model, _context, options) => {
+      if (options?.onPayload) {
+        const payload: Record<string, unknown> = {};
+        options.onPayload(payload, _model);
+        captured.payload = payload;
+      }
+      return {} as never;
+    };
+    const wrapper = createAnthropicServiceTierWrapper(base, params.serviceTier ?? "auto");
+    wrapper(
+      {
+        provider: params.provider ?? "anthropic",
+        api: params.api ?? "anthropic-messages",
+        id: "claude-sonnet-4-6",
+      } as never,
+      {} as never,
+      { apiKey: params.apiKey } as never,
+    );
+    return captured.payload;
+  }
+
+  it("does not inject service_tier for OAuth setup-token", () => {
+    const payload = runServiceTierWrapper({ apiKey: "sk-ant-oat01-test-token" });
+    expect(payload?.service_tier).toBeUndefined();
+  });
+
+  it("injects service_tier for regular API keys", () => {
+    const payload = runServiceTierWrapper({ apiKey: "sk-ant-api03-test-key" });
+    expect(payload?.service_tier).toBe("auto");
   });
 });
