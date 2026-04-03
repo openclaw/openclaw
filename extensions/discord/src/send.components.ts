@@ -206,6 +206,8 @@ export async function sendDiscordComponentMessage(
       mediaUrl: opts.mediaUrl,
       filename: opts.filename,
       mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
+      mediaAccess: opts.mediaAccess,
       replyTo: opts.replyTo,
       silent: opts.silent,
     });

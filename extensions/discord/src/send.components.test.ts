@@ -18,6 +18,11 @@ vi.mock("./components-registry.js", () => ({
   registerDiscordComponentEntries: vi.fn(),
 }));
 
+const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
+vi.mock("./send.outbound.js", () => ({
+  sendMessageDiscord: sendMessageDiscordMock,
+}));
+
 let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
 let editDiscordComponentMessage: typeof import("./send.components.js").editDiscordComponentMessage;
 let registerBuiltDiscordComponentMessage: typeof import("./send.components.js").registerBuiltDiscordComponentMessage;
@@ -37,6 +42,8 @@ describe("sendDiscordComponentMessage", () => {
 
   beforeEach(() => {
     registerMock = vi.mocked(registerDiscordComponentEntries);
+    sendMessageDiscordMock.mockReset();
+    sendMessageDiscordMock.mockResolvedValue({ messageId: "msg1", channelId: "chan-1" });
     vi.clearAllMocks();
   });
 
@@ -116,5 +123,32 @@ describe("sendDiscordComponentMessage", () => {
       modals: [{ id: "modal-1", title: "Modal", fields: [] }],
       messageId: "msg1",
     });
+  });
+});
+
+describe("sendDiscordComponentMessage classic message downgrade", () => {
+  it("forwards mediaReadFile and mediaAccess to sendMessageDiscord", async () => {
+    const readFileMock = vi.fn().mockResolvedValue(Buffer.from("pdf"));
+    const mediaAccess = { localRoots: ["/tmp"], readFile: readFileMock };
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      { blocks: [{ type: "text", text: "report" }] },
+      {
+        token: "t",
+        mediaUrl: "https://example.com/report.pdf",
+        mediaReadFile: readFileMock,
+        mediaAccess,
+      },
+    );
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:chan-1",
+      "report",
+      expect.objectContaining({
+        mediaReadFile: readFileMock,
+        mediaAccess,
+      }),
+    );
   });
 });
