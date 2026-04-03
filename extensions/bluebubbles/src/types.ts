@@ -92,9 +92,6 @@ export type BlueBubblesConfig = Omit<BlueBubblesAccountConfig, "actions"> & {
   defaultAccount?: string;
   /** Channel-level default per-action tool gating (default: true for all). */
   channelActions?: BlueBubblesActionConfig;
-} & BlueBubblesAccountConfig;
-  /** Per-action tool gating (default: true for all). */
-  actions?: BlueBubblesActionConfig;
 };
 
 export type BlueBubblesSendTarget =
