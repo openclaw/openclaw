@@ -14,6 +14,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -278,10 +279,17 @@ export async function resolveTelegramInboundBody(params: {
           }
         : null,
     });
-    if (
-      (topicConfig?.ingest ?? (groupConfig as TelegramGroupConfig | undefined)?.ingest) &&
-      sessionKey
-    ) {
+    const telegramGroupPolicy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "telegram",
+      groupId: String(chatId),
+      accountId,
+    });
+    const ingestEnabled =
+      topicConfig?.ingest ??
+      telegramGroupPolicy.groupConfig?.ingest ??
+      telegramGroupPolicy.defaultConfig?.ingest;
+    if (ingestEnabled === true && sessionKey) {
       fireAndForgetHook(
         triggerInternalHook(
           createInternalHookEvent(

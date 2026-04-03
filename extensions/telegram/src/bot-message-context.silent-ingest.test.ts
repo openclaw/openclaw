@@ -86,4 +86,58 @@ describe("telegram mention-skip silent ingest", () => {
     );
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
+
+  it("uses wildcard ingest when a specific group override omits ingest", async () => {
+    internalHookMocks.createInternalHookEvent.mockClear();
+    internalHookMocks.triggerInternalHook.mockClear();
+
+    const result = await buildTelegramMessageContextForTest({
+      message: makeGroupMessage("hello without mention"),
+      cfg: {
+        agents: {
+          defaults: {
+            model: "anthropic/sonnet-4.6",
+            workspace: "/tmp/openclaw",
+          },
+        },
+        channels: {
+          telegram: {
+            groups: {
+              "*": {
+                requireMention: true,
+                ingest: true,
+              },
+              "-1001234567890": {
+                requireMention: true,
+              },
+            },
+          },
+        },
+        messages: {
+          groupChat: {
+            mentionPatterns: ["@bot"],
+          },
+        },
+      } as never,
+      resolveGroupRequireMention: () => true,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: {
+          requireMention: true,
+        },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(result).toBeNull();
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      expect.stringContaining("telegram"),
+      expect.objectContaining({
+        channelId: "telegram",
+        content: "hello without mention",
+      }),
+    );
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+  });
 });
