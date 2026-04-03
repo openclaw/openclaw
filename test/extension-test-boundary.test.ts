@@ -34,6 +34,24 @@ function walk(dir: string, entries: string[] = []): string[] {
   return entries;
 }
 
+function walkCode(dir: string, entries: string[] = []): string[] {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") {
+        continue;
+      }
+      walkCode(fullPath, entries);
+      continue;
+    }
+    if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) {
+      continue;
+    }
+    entries.push(path.relative(repoRoot, fullPath).replaceAll(path.sep, "/"));
+  }
+  return entries;
+}
+
 function findExtensionImports(source: string): string[] {
   return [
     ...source.matchAll(/from\s+["']((?:\.\.\/)+extensions\/[^"']+)["']/g),
@@ -123,5 +141,22 @@ describe("non-extension test boundaries", () => {
     );
 
     expect(imports).toEqual([]);
+  });
+
+  it("keeps bundled plugin sync test-api loaders out of core tests", () => {
+    const files = [
+      ...walkCode(path.join(repoRoot, "src")),
+      ...walkCode(path.join(repoRoot, "test")),
+    ]
+      .filter((file) => !file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX))
+      .filter((file) => !file.startsWith("test/helpers/"))
+      .filter((file) => file !== "test/extension-test-boundary.test.ts");
+
+    const offenders = files.filter((file) => {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      return source.includes("loadBundledPluginTestApiSync(");
+    });
+
+    expect(offenders).toEqual([]);
   });
 });

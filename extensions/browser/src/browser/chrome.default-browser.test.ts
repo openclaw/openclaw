@@ -1,33 +1,25 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
+  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(importOriginal, {
     execFileSync: vi.fn(),
-  };
+  });
 });
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
-  const module = { existsSync, readFileSync };
-  return {
-    ...actual,
-    ...module,
-    default: {
-      ...actual,
-      ...module,
-    },
-  };
+  return mockNodeBuiltinModule(
+    importOriginal,
+    { existsSync, readFileSync },
+    { mirrorToDefault: true },
+  );
 });
-vi.mock("node:os", () => {
+vi.mock("node:os", async (importOriginal) => {
+  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
   const homedir = vi.fn();
-  const module = { homedir };
-  return {
-    ...module,
-    default: module,
-  };
+  return mockNodeBuiltinModule(importOriginal, { homedir }, { mirrorToDefault: true });
 });
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";

@@ -3,6 +3,8 @@ import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import { createVitestRunSpecs, writeVitestIncludeFile } from "./test-projects.test-support.mjs";
 
+// Keep this shim so `pnpm test -- src/foo.test.ts` still forwards filters
+// cleanly instead of leaking pnpm's passthrough sentinel to Vitest.
 const releaseLock = acquireLocalHeavyCheckLockSync({
   cwd: process.cwd(),
   env: process.env,

@@ -4,16 +4,12 @@ import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 const MOCK_USERNAME = "MockUser";
 
 vi.mock("node:os", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:os")>();
-  const base = ("default" in actual ? actual.default : actual) as Record<string, unknown>;
-  return {
-    ...actual,
-    default: {
-      ...base,
-      userInfo: () => ({ username: MOCK_USERNAME }),
-    },
-    userInfo: () => ({ username: MOCK_USERNAME }),
-  };
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    importOriginal,
+    { userInfo: () => ({ username: MOCK_USERNAME }) },
+    { mirrorToDefault: true },
+  );
 });
 
 let createIcaclsResetCommand: typeof import("./windows-acl.js").createIcaclsResetCommand;

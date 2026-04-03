@@ -15,31 +15,21 @@ vi.mock("./facade-runtime.js", () => ({
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      mkdir,
-      access,
-      rename,
-    },
-    mkdir,
-    access,
-    rename,
-  };
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    importOriginal,
+    { mkdir, access, rename },
+    { mirrorToDefault: true },
+  );
 });
 
 vi.mock("node:os", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:os")>();
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      homedir: () => "/home/test",
-    },
-    homedir: () => "/home/test",
-  };
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    importOriginal,
+    { homedir: () => "/home/test" },
+    { mirrorToDefault: true },
+  );
 });
 
 describe("browser maintenance", () => {
