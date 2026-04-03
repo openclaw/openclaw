@@ -1,13 +1,13 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
-import type { OutputRuntimeEnv } from "../runtime.js";
+import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
 const runtimeState = vi.hoisted(() => {
   const runtimeLogs: string[] = [];
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const defaultRuntime: OutputRuntimeEnv = {
+  const defaultRuntime: CliMockOutputRuntime = {
     log: vi.fn((...args: unknown[]) => {
       runtimeLogs.push(stringifyArgs(args));
     }),

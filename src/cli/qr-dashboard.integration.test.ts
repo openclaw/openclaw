@@ -2,15 +2,22 @@ import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
 const copyToClipboardMock = vi.hoisted(() => vi.fn(async () => false));
 
+type CliRuntimeEnv = RuntimeEnv & {
+  log: MockFn<RuntimeEnv["log"]>;
+  error: MockFn<RuntimeEnv["error"]>;
+  exit: MockFn<RuntimeEnv["exit"]>;
+};
+
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];
-const runtime = vi.hoisted<RuntimeEnv>(() => ({
+const runtime = vi.hoisted<CliRuntimeEnv>(() => ({
   log: (...args: unknown[]) => {
     runtimeLogs.push(args.map(String).join(" "));
   },

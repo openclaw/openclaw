@@ -31,7 +31,9 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
     configuredScore: 2,
     unconfiguredScore: 1,
     resolveConfigured: ({ cfg, accountId }) =>
-      isMattermostConfigured(resolveMattermostAccountWithSecrets(cfg, accountId ?? undefined)),
+      isMattermostConfigured(
+        resolveMattermostAccountWithSecrets(cfg, accountId ?? DEFAULT_ACCOUNT_ID),
+      ),
   }),
   introNote: {
     title: "Mattermost bot token",
