@@ -642,7 +642,7 @@ export default definePluginEntry({
         if (authLabelResult.error) {
           return { text: `Error: ${authLabelResult.error}` };
         }
-        if (!action && isMissingPairingScope(gatewayClientScopes)) {
+        if ((!action || action === "qr") && isMissingPairingScope(gatewayClientScopes)) {
           return buildMissingPairingScopeReply();
         }
 
@@ -653,9 +653,6 @@ export default definePluginEntry({
         const authLabel = authLabelResult.label ?? "auth";
 
         if (action === "qr") {
-          if (isMissingPairingScope(gatewayClientScopes)) {
-            return buildMissingPairingScopeReply();
-          }
           const channel = ctx.channel;
           const target = resolveQrReplyTarget(ctx);
           let autoNotifyArmed = false;
