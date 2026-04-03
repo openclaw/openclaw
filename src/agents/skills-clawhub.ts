@@ -219,6 +219,16 @@ export async function searchSkillsFromClawHub(params: {
   });
 }
 
+export async function fetchSkillDetailFromClawHub(params: {
+  slug: string;
+  baseUrl?: string;
+}): Promise<ClawHubSkillDetail> {
+  return await fetchClawHubSkillDetail({
+    slug: params.slug,
+    baseUrl: params.baseUrl,
+  });
+}
+
 async function resolveInstallVersion(params: {
   slug: string;
   version?: string;
