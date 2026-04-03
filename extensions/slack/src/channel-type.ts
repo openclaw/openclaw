@@ -14,13 +14,12 @@ export async function resolveSlackChannelType(params: {
   if (!channelId) {
     return "unknown";
   }
-  const cacheKey = `${params.accountId ?? "default"}:${channelId}`;
+  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const cacheKey = `${account.accountId}:${channelId}`;
   const cached = SLACK_CHANNEL_TYPE_CACHE.get(cacheKey);
   if (cached) {
     return cached;
   }
-
-  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const groupChannels = normalizeAllowListLower(account.dm?.groupChannels);
   const channelIdLower = channelId.toLowerCase();
   if (
@@ -66,4 +65,8 @@ export async function resolveSlackChannelType(params: {
     SLACK_CHANNEL_TYPE_CACHE.set(cacheKey, "unknown");
     return "unknown";
   }
+}
+
+export function __resetSlackChannelTypeCacheForTest(): void {
+  SLACK_CHANNEL_TYPE_CACHE.clear();
 }
