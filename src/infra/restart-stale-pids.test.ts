@@ -1,14 +1,17 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// This entire file tests lsof-based Unix port polling. The feature is a deliberate
-// no-op on Windows (findGatewayPidsOnPortSync returns [] immediately). Running these
-// tests on a Windows CI runner would require lsof which does not exist there, so we
-// skip the suite entirely and rely on the Linux/macOS runners for coverage.
+// This file primarily tests lsof-based Unix port polling. On Windows,
+// findGatewayPidsOnPortSync delegates to findVerifiedGatewayListenerPidsOnPortSync
+// (PowerShell/netstat discovery in gateway-processes.ts) instead of returning [].
+// Running lsof-dependent tests on a Windows CI runner is not possible, so the suite
+// is skipped on Windows; cross-platform tests mock process.platform to win32.
 const isWindows = process.platform === "win32";
 
 const mockSpawnSync = vi.hoisted(() => vi.fn());
 const mockResolveGatewayPort = vi.hoisted(() => vi.fn(() => 18789));
 const mockRestartWarn = vi.hoisted(() => vi.fn());
+const mockReadWindowsListeningPids = vi.hoisted(() => vi.fn((_port: number, _timeoutMs?: number): number[] => []));
+const mockReadWindowsProcessArgs = vi.hoisted(() => vi.fn((_pid: number, _timeoutMs?: number): string[] | null => null));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
@@ -35,6 +38,15 @@ vi.mock("../logging/subsystem.js", () => ({
     info: vi.fn(),
     error: vi.fn(),
   })),
+}));
+
+vi.mock("./gateway-processes.js", () => ({}));
+
+vi.mock("./windows-port-pids.js", () => ({
+  readWindowsListeningPidsOnPortSync: (port: number, timeoutMs?: number) =>
+    mockReadWindowsListeningPids(port, timeoutMs),
+  readWindowsProcessArgsSync: (pid: number, timeoutMs?: number) =>
+    mockReadWindowsProcessArgs(pid, timeoutMs),
 }));
 
 import { resolveLsofCommandSync } from "./ports-lsof.js";
@@ -101,7 +113,11 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     mockSpawnSync.mockReset();
     mockResolveGatewayPort.mockReset();
     mockRestartWarn.mockReset();
+    mockReadWindowsListeningPids.mockReset();
+    mockReadWindowsProcessArgs.mockReset();
     mockResolveGatewayPort.mockReturnValue(18789);
+    mockReadWindowsListeningPids.mockReturnValue([]);
+    mockReadWindowsProcessArgs.mockReturnValue(null);
     __testing.setSleepSyncOverride(() => {});
   });
 
@@ -189,16 +205,33 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(result).toEqual([stalePid]); // deduped — not [pid, pid]
     });
 
-    it("returns [] and skips lsof on win32", () => {
-      // The entire describe block is skipped on Windows (isWindows guard at top),
-      // so this test only runs on Linux/macOS. It mocks platform to win32 for the
-      // single assertion without needing to restore — the suite-level skipIf means
-      // this will never run on an actual Windows runner where the mock could leak.
+    it("delegates to Windows port helpers on win32 and skips lsof", () => {
       const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       try {
+        mockReadWindowsListeningPids.mockReturnValue([]);
         expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+        expect(mockReadWindowsListeningPids).toHaveBeenCalledWith(18789);
+        // lsof must NOT be invoked — Windows uses PowerShell/netstat
         expect(mockSpawnSync).not.toHaveBeenCalled();
+      } finally {
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
+
+    it("returns verified gateway pids from Windows helpers on win32", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const stalePid = process.pid + 900;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        mockReadWindowsListeningPids.mockReturnValue([stalePid]);
+        // Simulate a verified gateway process (must pass real isGatewayArgv)
+        mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
+        expect(findGatewayPidsOnPortSync(18789)).toEqual([stalePid]);
+        expect(mockReadWindowsListeningPids).toHaveBeenCalledWith(18789);
+        expect(mockReadWindowsProcessArgs).toHaveBeenCalledWith(stalePid);
       } finally {
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);

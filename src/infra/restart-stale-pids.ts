@@ -1,7 +1,13 @@
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isGatewayArgv } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
+import {
+  readWindowsListeningPidsOnPortSync,
+  readWindowsProcessArgsSync,
+} from "./windows-port-pids.js";
 
 const SPAWN_TIMEOUT_MS = 2000;
 const STALE_SIGTERM_WAIT_MS = 600;
@@ -79,6 +85,20 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
 }
 
 /**
+ * Windows: find listening PIDs on the port, then verify each is an openclaw
+ * gateway process via command-line inspection. Excludes the current process.
+ */
+function findVerifiedWindowsGatewayPidsOnPortSync(port: number): number[] {
+  const rawPids = readWindowsListeningPidsOnPortSync(port);
+  return Array.from(new Set(rawPids))
+    .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid)
+    .filter((pid) => {
+      const args = readWindowsProcessArgsSync(pid);
+      return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
+    });
+}
+
+/**
  * Find PIDs of gateway processes listening on the given port using synchronous lsof.
  * Returns only PIDs that belong to openclaw gateway processes (not the current process).
  */
@@ -87,7 +107,9 @@ export function findGatewayPidsOnPortSync(
   spawnTimeoutMs = SPAWN_TIMEOUT_MS,
 ): number[] {
   if (process.platform === "win32") {
-    return [];
+    // Use the shared Windows port inspection (PowerShell / netstat) with
+    // command-line verification to find only openclaw gateway processes.
+    return findVerifiedWindowsGatewayPidsOnPortSync(port);
   }
   const lsof = resolveLsofCommandSync();
   const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
@@ -139,6 +161,9 @@ export function findGatewayPidsOnPortSync(
 type PollResult = { free: true } | { free: false } | { free: null; permanent: boolean };
 
 function pollPortOnce(port: number): PollResult {
+  if (process.platform === "win32") {
+    return pollPortOnceWindows(port);
+  }
   try {
     const lsof = resolveLsofCommandSync();
     const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
@@ -179,11 +204,32 @@ function pollPortOnce(port: number): PollResult {
 }
 
 /**
+ * Windows-specific port poll.
+ * Uses a short timeout (POLL_SPAWN_TIMEOUT_MS) so a single slow PowerShell
+ * invocation cannot exceed the waitForPortFreeSync wall-clock budget.
+ * Only checks whether any process is listening — no gateway verification
+ * needed because we already killed the stale gateway in the prior step.
+ */
+function pollPortOnceWindows(port: number): PollResult {
+  try {
+    const pids = readWindowsListeningPidsOnPortSync(port, POLL_SPAWN_TIMEOUT_MS);
+    return pids.length === 0 ? { free: true } : { free: false };
+  } catch {
+    return { free: null, permanent: false };
+  }
+}
+
+/**
  * Synchronously terminate stale gateway processes.
  * Callers must pass a non-empty pids array.
- * Sends SIGTERM, waits briefly, then SIGKILL for survivors.
+ *
+ * On Unix: sends SIGTERM, waits briefly, then SIGKILL for survivors.
+ * On Windows: uses taskkill (graceful first, then /F for force-kill).
  */
 function terminateStaleProcessesSync(pids: number[]): number[] {
+  if (process.platform === "win32") {
+    return terminateStaleProcessesWindows(pids);
+  }
   const killed: number[] = [];
   for (const pid of pids) {
     try {
@@ -203,6 +249,51 @@ function terminateStaleProcessesSync(pids: number[]): number[] {
       process.kill(pid, "SIGKILL");
     } catch {
       // already gone
+    }
+  }
+  sleepSync(STALE_SIGKILL_WAIT_MS);
+  return killed;
+}
+
+/**
+ * Windows-specific process termination using taskkill.
+ * Sends a graceful taskkill first (/T for tree), waits, then escalates to /F.
+ */
+function terminateStaleProcessesWindows(pids: number[]): number[] {
+  const taskkillPath = path.join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "taskkill.exe",
+  );
+  const killed: number[] = [];
+  for (const pid of pids) {
+    try {
+      // Graceful termination (sends WM_CLOSE to the process tree)
+      spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
+        stdio: "ignore",
+        timeout: 5000,
+        windowsHide: true,
+      });
+      killed.push(pid);
+    } catch {
+      // Process may already be gone
+    }
+  }
+  if (killed.length === 0) {
+    return killed;
+  }
+  sleepSync(STALE_SIGTERM_WAIT_MS);
+  // Force-kill survivors
+  for (const pid of killed) {
+    try {
+      process.kill(pid, 0); // Check if still alive
+      spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
+        stdio: "ignore",
+        timeout: 5000,
+        windowsHide: true,
+      });
+    } catch {
+      // Already gone
     }
   }
   sleepSync(STALE_SIGKILL_WAIT_MS);
