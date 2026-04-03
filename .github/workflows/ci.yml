@@ -308,6 +308,9 @@ jobs:
         run: |
           set -euo pipefail
           case "$TASK" in
+            bundled)
+              pnpm test:bundled
+              ;;
             extensions)
               if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
                 export OPENCLAW_TEST_SHARDS="$SHARD_COUNT"
@@ -546,6 +549,11 @@ jobs:
         continue-on-error: true
         run: pnpm run lint:web-search-provider-boundaries
 
+      - name: Run web fetch provider boundary guard
+        id: web_fetch_provider_boundary
+        continue-on-error: true
+        run: pnpm run lint:web-fetch-provider-boundaries
+
       - name: Run extension src boundary guard
         id: extension_src_outside_plugin_sdk_boundary
         continue-on-error: true
@@ -593,6 +601,7 @@ jobs:
           NO_EXTENSION_TEST_CORE_IMPORTS_OUTCOME: ${{ steps.no_extension_test_core_imports.outcome }}
           PLUGIN_SDK_SUBPATHS_EXPORTED_OUTCOME: ${{ steps.plugin_sdk_subpaths_exported.outcome }}
           WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME: ${{ steps.web_search_provider_boundary.outcome }}
+          WEB_FETCH_PROVIDER_BOUNDARY_OUTCOME: ${{ steps.web_fetch_provider_boundary.outcome }}
           EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME: ${{ steps.extension_src_outside_plugin_sdk_boundary.outcome }}
           EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME: ${{ steps.extension_plugin_sdk_internal_boundary.outcome }}
           EXTENSION_RELATIVE_OUTSIDE_PACKAGE_BOUNDARY_OUTCOME: ${{ steps.extension_relative_outside_package_boundary.outcome }}
@@ -612,6 +621,7 @@ jobs:
             "lint:plugins:no-extension-test-core-imports|$NO_EXTENSION_TEST_CORE_IMPORTS_OUTCOME" \
             "lint:plugins:plugin-sdk-subpaths-exported|$PLUGIN_SDK_SUBPATHS_EXPORTED_OUTCOME" \
             "web-search-provider-boundary|$WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME" \
+            "web-fetch-provider-boundary|$WEB_FETCH_PROVIDER_BOUNDARY_OUTCOME" \
             "extension-src-outside-plugin-sdk-boundary|$EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME" \
             "extension-plugin-sdk-internal-boundary|$EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME" \
             "extension-relative-outside-package-boundary|$EXTENSION_RELATIVE_OUTSIDE_PACKAGE_BOUNDARY_OUTCOME" \

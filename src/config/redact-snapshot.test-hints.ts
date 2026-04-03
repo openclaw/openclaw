@@ -10,5 +10,7 @@ export const redactSnapshotTestHints: ConfigUiHints = {
   "gateway.auth.password": { sensitive: true },
   "models.providers.*.apiKey": { sensitive: true },
   "models.providers.*.baseUrl": { sensitive: true },
+  "models.providers.*.request.headers.*": { sensitive: true },
+  "models.providers.*.request.auth.token": { sensitive: true },
   "skills.entries.*.env.GEMINI_API_KEY": { sensitive: true },
 };

@@ -1,4 +1,6 @@
-import { beforeEach, describe } from "vitest";
+import { afterEach, beforeEach, describe } from "vitest";
+import { feishuThreadBindingTesting } from "../../../extensions/feishu/api.js";
+import { resetMatrixThreadBindingsForTests } from "../../../extensions/matrix/api.js";
 import {
   actionContractRegistry,
   directoryContractRegistry,
@@ -20,9 +22,11 @@ import {
   installSessionBindingContractSuite,
 } from "../../../src/channels/plugins/contracts/suites.js";
 import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../src/config/config.js";
 import { __testing as sessionBindingTesting } from "../../../src/infra/outbound/session-binding-service.js";
-import { feishuThreadBindingTesting } from "../../../src/plugin-sdk/feishu-conversation.js";
-import { resetMatrixThreadBindingsForTests } from "../../../src/plugin-sdk/matrix.js";
 import { resetPluginRuntimeStateForTest } from "../../../src/plugins/runtime.js";
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
@@ -40,6 +44,21 @@ function hasEntries<T extends { id: string }>(
   id: string,
 ): entries is readonly T[] {
   return entries.some((entry) => entry.id === id);
+}
+
+function resolveSessionBindingContractRuntimeConfig(id: string) {
+  if (id !== "discord" && id !== "matrix") {
+    return null;
+  }
+  return {
+    plugins: {
+      entries: {
+        [id]: {
+          enabled: true,
+        },
+      },
+    },
+  };
 }
 
 export function describeChannelRegistryBackedContracts(id: string) {
@@ -125,12 +144,22 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
   describe(`${entry.id} session binding contract`, () => {
     beforeEach(async () => {
       resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
+      const runtimeConfig = resolveSessionBindingContractRuntimeConfig(entry.id);
+      if (runtimeConfig) {
+        // These registry-backed contract suites intentionally exercise bundled runtime facades.
+        // Opt those specific plugins in so the activation boundary behaves like real runtime usage.
+        setRuntimeConfigSnapshot(runtimeConfig);
+      }
       setDefaultChannelPluginRegistryForTests();
       sessionBindingTesting.resetSessionBindingAdaptersForTests();
       discordThreadBindingTesting.resetThreadBindingsForTests();
       feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
       resetMatrixThreadBindingsForTests();
       await resetTelegramThreadBindingsForTests();
+    });
+    afterEach(() => {
+      clearRuntimeConfigSnapshot();
     });
 
     installSessionBindingContractSuite({

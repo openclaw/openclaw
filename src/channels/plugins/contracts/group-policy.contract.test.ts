@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveOpenProviderRuntimeGroupPolicy } from "../../../config/runtime-group-policy.js";
-import { whatsappAccessControlTesting } from "../../../plugin-sdk/whatsapp-surface.js";
+import { whatsappAccessControlTesting } from "../../../../extensions/whatsapp/api.js";
 import {
   evaluateZaloGroupAccess,
   resolveZaloRuntimeGroupPolicy,
-} from "../../../plugin-sdk/zalo.js";
+} from "../../../../extensions/zalo/api.js";
+import { resolveOpenProviderRuntimeGroupPolicy } from "../../../config/runtime-group-policy.js";
 import { installChannelRuntimeGroupPolicyFallbackSuite } from "./suites.js";
 
 describe("channel runtime group policy contract", () => {

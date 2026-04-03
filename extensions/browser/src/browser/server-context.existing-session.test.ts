@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserServerState } from "./server-context.js";
 
 vi.mock("./chrome-mcp.js", () => ({
@@ -57,10 +57,6 @@ function makeState(): BrowserServerState {
     profiles: new Map(),
   };
 }
-
-afterEach(() => {
-  vi.clearAllMocks();
-});
 
 beforeAll(async () => {
   ({ createBrowserRouteContext } = await import("./server-context.js"));

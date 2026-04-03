@@ -174,6 +174,7 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   ],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
+  webFetchProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
@@ -820,11 +821,11 @@ vi.mock("../plugins/loader.js", async () => {
     loadOpenClawPlugins: () => pluginRegistryState.registry,
   };
 });
-vi.mock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
+vi.mock("../plugins/runtime/runtime-web-channel-boundary.js", () => ({
   sendMessageWhatsApp: (...args: unknown[]) =>
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
-vi.mock("/src/plugins/runtime/runtime-whatsapp-boundary.js", () => ({
+vi.mock("/src/plugins/runtime/runtime-web-channel-boundary.js", () => ({
   sendMessageWhatsApp: (...args: unknown[]) =>
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));

@@ -80,7 +80,7 @@ Text + native (when enabled):
 - `/status` (show current status; includes provider usage/quota for the current model provider when available)
 - `/tasks` (list background tasks for the current session; shows active and recent task details with agent-local fallback counts)
 - `/allowlist` (list/add/remove allowlist entries)
-- `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
+- `/approve <id> <decision>` (resolve exec approval prompts; use the pending approval message for the available decisions)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/btw <question>` (ask an ephemeral side question about the current session without changing future session context; see [/tools/btw](/tools/btw))
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)

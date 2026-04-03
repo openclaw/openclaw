@@ -5,10 +5,13 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   logInboundDrop,
   evaluateSenderGroupAccessForPolicy,
+  filterSupplementalContextItems,
   recordPendingHistoryEntryIfEnabled,
+  resolveChannelContextVisibilityMode,
   resolveDualTextControlCommandGate,
   resolveMentionGating,
   resolveInboundSessionEnvelopeContext,
+  shouldIncludeSupplementalContext,
   formatAllowlistMatchMeta,
   type HistoryEntry,
 } from "../../runtime-api.js";
@@ -32,6 +35,7 @@ import {
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
+  translateMSTeamsDmConversationIdForGraph,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
@@ -68,6 +72,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     }
   };
   const msteamsCfg = cfg.channels?.msteams;
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg,
+    channel: "msteams",
+  });
   const historyLimit = Math.max(
     0,
     msteamsCfg?.historyLimit ??
@@ -98,6 +106,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
     const rawBody = text || attachmentPlaceholder;
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
+    let quoteSenderId: string | undefined;
+    let quoteSenderName: string | undefined;
     const from = activity.from;
     const conversation = activity.conversation;
 
@@ -426,6 +436,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         return;
       }
     }
+    const graphConversationId = translateMSTeamsDmConversationIdForGraph({
+      isDirectMessage,
+      conversationId,
+      aadObjectId: from.aadObjectId,
+      appId,
+    });
+
     const mediaList = await resolveMSTeamsInboundMedia({
       attachments,
       htmlSummary: htmlSummary ?? undefined,
@@ -434,7 +451,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       allowHosts: msteamsCfg?.mediaAllowHosts,
       authAllowHosts: msteamsCfg?.mediaAuthAllowHosts,
       conversationType,
-      conversationId,
+      conversationId: graphConversationId,
       conversationMessageId: conversationMessageId ?? undefined,
       activity: {
         id: activity.id,
@@ -460,26 +477,35 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           fetchThreadReplies(graphToken, groupId, conversationId, activity.replyToId),
         ]);
         const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
-        const threadMessages =
-          groupPolicy === "allowlist"
-            ? allMessages.filter((msg) => {
-                return resolveMSTeamsAllowlistMatch({
+        quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
+        quoteSenderName =
+          parentMsg?.from?.user?.displayName ??
+          parentMsg?.from?.application?.displayName ??
+          quoteInfo?.sender;
+        const { items: threadMessages } = filterSupplementalContextItems({
+          items: allMessages,
+          mode: contextVisibilityMode,
+          kind: "thread",
+          isSenderAllowed: (msg) =>
+            groupPolicy === "allowlist"
+              ? resolveMSTeamsAllowlistMatch({
                   allowFrom: effectiveGroupAllowFrom,
                   senderId: msg.from?.user?.id ?? "",
                   senderName: msg.from?.user?.displayName,
                   allowNameMatching,
-                }).allowed;
-              })
-            : allMessages;
+                }).allowed
+              : true,
+        });
         const formatted = formatThreadContext(threadMessages, activity.id);
         if (formatted) {
           threadContext = formatted;
         }
       } catch (err) {
-        log.debug?.("failed to fetch thread history", { error: String(err) });
+        log.debug?.("failed to fetch thread history", { error: formatUnknownError(err) });
         // Graceful degradation: thread history is an optional enhancement.
       }
     }
+    quoteSenderName ??= quoteInfo?.sender;
 
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
     const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
@@ -524,6 +550,24 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           }))
         : undefined;
     const commandBody = text.trim();
+    const quoteSenderAllowed =
+      quoteInfo && quoteInfo.sender
+        ? !isChannel || groupPolicy !== "allowlist"
+          ? true
+          : resolveMSTeamsAllowlistMatch({
+              allowFrom: effectiveGroupAllowFrom,
+              senderId: quoteSenderId ?? "",
+              senderName: quoteSenderName,
+              allowNameMatching,
+            }).allowed
+        : true;
+    const includeQuoteContext =
+      quoteInfo &&
+      shouldIncludeSupplementalContext({
+        mode: contextVisibilityMode,
+        kind: "quote",
+        senderAllowed: quoteSenderAllowed,
+      });
 
     // Prepend thread history to the agent body so the agent has full thread context.
     const bodyForAgent = threadContext
@@ -555,8 +599,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
       ReplyToId: activity.replyToId ?? undefined,
-      ReplyToBody: quoteInfo?.body,
-      ReplyToSender: quoteInfo?.sender,
+      ReplyToBody: includeQuoteContext ? quoteInfo?.body : undefined,
+      ReplyToSender: includeQuoteContext ? quoteInfo?.sender : undefined,
       ReplyToIsQuote: quoteInfo ? true : undefined,
       ...mediaPayload,
     });
@@ -566,7 +610,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
       ctx: ctxPayload,
       onRecordError: (err) => {
-        logVerboseMessage(`msteams: failed updating session meta: ${String(err)}`);
+        logVerboseMessage(`msteams: failed updating session meta: ${formatUnknownError(err)}`);
       },
     });
 
@@ -643,8 +687,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         });
       }
     } catch (err) {
-      log.error("dispatch failed", { error: String(err) });
-      runtime.error?.(`msteams dispatch failed: ${String(err)}`);
+      log.error("dispatch failed", { error: formatUnknownError(err) });
+      runtime.error?.(`msteams dispatch failed: ${formatUnknownError(err)}`);
       try {
         await context.sendActivity("⚠️ Something went wrong. Please try again.");
       } catch {
@@ -707,7 +751,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       });
     },
     onError: (err) => {
-      runtime.error?.(`msteams debounce flush failed: ${String(err)}`);
+      runtime.error?.(`msteams debounce flush failed: ${formatUnknownError(err)}`);
     },
   });
 

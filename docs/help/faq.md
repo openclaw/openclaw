@@ -173,6 +173,27 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
+  <Accordion title="Why are there two exec approval configs for chat approvals?">
+    They control different layers:
+
+    - `approvals.exec`: forwards approval prompts to chat destinations
+    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client
+
+    The host exec policy is still the real approval gate. Chat config only controls where approval
+    prompts appear and how people can answer them.
+
+    In most setups you do **not** need both:
+
+    - If the chat already supports commands and replies, same-chat `/approve` works through the shared path.
+    - If a supported native channel can infer approvers safely, OpenClaw now auto-enables DM-first native approvals when `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
+    - Use `approvals.exec` only when prompts must also be forwarded to other chats or explicit ops rooms.
+    - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you explicitly want approval prompts posted back into the originating room/topic.
+
+    Short version: forwarding is for routing, native client config is for richer channel-specific UX.
+    See [Exec Approvals](/tools/exec-approvals).
+
+  </Accordion>
+
   <Accordion title="What runtime do I need?">
     Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
   </Accordion>
@@ -280,9 +301,10 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     - `latest` = stable
     - `beta` = early build for testing
 
-    We ship builds to **beta**, test them, and once a build is solid we **promote
-    that same version to `latest`**. That's why beta and stable can point at the
-    **same version**.
+    Usually, a stable release lands on **beta** first, then an explicit
+    promotion step moves that same version to `latest`. Maintainers can also
+    publish straight to `latest` when needed. That's why beta and stable can
+    point at the **same version** after promotion.
 
     See what changed:
     [https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
@@ -292,7 +314,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="How do I install the beta version and what is the difference between beta and dev?">
-    **Beta** is the npm dist-tag `beta` (may match `latest`).
+    **Beta** is the npm dist-tag `beta` (may match `latest` after promotion).
     **Dev** is the moving head of `main` (git); when published, it uses the npm dist-tag `dev`.
 
     One-liners (macOS/Linux):
@@ -994,7 +1016,7 @@ for usage/billing and raise limits as needed.
     openclaw cron runs --id <jobId> --limit 50
     ```
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat).
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation).
 
   </Accordion>
 
@@ -1019,7 +1041,7 @@ for usage/billing and raise limits as needed.
     - **Heartbeat** for "main session" periodic checks.
     - **Isolated jobs** for autonomous agents that post summaries or deliver to chats.
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat),
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation),
     [Heartbeat](/gateway/heartbeat).
 
   </Accordion>

@@ -354,6 +354,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - Assistant thread status updates (for "is typing..." indicators in threads) use `assistant.threads.setStatus` and require bot scope `assistant:write`.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
+- Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
 - Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
   - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
@@ -419,27 +420,28 @@ Notes:
   "oauth_config": {
     "scopes": {
       "bot": [
-        "chat:write",
+        "app_mentions:read",
+        "assistant:write",
         "channels:history",
         "channels:read",
+        "chat:write",
+        "commands",
+        "emoji:read",
+        "files:read",
+        "files:write",
         "groups:history",
+        "groups:read",
         "im:history",
         "im:read",
         "im:write",
         "mpim:history",
         "mpim:read",
         "mpim:write",
-        "users:read",
-        "app_mentions:read",
-        "assistant:write",
-        "reactions:read",
-        "reactions:write",
         "pins:read",
         "pins:write",
-        "emoji:read",
-        "commands",
-        "files:read",
-        "files:write"
+        "reactions:read",
+        "reactions:write",
+        "users:read"
       ]
     }
   },
@@ -448,17 +450,17 @@ Notes:
     "event_subscriptions": {
       "bot_events": [
         "app_mention",
+        "channel_rename",
+        "member_joined_channel",
+        "member_left_channel",
         "message.channels",
         "message.groups",
         "message.im",
         "message.mpim",
-        "reaction_added",
-        "reaction_removed",
-        "member_joined_channel",
-        "member_left_channel",
-        "channel_rename",
         "pin_added",
-        "pin_removed"
+        "pin_removed",
+        "reaction_added",
+        "reaction_removed"
       ]
     }
   }
@@ -487,18 +489,46 @@ Exec approval prompts can route natively through Slack using interactive buttons
 
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
 
-Configuration uses the shared `approvals.exec` config with Slack targets:
+Config path:
+
+- `channels.slack.execApprovals.enabled`
+- `channels.slack.execApprovals.approvers` (optional; falls back to `commands.ownerAllowFrom` when possible)
+- `channels.slack.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
+- `agentFilter`, `sessionFilter`
+
+Slack auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one
+approver resolves. Set `enabled: false` to disable Slack as a native approval client explicitly.
+Set `enabled: true` to force native approvals on when approvers resolve.
+
+Default behavior with no explicit Slack exec approval config:
 
 ```json5
 {
-  approvals: {
-    exec: {
-      enabled: true,
-      targets: [{ channel: "slack", to: "U12345678" }],
+  commands: {
+    ownerAllowFrom: ["slack:U12345678"],
+  },
+}
+```
+
+Explicit Slack-native config is only needed when you want to override approvers, add filters, or
+opt into origin-chat delivery:
+
+```json5
+{
+  channels: {
+    slack: {
+      execApprovals: {
+        enabled: true,
+        approvers: ["U12345678"],
+        target: "both",
+      },
     },
   },
 }
 ```
+
+Shared `approvals.exec` forwarding is separate. Use it only when approval prompts must also route
+to other chats or explicit out-of-band targets.
 
 Same-chat `/approve` also works in Slack channels and DMs that already support commands. See [Exec approvals](/tools/exec-approvals) for the full approval forwarding model.
 

@@ -36,7 +36,6 @@ describe("tavily tools", () => {
   let tavilyClientTesting: typeof import("./tavily-client.js").__testing;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ createTavilyWebSearchProvider } = await import("./tavily-search-provider.js"));
     ({ createTavilySearchTool } = await import("./tavily-search-tool.js"));
     ({ createTavilyExtractTool } = await import("./tavily-extract-tool.js"));

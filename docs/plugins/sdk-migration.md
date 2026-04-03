@@ -46,9 +46,40 @@ The old approach caused problems:
 The modern plugin SDK fixes this: each import path (`openclaw/plugin-sdk/\<subpath\>`)
 is a small, self-contained module with a clear purpose and documented contract.
 
+Legacy provider convenience seams for bundled channels are also gone. Imports
+such as `openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
+`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`, and
+`openclaw/plugin-sdk/telegram-core` were private mono-repo shortcuts, not
+stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
+bundled plugin workspace, keep provider-owned helpers in that plugin's own
+`api.ts` or `runtime-api.ts`.
+
 ## How to migrate
 
 <Steps>
+  <Step title="Audit Windows wrapper fallback behavior">
+    If your plugin uses `openclaw/plugin-sdk/windows-spawn`, unresolved Windows
+    `.cmd`/`.bat` wrappers now fail closed unless you explicitly pass
+    `allowShellFallback: true`.
+
+    ```typescript
+    // Before
+    const program = applyWindowsSpawnProgramPolicy({ candidate });
+
+    // After
+    const program = applyWindowsSpawnProgramPolicy({
+      candidate,
+      // Only set this for trusted compatibility callers that intentionally
+      // accept shell-mediated fallback.
+      allowShellFallback: true,
+    });
+    ```
+
+    If your caller does not intentionally rely on shell fallback, do not set
+    `allowShellFallback` and handle the thrown error instead.
+
+  </Step>
+
   <Step title="Find deprecated imports">
     Search your plugin for imports from either deprecated surface:
 
@@ -127,7 +158,7 @@ is a small, self-contained module with a clear purpose and documented contract.
   | `plugin-sdk/channel-runtime` | Runtime wiring helpers | Channel runtime utilities |
   | `plugin-sdk/channel-send-result` | Send result types | Reply result types |
   | `plugin-sdk/runtime-store` | Persistent plugin storage | `createPluginRuntimeStore` |
-  | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload and reply helpers |
+  | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers |
   | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
   | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
   | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, error graph helpers |

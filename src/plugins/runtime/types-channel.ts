@@ -9,6 +9,9 @@ type ReadChannelAllowFromStore =
   typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
 type UpsertChannelPairingRequest =
   typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
+type DiscordRuntimeSurface = typeof import("../../../extensions/discord/runtime-api.js");
+type DiscordThreadBindings = typeof import("../../../extensions/discord/runtime-api.js");
+type MatrixThreadBindings = typeof import("../../../extensions/matrix/api.js");
 
 type ReadChannelAllowFromStoreForAccount = (params: {
   channel: Parameters<ReadChannelAllowFromStore>[0];
@@ -120,29 +123,29 @@ export type PluginRuntimeChannel = {
     }) => RuntimeThreadBindingLifecycleRecord[];
   };
   discord: {
-    messageActions: typeof import("../../plugin-sdk/discord.js").discordMessageActions;
-    auditChannelPermissions: typeof import("../../plugin-sdk/discord.js").auditDiscordChannelPermissions;
-    listDirectoryGroupsLive: typeof import("../../plugin-sdk/discord.js").listDiscordDirectoryGroupsLive;
-    listDirectoryPeersLive: typeof import("../../plugin-sdk/discord.js").listDiscordDirectoryPeersLive;
-    probeDiscord: typeof import("../../plugin-sdk/discord.js").probeDiscord;
-    resolveChannelAllowlist: typeof import("../../plugin-sdk/discord.js").resolveDiscordChannelAllowlist;
-    resolveUserAllowlist: typeof import("../../plugin-sdk/discord.js").resolveDiscordUserAllowlist;
-    sendComponentMessage: typeof import("../../plugin-sdk/discord.js").sendDiscordComponentMessage;
-    sendMessageDiscord: typeof import("../../plugin-sdk/discord.js").sendMessageDiscord;
-    sendPollDiscord: typeof import("../../plugin-sdk/discord.js").sendPollDiscord;
-    monitorDiscordProvider: typeof import("../../plugin-sdk/discord.js").monitorDiscordProvider;
+    messageActions: DiscordRuntimeSurface["discordMessageActions"];
+    auditChannelPermissions: DiscordRuntimeSurface["auditDiscordChannelPermissions"];
+    listDirectoryGroupsLive: DiscordRuntimeSurface["listDiscordDirectoryGroupsLive"];
+    listDirectoryPeersLive: DiscordRuntimeSurface["listDiscordDirectoryPeersLive"];
+    probeDiscord: DiscordRuntimeSurface["probeDiscord"];
+    resolveChannelAllowlist: DiscordRuntimeSurface["resolveDiscordChannelAllowlist"];
+    resolveUserAllowlist: DiscordRuntimeSurface["resolveDiscordUserAllowlist"];
+    sendComponentMessage: DiscordRuntimeSurface["sendDiscordComponentMessage"];
+    sendMessageDiscord: DiscordRuntimeSurface["sendMessageDiscord"];
+    sendPollDiscord: DiscordRuntimeSurface["sendPollDiscord"];
+    monitorDiscordProvider: DiscordRuntimeSurface["monitorDiscordProvider"];
     threadBindings: {
-      getManager: typeof import("../../plugin-sdk/discord.js").getThreadBindingManager;
-      resolveIdleTimeoutMs: typeof import("../../plugin-sdk/discord.js").resolveThreadBindingIdleTimeoutMs;
-      resolveInactivityExpiresAt: typeof import("../../plugin-sdk/discord.js").resolveThreadBindingInactivityExpiresAt;
-      resolveMaxAgeMs: typeof import("../../plugin-sdk/discord.js").resolveThreadBindingMaxAgeMs;
-      resolveMaxAgeExpiresAt: typeof import("../../plugin-sdk/discord.js").resolveThreadBindingMaxAgeExpiresAt;
-      setIdleTimeoutBySessionKey: typeof import("../../plugin-sdk/discord.js").setThreadBindingIdleTimeoutBySessionKey;
-      setMaxAgeBySessionKey: typeof import("../../plugin-sdk/discord.js").setThreadBindingMaxAgeBySessionKey;
-      unbindBySessionKey: typeof import("../../plugin-sdk/discord.js").unbindThreadBindingsBySessionKey;
+      getManager: DiscordThreadBindings["getThreadBindingManager"];
+      resolveIdleTimeoutMs: DiscordThreadBindings["resolveThreadBindingIdleTimeoutMs"];
+      resolveInactivityExpiresAt: DiscordThreadBindings["resolveThreadBindingInactivityExpiresAt"];
+      resolveMaxAgeMs: DiscordThreadBindings["resolveThreadBindingMaxAgeMs"];
+      resolveMaxAgeExpiresAt: DiscordThreadBindings["resolveThreadBindingMaxAgeExpiresAt"];
+      setIdleTimeoutBySessionKey: DiscordThreadBindings["setThreadBindingIdleTimeoutBySessionKey"];
+      setMaxAgeBySessionKey: DiscordThreadBindings["setThreadBindingMaxAgeBySessionKey"];
+      unbindBySessionKey: DiscordThreadBindings["unbindThreadBindingsBySessionKey"];
     };
     typing: {
-      pulse: typeof import("../../plugin-sdk/discord.js").sendTypingDiscord;
+      pulse: DiscordRuntimeSurface["sendTypingDiscord"];
       start: (params: {
         channelId: string;
         accountId?: string;
@@ -154,35 +157,35 @@ export type PluginRuntimeChannel = {
       }>;
     };
     conversationActions: {
-      editMessage: typeof import("../../plugin-sdk/discord.js").editMessageDiscord;
-      deleteMessage: typeof import("../../plugin-sdk/discord.js").deleteMessageDiscord;
-      pinMessage: typeof import("../../plugin-sdk/discord.js").pinMessageDiscord;
-      unpinMessage: typeof import("../../plugin-sdk/discord.js").unpinMessageDiscord;
-      createThread: typeof import("../../plugin-sdk/discord.js").createThreadDiscord;
-      editChannel: typeof import("../../plugin-sdk/discord.js").editChannelDiscord;
+      editMessage: DiscordRuntimeSurface["editMessageDiscord"];
+      deleteMessage: DiscordRuntimeSurface["deleteMessageDiscord"];
+      pinMessage: DiscordRuntimeSurface["pinMessageDiscord"];
+      unpinMessage: DiscordRuntimeSurface["unpinMessageDiscord"];
+      createThread: DiscordRuntimeSurface["createThreadDiscord"];
+      editChannel: DiscordRuntimeSurface["editChannelDiscord"];
     };
   };
   slack: {
-    listDirectoryGroupsLive: typeof import("../../plugin-sdk/slack.js").listSlackDirectoryGroupsLive;
-    listDirectoryPeersLive: typeof import("../../plugin-sdk/slack.js").listSlackDirectoryPeersLive;
-    probeSlack: typeof import("../../plugin-sdk/slack.js").probeSlack;
-    resolveChannelAllowlist: typeof import("../../plugin-sdk/slack.js").resolveSlackChannelAllowlist;
-    resolveUserAllowlist: typeof import("../../plugin-sdk/slack.js").resolveSlackUserAllowlist;
-    sendMessageSlack: typeof import("../../plugin-sdk/slack.js").sendMessageSlack;
-    monitorSlackProvider: typeof import("../../plugin-sdk/slack.js").monitorSlackProvider;
-    handleSlackAction: typeof import("../../plugin-sdk/slack.js").handleSlackAction;
+    listDirectoryGroupsLive: typeof import("../../../extensions/slack/runtime-api.js").listSlackDirectoryGroupsLive;
+    listDirectoryPeersLive: typeof import("../../../extensions/slack/runtime-api.js").listSlackDirectoryPeersLive;
+    probeSlack: typeof import("../../../extensions/slack/runtime-api.js").probeSlack;
+    resolveChannelAllowlist: typeof import("../../../extensions/slack/runtime-api.js").resolveSlackChannelAllowlist;
+    resolveUserAllowlist: typeof import("../../../extensions/slack/runtime-api.js").resolveSlackUserAllowlist;
+    sendMessageSlack: typeof import("../../../extensions/slack/runtime-api.js").sendMessageSlack;
+    monitorSlackProvider: typeof import("../../../extensions/slack/runtime-api.js").monitorSlackProvider;
+    handleSlackAction: typeof import("../../../extensions/slack/runtime-api.js").handleSlackAction;
   };
   matrix: {
     threadBindings: {
-      setIdleTimeoutBySessionKey: typeof import("../../plugin-sdk/matrix.js").setMatrixThreadBindingIdleTimeoutBySessionKey;
-      setMaxAgeBySessionKey: typeof import("../../plugin-sdk/matrix.js").setMatrixThreadBindingMaxAgeBySessionKey;
+      setIdleTimeoutBySessionKey: MatrixThreadBindings["setMatrixThreadBindingIdleTimeoutBySessionKey"];
+      setMaxAgeBySessionKey: MatrixThreadBindings["setMatrixThreadBindingMaxAgeBySessionKey"];
     };
   };
   signal: {
-    probeSignal: typeof import("../../plugin-sdk/signal.js").probeSignal;
-    sendMessageSignal: typeof import("../../plugin-sdk/signal.js").sendMessageSignal;
-    monitorSignalProvider: typeof import("../../plugin-sdk/signal.js").monitorSignalProvider;
-    messageActions: typeof import("../../plugin-sdk/signal.js").signalMessageActions;
+    probeSignal: typeof import("../../../extensions/signal/runtime-api.js").probeSignal;
+    sendMessageSignal: typeof import("../../../extensions/signal/runtime-api.js").sendMessageSignal;
+    monitorSignalProvider: typeof import("../../../extensions/signal/runtime-api.js").monitorSignalProvider;
+    messageActions: typeof import("../../../extensions/signal/runtime-api.js").signalMessageActions;
   };
   line: {
     listLineAccountIds: typeof import("../../plugin-sdk/line.js").listLineAccountIds;

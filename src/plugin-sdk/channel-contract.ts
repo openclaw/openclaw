@@ -4,6 +4,8 @@ export type {
   BaseTokenResolution,
   ChannelAgentTool,
   ChannelAccountSnapshot,
+  ChannelApprovalAdapter,
+  ChannelApprovalCapability,
   ChannelCommandConversationContext,
   ChannelGroupContext,
   ChannelMessageActionAdapter,
@@ -16,3 +18,5 @@ export type {
   ChannelThreadingContext,
   ChannelThreadingToolContext,
 } from "../channels/plugins/types.js";
+
+export type { ChannelDirectoryAdapter } from "../channels/plugins/types.adapters.js";

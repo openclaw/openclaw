@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
@@ -224,7 +225,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   const tasksCmd = program
     .command("tasks")
-    .description("Inspect durable background task state")
+    .description("Inspect durable background tasks and TaskFlow state")
     .option("--json", "Output as JSON", false)
     .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
     .option(
@@ -276,12 +277,12 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   tasksCmd
     .command("audit")
-    .description("Show stale or broken background task runs")
+    .description("Show stale or broken background tasks and TaskFlows")
     .option("--json", "Output as JSON", false)
     .option("--severity <level>", "Filter by severity (warn, error)")
     .option(
       "--code <name>",
-      "Filter by finding code (stale_queued, stale_running, lost, delivery_failed, missing_cleanup, inconsistent_timestamps)",
+      "Filter by finding code (stale_queued, stale_running, lost, delivery_failed, missing_cleanup, inconsistent_timestamps, restore_failed, stale_waiting, stale_blocked, cancel_stuck, missing_linked_tasks, blocked_task_missing)",
     )
     .option("--limit <n>", "Limit displayed findings")
     .action(async (opts, command) => {
@@ -298,6 +299,12 @@ export function registerStatusHealthSessionsCommands(program: Command) {
               | "delivery_failed"
               | "missing_cleanup"
               | "inconsistent_timestamps"
+              | "restore_failed"
+              | "stale_waiting"
+              | "stale_blocked"
+              | "cancel_stuck"
+              | "missing_linked_tasks"
+              | "blocked_task_missing"
               | undefined,
             limit: parsePositiveIntOrUndefined(opts.limit),
           },
@@ -308,7 +315,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   tasksCmd
     .command("maintenance")
-    .description("Preview or apply task ledger maintenance")
+    .description("Preview or apply tasks and TaskFlow maintenance")
     .option("--json", "Output as JSON", false)
     .option("--apply", "Apply reconciliation, cleanup stamping, and pruning", false)
     .action(async (opts, command) => {
@@ -366,6 +373,62 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .action(async (lookup) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await tasksCancelCommand(
+          {
+            lookup,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const tasksFlowCmd = tasksCmd
+    .command("flow")
+    .description("Inspect durable TaskFlow state under tasks");
+
+  tasksFlowCmd
+    .command("list")
+    .description("List tracked TaskFlows")
+    .option("--json", "Output as JSON", false)
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, waiting, blocked, succeeded, failed, cancelled, lost)",
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsListCommand(
+          {
+            json: Boolean(opts.json),
+            status: opts.status as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksFlowCmd
+    .command("show")
+    .description("Show one TaskFlow by flow id or owner key")
+    .argument("<lookup>", "Flow id or owner key")
+    .option("--json", "Output as JSON", false)
+    .action(async (lookup, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsShowCommand(
+          {
+            lookup,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksFlowCmd
+    .command("cancel")
+    .description("Cancel a running TaskFlow")
+    .argument("<lookup>", "Flow id or owner key")
+    .action(async (lookup) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsCancelCommand(
           {
             lookup,
           },

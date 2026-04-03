@@ -8,7 +8,7 @@
     "@discordjs/voice": "^0.19.2",
     "discord-api-types": "^0.38.43",
     "https-proxy-agent": "^8.0.0",
-    "opusscript": "^0.1.1"
+    "opusscript": "^0.0.8"
   },
   "devDependencies": {
     "openclaw": "workspace:*"

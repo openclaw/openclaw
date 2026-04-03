@@ -29,15 +29,14 @@ describe("normalizeChatType", () => {
 
 describe("WA_WEB_AUTH_DIR", () => {
   afterEach(() => {
-    vi.doUnmock("../plugins/runtime/runtime-whatsapp-boundary.js");
-    vi.resetModules();
+    vi.doUnmock("../plugins/runtime/runtime-web-channel-boundary.js");
   });
 
   it("resolves lazily and caches across the legacy and channels/web entrypoints", async () => {
     const resolveWaWebAuthDir = vi.fn(() => "/tmp/openclaw-whatsapp-auth");
 
     vi.resetModules();
-    vi.doMock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
+    vi.doMock("../plugins/runtime/runtime-web-channel-boundary.js", () => ({
       createWaSocket: vi.fn(),
       extractMediaPlaceholder: vi.fn(),
       extractText: vi.fn(),

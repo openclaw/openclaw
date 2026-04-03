@@ -8,7 +8,7 @@ import {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
   unbindThreadBindingsBySessionKey,
-} from "../../plugin-sdk/discord.js";
+} from "../../plugin-sdk/discord-runtime-surface.js";
 import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeSurface,
