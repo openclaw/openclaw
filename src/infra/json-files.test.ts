@@ -1,0 +1,108 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { describe, expect, it } from "vitest";
+import { createAsyncLock, readJsonFile, writeJsonAtomic, writeTextAtomic } from "./json-files.js";
+
+async function withTempBase<T>(run: (base: string) => Promise<T>): Promise<T> {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-json-files-"));
+  return run(base);
+}
+
+describe("json file helpers", () => {
+  it.each([
+    {
+      name: "reads valid json",
+      setup: async (base: string) => {
+        const filePath = path.join(base, "valid.json");
+        await fs.writeFile(filePath, '{"ok":true}', "utf8");
+        return filePath;
+      },
+      expected: { ok: true },
+    },
+    {
+      name: "returns null for invalid files",
+      setup: async (base: string) => {
+        const filePath = path.join(base, "invalid.json");
+        await fs.writeFile(filePath, "{not-json}", "utf8");
+        return filePath;
+      },
+      expected: null,
+    },
+    {
+      name: "returns null for missing files",
+      setup: async (base: string) => path.join(base, "missing.json"),
+      expected: null,
+    },
+  ])("$name", async ({ setup, expected }) => {
+    await withTempBase(async (base) => {
+      await expect(readJsonFile(await setup(base))).resolves.toEqual(expected);
+    });
+  });
+
+  it("writes json atomically with pretty formatting and optional trailing newline", async () => {
+    await withTempBase(async (base) => {
+      const filePath = path.join(base, "nested", "config.json");
+
+      await writeJsonAtomic(
+        filePath,
+        { ok: true, nested: { value: 1 } },
+        { trailingNewline: true, ensureDirMode: 0o755 },
+      );
+
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(
+        '{\n  "ok": true,\n  "nested": {\n    "value": 1\n  }\n}\n',
+      );
+    });
+  });
+
+  it.each([
+    { input: "hello", expected: "hello\n" },
+    { input: "hello\n", expected: "hello\n" },
+  ])("writes text atomically for %j", async ({ input, expected }) => {
+    await withTempBase(async (base) => {
+      const filePath = path.join(base, "nested", "note.txt");
+      await writeTextAtomic(filePath, input, { appendTrailingNewline: true });
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(expected);
+    });
+  });
+
+  it.each([
+    {
+      name: "serializes async lock callers even across rejections",
+      firstTask: async (events: string[]) => {
+        events.push("first:start");
+        await sleep(20);
+        events.push("first:end");
+        throw new Error("boom");
+      },
+      expectedFirstError: "boom",
+      expectedEvents: ["first:start", "first:end", "second:start", "second:end"],
+    },
+    {
+      name: "releases the async lock after synchronous throws",
+      firstTask: async (events: string[]) => {
+        events.push("first:start");
+        throw new Error("sync boom");
+      },
+      expectedFirstError: "sync boom",
+      expectedEvents: ["first:start", "second:start", "second:end"],
+    },
+  ])("$name", async ({ firstTask, expectedFirstError, expectedEvents }) => {
+    const withLock = createAsyncLock();
+    const events: string[] = [];
+
+    const first = withLock(() => firstTask(events));
+
+    const second = withLock(async () => {
+      events.push("second:start");
+      events.push("second:end");
+      return "ok";
+    });
+
+    await expect(first).rejects.toThrow(expectedFirstError);
+    await expect(second).resolves.toBe("ok");
+    expect(events).toEqual(expectedEvents);
+  });
+});

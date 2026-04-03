@@ -1,0 +1,23 @@
+import Foundation
+
+enum SessionKey {
+    static func normalizeMainKey(_ raw: String?) -> String {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "main" : trimmed
+    }
+
+    static func makeAgentSessionKey(agentId: String, baseKey: String) -> String {
+        let trimmedAgent = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBase = baseKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedAgent.isEmpty { return trimmedBase.isEmpty ? "main" : trimmedBase }
+        let normalizedBase = trimmedBase.isEmpty ? "main" : trimmedBase
+        return "agent:\(trimmedAgent):\(normalizedBase)"
+    }
+
+    static func isCanonicalMainSessionKey(_ value: String?) -> Bool {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return false }
+        if trimmed == "global" { return true }
+        return trimmed.hasPrefix("agent:")
+    }
+}
