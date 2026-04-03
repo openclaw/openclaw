@@ -24,6 +24,13 @@ export default defineConfig(() => {
   return {
     base,
     publicDir: path.resolve(here, "public"),
+    resolve: {
+      alias: {
+        // Provide a browser-safe stub for "node:module". The callers (e.g. src/version.ts)
+        // already wrap createRequire usage in try/catch and fall back to injected constants.
+        "node:module": path.resolve(here, "src/shims/node-module.ts"),
+      },
+    },
     optimizeDeps: {
       include: ["lit/directives/repeat.js"],
     },
