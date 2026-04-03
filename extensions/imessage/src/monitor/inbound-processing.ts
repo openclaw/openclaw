@@ -217,7 +217,8 @@ export function resolveIMessageInboundDecision(params: {
   // (the bot's own handle) disambiguates. See #60014.
   const destCallerId = params.message.destination_caller_id;
   const destMismatch =
-    destCallerId &&
+    typeof destCallerId === "string" &&
+    destCallerId.length > 0 &&
     normalizeIMessageHandle(sender) !== normalizeIMessageHandle(destCallerId);
   const isSelfChat = senderMatchesChatId && !destMismatch;
   // Track whether we already processed the is_from_me=true self-chat path.
