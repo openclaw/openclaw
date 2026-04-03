@@ -10,7 +10,9 @@ import { whatsappSetupPlugin } from "./channel.setup.js";
 import { whatsappSetupWizard } from "./setup-surface.js";
 
 const hoisted = vi.hoisted(() => ({
-  detectWhatsAppLinked: vi.fn(async () => false),
+  detectWhatsAppLinked: vi.fn<(cfg: OpenClawConfig, accountId: string) => Promise<boolean>>(
+    async () => false,
+  ),
   loginWeb: vi.fn(async () => {}),
   pathExists: vi.fn(async () => false),
   resolveWhatsAppAuthDir: vi.fn(() => ({
@@ -182,10 +184,7 @@ describe("whatsapp setup wizard", () => {
     expect(named.cfg.channels?.whatsapp?.dmPolicy).toBe("disabled");
     expect(named.cfg.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
     expect(named.cfg.channels?.whatsapp?.accounts?.work?.dmPolicy).toBe("open");
-    expect(named.cfg.channels?.whatsapp?.accounts?.work?.allowFrom).toEqual([
-      "*",
-      "+15555550123",
-    ]);
+    expect(named.cfg.channels?.whatsapp?.accounts?.work?.allowFrom).toEqual(["*", "+15555550123"]);
     expect(harness.note).toHaveBeenCalledWith(
       expect.stringContaining(
         "`channels.whatsapp.accounts.work.dmPolicy` + `channels.whatsapp.accounts.work.allowFrom`",
@@ -217,7 +216,9 @@ describe("whatsapp setup wizard", () => {
   });
 
   it("uses configured defaultAccount for omitted-account setup status", async () => {
-    hoisted.detectWhatsAppLinked.mockImplementation(async (_cfg, accountId) => accountId === "work");
+    hoisted.detectWhatsAppLinked.mockImplementation(
+      async (_cfg: OpenClawConfig, accountId: string) => accountId === "work",
+    );
 
     const status = await whatsappGetStatus({
       cfg: {
@@ -240,10 +241,7 @@ describe("whatsapp setup wizard", () => {
 
     expect(status.configured).toBe(true);
     expect(status.statusLines).toEqual(["WhatsApp (work): linked"]);
-    expect(hoisted.detectWhatsAppLinked).toHaveBeenCalledWith(
-      expect.any(Object),
-      "work",
-    );
+    expect(hoisted.detectWhatsAppLinked).toHaveBeenCalledWith(expect.any(Object), "work");
     expect(hoisted.detectWhatsAppLinked).not.toHaveBeenCalledWith(
       expect.any(Object),
       DEFAULT_ACCOUNT_ID,
