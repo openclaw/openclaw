@@ -89,6 +89,14 @@ export type ResolvedMemorySearchConfig = {
     enabled: boolean;
     maxEntries?: number;
   };
+  llmRecall: {
+    enabled: boolean;
+    model: string;
+    baseUrl?: string;
+    apiKey?: string;
+    maxFiles: number;
+    maxTokens: number;
+  };
 };
 
 const DEFAULT_CHUNK_TOKENS = 400;
@@ -292,6 +300,14 @@ function mergeConfig(
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
     maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
   };
+  const llmRecall = {
+    enabled: overrides?.llmRecall?.enabled ?? defaults?.llmRecall?.enabled ?? false,
+    model: overrides?.llmRecall?.model ?? defaults?.llmRecall?.model ?? "",
+    baseUrl: overrides?.llmRecall?.baseUrl ?? defaults?.llmRecall?.baseUrl,
+    apiKey: overrides?.llmRecall?.apiKey ?? defaults?.llmRecall?.apiKey,
+    maxFiles: overrides?.llmRecall?.maxFiles ?? defaults?.llmRecall?.maxFiles ?? 5,
+    maxTokens: overrides?.llmRecall?.maxTokens ?? defaults?.llmRecall?.maxTokens ?? 256,
+  };
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
   const minScore = clampNumber(query.minScore, 0, 1);
@@ -362,6 +378,14 @@ function mergeConfig(
         typeof cache.maxEntries === "number" && Number.isFinite(cache.maxEntries)
           ? Math.max(1, Math.floor(cache.maxEntries))
           : undefined,
+    },
+    llmRecall: {
+      enabled: Boolean(llmRecall.enabled),
+      model: llmRecall.model,
+      baseUrl: llmRecall.baseUrl,
+      apiKey: llmRecall.apiKey,
+      maxFiles: Math.max(1, Math.floor(Number.isFinite(llmRecall.maxFiles) ? llmRecall.maxFiles : 5)),
+      maxTokens: Math.max(64, Math.floor(Number.isFinite(llmRecall.maxTokens) ? llmRecall.maxTokens : 256)),
     },
   };
 }

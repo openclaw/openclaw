@@ -459,6 +459,21 @@ export type MemorySearchConfig = {
     /** Optional cap on cached embeddings (best-effort). */
     maxEntries?: number;
   };
+  /** LLM-based memory file recall (side query to select relevant .md files). */
+  llmRecall?: {
+    /** Enable LLM recall (default: false). */
+    enabled?: boolean;
+    /** Model id for the selector LLM (e.g. "gemini-2.0-flash"). */
+    model?: string;
+    /** OpenAI-compatible API base URL. */
+    baseUrl?: string;
+    /** API key (or env var name prefixed with "env:"). */
+    apiKey?: string;
+    /** Max memory files to return (default: 5). */
+    maxFiles?: number;
+    /** Max tokens for the selector response (default: 256). */
+    maxTokens?: number;
+  };
 };
 
 export type ToolsConfig = {
