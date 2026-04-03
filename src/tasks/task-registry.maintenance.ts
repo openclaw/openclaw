@@ -1,6 +1,7 @@
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { deriveSessionChatType } from "../sessions/session-key-utils.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
@@ -63,11 +64,33 @@ function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   return now - referenceAt >= TASK_RECONCILE_GRACE_MS;
 }
 
+/**
+ * Returns false if the task's runtime is cron, since cron tasks do not maintain
+ * a persistent child session — once the cron job finishes, no backing session
+ * exists and the task should be considered stale.
+ *
+ * For cli tasks, a matching session-store entry is only treated as live if the
+ * session key is an agent-scoped key (not a long-lived channel/group/direct
+ * session like a Slack or Telegram channel session whose entry persists
+ * indefinitely regardless of whether any task work is still running).
+ *
+ * For subagent and acp tasks, the backing session entry is the canonical signal.
+ */
 function hasBackingSession(task: TaskRecord): boolean {
+  // cron tasks never have a persistent backing session — the cron job fires,
+  // does its work, and exits. Any childSessionKey is a transient run key, not
+  // a long-lived session that indicates the task is still active.
+  if (task.runtime === "cron") {
+    return false;
+  }
+
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
+    // For runtimes other than cron, a missing key means we cannot verify
+    // liveness; be conservative and assume the task may still be running.
     return true;
   }
+
   if (task.runtime === "acp") {
     const acpEntry = readAcpSessionEntry({
       sessionKey: childSessionKey,
@@ -77,12 +100,30 @@ function hasBackingSession(task: TaskRecord): boolean {
     }
     return Boolean(acpEntry.entry);
   }
-  if (task.runtime === "subagent" || task.runtime === "cli") {
+
+  if (task.runtime === "subagent") {
     const agentId = parseAgentSessionKey(childSessionKey)?.agentId;
     const storePath = resolveStorePath(undefined, { agentId });
     const store = loadSessionStore(storePath);
     return Boolean(findSessionEntryByKey(store, childSessionKey));
   }
+
+  if (task.runtime === "cli") {
+    // For CLI tasks, the childSessionKey may point to a long-lived channel
+    // session (e.g. agent:main:slack:channel:xyz) whose entry persists in the
+    // session store indefinitely — even after the actual task work has ended.
+    // A channel/group/direct session existing in the store does NOT mean the
+    // task is still alive, so we must exclude those from the "backed" check.
+    const chatType = deriveSessionChatType(childSessionKey);
+    if (chatType === "channel" || chatType === "group" || chatType === "direct") {
+      return false;
+    }
+    const agentId = parseAgentSessionKey(childSessionKey)?.agentId;
+    const storePath = resolveStorePath(undefined, { agentId });
+    const store = loadSessionStore(storePath);
+    return Boolean(findSessionEntryByKey(store, childSessionKey));
+  }
+
   return true;
 }
 
