@@ -2,6 +2,7 @@ import {
   createChannelExecApprovalProfile,
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
+  matchesApprovalRequestFilters,
   resolveApprovalRequestChannelAccountId,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-runtime";
@@ -73,16 +74,31 @@ export function isTelegramExecApprovalTargetRecipient(params: {
   });
 }
 
-function countTelegramExecApprovalHandlerAccounts(cfg: OpenClawConfig): number {
-  return listTelegramAccountIds(cfg).filter((accountId) => {
-    const account = resolveTelegramAccount({ cfg, accountId });
+function countTelegramExecApprovalEligibleAccounts(params: {
+  cfg: OpenClawConfig;
+  request: ExecApprovalRequest | PluginApprovalRequest;
+}): number {
+  return listTelegramAccountIds(params.cfg).filter((accountId) => {
+    const account = resolveTelegramAccount({ cfg: params.cfg, accountId });
     if (!account.enabled || account.tokenSource === "none") {
       return false;
     }
-    return isChannelExecApprovalClientEnabledFromConfig({
-      enabled: resolveTelegramExecApprovalConfig({ cfg, accountId })?.enabled,
-      approverCount: getTelegramExecApprovalApprovers({ cfg, accountId }).length,
+    const config = resolveTelegramExecApprovalConfig({
+      cfg: params.cfg,
+      accountId,
     });
+    return (
+      isChannelExecApprovalClientEnabledFromConfig({
+        enabled: config?.enabled,
+        approverCount: getTelegramExecApprovalApprovers({ cfg: params.cfg, accountId }).length,
+      }) &&
+      matchesApprovalRequestFilters({
+        request: params.request.request,
+        agentFilter: config?.agentFilter,
+        sessionFilter: config?.sessionFilter,
+        fallbackAgentIdFromSessionKey: true,
+      })
+    );
   }).length;
 }
 
@@ -98,7 +114,12 @@ function matchesTelegramRequestAccount(params: {
     channel: "telegram",
   });
   if (turnSourceChannel && turnSourceChannel !== "telegram" && !boundAccountId) {
-    return countTelegramExecApprovalHandlerAccounts(params.cfg) <= 1;
+    return (
+      countTelegramExecApprovalEligibleAccounts({
+        cfg: params.cfg,
+        request: params.request,
+      }) <= 1
+    );
   }
   return (
     !boundAccountId ||

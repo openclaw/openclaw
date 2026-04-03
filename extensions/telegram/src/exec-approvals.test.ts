@@ -292,6 +292,59 @@ describe("telegram exec approvals", () => {
     ).toBe(false);
   });
 
+  it("uses request filters when checking foreign-channel telegram ambiguity", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "tok-default",
+              execApprovals: {
+                enabled: true,
+                approvers: ["123"],
+                agentFilter: ["ops"],
+              },
+            },
+            ops: {
+              botToken: "tok-ops",
+              execApprovals: {
+                enabled: true,
+                approvers: ["123"],
+                agentFilter: ["other"],
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-5",
+      request: {
+        command: "echo hi",
+        sessionKey: "agent:ops:missing",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
+  });
+
   it("ignores disabled telegram accounts when checking foreign-channel ambiguity", () => {
     const cfg = {
       channels: {
@@ -317,7 +370,7 @@ describe("telegram exec approvals", () => {
       },
     } as OpenClawConfig;
     const request = {
-      id: "req-5",
+      id: "req-6",
       request: {
         command: "echo hi",
         sessionKey: "agent:ops:missing",
