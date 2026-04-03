@@ -340,6 +340,45 @@ describe("legacy migrate talk provider shape", () => {
     });
   });
 
+  it("treats empty talk.providers as legacy-only talk config", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        providers: {},
+        voiceId: "voice-1",
+        modelId: "eleven_v3",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved talk legacy fields (voiceId, modelId) → talk.providers.elevenlabs (filled missing provider fields only).",
+    );
+    expect(res.config?.talk).toEqual({
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-1",
+          modelId: "eleven_v3",
+        },
+      },
+    });
+  });
+
+  it("does not trust blocked talk.provider ids during migration", () => {
+    const res = migrateLegacyConfig({
+      talk: {
+        provider: "__proto__",
+        voiceId: "legacy-voice",
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Skipped talk legacy field migration because talk.providers defines multiple providers and talk.provider is unset; move talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey under the intended provider manually.",
+    );
+    expect(res.config).toBeNull();
+    expect(res.changes).toContain(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+  });
+
   it("leaves legacy talk fields in place when the target provider is ambiguous", () => {
     const res = migrateLegacyConfig({
       talk: {

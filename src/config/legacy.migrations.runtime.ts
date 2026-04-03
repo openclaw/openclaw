@@ -156,12 +156,18 @@ function resolveTalkMigrationTargetProviderId(talk: Record<string, unknown>): st
     typeof talk.provider === "string" && talk.provider.trim() ? talk.provider.trim() : null;
   const providers = getRecord(talk.providers);
   if (explicitProvider) {
+    if (isBlockedObjectKey(explicitProvider)) {
+      return null;
+    }
     return explicitProvider;
   }
   if (!providers) {
     return LEGACY_TALK_PROVIDER_ID;
   }
   const providerIds = Object.keys(providers).filter((key) => !isBlockedObjectKey(key));
+  if (providerIds.length === 0) {
+    return LEGACY_TALK_PROVIDER_ID;
+  }
   if (providerIds.length === 1) {
     return providerIds[0] ?? null;
   }
