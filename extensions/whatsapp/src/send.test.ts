@@ -84,6 +84,36 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 
+  it("uses configured defaultAccount when outbound accountId is omitted", async () => {
+    setActiveWebListener(null);
+    setActiveWebListener("work", {
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+
+    const result = await sendMessageWhatsApp("+1555", "hi", {
+      verbose: false,
+      cfg: {
+        channels: {
+          whatsapp: {
+            defaultAccount: "work",
+            accounts: {
+              work: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toEqual({
+      messageId: "msg123",
+      toJid: "1555@s.whatsapp.net",
+    });
+    expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
+  });
+
   it("trims leading whitespace before sending text and captions", async () => {
     await sendMessageWhatsApp("+1555", "\n \thello", { verbose: false });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "hello", undefined, undefined);
