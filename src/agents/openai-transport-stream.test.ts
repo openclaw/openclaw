@@ -331,6 +331,56 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "system" });
   });
 
+  it("uses system role for Moonshot default-route completions providers", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.5",
+        name: "Kimi K2.5",
+        api: "openai-completions",
+        provider: "moonshot",
+        baseUrl: "",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<{ role?: string }> };
+
+    expect(params.messages?.[0]).toMatchObject({ role: "system" });
+  });
+
+  it("uses system role for ModelStudio-hosted completions providers", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen3.6-plus",
+        name: "Qwen 3.6 Plus",
+        api: "openai-completions",
+        provider: "custom-qwen",
+        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<{ role?: string }> };
+
+    expect(params.messages?.[0]).toMatchObject({ role: "system" });
+  });
+
   it("uses max_tokens for Chutes default-route completions providers without relying on baseUrl host sniffing", () => {
     const params = buildOpenAICompletionsParams(
       {

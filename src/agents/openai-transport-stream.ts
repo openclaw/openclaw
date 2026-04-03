@@ -1343,6 +1343,11 @@ function detectCompat(model: OpenAIModeModel) {
   const isDefaultRoute = endpointClass === "default";
   const isMistral =
     capabilities.knownProviderFamily === "mistral" || endpointClass === "mistral-public";
+  const isMoonshotLike =
+    capabilities.knownProviderFamily === "moonshot" ||
+    capabilities.knownProviderFamily === "modelstudio" ||
+    endpointClass === "moonshot-native" ||
+    endpointClass === "modelstudio-native";
   const isZai = endpointClass === "zai-native" || (isDefaultRoute && provider === "zai");
   const isNonStandard =
     endpointClass === "cerebras-native" ||
@@ -1374,7 +1379,7 @@ function detectCompat(model: OpenAIModeModel) {
       : {};
   return {
     supportsStore: !isNonStandard,
-    supportsDeveloperRole: !isNonStandard,
+    supportsDeveloperRole: !isNonStandard && !isMoonshotLike,
     supportsReasoningEffort: !isGrok && !isMistral && !isZai,
     reasoningEffortMap,
     supportsUsageInStreaming: true,
