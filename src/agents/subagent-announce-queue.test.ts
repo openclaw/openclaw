@@ -204,8 +204,10 @@ describe("subagent-announce-queue", () => {
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalledTimes(2);
     });
-    const firstSent = send.mock.calls[0][0];
-    const secondSent = send.mock.calls[1][0];
+    const firstCall = send.mock.calls[0];
+    const secondCall = send.mock.calls[1];
+    const firstSent = firstCall[0]!;
+    const secondSent = secondCall[0]!;
     expect(firstSent.display.text).toBe("first visible");
     expect(secondSent.display.summaryLine).toBeUndefined();
     expect(secondSent.execution.agentPrompt).toBe("second internal");
@@ -249,7 +251,9 @@ describe("subagent-announce-queue", () => {
     await vi.waitFor(() => {
       expect(send).toHaveBeenCalledTimes(1);
     });
-    const overflowSummary = send.mock.calls[0][0].display.text;
+    const firstCall = send.mock.calls[0];
+    const overflowSent = firstCall[0]!;
+    const overflowSummary = overflowSent.display.text;
     expect(overflowSummary).toContain("[Queue overflow]");
     expect(overflowSummary).toContain("[summary unavailable]");
     expect(overflowSummary).not.toContain("hidden fallback prompt");
