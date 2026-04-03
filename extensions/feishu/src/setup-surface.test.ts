@@ -90,6 +90,56 @@ describe("feishu setup wizard", () => {
       }),
     ).resolves.toBeTruthy();
   });
+
+  it("writes selected-account credentials instead of overwriting the channel root", async () => {
+    const prompter = createTestWizardPrompter({
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Enter Feishu App Secret") {
+          return "work-secret"; // pragma: allowlist secret
+        }
+        if (message === "Enter Feishu App ID") {
+          return "work-app";
+        }
+        if (message === "Group chat allowlist (chat_ids)") {
+          return "";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+      select: vi.fn(
+        async ({ initialValue }: { initialValue?: string }) => initialValue ?? "websocket",
+      ) as never,
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: feishuConfigure,
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "top-level-app",
+            appSecret: "top-level-secret", // pragma: allowlist secret
+            accounts: {
+              work: {
+                appId: "",
+              },
+            },
+          },
+        },
+      } as never,
+      prompter,
+      accountOverrides: {
+        feishu: "work",
+      },
+      runtime: createNonExitingTypedRuntimeEnv<FeishuConfigureRuntime>(),
+    });
+
+    expect(result.cfg.channels?.feishu?.appId).toBe("top-level-app");
+    expect(result.cfg.channels?.feishu?.appSecret).toBe("top-level-secret");
+    expect(result.cfg.channels?.feishu?.accounts?.work).toMatchObject({
+      enabled: true,
+      appId: "work-app",
+      appSecret: "work-secret",
+    });
+  });
 });
 
 describe("feishu setup wizard status", () => {
