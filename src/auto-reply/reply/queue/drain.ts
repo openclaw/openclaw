@@ -196,18 +196,25 @@ export function scheduleFollowupDrain(
             continue;
           }
 
-          await effectiveRunFollowup({
-            execution: { visibility: "internal", agentPrompt: prompt },
-            display: { visibility: "user-visible", text: prompt },
-            run,
-            enqueuedAt: Date.now(),
-            ...routing,
-          });
-          queue.items.splice(0, items.length);
-          if (summary) {
-            clearQueueSummaryState(queue);
+          try {
+            await effectiveRunFollowup({
+              execution: { visibility: "internal", agentPrompt: prompt },
+              display: { visibility: "user-visible", text: prompt },
+              run,
+              enqueuedAt: Date.now(),
+              ...routing,
+            });
+            queue.items.splice(0, items.length);
+            if (summary) {
+              clearQueueSummaryState(queue);
+            }
+            continue;
+          } catch (err) {
+            defaultRuntime.error?.(
+              `collect-mode followup execution failed for ${key}; preserving batch for retry: ${String(err)}`,
+            );
+            throw err;
           }
-          continue;
         }
 
         const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
