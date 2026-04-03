@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { enqueueAnnounce, resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
+import {
+  enqueueAnnounce,
+  maybeSendAnnounceCollectEmptySummary,
+  resetAnnounceQueuesForTests,
+  resolveAnnounceCollectEmptySummaryTarget,
+} from "./subagent-announce-queue.js";
 
 type SentItem = {
   execution: { agentPrompt: string };
@@ -46,6 +51,47 @@ function getSentItem(send: { mock: { calls: SentItem[][] } }, index: number): Se
 }
 
 describe("subagent-announce-queue", () => {
+  it("reuses the last safe summary target when forced collect drain empties the queue", () => {
+    const lastSummaryTarget = {
+      execution: { visibility: "internal", agentPrompt: "internal" },
+      display: { visibility: "summary-only", summaryLine: "safe summary" },
+      enqueuedAt: 1,
+      sessionKey: "agent:main:telegram:dm:u1",
+      origin: { channel: "telegram", to: "telegram:1" },
+      originKey: "telegram:telegram:1",
+    } as const;
+
+    expect(
+      resolveAnnounceCollectEmptySummaryTarget({ items: [], lastSummaryTarget }),
+    ).toEqual(lastSummaryTarget);
+  });
+
+  it("sends collect-empty overflow summaries using the last safe summary target", async () => {
+    const send = vi.fn(async () => {});
+    const queue = {
+      items: [],
+      dropPolicy: "summarize" as const,
+      droppedCount: 1,
+      summaryLines: ["first safe summary"],
+      lastSummaryTarget: {
+        execution: { visibility: "internal", agentPrompt: "internal" },
+        display: { visibility: "summary-only", summaryLine: "second safe summary" },
+        enqueuedAt: 1,
+        sessionKey: "agent:main:telegram:dm:u1",
+        origin: { channel: "telegram", to: "telegram:2" },
+        originKey: "telegram:telegram:2",
+      },
+    };
+
+    await expect(maybeSendAnnounceCollectEmptySummary({ queue, send })).resolves.toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
+    const sent = getSentItem(send, 0);
+    expect(sent.display.text).toContain("[Queue overflow]");
+    expect(sent.display.text).toContain("first safe summary");
+    expect(queue.droppedCount).toBe(0);
+    expect(queue.summaryLines).toEqual([]);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     resetAnnounceQueuesForTests();

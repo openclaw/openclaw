@@ -58,6 +58,8 @@ type AnnounceQueueState = {
   summaryLines: string[];
   collectForceIndividual: boolean;
   send: (item: AnnounceQueueItem) => Promise<void>;
+  /** Safe queued announce item shape to reuse for overflow-summary delivery when items drain empty. */
+  lastSummaryTarget?: AnnounceQueueItem;
   /** Consecutive drain failures — drives exponential backoff on errors. */
   consecutiveFailures: number;
 };
@@ -102,6 +104,7 @@ function getAnnounceQueue(
     summaryLines: [],
     collectForceIndividual: false,
     send,
+    lastSummaryTarget: undefined,
     consecutiveFailures: 0,
   };
   applyQueueRuntimeSettings({
@@ -124,6 +127,38 @@ function hasAnnounceCrossChannelItems(items: AnnounceQueueItem[]): boolean {
   });
 }
 
+export function resolveAnnounceCollectEmptySummaryTarget(params: {
+  items: AnnounceQueueItem[];
+  lastSummaryTarget?: AnnounceQueueItem;
+}): AnnounceQueueItem | undefined {
+  return params.items[0] ?? params.lastSummaryTarget;
+}
+
+export async function maybeSendAnnounceCollectEmptySummary(params: {
+  queue: Pick<
+    AnnounceQueueState,
+    "items" | "dropPolicy" | "droppedCount" | "summaryLines" | "lastSummaryTarget"
+  >;
+  send: (item: AnnounceQueueItem) => Promise<void>;
+}): Promise<boolean> {
+  const summaryPrompt = previewQueueSummaryPrompt({ state: params.queue, noun: "announce" });
+  const summaryTarget = resolveAnnounceCollectEmptySummaryTarget({
+    items: params.queue.items,
+    lastSummaryTarget: params.queue.lastSummaryTarget,
+  });
+  if (!summaryPrompt || !summaryTarget) {
+    return false;
+  }
+  params.queue.lastSummaryTarget = summaryTarget;
+  await params.send({
+    ...summaryTarget,
+    execution: { visibility: "internal", agentPrompt: summaryPrompt },
+    display: { visibility: "user-visible", text: summaryPrompt },
+  });
+  clearQueueSummaryState(params.queue);
+  return true;
+}
+
 function scheduleAnnounceDrain(key: string) {
   const queue = beginQueueDrain(ANNOUNCE_QUEUES, key);
   if (!queue) {
@@ -142,21 +177,16 @@ function scheduleAnnounceDrain(key: string) {
             collectState,
             isCrossChannel: hasAnnounceCrossChannelItems(queue.items),
             items: queue.items,
-            run: async (item) => await queue.send(item),
+            run: async (item) => {
+              queue.lastSummaryTarget = item;
+              await queue.send(item);
+            },
           });
           if (collectState.forceIndividualCollect) {
             queue.collectForceIndividual = true;
           }
           if (collectDrainResult === "empty") {
-            const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
-            const summaryTarget = queue.items[0];
-            if (summaryPrompt && summaryTarget) {
-              await queue.send({
-                ...summaryTarget,
-                execution: { visibility: "internal", agentPrompt: summaryPrompt },
-                display: { visibility: "user-visible", text: summaryPrompt },
-              });
-              clearQueueSummaryState(queue);
+            if (await maybeSendAnnounceCollectEmptySummary({ queue, send: queue.send })) {
               continue;
             }
             break;
@@ -182,6 +212,7 @@ function scheduleAnnounceDrain(key: string) {
               if (!summaryTarget) {
                 break;
               }
+              queue.lastSummaryTarget = summaryTarget;
               await queue.send({
                 ...summaryTarget,
                 execution: { visibility: "internal", agentPrompt: summary },
@@ -199,6 +230,7 @@ function scheduleAnnounceDrain(key: string) {
           if (!last) {
             break;
           }
+          queue.lastSummaryTarget = last;
           await queue.send({
             ...last,
             execution: { visibility: "internal", agentPrompt: prompt },
@@ -217,12 +249,14 @@ function scheduleAnnounceDrain(key: string) {
           if (
             !(await drainNextQueueItem(
               queue.items,
-              async (item) =>
+              async (item) => {
+                queue.lastSummaryTarget = item;
                 await queue.send({
                   ...item,
                   execution: { visibility: "internal", agentPrompt: summaryPrompt },
                   display: { visibility: "user-visible", text: summaryPrompt },
-                }),
+                });
+              },
             ))
           ) {
             break;
@@ -231,7 +265,12 @@ function scheduleAnnounceDrain(key: string) {
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, async (item) => await queue.send(item)))) {
+        if (
+          !(await drainNextQueueItem(queue.items, async (item) => {
+            queue.lastSummaryTarget = item;
+            await queue.send(item);
+          }))
+        ) {
           break;
         }
       }
