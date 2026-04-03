@@ -169,6 +169,7 @@ function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): Exec
 }
 
 function shouldSkipForwardingFallback(params: {
+  approvalKind: "exec" | "plugin";
   target: ExecApprovalForwardTarget;
   cfg: OpenClawConfig;
   routeRequest: ApprovalRouteRequest;
@@ -181,6 +182,7 @@ function shouldSkipForwardingFallback(params: {
   return (
     adapter?.delivery?.shouldSuppressForwardingFallback?.({
       cfg: params.cfg,
+      approvalKind: params.approvalKind,
       target: params.target,
       request: buildSyntheticApprovalRequest(params.routeRequest),
     }) ?? false
@@ -351,7 +353,9 @@ function buildExecPendingPayload(params: {
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     text: buildRequestMessage(params.request, params.nowMs),
+    agentId: params.request.request.agentId ?? null,
     allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
+    sessionKey: params.request.request.sessionKey ?? null,
   });
 }
 
@@ -502,8 +506,15 @@ function createApprovalHandlers<
             resolveSessionTarget: params.resolveSessionTarget,
           })
         : []),
-    ].filter((target) => !shouldSkipForwardingFallback({ target, cfg, routeRequest }));
-
+    ].filter(
+      (target) =>
+        !shouldSkipForwardingFallback({
+          approvalKind: params.strategy.kind,
+          target,
+          cfg,
+          routeRequest,
+        }),
+    );
     if (filteredTargets.length === 0) {
       return false;
     }
@@ -598,7 +609,15 @@ function createApprovalHandlers<
                 resolveSessionTarget: params.resolveSessionTarget,
               })
             : []),
-        ].filter((target) => !shouldSkipForwardingFallback({ target, cfg, routeRequest }));
+        ].filter(
+          (target) =>
+            !shouldSkipForwardingFallback({
+              approvalKind: params.strategy.kind,
+              target,
+              cfg,
+              routeRequest,
+            }),
+        );
       }
     }
     if (!targets?.length) {
