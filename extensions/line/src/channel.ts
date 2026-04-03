@@ -8,6 +8,7 @@ import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
+import { getLineRuntime } from "./runtime.js";
 import { pushMessageLine } from "./send.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
@@ -158,11 +159,13 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       message: "OpenClaw: your access has been approved.",
       normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
       notify: async ({ cfg, id, message }) => {
-        const account = resolveLineAccount({ cfg });
+        const account = (getLineRuntime().channel.line?.resolveLineAccount ?? resolveLineAccount)({
+          cfg,
+        });
         if (!account.channelAccessToken) {
           throw new Error("LINE channel access token not configured");
         }
-        await pushMessageLine(id, message, {
+        await (getLineRuntime().channel.line?.pushMessageLine ?? pushMessageLine)(id, message, {
           accountId: account.accountId,
           channelAccessToken: account.channelAccessToken,
         });
