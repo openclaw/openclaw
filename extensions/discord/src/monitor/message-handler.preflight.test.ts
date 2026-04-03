@@ -721,6 +721,47 @@ describe("preflightDiscordMessage", () => {
     expect(result?.hasAnyMention).toBe(false);
   });
 
+  it("does not treat bot-sent @everyone as wasMentioned", async () => {
+    const channelId = "channel-everyone-2";
+    const guildId = "guild-everyone-2";
+    const client = createGuildTextClient(channelId);
+    const message = createDiscordMessage({
+      id: "m-everyone-2",
+      channelId,
+      content: "@everyone relay message",
+      mentionedEveryone: true,
+      author: {
+        id: "relay-bot-2",
+        bot: true,
+        username: "RelayBot",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: true,
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      guildEntries: {
+        [guildId]: {
+          requireMention: false,
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.wasMentioned).toBe(false);
+  });
+
   it("uses attachment content_type for guild audio preflight mention detection", async () => {
     transcribeFirstAudioMock.mockResolvedValue("hey openclaw");
 
