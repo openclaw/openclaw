@@ -145,3 +145,16 @@ export function formatMatrixMediaUnavailableText(params: {
     }) ?? ""
   );
 }
+
+export function formatMatrixMediaTooLargeText(params: {
+  body?: string;
+  filename?: string;
+  msgtype?: string;
+}): string {
+  const kind = resolveMatrixMediaKind(params.msgtype);
+  const label = resolveMatrixMediaLabel(kind ?? undefined);
+  const marker = `[matrix ${label} too large]`;
+  const caption = resolveMatrixMessageBody(params)?.trim() ?? "";
+  if (!caption) return marker;
+  return `${caption}\n\n${marker}`;
+}

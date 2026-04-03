@@ -9,9 +9,13 @@ const { downloadMatrixMediaMock } = vi.hoisted(() => ({
   downloadMatrixMediaMock: vi.fn(),
 }));
 
-vi.mock("./media.js", () => ({
-  downloadMatrixMedia: (...args: unknown[]) => downloadMatrixMediaMock(...args),
-}));
+vi.mock("./media.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./media.js")>();
+  return {
+    ...actual,
+    downloadMatrixMedia: (...args: unknown[]) => downloadMatrixMediaMock(...args),
+  };
+});
 
 function createMediaFailureHarness() {
   const logger = {
@@ -207,6 +211,58 @@ describe("createMatrixRoomMessageHandler media failures", () => {
         ctx: expect.objectContaining({
           RawBody: "can you see this image?\n\n[matrix image attachment unavailable]",
           CommandBody: "can you see this image?\n\n[matrix image attachment unavailable]",
+        }),
+      }),
+    );
+  });
+
+  it("shows a too-large marker when the download is rejected due to size limit", async () => {
+    downloadMatrixMediaMock.mockRejectedValue(
+      new Error("Matrix media exceeds configured size limit"),
+    );
+    const { handler, recordInboundSession } = createMediaFailureHarness();
+
+    await handler(
+      "!room:example.org",
+      createImageEvent({
+        msgtype: "m.image",
+        body: "big-photo.jpg",
+        url: "mxc://example/big-image",
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          RawBody: "[matrix image attachment too large]",
+          CommandBody: "[matrix image attachment too large]",
+          MediaPath: undefined,
+        }),
+      }),
+    );
+  });
+
+  it("preserves a real caption while marking the attachment too large on size limit error", async () => {
+    downloadMatrixMediaMock.mockRejectedValue(
+      new Error("Matrix media exceeds configured size limit (10485760 bytes > 5242880 bytes)"),
+    );
+    const { handler, recordInboundSession } = createMediaFailureHarness();
+
+    await handler(
+      "!room:example.org",
+      createImageEvent({
+        msgtype: "m.image",
+        body: "check this out",
+        filename: "large-photo.jpg",
+        url: "mxc://example/big-image",
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          RawBody: "check this out\n\n[matrix image attachment too large]",
+          CommandBody: "check this out\n\n[matrix image attachment too large]",
         }),
       }),
     );

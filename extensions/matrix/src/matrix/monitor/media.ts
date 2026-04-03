@@ -62,6 +62,15 @@ async function fetchEncryptedMediaBuffer(params: {
   return { buffer: decrypted };
 }
 
+/**
+ * Returns true if the error is a Matrix media size limit error (pre-download
+ * metadata check or streaming cap). Used to distinguish oversized media from
+ * transient network failures so the handler can surface a clear user message.
+ */
+export function isMatrixMediaSizeLimitError(err: unknown): boolean {
+  return String(err).includes("exceeds configured size limit");
+}
+
 export async function downloadMatrixMedia(params: {
   client: MatrixClient;
   mxcUrl: string;

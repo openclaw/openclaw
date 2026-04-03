@@ -5,6 +5,7 @@ import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/secur
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { createMatrixDraftStream } from "../draft-stream.js";
 import {
+  formatMatrixMediaTooLargeText,
   formatMatrixMediaUnavailableText,
   formatMatrixMessageText,
   resolveMatrixMessageAttachment,
@@ -30,7 +31,7 @@ import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixAllowListMatch } from "./allowlist.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
-import { downloadMatrixMedia } from "./media.js";
+import { downloadMatrixMedia, isMatrixMediaSizeLimitError } from "./media.js";
 import { resolveMentions } from "./mentions.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
 import { deliverMatrixReplies } from "./replies.js";
@@ -139,12 +140,20 @@ function resolveMatrixInboundBodyText(params: {
   msgtype?: string;
   hadMediaUrl: boolean;
   mediaDownloadFailed: boolean;
+  mediaSizeLimitExceeded?: boolean;
 }): string {
   if (params.mediaPlaceholder) {
     return params.rawBody || params.mediaPlaceholder;
   }
   if (!params.mediaDownloadFailed || !params.hadMediaUrl) {
     return params.rawBody;
+  }
+  if (params.mediaSizeLimitExceeded) {
+    return formatMatrixMediaTooLargeText({
+      body: params.rawBody,
+      filename: params.filename,
+      msgtype: params.msgtype,
+    });
   }
   return formatMatrixMediaUnavailableText({
     body: params.rawBody,
@@ -766,6 +775,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           placeholder: string;
         } | null = null;
         let mediaDownloadFailed = false;
+        let mediaSizeLimitExceeded = false;
         const finalContentUrl =
           "url" in content && typeof content.url === "string" ? content.url : undefined;
         const finalContentFile =
@@ -795,6 +805,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             });
           } catch (err) {
             mediaDownloadFailed = true;
+            if (isMatrixMediaSizeLimitError(err)) {
+              mediaSizeLimitExceeded = true;
+            }
             const errorText = err instanceof Error ? err.message : String(err);
             logVerboseMessage(
               `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
@@ -817,6 +830,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           msgtype: content.msgtype,
           hadMediaUrl: Boolean(finalMediaUrl),
           mediaDownloadFailed,
+          mediaSizeLimitExceeded,
         });
         if (!bodyText) {
           await commitInboundEventIfClaimed();
