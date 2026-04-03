@@ -76,7 +76,7 @@ openclaw memory index --agent main --verbose
 - `--include-promoted`: include already promoted candidates in output.
 - `--json`: print JSON output.
 
-## Dreaming
+## Dreaming (experimental)
 
 Dreaming is the overnight reflection pass for memory. It is called "dreaming" because the system revisits what was recalled during the day and decides what is worth keeping long-term.
 
