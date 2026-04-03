@@ -28,6 +28,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { resolveGatewayAuth } from "../auth.js";
 import { diffConfigPaths } from "../config-reload.js";
 import {
   formatControlPlaneActor,
@@ -221,14 +222,37 @@ function parseValidateConfigFromRawOrRespond(
   return { config: validated.config, schema };
 }
 
+function getEffectiveSharedGatewayAuth(config: OpenClawConfig): {
+  mode: "token" | "password";
+  secret: string | undefined;
+} | null {
+  const resolvedAuth = resolveGatewayAuth({
+    authConfig: config.gateway?.auth,
+    env: process.env,
+    tailscaleMode: config.gateway?.tailscale?.mode,
+  });
+  if (resolvedAuth.mode === "token") {
+    return {
+      mode: "token",
+      secret: resolvedAuth.token,
+    };
+  }
+  if (resolvedAuth.mode === "password") {
+    return {
+      mode: "password",
+      secret: resolvedAuth.password,
+    };
+  }
+  return null;
+}
+
 function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
-  const prevAuth = prev.gateway?.auth;
-  const nextAuth = next.gateway?.auth;
-  return (
-    prevAuth?.mode !== nextAuth?.mode ||
-    !isDeepStrictEqual(prevAuth?.token, nextAuth?.token) ||
-    !isDeepStrictEqual(prevAuth?.password, nextAuth?.password)
-  );
+  const prevAuth = getEffectiveSharedGatewayAuth(prev);
+  const nextAuth = getEffectiveSharedGatewayAuth(next);
+  if (prevAuth === null || nextAuth === null) {
+    return prevAuth !== nextAuth;
+  }
+  return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
 }
 
 function queueSharedGatewayAuthDisconnect(
@@ -394,7 +418,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     respond(true, result, undefined);
   },
-  "config.set": async ({ params, respond, context }) => {
+  "config.set": async ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
@@ -409,9 +433,6 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!(await ensureResolvableSecretRefsOrRespond({ config: parsed.config, respond }))) {
       return;
     }
-    // Compare before the write so we invalidate clients authenticated against the
-    // previous shared secret immediately after the config update succeeds.
-    const disconnectSharedAuthClients = didSharedGatewayAuthChange(snapshot.config, parsed.config);
     await writeConfigFile(parsed.config, writeOptions);
     respond(
       true,
@@ -422,7 +443,6 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.patch": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {

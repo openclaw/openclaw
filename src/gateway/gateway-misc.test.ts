@@ -203,16 +203,19 @@ describe("gateway broadcaster", () => {
         socket: approvalsSocket as unknown as GatewayWsClient["socket"],
         connect: { role: "operator", scopes: ["operator.approvals"] } as GatewayWsClient["connect"],
         connId: "c-approvals",
+        usesSharedGatewayAuth: false,
       },
       {
         socket: pairingSocket as unknown as GatewayWsClient["socket"],
         connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
         connId: "c-pairing",
+        usesSharedGatewayAuth: false,
       },
       {
         socket: readSocket as unknown as GatewayWsClient["socket"],
         connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
         connId: "c-read",
+        usesSharedGatewayAuth: false,
       },
     ]);
 
