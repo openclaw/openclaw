@@ -191,6 +191,34 @@ describe("telegramSetupWizard.dmPolicy", () => {
     });
   });
 
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          defaultAccount: "alerts",
+          dmPolicy: "disabled",
+          allowFrom: ["123"],
+          accounts: {
+            alerts: {
+              dmPolicy: "allowlist",
+              botToken: "tok",
+            },
+          },
+        },
+      },
+    };
+
+    expect(telegramSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(telegramSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.telegram.accounts.alerts.dmPolicy",
+      allowFromKey: "channels.telegram.accounts.alerts.allowFrom",
+    });
+
+    const next = telegramSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    expect(next?.channels?.telegram?.dmPolicy).toBe("disabled");
+    expect(next?.channels?.telegram?.accounts?.alerts?.dmPolicy).toBe("open");
+  });
+
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
     const next = telegramSetupWizard.dmPolicy?.setPolicy(
       {

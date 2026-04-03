@@ -16,6 +16,7 @@ import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
+  resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "./accounts.js";
 import {
@@ -82,20 +83,21 @@ const dmPolicy: ChannelSetupDmPolicy = {
   channel,
   policyKey: "channels.telegram.dmPolicy",
   allowFromKey: "channels.telegram.allowFrom",
-  resolveConfigKeys: (_cfg, accountId) =>
-    accountId && accountId !== DEFAULT_ACCOUNT_ID
+  resolveConfigKeys: (cfg, accountId) =>
+    (accountId ?? resolveDefaultTelegramAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.telegram.accounts.${accountId}.dmPolicy`,
-          allowFromKey: `channels.telegram.accounts.${accountId}.allowFrom`,
+          policyKey: `channels.telegram.accounts.${accountId ?? resolveDefaultTelegramAccountId(cfg)}.dmPolicy`,
+          allowFromKey: `channels.telegram.accounts.${accountId ?? resolveDefaultTelegramAccountId(cfg)}.allowFrom`,
         }
       : {
           policyKey: "channels.telegram.dmPolicy",
           allowFromKey: "channels.telegram.allowFrom",
         },
   getCurrent: (cfg, accountId) =>
-    mergeTelegramAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID).dmPolicy ?? "pairing",
+    mergeTelegramAccountConfig(cfg, accountId ?? resolveDefaultTelegramAccountId(cfg)).dmPolicy ??
+    "pairing",
   setPolicy: (cfg, policy, accountId) => {
-    const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+    const resolvedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
     const merged = mergeTelegramAccountConfig(cfg, resolvedAccountId);
     return patchChannelConfigForAccount({
       cfg,
