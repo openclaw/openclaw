@@ -403,7 +403,7 @@ Notes:
   "features": {
     "bot_user": {
       "display_name": "OpenClaw",
-      "always_online": false
+      "always_online": true
     },
     "app_home": {
       "messages_tab_enabled": true,
