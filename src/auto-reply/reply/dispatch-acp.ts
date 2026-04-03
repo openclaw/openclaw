@@ -242,11 +242,20 @@ async function finalizeAcpTurnOutput(params: {
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
+  replyMode?: string;
   shouldEmitResolvedIdentityNotice: boolean;
 }): Promise<boolean> {
   await params.delivery.settleVisibleText();
   let queuedFinal =
     params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
+
+  // ── tool-only: skip TTS synthesis and text fallback entirely ──
+  // The accumulated block text will be suppressed by deliver() anyway.
+  // This guard prevents wasted TTS API calls.
+  if (params.replyMode === "tool-only") {
+    return queuedFinal;
+  }
+
   const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
   const accumulatedBlockText = params.delivery.getAccumulatedBlockText();
   const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;
@@ -328,6 +337,7 @@ export async function tryDispatchAcpReply(params: {
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
+  replyMode?: string;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
@@ -361,6 +371,7 @@ export async function tryDispatchAcpReply(params: {
     sessionTtsAuto: params.sessionTtsAuto,
     ttsChannel: params.ttsChannel,
     suppressUserDelivery: params.suppressUserDelivery,
+    replyMode: params.replyMode,
     shouldRouteToOriginating: params.shouldRouteToOriginating,
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
@@ -372,6 +383,7 @@ export async function tryDispatchAcpReply(params: {
   );
   const shouldEmitResolvedIdentityNotice =
     !params.suppressUserDelivery &&
+    params.replyMode !== "tool-only" &&
     identityPendingBeforeTurn &&
     (Boolean(params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim()) ||
       hasBoundConversationForSession({
@@ -478,6 +490,7 @@ export async function tryDispatchAcpReply(params: {
         inboundAudio: params.inboundAudio,
         sessionTtsAuto: params.sessionTtsAuto,
         ttsChannel: params.ttsChannel,
+        replyMode: params.replyMode,
         shouldEmitResolvedIdentityNotice,
       })) || queuedFinal;
 

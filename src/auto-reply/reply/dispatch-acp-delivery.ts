@@ -80,6 +80,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
+  replyMode?: string;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
@@ -187,6 +188,22 @@ export function createAcpDispatchDeliveryCoordinator(params: {
 
     if (params.suppressUserDelivery) {
       return false;
+    }
+
+    // ── tool-only mode: suppress assistant text but allow tool summaries ──
+    // Block streaming text and text-only finals. Allow tool payloads,
+    // media-bearing finals, and error finals through.
+    if (params.replyMode === "tool-only") {
+      if (kind === "block") {
+        return false;
+      }
+      if (kind === "final") {
+        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+        const isError = Boolean(payload.isError);
+        if (!hasMedia && !isError) {
+          return false;
+        }
+      }
     }
 
     const ttsPayload = meta?.skipTts

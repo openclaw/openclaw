@@ -222,3 +222,90 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasDeliveredVisibleText()).toBe(false);
   });
 });
+
+describe("tool-only replyMode filtering", () => {
+  function createToolOnlyCoordinator(replyMode?: string) {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+      replyMode,
+    });
+    return { coordinator, dispatcher };
+  }
+
+  it("suppresses block text when replyMode is tool-only", async () => {
+    const { coordinator, dispatcher } = createToolOnlyCoordinator("tool-only");
+
+    const delivered = await coordinator.deliver("block", { text: "streaming chunk" }, { skipTts: true });
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers tool results when replyMode is tool-only", async () => {
+    const { coordinator, dispatcher } = createToolOnlyCoordinator("tool-only");
+
+    const delivered = await coordinator.deliver("tool", { text: "tool output" }, { skipTts: true });
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "tool output" });
+  });
+
+  it("suppresses text-only final when replyMode is tool-only", async () => {
+    const { coordinator, dispatcher } = createToolOnlyCoordinator("tool-only");
+
+    const delivered = await coordinator.deliver("final", { text: "done" }, { skipTts: true });
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers final with mediaUrl when replyMode is tool-only", async () => {
+    const { coordinator, dispatcher } = createToolOnlyCoordinator("tool-only");
+
+    const delivered = await coordinator.deliver(
+      "final",
+      { text: "image result", mediaUrl: "https://example.com/img.png" },
+      { skipTts: true },
+    );
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "image result",
+      mediaUrl: "https://example.com/img.png",
+    });
+  });
+
+  it("delivers final with isError when replyMode is tool-only", async () => {
+    const { coordinator, dispatcher } = createToolOnlyCoordinator("tool-only");
+
+    const delivered = await coordinator.deliver(
+      "final",
+      { text: "something failed", isError: true },
+      { skipTts: true },
+    );
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "something failed",
+      isError: true,
+    });
+  });
+
+  it("delivers block text when replyMode is undefined (auto behavior preserved)", async () => {
+    const { coordinator, dispatcher } = createToolOnlyCoordinator(undefined);
+
+    const delivered = await coordinator.deliver("block", { text: "streaming chunk" }, { skipTts: true });
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "streaming chunk" });
+  });
+});
