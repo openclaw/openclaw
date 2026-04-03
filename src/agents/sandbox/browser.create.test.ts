@@ -25,8 +25,8 @@ const bridgeMocks = vi.hoisted(() => ({
   stopBrowserBridgeServer: vi.fn(),
 }));
 
-vi.mock("./docker.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./docker.js")>();
+vi.mock("./docker.js", async () => {
+  const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
   return {
     ...actual,
     dockerContainerState: dockerMocks.dockerContainerState,
