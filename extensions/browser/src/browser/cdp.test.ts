@@ -227,6 +227,23 @@ describe("cdp", () => {
     expect(created.targetId).toBe("TARGET_LOCAL");
   });
 
+  it("blocks cross-host websocket pivots returned by /json/version in strict SSRF mode", async () => {
+    const httpPort = await startVersionHttpServer({
+      webSocketDebuggerUrl: "ws://169.254.169.254:9222/devtools/browser/PIVOT",
+    });
+
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: `http://127.0.0.1:${httpPort}`,
+        url: "https://example.com",
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        },
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+  });
+
   it("evaluates javascript via CDP", async () => {
     const wsPort = await startWsServerWithMessages((msg, socket) => {
       if (msg.method === "Runtime.enable") {

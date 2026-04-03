@@ -1,6 +1,7 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
+  assertCdpEndpointAllowed,
   fetchJson,
   isLoopbackHost,
   isWebSocketUrl,
@@ -194,6 +195,7 @@ export async function createTargetViaCdp(opts: {
     if (!wsUrl) {
       throw new Error("CDP /json/version missing webSocketDebuggerUrl");
     }
+    await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
   }
 
   return await withCdpSocket(wsUrl, async (send) => {
