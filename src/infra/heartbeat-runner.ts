@@ -537,12 +537,11 @@ function resolveHeartbeatRunPrompt(params: {
   // If tasks are defined, build a batched prompt with due tasks
   if (params.preflight.tasks && params.preflight.tasks.length > 0) {
     const tasks = params.preflight.tasks;
-    const nowMs = Date.now();
     const dueTasks = tasks.filter((task) =>
       isTaskDue(
         (params.preflight.session.entry?.heartbeatTaskState as Record<string, number>)?.[task.name],
         task.interval,
-        nowMs,
+        startedAt,
       ),
     );
 
@@ -555,9 +554,8 @@ ${taskList}
 After completing all due tasks, reply HEARTBEAT_OK.`;
       return { prompt, hasExecCompletion: false, hasCronEvents: false };
     }
-    // No tasks due - still run but with empty task list
-    const prompt = `No periodic tasks are due right now. Reply HEARTBEAT_OK.`;
-    return { prompt, hasExecCompletion: false, hasCronEvents: false };
+    // No tasks due - skip this heartbeat to avoid wasteful API calls
+    return null;
   }
 
   // Fallback to original behavior
@@ -698,25 +696,35 @@ export async function runHeartbeatOnce(opts: {
     workspaceDir,
   });
 
-  // Update task last run times BEFORE model runs - ensures timestamps are persisted
-  // even when model completes with HEARTBEAT_OK (which triggers early return)
-  if (preflight.tasks && preflight.tasks.length > 0) {
+  // Track if heartbeat completed successfully (for updating task timestamps)
+  let heartbeatSuccess = false;
+
+  // Update task last run times AFTER successful heartbeat completion
+  const updateTaskTimestamps = async () => {
+    if (!preflight.tasks || preflight.tasks.length === 0) return;
+    
     const store = loadSessionStore(storePath);
     const current = store[sessionKey];
-    if (current) {
-      const taskState = (current.heartbeatTaskState as Record<string, number>) || {};
-      for (const task of preflight.tasks) {
-        if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
-          taskState[task.name] = startedAt;
-        }
+    // Initialize stub entry on first run when current doesn't exist
+    const base = current ?? {
+      sessionId: sessionKey,
+      updatedAt: startedAt,
+      createdAt: startedAt,
+      messageCount: 0,
+      lastMessageAt: startedAt,
+      heartbeatTaskState: {}
+    };
+    const taskState = { ...((base.heartbeatTaskState as Record<string, number>) || {}) };
+    
+    for (const task of preflight.tasks) {
+      if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
+        taskState[task.name] = startedAt;
       }
-      store[sessionKey] = {
-        ...current,
-        heartbeatTaskState: taskState,
-      };
-      await saveSessionStore(storePath, store);
     }
-  }
+    
+    store[sessionKey] = { ...base, heartbeatTaskState: taskState };
+    await saveSessionStore(storePath, store);
+  };
 
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
@@ -1011,6 +1019,8 @@ export async function runHeartbeatOnce(opts: {
       accountId: delivery.accountId,
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
+    heartbeatSuccess = true;
+    await updateTaskTimestamps();
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);

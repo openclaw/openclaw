@@ -234,12 +234,8 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
         if (nextTrimmed.startsWith("- name:")) {
           break;
         }
-        // End of tasks block
-        if (!nextTrimmed.startsWith(" ") && !nextTrimmed.startsWith("\t") && nextTrimmed) {
-          inTasksBlock = false;
-          break;
-        }
 
+        // Check for task fields BEFORE checking for end of block
         if (nextTrimmed.startsWith("interval:")) {
           interval = nextTrimmed
             .replace("interval:", "")
@@ -250,6 +246,10 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
             .replace("prompt:", "")
             .trim()
             .replace(/^["']|["']$/g, "");
+        } else if (!nextTrimmed.startsWith(" ") && !nextTrimmed.startsWith("\t") && nextTrimmed) {
+          // End of tasks block
+          inTasksBlock = false;
+          break;
         }
       }
 
