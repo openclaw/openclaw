@@ -9,6 +9,13 @@ import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
+/**
+ * Events excluded from broadcast to node-role clients.
+ * Nodes receive chat via the subscription-based nodeSendToSession path;
+ * broadcasting chat/agent to all WS clients leaks cross-session output.
+ */
+const NODE_EXCLUDED_EVENTS = new Set(["chat", "chat.side_result", "agent"]);
+
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
@@ -47,11 +54,15 @@ export type GatewayBroadcastToConnIdsFn = (
 ) => void;
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
+  const role = client.connect.role ?? "operator";
+  // Nodes receive chat via nodeSendToSession, not broadcast.
+  if (role === "node" && NODE_EXCLUDED_EVENTS.has(event)) {
+    return false;
+  }
   const required = EVENT_SCOPE_GUARDS[event];
   if (!required) {
     return true;
   }
-  const role = client.connect.role ?? "operator";
   if (role !== "operator") {
     return false;
   }

@@ -230,6 +230,48 @@ describe("gateway broadcaster", () => {
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
   });
+
+  it("excludes chat/agent events from node-role clients", () => {
+    const operatorSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const nodeSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+
+    const clients = new Set<GatewayWsClient>([
+      {
+        socket: operatorSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.admin"] } as GatewayWsClient["connect"],
+        connId: "c-operator",
+      },
+      {
+        socket: nodeSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "node", scopes: [] } as GatewayWsClient["connect"],
+        connId: "c-node",
+      },
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { runId: "r1", state: "delta" });
+    broadcast("chat.side_result", { runId: "r1" });
+    broadcast("agent", { sessionKey: "main" });
+
+    // Node should NOT receive chat/agent broadcasts
+    expect(nodeSocket.send).toHaveBeenCalledTimes(0);
+    // Operator should receive all three
+    expect(operatorSocket.send).toHaveBeenCalledTimes(3);
+
+    // Non-excluded events like tick should still reach nodes
+    broadcast("tick", { ts: 1 });
+    expect(nodeSocket.send).toHaveBeenCalledTimes(1);
+    expect(operatorSocket.send).toHaveBeenCalledTimes(4);
+  });
 });
 
 describe("chat run registry", () => {
