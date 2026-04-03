@@ -190,21 +190,21 @@ describe("slackPlugin actions", () => {
   });
 
   it("uses configured defaultAccount for pairing approval notifications", async () => {
+    const cfg = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
     setSlackRuntime({
       config: {
-        loadConfig: () =>
-          ({
-            channels: {
-              slack: {
-                defaultAccount: "work",
-                accounts: {
-                  work: {
-                    botToken: "xoxb-work",
-                  },
-                },
-              },
-            },
-          }) as OpenClawConfig,
+        loadConfig: () => cfg,
       },
     } as never);
 
@@ -214,8 +214,8 @@ describe("slackPlugin actions", () => {
     }
 
     await notify({
+      cfg,
       id: "U12345678",
-      message: "approved",
     });
 
     expect(sendMessageSlackMock).toHaveBeenCalledWith(
