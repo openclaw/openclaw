@@ -11,12 +11,18 @@ vi.mock("../plugins/provider-runtime.js", () => ({
         "kilocode",
         "kimi",
         "kimi-code",
+        "minimax",
+        "minimax-portal",
         "mistral",
+        "moonshot",
         "openai",
         "openai-codex",
         "opencode",
         "opencode-go",
+        "ollama",
         "openrouter",
+        "xai",
+        "zai",
       ].includes(provider)
     ) {
       return undefined;
@@ -27,6 +33,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
         switch (provider) {
           case "amazon-bedrock":
           case "anthropic":
+          case "minimax":
+          case "minimax-portal":
             return {
               sanitizeMode: "full",
               sanitizeToolCallIds: true,
@@ -37,6 +45,18 @@ vi.mock("../plugins/provider-runtime.js", () => ({
               allowSyntheticToolResults: true,
               ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
             };
+          case "moonshot":
+          case "ollama":
+          case "zai":
+            return context?.modelApi === "openai-completions"
+              ? {
+                  sanitizeToolCallIds: true,
+                  toolCallIdMode: "strict",
+                  applyAssistantFirstOrderingFix: true,
+                  validateGeminiTurns: true,
+                  validateAnthropicTurns: true,
+                }
+              : undefined;
           case "google":
             return {
               sanitizeMode: "full",
@@ -88,6 +108,28 @@ vi.mock("../plugins/provider-runtime.js", () => ({
                   }
                 : {}),
             };
+          case "xai":
+            if (
+              context?.modelApi === "openai-completions" ||
+              context?.modelApi === "openai-responses"
+            ) {
+              return {
+                sanitizeToolCallIds: true,
+                toolCallIdMode: "strict",
+                ...(context.modelApi === "openai-completions"
+                  ? {
+                      applyAssistantFirstOrderingFix: true,
+                      validateGeminiTurns: true,
+                      validateAnthropicTurns: true,
+                    }
+                  : {
+                      applyAssistantFirstOrderingFix: false,
+                      validateGeminiTurns: false,
+                      validateAnthropicTurns: false,
+                    }),
+              };
+            }
+            return undefined;
           case "kilocode":
             return modelId.includes("gemini")
               ? {
@@ -183,10 +225,10 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
-  it("falls back to transport defaults when a plugin replay hook returns undefined", () => {
+  it("falls back to unowned transport defaults when no owning plugin exists", () => {
     const policy = resolveTranscriptPolicy({
-      provider: "kilocode",
-      modelId: "kilocode-default",
+      provider: "custom-openai-proxy",
+      modelId: "demo-model",
       modelApi: "openai-completions",
     });
 
@@ -194,6 +236,19 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict");
     expect(policy.applyGoogleTurnOrdering).toBe(true);
     expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("uses provider-owned Anthropic replay policy for MiniMax transports", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "minimax",
+      modelId: "MiniMax-M2.7",
+      modelApi: "anthropic-messages",
+    });
+
+    expect(policy.sanitizeMode).toBe("full");
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.preserveSignatures).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 

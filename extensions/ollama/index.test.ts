@@ -142,6 +142,32 @@ describe("ollama plugin", () => {
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
   });
 
+  it("owns replay policy for OpenAI-compatible Ollama routes only", () => {
+    const provider = registerProvider();
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "ollama",
+        modelApi: "openai-completions",
+        modelId: "qwen3:32b",
+      } as never),
+    ).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+    });
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "ollama",
+        modelApi: "ollama",
+        modelId: "qwen3.5:9b",
+      } as never),
+    ).toBeUndefined();
+  });
+
   it("wraps native Ollama payloads with top-level think=false when thinking is off", () => {
     const provider = registerProvider();
     let payloadSeen: Record<string, unknown> | undefined;
