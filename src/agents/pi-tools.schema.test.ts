@@ -20,6 +20,20 @@ describe("normalizeToolParameters", () => {
     expect(parameters.properties).toEqual({});
   });
 
+  it("does not rewrite non-empty schemas that still lack type/properties", () => {
+    const tool: AnyAgentTool = {
+      name: "conditional",
+      label: "conditional",
+      description: "Conditional schema stays untouched",
+      parameters: { allOf: [] },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    expect(normalized.parameters).toEqual({ allOf: [] });
+  });
+
   it("injects properties:{} for type:object schemas missing properties (MCP no-param tools)", () => {
     const tool: AnyAgentTool = {
       name: "list_regions",
