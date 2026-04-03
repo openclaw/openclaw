@@ -329,7 +329,9 @@ export async function monitorMSTeamsProvider(
   const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
   const messageHandler = (req: Request, res: Response) => {
     void adapter
-      .process(req, res, (context: unknown) => handler.run?.(context))
+      .process(req, res, async (context: unknown) => {
+        await handler.run?.(context);
+      })
       .catch((err: unknown) => {
         log.error("msteams webhook failed", { error: formatUnknownError(err) });
       });

@@ -127,6 +127,7 @@ type DebounceBuffer<T> = {
   debounceMs: number;
   releaseReady: () => void;
   readyReleased: boolean;
+  delivered: boolean;
   task: Promise<void>;
 };
 
@@ -159,6 +160,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const runFlush = async (items: T[]) => {
     try {
       await params.onFlush(items);
+      return true;
     } catch (err) {
       try {
         params.onError?.(err, items);
@@ -166,6 +168,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
         // Flush failures are reported via onError, but this helper stays
         // non-throwing so keyed chains can continue processing later items.
       }
+      return false;
     }
   };
 
@@ -226,7 +229,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     // arrives, so later same-key work cannot overtake a timer-backed flush.
     releaseBuffer(buffer);
     await buffer.task;
-    return hadMessages;
+    return hadMessages && buffer.delivered;
   };
 
   const flushKey = async (key: string) => {
@@ -310,7 +313,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       if (buffer.items.length === 0) {
         return;
       }
-      await runFlush(buffer.items);
+      buffer.delivered = await runFlush(buffer.items);
     });
     buffer = {
       items: [item],
@@ -318,6 +321,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       debounceMs,
       releaseReady: reservedTask.release,
       readyReleased: false,
+      delivered: false,
       task: reservedTask.task,
     };
     buffers.set(key, buffer);

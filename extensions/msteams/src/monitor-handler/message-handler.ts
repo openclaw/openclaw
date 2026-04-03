@@ -3,6 +3,7 @@ import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  DEFAULT_GROUP_HISTORY_LIMIT,
   dispatchReplyFromConfigWithSettledDispatcher,
   evaluateSenderGroupAccessForPolicy,
   filterSupplementalContextItems,

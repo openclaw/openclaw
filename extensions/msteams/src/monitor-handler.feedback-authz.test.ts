@@ -133,7 +133,7 @@ async function withFeedbackHandler(params: {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "openclaw-msteams-feedback-"));
   try {
     const originalRun = vi.fn(async () => undefined);
-    const handler = registerMSTeamsHandlers(
+    const { handler } = registerMSTeamsHandlers(
       createActivityHandler(originalRun),
       createDeps({
         cfg: {
@@ -141,8 +141,10 @@ async function withFeedbackHandler(params: {
           session: { store: tmpDir },
         },
       }),
-    ) as MSTeamsActivityHandler & {
-      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    ) as {
+      handler: MSTeamsActivityHandler & {
+        run: NonNullable<MSTeamsActivityHandler["run"]>;
+      };
     };
 
     await handler.run(createFeedbackInvokeContext(params.context));
@@ -265,7 +267,7 @@ describe("msteams feedback invoke authz", () => {
     const tmpDir = await mkdtemp(path.join(tmpdir(), "openclaw-msteams-feedback-"));
     try {
       const originalRun = vi.fn(async () => undefined);
-      const handler = registerMSTeamsHandlers(
+      const { handler } = registerMSTeamsHandlers(
         createActivityHandler(originalRun),
         createDeps({
           cfg: {
@@ -279,8 +281,10 @@ describe("msteams feedback invoke authz", () => {
             },
           } as OpenClawConfig,
         }),
-      ) as MSTeamsActivityHandler & {
-        run: NonNullable<MSTeamsActivityHandler["run"]>;
+      ) as {
+        handler: MSTeamsActivityHandler & {
+          run: NonNullable<MSTeamsActivityHandler["run"]>;
+        };
       };
 
       await handler.run(

@@ -88,7 +88,9 @@ export function createImmediateInboundDebounce() {
           params.onError?.(err, [item]);
         }
       },
-      flushKey: async () => {},
+      flushKey: async () => false,
+      flushAll: async () => 0,
+      unregister: () => {},
     }),
   };
 }

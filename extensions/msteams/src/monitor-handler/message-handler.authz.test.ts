@@ -300,8 +300,8 @@ describe("msteams monitor handler authz", () => {
       },
     } as OpenClawConfig);
 
-    const handler = createMSTeamsMessageHandler(deps);
-    await handler({
+    const { handleTeamsMessage } = createMSTeamsMessageHandler(deps);
+    await handleTeamsMessage({
       activity: {
         id: "msg-pairing",
         type: "message",
@@ -333,7 +333,7 @@ describe("msteams monitor handler authz", () => {
         attachments: [],
       },
       sendActivity: vi.fn(async () => undefined),
-    } as unknown as Parameters<typeof handler>[0]);
+    } as unknown as Parameters<typeof handleTeamsMessage>[0]);
 
     expect(upsertPairingRequest).toHaveBeenCalledWith({
       channel: "msteams",
