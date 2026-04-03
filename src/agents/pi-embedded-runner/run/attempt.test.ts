@@ -324,22 +324,28 @@ describe("resolvePromptModeForSession", () => {
 });
 
 describe("shouldInjectHeartbeatPrompt", () => {
-  it("uses trigger policy defaults for non-cron triggers", () => {
+  it("uses trigger policy defaults for non-cron/non-heartbeat triggers", () => {
     expect(shouldInjectHeartbeatPromptForTrigger("user")).toBe(true);
-    expect(shouldInjectHeartbeatPromptForTrigger("heartbeat")).toBe(true);
     expect(shouldInjectHeartbeatPromptForTrigger("memory")).toBe(true);
     expect(shouldInjectHeartbeatPromptForTrigger(undefined)).toBe(true);
+  });
+
+  it("suppresses the heartbeat prompt for heartbeat-triggered runs (FORK)", () => {
+    expect(shouldInjectHeartbeatPromptForTrigger("heartbeat")).toBe(false);
   });
 
   it("uses trigger policy overrides for cron", () => {
     expect(shouldInjectHeartbeatPromptForTrigger("cron")).toBe(false);
   });
 
-  it("injects the heartbeat prompt for default-agent non-cron runs", () => {
+  it("injects the heartbeat prompt for default-agent non-cron/non-heartbeat runs", () => {
     expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "user" })).toBe(true);
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "heartbeat" })).toBe(true);
     expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "memory" })).toBe(true);
     expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: undefined })).toBe(true);
+  });
+
+  it("suppresses the heartbeat prompt for heartbeat-triggered default-agent runs (FORK)", () => {
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "heartbeat" })).toBe(false);
   });
 
   it("suppresses the heartbeat prompt for cron-triggered runs", () => {
