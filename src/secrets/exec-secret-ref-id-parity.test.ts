@@ -89,6 +89,9 @@ describe("exec SecretRef id parity", () => {
     if (canonicalId.startsWith("models.providers.") && canonicalId.includes(".headers.")) {
       return "models.headers";
     }
+    if (canonicalId.startsWith("models.providers.") && canonicalId.includes(".request.")) {
+      return "models.request";
+    }
     if (canonicalId.startsWith("models.providers.")) {
       return "models.apiKey";
     }

@@ -5,6 +5,7 @@ import {
   resolveProviderRequestPolicyConfig,
   resolveProviderRequestConfig,
   resolveProviderRequestHeaders,
+  sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
   sanitizeRuntimeProviderRequestOverrides,
 } from "./provider-request-config.js";
@@ -307,6 +308,20 @@ describe("provider request config", () => {
         },
       }),
     ).toThrow(/request\.(headers\.X-Tenant|auth\.token|tls\.cert): unresolved SecretRef/i);
+  });
+
+  it("rejects model-provider transport overrides that the llm path cannot carry", () => {
+    expect(() =>
+      sanitizeConfiguredModelProviderRequest({
+        headers: {
+          "X-Tenant": "acme",
+        },
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+        },
+      }),
+    ).toThrow(/models\.providers\.\*\.request only supports headers and auth overrides/i);
   });
 
   it("merges configured request overrides with later entries winning", () => {

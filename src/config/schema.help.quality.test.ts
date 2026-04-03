@@ -113,6 +113,7 @@ const TARGET_KEYS = [
   "models.mode",
   "models.providers.*.auth",
   "models.providers.*.authHeader",
+  "models.providers.*.request",
   "gateway.reload.mode",
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",

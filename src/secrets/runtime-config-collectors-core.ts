@@ -17,6 +17,7 @@ import { isRecord } from "./shared.js";
 type ProviderLike = {
   apiKey?: unknown;
   headers?: unknown;
+  request?: unknown;
   enabled?: unknown;
 };
 
@@ -52,21 +53,33 @@ function collectModelProviderAssignments(params: {
       },
     });
     const headers = isRecord(provider.headers) ? provider.headers : undefined;
-    if (!headers) {
-      continue;
+    if (headers) {
+      for (const [headerKey, headerValue] of Object.entries(headers)) {
+        collectSecretInputAssignment({
+          value: headerValue,
+          path: `models.providers.${providerId}.headers.${headerKey}`,
+          expected: "string",
+          defaults: params.defaults,
+          context: params.context,
+          active: providerIsActive,
+          inactiveReason: "provider is disabled.",
+          apply: (value) => {
+            headers[headerKey] = value;
+          },
+        });
+      }
     }
-    for (const [headerKey, headerValue] of Object.entries(headers)) {
-      collectSecretInputAssignment({
-        value: headerValue,
-        path: `models.providers.${providerId}.headers.${headerKey}`,
-        expected: "string",
+
+    const request = isRecord(provider.request) ? provider.request : undefined;
+    if (request) {
+      collectProviderRequestAssignments({
+        request,
+        pathPrefix: `models.providers.${providerId}.request`,
         defaults: params.defaults,
         context: params.context,
         active: providerIsActive,
         inactiveReason: "provider is disabled.",
-        apply: (value) => {
-          headers[headerKey] = value;
-        },
+        collectTransportSecrets: false,
       });
     }
   }
@@ -295,6 +308,7 @@ function collectProviderRequestAssignments(params: {
   context: ResolverContext;
   active?: boolean;
   inactiveReason?: string;
+  collectTransportSecrets?: boolean;
 }): void {
   const headers = isRecord(params.request.headers) ? params.request.headers : undefined;
   if (headers) {
@@ -362,15 +376,17 @@ function collectProviderRequestAssignments(params: {
     }
   };
 
-  collectTlsAssignments(
-    isRecord(params.request.tls) ? params.request.tls : undefined,
-    `${params.pathPrefix}.tls`,
-  );
-  const proxy = isRecord(params.request.proxy) ? params.request.proxy : undefined;
-  collectTlsAssignments(
-    isRecord(proxy?.tls) ? proxy.tls : undefined,
-    `${params.pathPrefix}.proxy.tls`,
-  );
+  if (params.collectTransportSecrets !== false) {
+    collectTlsAssignments(
+      isRecord(params.request.tls) ? params.request.tls : undefined,
+      `${params.pathPrefix}.tls`,
+    );
+    const proxy = isRecord(params.request.proxy) ? params.request.proxy : undefined;
+    collectTlsAssignments(
+      isRecord(proxy?.tls) ? proxy.tls : undefined,
+      `${params.pathPrefix}.proxy.tls`,
+    );
+  }
 }
 
 function collectMediaRequestAssignments(params: {
