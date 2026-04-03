@@ -50,7 +50,8 @@ export type ConfigDocBaselineEntry = {
 
 export type ConfigDocBaseline = {
   generatedBy: "scripts/generate-config-doc-baseline.ts";
-  entries: ConfigDocBaselineEntry[];
+  coreEntries: ConfigDocBaselineEntry[];
+  pluginEntries: ConfigDocBaselineEntry[];
 };
 
 export type ConfigDocBaselineStatefileRender = {
@@ -465,6 +466,30 @@ export function dedupeConfigDocBaselineEntries(
   return [...byPath.values()].toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
+export function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {
+  coreEntries: ConfigDocBaselineEntry[];
+  pluginEntries: ConfigDocBaselineEntry[];
+} {
+  const coreEntries: ConfigDocBaselineEntry[] = [];
+  const pluginEntries: ConfigDocBaselineEntry[] = [];
+
+  for (const entry of entries) {
+    if (entry.kind === "plugin") {
+      pluginEntries.push(entry);
+      continue;
+    }
+    coreEntries.push(entry);
+  }
+
+  return { coreEntries, pluginEntries };
+}
+
+export function flattenConfigDocBaselineEntries(
+  baseline: ConfigDocBaseline,
+): ConfigDocBaselineEntry[] {
+  return [...baseline.coreEntries, ...baseline.pluginEntries];
+}
+
 export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
   if (cachedConfigDocBaselinePromise) {
     return await cachedConfigDocBaselinePromise;
@@ -482,13 +507,15 @@ export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
     const entries = dedupeConfigDocBaselineEntries(
       collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
     );
+    const { coreEntries, pluginEntries } = splitConfigDocBaselineEntries(entries);
     logConfigDocBaselineDebug(
       `collect baseline entries done count=${entries.length} elapsedMs=${Date.now() - collectStart}`,
     );
     logConfigDocBaselineDebug(`build baseline done elapsedMs=${Date.now() - start}`);
     return {
       generatedBy: GENERATED_BY,
-      entries,
+      coreEntries,
+      pluginEntries,
     };
   })();
   try {
@@ -505,13 +532,14 @@ export async function renderConfigDocBaselineStatefile(
   const start = Date.now();
   logConfigDocBaselineDebug("render statefile start");
   const resolvedBaseline = baseline ? await baseline : await buildConfigDocBaseline();
+  const entries = flattenConfigDocBaselineEntries(resolvedBaseline);
   const json = `${JSON.stringify(resolvedBaseline, null, 2)}\n`;
   const metadataLine = JSON.stringify({
     generatedBy: GENERATED_BY,
     recordType: "meta",
-    totalPaths: resolvedBaseline.entries.length,
+    totalPaths: entries.length,
   });
-  const entryLines = resolvedBaseline.entries.map((entry) =>
+  const entryLines = entries.map((entry) =>
     JSON.stringify({
       recordType: "path",
       ...entry,

@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   type ConfigDocBaseline,
+  type ConfigDocBaselineEntry,
+  flattenConfigDocBaselineEntries,
   renderConfigDocBaselineStatefile,
   writeConfigDocBaselineStatefile,
 } from "./doc-baseline.js";
@@ -24,7 +26,7 @@ describe("config doc baseline integration", () => {
   > | null = null;
   let sharedGeneratedJsonPromise: Promise<string> | null = null;
   let sharedGeneratedJsonlPromise: Promise<string> | null = null;
-  let sharedByPathPromise: Promise<Map<string, ConfigDocBaseline["entries"][number]>> | null = null;
+  let sharedByPathPromise: Promise<Map<string, ConfigDocBaselineEntry>> | null = null;
 
   function getSharedBaseline() {
     sharedBaselinePromise ??= fs
@@ -50,7 +52,8 @@ describe("config doc baseline integration", () => {
 
   function getSharedByPath() {
     sharedByPathPromise ??= getSharedBaseline().then(
-      (baseline) => new Map(baseline.entries.map((entry) => [entry.path, entry])),
+      (baseline) =>
+        new Map(flattenConfigDocBaselineEntries(baseline).map((entry) => [entry.path, entry])),
     );
     return sharedByPathPromise;
   }
