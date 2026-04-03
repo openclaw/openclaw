@@ -92,13 +92,17 @@ export const formatBunFetchSocketError = (message: string) => {
   ].join("\n");
 };
 
-export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
+export const resolveEnforceFinalTag = (
+  run: FollowupRun["run"],
+  provider: string,
+  model = run.model,
+) =>
   Boolean(
     run.enforceFinalTag ||
     isReasoningTagProvider(provider, {
       config: run.config,
       workspaceDir: run.workspaceDir,
-      modelId: run.model,
+      modelId: model,
     }),
   );
 
@@ -133,7 +137,7 @@ export function buildEmbeddedRunBaseParams(params: {
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
-    enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider),
+    enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider, params.model),
     silentExpected: params.run.silentExpected,
     provider: params.provider,
     model: params.model,
