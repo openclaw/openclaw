@@ -5,7 +5,7 @@ run_prepare_push_retry_gates() {
   run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
   run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" pnpm check
   if [ "$docs_only" != "true" ]; then
-    run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" pnpm test
+    run_quiet_logged "pnpm test:planner (lease-retry)" ".local/lease-retry-test.log" pnpm test:planner
   fi
 }
 
@@ -105,11 +105,11 @@ prepare_gates() {
       gates_mode="full"
       local prepare_unit_fast_batch_target_ms
       prepare_unit_fast_batch_target_ms="${OPENCLAW_PREPARE_TEST_UNIT_FAST_BATCH_TARGET_MS:-5000}"
-      echo "Running pnpm test with OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS=$prepare_unit_fast_batch_target_ms for shorter-lived unit-fast workers."
+      echo "Running pnpm test:planner with OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS=$prepare_unit_fast_batch_target_ms for shorter-lived unit-fast workers."
       run_quiet_logged \
-        "pnpm test" \
+        "pnpm test:planner" \
         ".local/gates-test.log" \
-        env OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS="$prepare_unit_fast_batch_target_ms" pnpm test
+        env OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS="$prepare_unit_fast_batch_target_ms" pnpm test:planner
       previous_full_gates_head="$current_head"
     fi
   fi
