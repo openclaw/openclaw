@@ -16,7 +16,7 @@ metadata:
         - PADDLEOCR_DOC_PARSING_API_URL
         - PADDLEOCR_ACCESS_TOKEN
       bins:
-        - python
+        - uv
     primaryEnv: PADDLEOCR_ACCESS_TOKEN
     emoji: "📄"
     homepage: https://github.com/PaddlePaddle/PaddleOCR/tree/main/skills/paddleocr-doc-parsing

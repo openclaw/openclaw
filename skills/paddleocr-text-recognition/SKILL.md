@@ -16,7 +16,7 @@ metadata:
         - PADDLEOCR_OCR_API_URL
         - PADDLEOCR_ACCESS_TOKEN
       bins:
-        - python
+        - uv
     primaryEnv: PADDLEOCR_ACCESS_TOKEN
     emoji: "🔤"
     homepage: https://github.com/PaddlePaddle/PaddleOCR/tree/main/skills/paddleocr-text-recognition
