@@ -118,7 +118,7 @@ function loadBundleManifestFile(params: {
     });
   }
   try {
-    const raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
+    const raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8"));
     if (!isRecord(raw)) {
       return { ok: false, error: "plugin manifest must be an object", manifestPath };
     }

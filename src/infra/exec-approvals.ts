@@ -485,9 +485,21 @@ type ResolvedExecPolicyField<TValue extends ExecSecurity | ExecAsk> = {
   source: string | null;
 };
 
+function hasOwnPolicyField(
+  value: unknown,
+  field: "security" | "ask" | "askFallback",
+): boolean {
+  if (!value || typeof value !== "object" || !Object.hasOwn(value, field)) {
+    return false;
+  }
+  const fieldValue = (value as Record<string, unknown>)[field];
+  return fieldValue !== null && fieldValue !== undefined;
+}
+
 function resolveDefaultSecurityField(params: {
   field: "security" | "askFallback";
   defaults: ExecApprovalsDefaults;
+  rawDefaults: ExecApprovalsDefaults;
   fallback: ExecSecurity;
 }): ResolvedExecPolicyField<ExecSecurity> {
   const defaultValue = params.defaults[params.field];
@@ -495,6 +507,12 @@ function resolveDefaultSecurityField(params: {
     return {
       value: defaultValue,
       source: `defaults.${params.field}`,
+    };
+  }
+  if (hasOwnPolicyField(params.rawDefaults, params.field)) {
+    return {
+      value: params.fallback,
+      source: null,
     };
   }
   return {
@@ -505,12 +523,19 @@ function resolveDefaultSecurityField(params: {
 
 function resolveDefaultAskField(params: {
   defaults: ExecApprovalsDefaults;
+  rawDefaults: ExecApprovalsDefaults;
   fallback: ExecAsk;
 }): ResolvedExecPolicyField<ExecAsk> {
   if (isExecAsk(params.defaults.ask)) {
     return {
       value: params.defaults.ask,
       source: "defaults.ask",
+    };
+  }
+  if (hasOwnPolicyField(params.rawDefaults, "ask")) {
+    return {
+      value: params.fallback,
+      source: null,
     };
   }
   return {
@@ -522,6 +547,7 @@ function resolveDefaultAskField(params: {
 function resolveAgentSecurityField(params: {
   field: "security" | "askFallback";
   defaults: ExecApprovalsDefaults;
+  rawDefaults: ExecApprovalsDefaults;
   agent: ExecApprovalsAgent;
   rawAgent: ExecApprovalsAgent;
   wildcard: ExecApprovalsAgent;
@@ -532,10 +558,10 @@ function resolveAgentSecurityField(params: {
   const fallbackField = resolveDefaultSecurityField({
     field: params.field,
     defaults: params.defaults,
+    rawDefaults: params.rawDefaults,
     fallback: params.fallback,
   });
-  const rawAgentValue = params.rawAgent[params.field];
-  if (rawAgentValue != null) {
+  if (hasOwnPolicyField(params.rawAgent, params.field)) {
     if (isExecSecurity(params.agent[params.field])) {
       return {
         value: params.agent[params.field] as ExecSecurity,
@@ -544,8 +570,7 @@ function resolveAgentSecurityField(params: {
     }
     return fallbackField;
   }
-  const rawWildcardValue = params.rawWildcard[params.field];
-  if (rawWildcardValue != null) {
+  if (hasOwnPolicyField(params.rawWildcard, params.field)) {
     if (isExecSecurity(params.wildcard[params.field])) {
       return {
         value: params.wildcard[params.field] as ExecSecurity,
@@ -559,6 +584,7 @@ function resolveAgentSecurityField(params: {
 
 function resolveAgentAskField(params: {
   defaults: ExecApprovalsDefaults;
+  rawDefaults: ExecApprovalsDefaults;
   agent: ExecApprovalsAgent;
   rawAgent: ExecApprovalsAgent;
   wildcard: ExecApprovalsAgent;
@@ -568,9 +594,10 @@ function resolveAgentAskField(params: {
 }): ResolvedExecPolicyField<ExecAsk> {
   const fallbackField = resolveDefaultAskField({
     defaults: params.defaults,
+    rawDefaults: params.rawDefaults,
     fallback: params.fallback,
   });
-  if (params.rawAgent.ask != null) {
+  if (hasOwnPolicyField(params.rawAgent, "ask")) {
     if (isExecAsk(params.agent.ask)) {
       return {
         value: params.agent.ask,
@@ -579,7 +606,7 @@ function resolveAgentAskField(params: {
     }
     return fallbackField;
   }
-  if (params.rawWildcard.ask != null) {
+  if (hasOwnPolicyField(params.rawWildcard, "ask")) {
     if (isExecAsk(params.wildcard.ask)) {
       return {
         value: params.wildcard.ask,
@@ -624,6 +651,7 @@ export function resolveExecApprovalsFromFile(params: {
   const rawFile = params.file;
   const file = normalizeExecApprovals(params.file);
   const defaults = file.defaults ?? {};
+  const rawDefaults = rawFile.defaults ?? {};
   const agentKey = params.agentId ?? DEFAULT_AGENT_ID;
   const agent = file.agents?.[agentKey] ?? {};
   const wildcard = file.agents?.["*"] ?? {};
@@ -645,6 +673,7 @@ export function resolveExecApprovalsFromFile(params: {
   const resolvedAgentSecurity = resolveAgentSecurityField({
     field: "security",
     defaults,
+    rawDefaults,
     agent,
     rawAgent,
     wildcard,
@@ -654,6 +683,7 @@ export function resolveExecApprovalsFromFile(params: {
   });
   const resolvedAgentAsk = resolveAgentAskField({
     defaults,
+    rawDefaults,
     agent,
     rawAgent,
     wildcard,
@@ -664,6 +694,7 @@ export function resolveExecApprovalsFromFile(params: {
   const resolvedAgentAskFallback = resolveAgentSecurityField({
     field: "askFallback",
     defaults,
+    rawDefaults,
     agent,
     rawAgent,
     wildcard,
