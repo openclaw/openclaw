@@ -109,7 +109,7 @@ describe("failover-error", () => {
         status: 410,
         message: "invalid_api_key",
       }),
-    ).toBe("auth_permanent");
+    ).toBe("auth");
     expect(
       resolveFailoverReasonFromError({
         status: 410,

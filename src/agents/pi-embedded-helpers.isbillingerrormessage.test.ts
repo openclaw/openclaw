@@ -68,14 +68,12 @@ describe("isAuthPermanentErrorMessage", () => {
     {
       name: "matches permanent auth failure patterns",
       samples: [
-        "invalid_api_key",
         "api key revoked",
         "api key deactivated",
         "key has been disabled",
         "key has been revoked",
         "account has been deactivated",
-        "could not authenticate api key",
-        "could not validate credentials",
+        "OAuth authentication is currently not allowed for this organization",
         "API_KEY_REVOKED",
         "api_key_deleted",
       ],
@@ -84,6 +82,8 @@ describe("isAuthPermanentErrorMessage", () => {
     {
       name: "does not match transient auth errors",
       samples: [
+        "invalid_api_key",
+        "permission_error",
         "unauthorized",
         "invalid token",
         "authentication failed",
@@ -102,8 +102,12 @@ describe("isAuthErrorMessage", () => {
   it.each([
     'No credentials found for profile "anthropic:default".',
     "No API key found for profile openai.",
+    "invalid_api_key",
+    "permission_error",
     "OAuth token refresh failed for anthropic: Failed to refresh OAuth token for anthropic. Please try again or re-authenticate.",
     "Please re-authenticate to continue.",
+    "could not authenticate api key",
+    "could not validate credentials",
     "Failed to extract accountId from token",
   ])("matches auth errors for %j", (sample) => {
     expect(isAuthErrorMessage(sample)).toBe(true);

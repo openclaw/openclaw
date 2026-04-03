@@ -518,6 +518,27 @@ type ResolvedAuthCooldownConfig = {
   failureWindowMs: number;
 };
 
+type DisabledFailureReason = Extract<AuthProfileFailureReason, "billing" | "auth_permanent">;
+
+type DisabledFailureBackoffPolicy = {
+  baseMs: (cfg: ResolvedAuthCooldownConfig) => number;
+  maxMs: (cfg: ResolvedAuthCooldownConfig) => number;
+};
+
+const DISABLED_FAILURE_BACKOFF_POLICIES = {
+  billing: {
+    baseMs: (cfg) => cfg.billingBackoffMs,
+    maxMs: (cfg) => cfg.billingMaxMs,
+  },
+  auth_permanent: {
+    // Keep high-confidence permanent-auth failures in the disabled lane, but
+    // recover much sooner than billing because some providers surface
+    // auth-looking payloads transiently during incidents.
+    baseMs: (cfg) => cfg.authPermanentBackoffMs,
+    maxMs: (cfg) => cfg.authPermanentMaxMs,
+  },
+} as const satisfies Record<DisabledFailureReason, DisabledFailureBackoffPolicy>;
+
 function resolveAuthCooldownConfig(params: {
   cfg?: OpenClawConfig;
   providerId: string;
@@ -530,9 +551,7 @@ function resolveAuthCooldownConfig(params: {
     failureWindowHours: 24,
   } as const;
 
-  const resolveHours = (value: unknown, fallback: number) =>
-    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
-  const resolveMinutes = (value: unknown, fallback: number) =>
+  const resolvePositiveNumber = (value: unknown, fallback: number) =>
     typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 
   const cooldowns = params.cfg?.auth?.cooldowns;
@@ -549,20 +568,23 @@ function resolveAuthCooldownConfig(params: {
     return undefined;
   })();
 
-  const billingBackoffHours = resolveHours(
+  const billingBackoffHours = resolvePositiveNumber(
     billingOverride ?? cooldowns?.billingBackoffHours,
     defaults.billingBackoffHours,
   );
-  const billingMaxHours = resolveHours(cooldowns?.billingMaxHours, defaults.billingMaxHours);
-  const authPermanentBackoffMinutes = resolveMinutes(
+  const billingMaxHours = resolvePositiveNumber(
+    cooldowns?.billingMaxHours,
+    defaults.billingMaxHours,
+  );
+  const authPermanentBackoffMinutes = resolvePositiveNumber(
     cooldowns?.authPermanentBackoffMinutes,
     defaults.authPermanentBackoffMinutes,
   );
-  const authPermanentMaxMinutes = resolveMinutes(
+  const authPermanentMaxMinutes = resolvePositiveNumber(
     cooldowns?.authPermanentMaxMinutes,
     defaults.authPermanentMaxMinutes,
   );
-  const failureWindowHours = resolveHours(
+  const failureWindowHours = resolvePositiveNumber(
     cooldowns?.failureWindowHours,
     defaults.failureWindowHours,
   );
@@ -576,7 +598,7 @@ function resolveAuthCooldownConfig(params: {
   };
 }
 
-function calculateAuthProfileBillingDisableMsWithConfig(params: {
+function calculateDisabledLaneBackoffMs(params: {
   errorCount: number;
   baseMs: number;
   maxMs: number;
@@ -587,6 +609,19 @@ function calculateAuthProfileBillingDisableMsWithConfig(params: {
   const exponent = Math.min(normalized - 1, 10);
   const raw = baseMs * 2 ** exponent;
   return Math.min(maxMs, raw);
+}
+
+function resolveDisabledFailureBackoffMs(params: {
+  reason: DisabledFailureReason;
+  errorCount: number;
+  cfgResolved: ResolvedAuthCooldownConfig;
+}): number {
+  const policy = DISABLED_FAILURE_BACKOFF_POLICIES[params.reason];
+  return calculateDisabledLaneBackoffMs({
+    errorCount: params.errorCount,
+    baseMs: policy.baseMs(params.cfgResolved),
+    maxMs: policy.maxMs(params.cfgResolved),
+  });
 }
 
 export function resolveProfileUnusableUntilForDisplay(
@@ -675,12 +710,15 @@ function computeNextProfileUsageStats(params: {
     lastFailureAt: params.now,
   };
 
-  if (params.reason === "billing") {
-    const billingCount = failureCounts[params.reason] ?? 1;
-    const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
-      errorCount: billingCount,
-      baseMs: params.cfgResolved.billingBackoffMs,
-      maxMs: params.cfgResolved.billingMaxMs,
+  const disabledFailureReason =
+    params.reason === "billing" || params.reason === "auth_permanent" ? params.reason : null;
+
+  if (disabledFailureReason) {
+    const disableCount = failureCounts[disabledFailureReason] ?? 1;
+    const backoffMs = resolveDisabledFailureBackoffMs({
+      reason: disabledFailureReason,
+      errorCount: disableCount,
+      cfgResolved: params.cfgResolved,
     });
     // Keep active disable windows immutable so retries within the window cannot
     // extend recovery time indefinitely.
@@ -689,23 +727,7 @@ function computeNextProfileUsageStats(params: {
       now: params.now,
       recomputedUntil: params.now + backoffMs,
     });
-    updatedStats.disabledReason = params.reason;
-  } else if (params.reason === "auth_permanent") {
-    // Keep permanent-auth failures in the disabled lane, but use a much
-    // shorter backoff than billing. Some upstream incidents surface auth-ish
-    // payloads transiently, so the provider should recover automatically.
-    const authPermanentCount = failureCounts[params.reason] ?? 1;
-    const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
-      errorCount: authPermanentCount,
-      baseMs: params.cfgResolved.authPermanentBackoffMs,
-      maxMs: params.cfgResolved.authPermanentMaxMs,
-    });
-    updatedStats.disabledUntil = keepActiveWindowOrRecompute({
-      existingUntil: params.existing.disabledUntil,
-      now: params.now,
-      recomputedUntil: params.now + backoffMs,
-    });
-    updatedStats.disabledReason = params.reason;
+    updatedStats.disabledReason = disabledFailureReason;
   } else {
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
     // Keep active cooldown windows immutable so retries within the window
