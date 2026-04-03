@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   getAgentRuntimeCommandSecretTargetIds,
-  getMemoryCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
 } from "./command-secret-targets.js";
@@ -11,17 +10,7 @@ describe("command secret target ids", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
-    expect(ids.has("tools.web.fetch.firecrawl.apiKey")).toBe(true);
-  });
-
-  it("keeps memory command target set focused on memorySearch remote credentials", () => {
-    const ids = getMemoryCommandSecretTargetIds();
-    expect(ids).toEqual(
-      new Set([
-        "agents.defaults.memorySearch.remote.apiKey",
-        "agents.list[].memorySearch.remote.apiKey",
-      ]),
-    );
+    expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
   });
 
   it("includes gateway auth and channel targets for security audit", () => {

@@ -1,3 +1,4 @@
+import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
@@ -54,18 +55,88 @@ export async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
 }
 
 /**
+ * Create a lightweight no-op HTTP plugin stub that satisfies the Teams SDK's
+ * plugin discovery by name ("http") but does NOT spin up an Express server.
+ *
+ * The default HttpPlugin in @microsoft/teams.apps registers an Express
+ * middleware with the pattern `/api*`.  When the host application (OpenClaw)
+ * uses Express 5 — which depends on path-to-regexp v8 — that pattern is
+ * invalid and throws:
+ *
+ *   Missing parameter name at index 5: /api*
+ *
+ * OpenClaw manages its own Express server for the Teams webhook endpoint, so
+ * the SDK's built-in HTTP server is unnecessary.  Passing this stub prevents
+ * the SDK from creating the default HttpPlugin and avoids the crash.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/55161
+ */
+async function createNoOpHttpPlugin(): Promise<unknown> {
+  // Lazy-import reflect-metadata (required by the Teams SDK decorator system)
+  // and the decorator key constants so we can tag the stub class correctly.
+  //
+  // FRAGILE: these are internal SDK paths (not public API).  If
+  // @microsoft/teams.apps changes its dist layout, these imports will break.
+  // Pin the SDK version and re-verify after any upgrade.
+  await import("reflect-metadata");
+  const { PLUGIN_METADATA_KEY } =
+    await import("@microsoft/teams.apps/dist/types/plugin/decorators/plugin.js");
+  const { PLUGIN_DEPENDENCIES_METADATA_KEY } =
+    await import("@microsoft/teams.apps/dist/types/plugin/decorators/dependency.js");
+  const { PLUGIN_EVENTS_METADATA_KEY } =
+    await import("@microsoft/teams.apps/dist/types/plugin/decorators/event.js");
+
+  class NoOpHttpPlugin {
+    onInit() {}
+    async onStart() {}
+    onStop() {}
+    asServer() {
+      return {
+        onRequest: undefined as unknown,
+        initialize: async () => {},
+        start: async () => {},
+        stop: async () => {},
+      } as {
+        onRequest: unknown;
+        initialize: (opts?: unknown) => Promise<void>;
+        start: (port?: number | string) => Promise<void>;
+        stop: () => Promise<void>;
+      };
+    }
+  }
+
+  Reflect.defineMetadata(
+    PLUGIN_METADATA_KEY,
+    { name: "http", version: "0.0.0", description: "no-op stub (express 5 compat)" },
+    NoOpHttpPlugin,
+  );
+  Reflect.defineMetadata(PLUGIN_DEPENDENCIES_METADATA_KEY, [], NoOpHttpPlugin);
+  Reflect.defineMetadata(PLUGIN_EVENTS_METADATA_KEY, [], NoOpHttpPlugin);
+
+  return new NoOpHttpPlugin();
+}
+
+/**
  * Create a Teams SDK App instance from credentials. The App manages token
  * acquisition, JWT validation, and the HTTP server lifecycle.
  *
  * This replaces the previous CloudAdapter + MsalTokenProvider + authorizeJWT
  * from @microsoft/agents-hosting.
  */
-export function createMSTeamsApp(creds: MSTeamsCredentials, sdk: MSTeamsTeamsSdk): MSTeamsApp {
+export async function createMSTeamsApp(
+  creds: MSTeamsCredentials,
+  sdk: MSTeamsTeamsSdk,
+): Promise<MSTeamsApp> {
+  const noOpHttp = await createNoOpHttpPlugin();
+  // Use type assertion: the SDK's AppOptions generic narrows `plugins` to
+  // Array<TPlugin>, but our no-op stub satisfies the runtime contract without
+  // matching the decorator-heavy IPlugin type at compile time.
   return new sdk.App({
     clientId: creds.appId,
     clientSecret: creds.appPassword,
     tenantId: creds.tenantId,
-  });
+    plugins: [noOpHttp],
+  } as ConstructorParameters<MSTeamsTeamsSdk["App"]>[0]);
 }
 
 /**
@@ -379,7 +450,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         }
       } catch (err) {
         if (!isInvoke) {
-          response.status(500).send({ error: String(err) });
+          response.status(500).send({ error: formatUnknownError(err) });
         }
       }
     },
@@ -396,23 +467,65 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
 
 export async function loadMSTeamsSdkWithAuth(creds: MSTeamsCredentials) {
   const sdk = await loadMSTeamsSdk();
-  const app = createMSTeamsApp(creds, sdk);
+  const app = await createMSTeamsApp(creds, sdk);
   return { sdk, app };
 }
 
 /**
- * Create a Bot Framework JWT validator using the Teams SDK's built-in
- * JwtValidator pre-configured for Bot Framework signing keys.
+ * Create a Bot Framework JWT validator with strict multi-issuer support.
  *
- * Validates: signature (JWKS), audience (appId), issuer (api.botframework.com),
- * and expiration (5-minute clock tolerance).
+ * During Microsoft's transition, inbound service tokens can be signed by either:
+ * - Legacy Bot Framework issuer/JWKS
+ * - Entra issuer/JWKS
+ *
+ * Security invariants are preserved for both paths:
+ * - signature verification (issuer-specific JWKS)
+ * - audience validation (appId)
+ * - issuer validation (strict allowlist)
+ * - expiration validation (Teams SDK defaults)
  */
 export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
   validate: (authHeader: string, serviceUrl?: string) => Promise<boolean>;
 }> {
-  const { createServiceTokenValidator } =
+  const { JwtValidator } =
     await import("@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js");
-  const validator = createServiceTokenValidator(creds.appId, creds.tenantId);
+
+  const botFrameworkValidator = new JwtValidator({
+    clientId: creds.appId,
+    tenantId: creds.tenantId,
+    validateIssuer: { allowedIssuer: "https://api.botframework.com" },
+    jwksUriOptions: {
+      type: "uri",
+      uri: "https://login.botframework.com/v1/.well-known/keys",
+    },
+  });
+
+  const entraValidator = new JwtValidator({
+    clientId: creds.appId,
+    tenantId: creds.tenantId,
+    validateIssuer: { allowedTenantIds: [creds.tenantId] },
+    jwksUriOptions: {
+      type: "uri",
+      uri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+    },
+  });
+
+  async function validateWithFallback(
+    token: string,
+    overrides: { validateServiceUrl: { expectedServiceUrl: string } } | undefined,
+  ): Promise<boolean> {
+    for (const validator of [botFrameworkValidator, entraValidator]) {
+      try {
+        const result = await validator.validateAccessToken(token, overrides);
+        if (result != null) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
 
   return {
     async validate(authHeader: string, serviceUrl?: string): Promise<boolean> {
@@ -420,15 +533,11 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
       if (!token) {
         return false;
       }
-      try {
-        const result = await validator.validateAccessToken(
-          token,
-          serviceUrl ? { validateServiceUrl: { expectedServiceUrl: serviceUrl } } : undefined,
-        );
-        return result != null;
-      } catch {
-        return false;
-      }
+
+      const overrides = serviceUrl
+        ? ({ validateServiceUrl: { expectedServiceUrl: serviceUrl } } as const)
+        : undefined;
+      return await validateWithFallback(token, overrides);
     },
   };
 }

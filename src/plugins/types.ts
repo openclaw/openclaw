@@ -12,6 +12,7 @@ import type {
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
+import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -21,7 +22,13 @@ import type {
   ChannelStructuredComponents,
 } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderConfig } from "../config/types.js";
+import type {
+  CliBackendConfig,
+  ModelProviderAuthMode,
+  ModelProviderConfig,
+} from "../config/types.js";
+import type { ModelCompatConfig } from "../config/types.models.js";
+import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -29,9 +36,18 @@ import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type {
+  RuntimeWebFetchMetadata,
+  RuntimeWebSearchMetadata,
+} from "../secrets/runtime-web-tools.types.js";
+import type {
+  SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfiguredContext,
+  SpeechProviderConfig,
+  SpeechProviderResolveConfigContext,
+  SpeechProviderResolveTalkConfigContext,
+  SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
   SpeechProviderId,
   SpeechSynthesisRequest,
@@ -40,6 +56,7 @@ import type {
   SpeechTelephonySynthesisResult,
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
+import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
@@ -102,14 +119,22 @@ export type OpenClawPluginConfigSchema = {
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
+  /** Active runtime-resolved config snapshot when one is available. */
+  runtimeConfig?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;
   sessionKey?: string;
-  /** Ephemeral session UUID — regenerated on /new and /reset. Use for per-conversation isolation. */
+  /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
+  browser?: {
+    sandboxBridgeUrl?: string;
+    allowHostControl?: boolean;
+  };
   messageChannel?: string;
   agentAccountId?: string;
+  /** Trusted ambient delivery route for the active agent/session. */
+  deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
   /** Whether the trusted sender is an owner. */
@@ -154,6 +179,7 @@ export type ProviderAuthResult = {
 /** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
   prompter: WizardPrompter;
@@ -345,6 +371,52 @@ export type ProviderNormalizeResolvedModelContext = {
 };
 
 /**
+ * Provider-owned model-id normalization before config/runtime lookup.
+ *
+ * Use this for provider-specific alias cleanup that should stay with the
+ * plugin rather than in core string tables.
+ */
+export type ProviderNormalizeModelIdContext = {
+  provider: string;
+  modelId: string;
+};
+
+/**
+ * Provider-owned config normalization for `models.providers.<id>` entries.
+ *
+ * Use this for provider-specific config cleanup that should stay with the
+ * plugin rather than in core config-policy tables.
+ */
+export type ProviderNormalizeConfigContext = {
+  provider: string;
+  providerConfig: ModelProviderConfig;
+};
+
+/**
+ * Provider-owned transport normalization for arbitrary provider/model config.
+ *
+ * Use this when transport cleanup depends on API/baseUrl rather than the
+ * owning provider id, for example custom providers that still target a
+ * plugin-owned transport family.
+ */
+export type ProviderNormalizeTransportContext = {
+  provider: string;
+  api?: string | null;
+  baseUrl?: string;
+};
+
+/**
+ * Provider-owned env/config auth marker resolution for `models.providers`.
+ *
+ * Use this when a provider resolves auth from env vars that do not follow the
+ * generic API-key conventions.
+ */
+export type ProviderResolveConfigApiKeyContext = {
+  provider: string;
+  env: NodeJS.ProcessEnv;
+};
+
+/**
  * Runtime auth input for providers that need an extra exchange step before
  * inference. The incoming `apiKey` is the raw credential resolved from auth
  * profiles/env/config. The returned value should be the actual token/key to use
@@ -374,6 +446,7 @@ export type ProviderPrepareRuntimeAuthContext = {
 export type ProviderPreparedRuntimeAuth = {
   apiKey: string;
   baseUrl?: string;
+  request?: ProviderRequestTransportOverrides;
   expiresAt?: number;
 };
 
@@ -467,6 +540,108 @@ export type ProviderPrepareExtraParamsContext = {
   thinkingLevel?: ThinkLevel;
 };
 
+export type ProviderReplaySanitizeMode = "full" | "images-only";
+
+export type ProviderReplayToolCallIdMode = "strict" | "strict9";
+
+export type ProviderReasoningOutputMode = "native" | "tagged";
+
+/**
+ * Provider-owned replay/compaction transcript policy.
+ *
+ * These values are consumed by shared history replay and compaction logic.
+ * Return only the fields the provider wants to override; core fills the rest
+ * with its default policy.
+ */
+export type ProviderReplayPolicy = {
+  sanitizeMode?: ProviderReplaySanitizeMode;
+  sanitizeToolCallIds?: boolean;
+  toolCallIdMode?: ProviderReplayToolCallIdMode;
+  preserveSignatures?: boolean;
+  sanitizeThoughtSignatures?: {
+    allowBase64Only?: boolean;
+    includeCamelCase?: boolean;
+  };
+  dropThinkingBlocks?: boolean;
+  repairToolUseResultPairing?: boolean;
+  applyAssistantFirstOrderingFix?: boolean;
+  allowSyntheticToolResults?: boolean;
+};
+
+/**
+ * Provider-owned replay/compaction policy input.
+ *
+ * Use this when transcript replay rules depend on provider/model transport
+ * behavior and should stay with the provider plugin instead of core tables.
+ */
+export type ProviderReplayPolicyContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  provider: string;
+  modelId?: string;
+  modelApi?: string | null;
+  model?: ProviderRuntimeModel;
+};
+
+/**
+ * Provider-owned replay-history sanitization input.
+ *
+ * Runs after core applies generic transcript cleanup so plugins can make
+ * provider-specific replay rewrites without owning the whole compaction flow.
+ */
+export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext & {
+  sessionId: string;
+  messages: AgentMessage[];
+  allowedToolNames?: Iterable<string>;
+};
+
+/**
+ * Provider-owned final replay-turn validation input.
+ *
+ * Use this for providers that require strict turn ordering or additional
+ * replay-time transcript validation beyond generic sanitation.
+ */
+export type ProviderValidateReplayTurnsContext = ProviderReplayPolicyContext & {
+  sessionId?: string;
+  messages: AgentMessage[];
+};
+
+/**
+ * Provider-owned tool-schema normalization input.
+ *
+ * Runs before tool registration for replay/compaction/inference so providers
+ * can rewrite schema keywords that their transport family does not support.
+ */
+export type ProviderNormalizeToolSchemasContext = ProviderReplayPolicyContext & {
+  tools: AnyAgentTool[];
+};
+
+/**
+ * Provider-owned reasoning output mode input.
+ *
+ * Use this when a provider requires a specific reasoning-output contract, such
+ * as text tags instead of native structured reasoning fields.
+ */
+export type ProviderReasoningOutputModeContext = ProviderReplayPolicyContext;
+
+/**
+ * Provider-owned transport creation.
+ *
+ * Use this when the provider needs to replace pi-ai's default transport with a
+ * custom StreamFn (for example a native API transport that cannot be expressed
+ * as a wrapper around `streamSimple`).
+ */
+export type ProviderCreateStreamFnContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel;
+};
+
 /**
  * Provider-owned stream wrapper hook after OpenClaw applies its generic
  * transport-independent wrappers.
@@ -475,7 +650,46 @@ export type ProviderPrepareExtraParamsContext = {
  * through the normal `pi-ai` stream path.
  */
 export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
+  model?: ProviderRuntimeModel;
   streamFn?: StreamFn;
+};
+
+/**
+ * Generic embedding provider shape returned by provider plugins.
+ *
+ * Keep this aligned with the memory embedding contract without forcing the
+ * plugin system to import memory internals directly.
+ */
+export type PluginEmbeddingProvider = {
+  id: string;
+  model: string;
+  maxInputTokens?: number;
+  embedQuery: (text: string) => Promise<number[]>;
+  embedBatch: (texts: string[]) => Promise<number[][]>;
+  embedBatchInputs?: (inputs: unknown[]) => Promise<number[][]>;
+  client?: unknown;
+};
+
+/**
+ * Provider-owned embedding transport creation.
+ *
+ * Use this when a provider wants memory embeddings to live with the provider
+ * plugin instead of the core memory switchboard.
+ */
+export type ProviderCreateEmbeddingProviderContext = {
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  model: string;
+  remote?: {
+    baseUrl?: string;
+    apiKey?: unknown;
+    headers?: Record<string, string>;
+  };
+  providerApiKey?: string;
+  outputDimensionality?: number;
+  taskType?: string;
 };
 
 /**
@@ -503,6 +717,22 @@ export type ProviderBuildMissingAuthMessageContext = {
   env: NodeJS.ProcessEnv;
   provider: string;
   listProfileIds: (providerId: string) => string[];
+};
+
+/**
+ * Provider-owned unknown-model hint override.
+ *
+ * Runs after catalog/runtime lookup misses for the requested provider. Return a
+ * hint suffix that OpenClaw should append to the generic `Unknown model`
+ * error.
+ */
+export type ProviderBuildUnknownModelHintContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  modelId: string;
 };
 
 /**
@@ -621,6 +851,17 @@ export type ProviderPluginWizardSetup = {
     initialSelections?: string[];
     message?: string;
   };
+  /**
+   * Optional default-model prompt policy for this auth/setup choice.
+   *
+   * Use this when selecting the auth choice should still force a model picker
+   * even if the choice was preseeded via CLI/configure, or when "keep current"
+   * would skip required provider-owned post-selection work.
+   */
+  modelSelection?: {
+    promptWhenAuthChoiceProvided?: boolean;
+    allowKeepCurrent?: boolean;
+  };
 };
 
 /** Optional model-picker metadata shown in interactive provider selection flows. */
@@ -636,12 +877,39 @@ export type ProviderPluginWizard = {
   modelPicker?: ProviderPluginWizardModelPicker;
 };
 
+export type ProviderOAuthProfileIdRepair = {
+  /**
+   * Legacy OAuth profile id to migrate away from.
+   *
+   * When omitted, OpenClaw falls back to `<provider>:default`.
+   */
+  legacyProfileId?: string;
+  /**
+   * Optional custom doctor prompt label.
+   *
+   * Defaults to the provider label when omitted.
+   */
+  promptLabel?: string;
+};
+
 export type ProviderModelSelectedContext = {
   config: OpenClawConfig;
   model: string;
   prompter: WizardPrompter;
   agentDir?: string;
   workspaceDir?: string;
+};
+
+export type ProviderResolveSyntheticAuthContext = {
+  config?: OpenClawConfig;
+  provider: string;
+  providerConfig?: ModelProviderConfig;
+};
+
+export type ProviderSyntheticAuthResult = {
+  apiKey: string;
+  source: string;
+  mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
 };
 
 /** Text-inference provider capability registered by a plugin. */
@@ -651,6 +919,14 @@ export type ProviderPlugin = {
   label: string;
   docsPath?: string;
   aliases?: string[];
+  /**
+   * Internal-only aliases used for runtime/config hook lookup.
+   *
+   * Unlike `aliases`, these values are not treated as user-facing provider ids
+   * for auth/setup surfaces. Use them for legacy config keys or compat-only
+   * hook routing.
+   */
+  hookAliases?: string[];
   /**
    * Provider-related env vars shown in setup/search/help surfaces.
    *
@@ -702,6 +978,57 @@ export type ProviderPlugin = {
     ctx: ProviderNormalizeResolvedModelContext,
   ) => ProviderRuntimeModel | null | undefined;
   /**
+   * Provider-owned compat contribution for resolved models outside direct
+   * provider ownership.
+   *
+   * Use this when a plugin can recognize its vendor's models behind another
+   * OpenAI-compatible transport (for example OpenRouter or a custom base URL)
+   * and needs to contribute compat flags without taking over the provider.
+   */
+  contributeResolvedModelCompat?: (
+    ctx: ProviderNormalizeResolvedModelContext,
+  ) => Partial<ModelCompatConfig> | null | undefined;
+  /**
+   * Provider-owned model-id normalization.
+   *
+   * Runs before model lookup/canonicalization. Use this for alias cleanup such
+   * as provider-owned preview/legacy model ids.
+   */
+  normalizeModelId?: (ctx: ProviderNormalizeModelIdContext) => string | null | undefined;
+  /**
+   * Provider-owned transport-family normalization before generic model
+   * assembly.
+   *
+   * Use this for API/baseUrl cleanup that may apply to custom provider ids
+   * which still target the provider's transport family.
+   */
+  normalizeTransport?: (
+    ctx: ProviderNormalizeTransportContext,
+  ) => { api?: string | null; baseUrl?: string } | null | undefined;
+  /**
+   * Provider-owned config normalization for `models.providers.<id>`.
+   *
+   * Use this for provider-specific baseUrl/model-id cleanup that should stay
+   * with the plugin rather than in core config-policy tables.
+   */
+  normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
+  /**
+   * Provider-owned final native-streaming compat pass for config providers.
+   *
+   * Use this when a provider opts specific native base URLs into
+   * `supportsUsageInStreaming` or similar transport compatibility flags.
+   */
+  applyNativeStreamingUsageCompat?: (
+    ctx: ProviderNormalizeConfigContext,
+  ) => ModelProviderConfig | null | undefined;
+  /**
+   * Provider-owned config apiKey/env marker resolution.
+   *
+   * Use this when a provider resolves auth from env vars such as AWS/GCP
+   * markers rather than a normal API-key env var.
+   */
+  resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
+  /**
    * Static provider capability overrides consumed by shared transcript/tooling
    * logic.
    *
@@ -709,6 +1036,51 @@ export type ProviderPlugin = {
    * sanitization quirks, or requires provider-family hints.
    */
   capabilities?: Partial<ProviderCapabilities>;
+  /**
+   * Provider-owned replay/compaction policy override.
+   *
+   * Use this when transcript replay or compaction should follow provider-owned
+   * rules that are more expressive than the static `capabilities` bag.
+   */
+  buildReplayPolicy?: (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined;
+  /**
+   * Provider-owned replay-history sanitization.
+   *
+   * Runs after OpenClaw performs generic transcript cleanup. Use this for
+   * provider-specific replay rewrites that should stay with the provider
+   * plugin rather than in shared core compaction helpers.
+   */
+  sanitizeReplayHistory?: (
+    ctx: ProviderSanitizeReplayHistoryContext,
+  ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;
+  /**
+   * Provider-owned final replay-turn validation.
+   *
+   * Use this when provider transports need stricter replay-time validation or
+   * turn reshaping after generic sanitation. Returning a non-null value
+   * replaces the built-in replay validators rather than composing with them.
+   */
+  validateReplayTurns?: (
+    ctx: ProviderValidateReplayTurnsContext,
+  ) => Promise<AgentMessage[] | null | undefined> | AgentMessage[] | null | undefined;
+  /**
+   * Provider-owned tool-schema normalization.
+   *
+   * Use this for transport-family schema cleanup before OpenClaw registers
+   * tools with the embedded runner.
+   */
+  normalizeToolSchemas?: (
+    ctx: ProviderNormalizeToolSchemasContext,
+  ) => AnyAgentTool[] | null | undefined;
+  /**
+   * Provider-owned reasoning output mode.
+   *
+   * Use this when a provider requires tagged reasoning/final output instead of
+   * native structured reasoning fields.
+   */
+  resolveReasoningOutputMode?: (
+    ctx: ProviderReasoningOutputModeContext,
+  ) => ProviderReasoningOutputMode | null | undefined;
   /**
    * Provider-owned extra-param normalization before generic stream option
    * wrapping.
@@ -721,6 +1093,13 @@ export type ProviderPlugin = {
     ctx: ProviderPrepareExtraParamsContext,
   ) => Record<string, unknown> | null | undefined;
   /**
+   * Provider-owned transport factory.
+   *
+   * Use this when the provider needs a fully custom StreamFn instead of a
+   * wrapper around the normal `streamSimple` path.
+   */
+  createStreamFn?: (ctx: ProviderCreateStreamFnContext) => StreamFn | null | undefined;
+  /**
    * Provider-owned stream wrapper applied after generic OpenClaw wrappers.
    *
    * Typical uses: provider attribution headers, request-body rewrites, or
@@ -728,6 +1107,19 @@ export type ProviderPlugin = {
    * transport implementation.
    */
   wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  /**
+   * Provider-owned embedding provider factory.
+   *
+   * Use this when memory embedding behavior belongs with the provider plugin
+   * rather than the core embedding switchboard.
+   */
+  createEmbeddingProvider?: (
+    ctx: ProviderCreateEmbeddingProviderContext,
+  ) =>
+    | Promise<PluginEmbeddingProvider | null | undefined>
+    | PluginEmbeddingProvider
+    | null
+    | undefined;
   /**
    * Runtime auth exchange hook.
    *
@@ -780,6 +1172,14 @@ export type ProviderPlugin = {
   buildMissingAuthMessage?: (
     ctx: ProviderBuildMissingAuthMessageContext,
   ) => string | null | undefined;
+  /**
+   * Provider-owned unknown-model hint override.
+   *
+   * Return a suffix when the provider wants a more specific recovery hint than
+   * OpenClaw's generic `Unknown model` error after catalog/runtime lookup
+   * fails.
+   */
+  buildUnknownModelHint?: (ctx: ProviderBuildUnknownModelHintContext) => string | null | undefined;
   /**
    * Provider-owned built-in model suppression.
    *
@@ -853,6 +1253,14 @@ export type ProviderPlugin = {
    */
   deprecatedProfileIds?: string[];
   /**
+   * Legacy OAuth profile-id migrations that `openclaw doctor` should offer.
+   *
+   * Use this when a provider moved from a legacy default OAuth profile id to a
+   * newer identity-based id and wants doctor to own the config rewrite without
+   * another core-specific migration branch.
+   */
+  oauthProfileIdRepairs?: ProviderOAuthProfileIdRepair[];
+  /**
    * Provider-owned OAuth refresh.
    *
    * OpenClaw calls this before falling back to the shared `pi-ai` OAuth
@@ -871,12 +1279,50 @@ export type ProviderPlugin = {
   buildAuthDoctorHint?: (
     ctx: ProviderAuthDoctorHintContext,
   ) => string | Promise<string | null | undefined> | null | undefined;
+  /**
+   * Provider-owned config-backed auth resolution.
+   *
+   * Providers own any provider-specific fallback secret rules here so core
+   * auth/discovery code can stay generic and avoid parsing provider-private
+   * config layouts.
+   *
+   * The returned `apiKey` may be:
+   * - a real credential from the active runtime snapshot, suitable for runtime use
+   * - a non-secret marker (for example a managed SecretRef marker), suitable only
+   *   for discovery/bootstrap callers
+   *
+   * Runtime callers must not treat non-secret markers as runnable credentials;
+   * they should retry against the active runtime snapshot when available.
+   *
+   * This hook is the canonical seam for provider-specific fallback auth
+   * derived from plugin/private config. It may return:
+   * - a runnable literal credential for runtime callers
+   * - a non-secret marker for managed-secret source config, which is still useful
+   *   for discovery/bootstrap callers
+   *
+   * Runtime callers must not treat non-secret markers as runnable credentials;
+   * they should retry against the active runtime snapshot when available.
+   *
+   * Use this when the provider can operate without a real secret for certain
+   * configured local/self-hosted cases and wants auth resolution to treat that
+   * config as available.
+   */
+  resolveSyntheticAuth?: (
+    ctx: ProviderResolveSyntheticAuthContext,
+  ) => ProviderSyntheticAuthResult | null | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
 export type WebSearchProviderId = string;
+export type WebFetchProviderId = string;
 
 export type WebSearchProviderToolDefinition = {
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+};
+
+export type WebFetchProviderToolDefinition = {
   description: string;
   parameters: Record<string, unknown>;
   execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -886,6 +1332,12 @@ export type WebSearchProviderContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebSearchMetadata;
+};
+
+export type WebFetchProviderContext = {
+  config?: OpenClawConfig;
+  fetchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebFetchMetadata;
 };
 
 export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
@@ -901,10 +1353,40 @@ export type WebSearchRuntimeMetadataContext = {
   };
 };
 
+export type WebSearchProviderSetupContext = {
+  config: OpenClawConfig;
+  runtime: RuntimeEnv;
+  prompter: WizardPrompter;
+  quickstartDefaults?: boolean;
+  secretInputMode?: SecretInputMode;
+};
+
+export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebFetchRuntimeMetadataContext = {
+  config?: OpenClawConfig;
+  fetchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebFetchMetadata;
+  resolvedCredential?: {
+    value?: string;
+    source: WebFetchCredentialResolutionSource;
+    fallbackEnvVar?: string;
+  };
+};
+
 export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  /**
+   * Interactive onboarding surfaces where this search provider should appear
+   * when OpenClaw has no config-aware runtime context yet.
+   *
+   * Unlike provider auth, search setup historically exposed only a curated
+   * quickstart subset. Keep this plugin-owned so core does not hardcode the
+   * default bundled provider list.
+   */
+  onboardingScopes?: Array<"text-inference">;
   requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
@@ -919,6 +1401,7 @@ export type WebSearchProviderPlugin = {
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  runSetup?: (ctx: WebSearchProviderSetupContext) => OpenClawConfig | Promise<OpenClawConfig>;
   resolveRuntimeMetadata?: (
     ctx: WebSearchRuntimeMetadataContext,
   ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;
@@ -929,13 +1412,55 @@ export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
   pluginId: string;
 };
 
+export type WebFetchProviderPlugin = {
+  id: WebFetchProviderId;
+  label: string;
+  hint: string;
+  requiresCredential?: boolean;
+  credentialLabel?: string;
+  envVars: string[];
+  placeholder: string;
+  signupUrl: string;
+  docsUrl?: string;
+  autoDetectOrder?: number;
+  /** Canonical plugin-owned config path for this provider's primary fetch credential. */
+  credentialPath: string;
+  /**
+   * Legacy or inactive credential paths that should warn but not activate this provider.
+   * Include credentialPath here when overriding the list, because runtime classification
+   * treats inactiveSecretPaths as the full inactive surface for this provider.
+   */
+  inactiveSecretPaths?: string[];
+  getCredentialValue: (fetchConfig?: Record<string, unknown>) => unknown;
+  setCredentialValue: (fetchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  /** Apply the minimal config needed to select this provider without scattering plugin config writes in core. */
+  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  resolveRuntimeMetadata?: (
+    ctx: WebFetchRuntimeMetadataContext,
+  ) => Partial<RuntimeWebFetchMetadata> | Promise<Partial<RuntimeWebFetchMetadata>>;
+  createTool: (ctx: WebFetchProviderContext) => WebFetchProviderToolDefinition | null;
+};
+
+export type PluginWebFetchProviderEntry = WebFetchProviderPlugin & {
+  pluginId: string;
+};
+
 /** Speech capability registered by a plugin. */
 export type SpeechProviderPlugin = {
   id: SpeechProviderId;
   label: string;
   aliases?: string[];
+  autoSelectOrder?: number;
   models?: readonly string[];
   voices?: readonly string[];
+  resolveConfig?: (ctx: SpeechProviderResolveConfigContext) => SpeechProviderConfig;
+  parseDirectiveToken?: (ctx: SpeechDirectiveTokenParseContext) => SpeechDirectiveTokenParseResult;
+  resolveTalkConfig?: (ctx: SpeechProviderResolveTalkConfigContext) => SpeechProviderConfig;
+  resolveTalkOverrides?: (
+    ctx: SpeechProviderResolveTalkOverridesContext,
+  ) => SpeechProviderConfig | undefined;
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
   synthesizeTelephony?: (
@@ -974,6 +1499,10 @@ export type PluginCommandContext = {
   isAuthorizedSender: boolean;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
+  /** Stable host session key for the active conversation when available. */
+  sessionKey?: string;
+  /** Ephemeral host session id for the active conversation when available. */
+  sessionId?: string;
   /** Raw command arguments after the command name */
   args?: string;
   /** The full normalized command body */
@@ -988,6 +1517,8 @@ export type PluginCommandContext = {
   accountId?: string;
   /** Thread/topic id if available */
   messageThreadId?: string | number;
+  /** Parent conversation id for thread-capable channels */
+  threadParentId?: string;
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;
@@ -1074,6 +1605,13 @@ export type OpenClawPluginCommandDefinition = {
    * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
    */
   nativeNames?: Partial<Record<string, string>> & { default?: string };
+  /**
+   * Optional Telegram-native progress placeholder text.
+   * When set, Telegram native/plugin command delivery sends this text
+   * immediately, then edits that same message in place if the final reply
+   * is a simple text-only payload.
+   */
+  telegramNativeProgressMessage?: string;
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */
@@ -1273,6 +1811,20 @@ export type OpenClawPluginCliContext = {
 
 export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void | Promise<void>;
 
+/**
+ * Top-level CLI metadata for plugin-owned commands.
+ *
+ * Descriptors are the parse-time contract for lazy plugin CLI registration.
+ * If you want OpenClaw to keep a plugin command lazy-loaded while still
+ * advertising it at the root CLI level, provide descriptors that cover every
+ * top-level command root registered by that plugin CLI surface.
+ */
+export type OpenClawPluginCliCommandDescriptor = {
+  name: string;
+  description: string;
+  hasSubcommands: boolean;
+};
+
 /** Context passed to long-lived plugin services. */
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
@@ -1288,6 +1840,28 @@ export type OpenClawPluginService = {
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };
 
+/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
+export type CliBackendPlugin = {
+  /** Provider id used in model refs, for example `claude-cli/opus`. */
+  id: string;
+  /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
+  config: CliBackendConfig;
+  /**
+   * Whether OpenClaw should inject bundle MCP config for this backend.
+   *
+   * Keep this opt-in. Only backends that explicitly consume an MCP config file
+   * should enable it.
+   */
+  bundleMcp?: boolean;
+  /**
+   * Optional config normalizer applied after user overrides merge.
+   *
+   * Use this for backend-specific compatibility rewrites when old config
+   * shapes need to stay working.
+   */
+  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+};
+
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
 };
@@ -1298,7 +1872,7 @@ export type OpenClawPluginDefinition = {
   name?: string;
   description?: string;
   version?: string;
-  kind?: PluginKind;
+  kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
   register?: (api: OpenClawPluginApi) => void | Promise<void>;
   activate?: (api: OpenClawPluginApi) => void | Promise<void>;
@@ -1308,7 +1882,7 @@ export type OpenClawPluginModule =
   | OpenClawPluginDefinition
   | ((api: OpenClawPluginApi) => void | Promise<void>);
 
-export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime";
+export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
 
 /** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
@@ -1341,9 +1915,29 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
-  registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
-  registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
+  registerGatewayMethod: (
+    method: string,
+    handler: GatewayRequestHandler,
+    opts?: { scope?: OperatorScope },
+  ) => void;
+  registerCli: (
+    registrar: OpenClawPluginCliRegistrar,
+    opts?: {
+      /** Explicit top-level command roots owned by this registrar. */
+      commands?: string[];
+      /**
+       * Parse-time command descriptors for lazy root CLI registration.
+       *
+       * When descriptors cover every top-level command root, OpenClaw can keep
+       * the plugin registrar lazy in the normal root CLI path. Command-only
+       * registrations stay on the eager compatibility path.
+       */
+      descriptors?: OpenClawPluginCliCommandDescriptor[];
+    },
+  ) => void;
   registerService: (service: OpenClawPluginService) => void;
+  /** Register a text-only CLI backend used by the local CLI runner. */
+  registerCliBackend: (backend: CliBackendPlugin) => void;
   /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
   /** Register a speech synthesis provider (speech capability). */
@@ -1352,6 +1946,8 @@ export type OpenClawPluginApi = {
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
+  /** Register a web fetch provider (web fetch capability). */
+  registerWebFetchProvider: (provider: WebFetchProviderPlugin) => void;
   /** Register a web search provider (web search capability). */
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
@@ -1364,14 +1960,22 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
-  /** Register a context engine implementation (exclusive slot — only one active at a time). */
+  /** Register a context engine implementation (exclusive slot - only one active at a time). */
   registerContextEngine: (
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
   ) => void;
   /** Register the system prompt section builder for this memory plugin (exclusive slot). */
   registerMemoryPromptSection: (
-    builder: import("../memory/prompt-section.js").MemoryPromptSectionBuilder,
+    builder: import("./memory-state.js").MemoryPromptSectionBuilder,
+  ) => void;
+  /** Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot). */
+  registerMemoryFlushPlan: (resolver: import("./memory-state.js").MemoryFlushPlanResolver) => void;
+  /** Register the active memory runtime adapter for this memory plugin (exclusive slot). */
+  registerMemoryRuntime: (runtime: import("./memory-state.js").MemoryPluginRuntime) => void;
+  /** Register a memory embedding provider adapter. Multiple adapters may coexist. */
+  registerMemoryEmbeddingProvider: (
+    adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
@@ -1403,6 +2007,7 @@ export type PluginHookName =
   | "before_model_resolve"
   | "before_prompt_build"
   | "before_agent_start"
+  | "before_agent_reply"
   | "llm_input"
   | "llm_output"
   | "agent_end"
@@ -1425,12 +2030,14 @@ export type PluginHookName =
   | "subagent_ended"
   | "gateway_start"
   | "gateway_stop"
-  | "before_dispatch";
+  | "before_dispatch"
+  | "before_install";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
   "before_prompt_build",
   "before_agent_start",
+  "before_agent_reply",
   "llm_input",
   "llm_output",
   "agent_end",
@@ -1454,6 +2061,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "before_dispatch",
+  "before_install",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -1480,6 +2088,8 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
 
 // Agent context shared across agent hooks
 export type PluginHookAgentContext = {
+  /** Unique identifier for this agent run. */
+  runId?: string;
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -1572,6 +2182,21 @@ export const stripPromptMutationFieldsFromLegacyHookResult = (
     : undefined;
 };
 
+// before_agent_reply hook
+export type PluginHookBeforeAgentReplyEvent = {
+  /** The final user message text heading to the LLM (after commands/directives). */
+  cleanedBody: string;
+};
+
+export type PluginHookBeforeAgentReplyResult = {
+  /** Whether the plugin is claiming this message (short-circuits the LLM agent). */
+  handled: boolean;
+  /** Synthetic reply that short-circuits the LLM agent. */
+  reply?: ReplyPayload;
+  /** Reason for interception (for logging/debugging). */
+  reason?: string;
+};
+
 // llm_input hook
 export type PluginHookLlmInputEvent = {
   runId: string;
@@ -1623,7 +2248,7 @@ export type PluginHookBeforeCompactionEvent = {
   sessionFile?: string;
 };
 
-// before_reset hook — fired when /new or /reset clears a session
+// before_reset hook - fired when /new or /reset clears a session
 export type PluginHookBeforeResetEvent = {
   sessionFile?: string;
   messages?: unknown[];
@@ -1743,7 +2368,7 @@ export type PluginHookMessageSentEvent = {
 export type PluginHookToolContext = {
   agentId?: string;
   sessionKey?: string;
-  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  /** Ephemeral session UUID - regenerated on /new and /reset. */
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
@@ -1762,10 +2387,35 @@ export type PluginHookBeforeToolCallEvent = {
   toolCallId?: string;
 };
 
+export const PluginApprovalResolutions = {
+  ALLOW_ONCE: "allow-once",
+  ALLOW_ALWAYS: "allow-always",
+  DENY: "deny",
+  TIMEOUT: "timeout",
+  CANCELLED: "cancelled",
+} as const;
+
+export type PluginApprovalResolution =
+  (typeof PluginApprovalResolutions)[keyof typeof PluginApprovalResolutions];
+
 export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
+  requireApproval?: {
+    title: string;
+    description: string;
+    severity?: "info" | "warning" | "critical";
+    timeoutMs?: number;
+    timeoutBehavior?: "allow" | "deny";
+    /** Set automatically by the hook runner - plugins should not set this. */
+    pluginId?: string;
+    /**
+     * Best-effort callback invoked with the final outcome after approval resolves, times out, or is cancelled.
+     * OpenClaw does not await this callback before allowing or denying the tool call.
+     */
+    onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
+  };
 };
 
 // after_tool_call hook
@@ -1932,6 +2582,117 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+export type PluginInstallTargetType = "skill" | "plugin";
+export type PluginInstallRequestKind =
+  | "skill-install"
+  | "plugin-dir"
+  | "plugin-archive"
+  | "plugin-file"
+  | "plugin-npm";
+export type PluginInstallSourcePathKind = "file" | "directory";
+
+export type PluginInstallFinding = {
+  ruleId: string;
+  severity: "info" | "warn" | "critical";
+  file: string;
+  line: number;
+  message: string;
+};
+
+export type PluginHookBeforeInstallRequest = {
+  /** Original install entrypoint/provenance. */
+  kind: PluginInstallRequestKind;
+  /** Install mode requested by the caller. */
+  mode: "install" | "update";
+  /** Raw user-facing specifier or path when available. */
+  requestedSpecifier?: string;
+};
+
+export type PluginHookBeforeInstallBuiltinScan = {
+  /** Whether the built-in scan completed successfully. */
+  status: "ok" | "error";
+  /** Number of files the built-in scanner actually inspected. */
+  scannedFiles: number;
+  critical: number;
+  warn: number;
+  info: number;
+  findings: PluginInstallFinding[];
+  /** Scanner failure reason when status=`error`. */
+  error?: string;
+};
+
+export type PluginHookBeforeInstallSkillInstallSpec = {
+  id?: string;
+  kind: "brew" | "node" | "go" | "uv" | "download";
+  label?: string;
+  bins?: string[];
+  os?: string[];
+  formula?: string;
+  package?: string;
+  module?: string;
+  url?: string;
+  archive?: string;
+  extract?: boolean;
+  stripComponents?: number;
+  targetDir?: string;
+};
+
+export type PluginHookBeforeInstallSkill = {
+  installId: string;
+  installSpec?: PluginHookBeforeInstallSkillInstallSpec;
+};
+
+export type PluginHookBeforeInstallPlugin = {
+  /** Canonical plugin id OpenClaw will install under. */
+  pluginId: string;
+  /** Normalized installable content shape after source resolution. */
+  contentType: "bundle" | "package" | "file";
+  packageName?: string;
+  manifestId?: string;
+  version?: string;
+  extensions?: string[];
+};
+
+// before_install hook
+export type PluginHookBeforeInstallContext = {
+  /** Category of install target being checked. */
+  targetType: PluginInstallTargetType;
+  /** Original install entrypoint/provenance. */
+  requestKind: PluginInstallRequestKind;
+  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  origin?: string;
+};
+
+export type PluginHookBeforeInstallEvent = {
+  /** Category of install target being checked. */
+  targetType: PluginInstallTargetType;
+  /** Human-readable skill or plugin name. */
+  targetName: string;
+  /** Absolute path to the install target content being scanned. */
+  sourcePath: string;
+  /** Whether the install target content is a file or directory. */
+  sourcePathKind: PluginInstallSourcePathKind;
+  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  origin?: string;
+  /** Install request provenance and caller mode. */
+  request: PluginHookBeforeInstallRequest;
+  /** Structured result of the built-in scanner. */
+  builtinScan: PluginHookBeforeInstallBuiltinScan;
+  /** Present when targetType=`skill`. */
+  skill?: PluginHookBeforeInstallSkill;
+  /** Present when targetType=`plugin`. */
+  plugin?: PluginHookBeforeInstallPlugin;
+};
+
+export type PluginHookBeforeInstallResult = {
+  /** Additional findings to merge with built-in scanner results. */
+  findings?: PluginInstallFinding[];
+  /** If true, block the installation entirely. */
+  block?: boolean;
+  /** Human-readable reason for blocking. */
+  blockReason?: string;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -1949,6 +2710,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
+  before_agent_reply: (
+    event: PluginHookBeforeAgentReplyEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeAgentReplyResult | void> | PluginHookBeforeAgentReplyResult | void;
   llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
@@ -2038,6 +2803,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  before_install: (
+    event: PluginHookBeforeInstallEvent,
+    ctx: PluginHookBeforeInstallContext,
+  ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

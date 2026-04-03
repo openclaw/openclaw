@@ -10,7 +10,7 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 });
 
 describe("cron service store seam coverage", () => {
-  it("loads, normalizes legacy stored jobs, recomputes next runs, and persists the migrated shape", async () => {
+  it("loads stored jobs, recomputes next runs, and does not rewrite the store on load", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
 
@@ -22,18 +22,16 @@ describe("cron service store seam coverage", () => {
           version: 1,
           jobs: [
             {
-              id: "legacy-current-job",
-              name: "legacy current job",
+              id: "modern-job",
+              name: "modern job",
               enabled: true,
               createdAtMs: now - 60_000,
               updatedAtMs: now - 60_000,
               schedule: { kind: "every", everyMs: 60_000 },
-              sessionTarget: "current",
-              wakeMode: "next-heartbeat",
-              message: "legacy message-only payload",
-              provider: "telegram",
-              to: "123",
-              deliver: true,
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              payload: { kind: "agentTurn", message: "ping" },
+              delivery: { mode: "announce", channel: "telegram", to: "123" },
               state: {},
             },
           ],
@@ -61,10 +59,7 @@ describe("cron service store seam coverage", () => {
     expect(job?.sessionTarget).toBe("isolated");
     expect(job?.payload.kind).toBe("agentTurn");
     if (job?.payload.kind === "agentTurn") {
-      expect(job.payload.message).toBe("legacy message-only payload");
-      expect(job.payload.channel).toBeUndefined();
-      expect(job.payload.to).toBeUndefined();
-      expect(job.payload.deliver).toBeUndefined();
+      expect(job.payload.message).toBe("ping");
     }
     expect(job?.delivery).toMatchObject({
       mode: "announce",
@@ -77,13 +72,9 @@ describe("cron service store seam coverage", () => {
       jobs: Array<Record<string, unknown>>;
     };
     const persistedJob = persisted.jobs[0];
-    expect(persistedJob?.message).toBeUndefined();
-    expect(persistedJob?.provider).toBeUndefined();
-    expect(persistedJob?.to).toBeUndefined();
-    expect(persistedJob?.deliver).toBeUndefined();
     expect(persistedJob?.payload).toMatchObject({
       kind: "agentTurn",
-      message: "legacy message-only payload",
+      message: "ping",
     });
     expect(persistedJob?.delivery).toMatchObject({
       mode: "announce",

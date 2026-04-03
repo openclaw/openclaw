@@ -1,7 +1,7 @@
 import { appendFileSync } from "node:fs";
 import { buildCIExecutionManifest } from "./test-planner/planner.mjs";
 
-const WORKFLOWS = new Set(["ci", "install-smoke", "ci-bun"]);
+const WORKFLOWS = new Set(["ci", "install-smoke"]);
 
 const parseArgs = (argv) => {
   const parsed = {
@@ -13,7 +13,7 @@ const parseArgs = (argv) => {
       const nextValue = argv[index + 1] ?? "";
       if (!WORKFLOWS.has(nextValue)) {
         throw new Error(
-          `Unsupported --workflow value "${String(nextValue || "<missing>")}". Supported values: ci, install-smoke, ci-bun.`,
+          `Unsupported --workflow value "${String(nextValue || "<missing>")}". Supported values: ci, install-smoke.`,
         );
       }
       parsed.workflow = nextValue;
@@ -47,7 +47,6 @@ if (workflow === "ci") {
   writeOutput("has_changed_extensions", String(manifest.scope.hasChangedExtensions));
   writeOutput("changed_extensions_matrix", JSON.stringify(manifest.scope.changedExtensionsMatrix));
   writeOutput("run_build_artifacts", String(manifest.jobs.buildArtifacts.enabled));
-  writeOutput("run_release_check", String(manifest.jobs.releaseCheck.enabled));
   writeOutput("run_checks_fast", String(manifest.jobs.checksFast.enabled));
   writeOutput("checks_fast_matrix", JSON.stringify(manifest.jobs.checksFast.matrix));
   writeOutput("run_checks", String(manifest.jobs.checks.enabled));
@@ -70,7 +69,4 @@ if (workflow === "ci") {
 } else if (workflow === "install-smoke") {
   writeOutput("docs_only", String(manifest.scope.docsOnly));
   writeOutput("run_install_smoke", String(manifest.jobs.installSmoke.enabled));
-} else if (workflow === "ci-bun") {
-  writeOutput("run_bun_checks", String(manifest.jobs.bunChecks.enabled));
-  writeOutput("bun_checks_matrix", JSON.stringify(manifest.jobs.bunChecks.matrix));
 }

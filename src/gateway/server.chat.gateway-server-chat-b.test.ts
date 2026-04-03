@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/types.js";
+import { clearConfigCache } from "../config/config.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import {
   connectOk,
@@ -54,6 +55,7 @@ async function withGatewayChatHarness(
     await run({ ws, createSessionDir });
   } finally {
     __setMaxChatHistoryMessagesBytesForTest();
+    clearConfigCache();
     testState.sessionStorePath = undefined;
     ws.close();
     await server.close();
@@ -69,16 +71,31 @@ async function writeMainSessionStore() {
   });
 }
 
+async function writeGatewayConfig(config: Record<string, unknown>) {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+  }
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+  clearConfigCache();
+}
+
 async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
   await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
 }
 
 async function fetchHistoryMessages(
   ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"],
+  params?: {
+    limit?: number;
+    maxChars?: number;
+  },
 ): Promise<unknown[]> {
   const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
     sessionKey: "main",
-    limit: 1000,
+    limit: params?.limit ?? 1000,
+    ...(typeof params?.maxChars === "number" ? { maxChars: params.maxChars } : {}),
   });
   expect(historyRes.ok).toBe(true);
   return historyRes.payload?.messages ?? [];
@@ -99,6 +116,86 @@ async function prepareMainHistoryHarness(params: {
 }
 
 describe("gateway server chat", () => {
+  test("chat.history backfills claude-cli sessions from Claude project files", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const originalHome = process.env.HOME;
+      const homeDir = path.join(sessionDir, "home");
+      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
+      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
+      await fs.mkdir(claudeProjectsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
+        [
+          JSON.stringify({
+            type: "queue-operation",
+            operation: "enqueue",
+            timestamp: "2026-03-26T16:29:54.722Z",
+            sessionId: cliSessionId,
+            content: "[Thu 2026-03-26 16:29 GMT] hi",
+          }),
+          JSON.stringify({
+            type: "user",
+            uuid: "user-1",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: {
+              role: "user",
+              content:
+                'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+            },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "assistant-1",
+            timestamp: "2026-03-26T16:29:55.500Z",
+            message: {
+              role: "assistant",
+              model: "claude-sonnet-4-6",
+              content: [{ type: "text", text: "hello from Claude" }],
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+      process.env.HOME = homeDir;
+      try {
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId: "sess-main",
+              updatedAt: Date.now(),
+              modelProvider: "claude-cli",
+              model: "claude-sonnet-4-6",
+              cliSessionBindings: {
+                "claude-cli": {
+                  sessionId: cliSessionId,
+                },
+              },
+            },
+          },
+        });
+
+        const messages = await fetchHistoryMessages(ws);
+        expect(messages).toHaveLength(2);
+        expect(messages[0]).toMatchObject({
+          role: "user",
+          content: "hi",
+        });
+        expect(messages[1]).toMatchObject({
+          role: "assistant",
+          provider: "claude-cli",
+        });
+      } finally {
+        if (originalHome === undefined) {
+          delete process.env.HOME;
+        } else {
+          process.env.HOME = originalHome;
+        }
+      }
+    });
+  });
+
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
@@ -374,6 +471,100 @@ describe("gateway server chat", () => {
       expect(second.content?.replace(/\s+/g, " ").trim()).toBe("A B");
       expect(third.text?.replace(/\s+/g, " ").trim()).toBe("C");
       expect(fourth.content?.[0]?.text).toBe("  keep padded  ");
+    });
+  });
+
+  test("chat.history applies gateway.webchat.chatHistoryMaxChars from config", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await writeGatewayConfig({
+        gateway: {
+          webchat: {
+            chatHistoryMaxChars: 5,
+          },
+        },
+      });
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "abcdefghij" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws);
+      expect(JSON.stringify(messages)).toContain("abcde\\n...(truncated)...");
+    });
+  });
+
+  test("chat.history prefers RPC maxChars over config", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await writeGatewayConfig({
+        gateway: {
+          webchat: {
+            chatHistoryMaxChars: 3,
+          },
+        },
+      });
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "abcdefghij" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { maxChars: 7 });
+      const serialized = JSON.stringify(messages);
+      expect(serialized).toContain("abcdefg\\n...(truncated)...");
+      expect(serialized).not.toContain("abc\\n...(truncated)...");
+    });
+  });
+
+  test("chat.history rejects invalid RPC maxChars values", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+
+      const zeroRes = await rpcReq(ws, "chat.history", {
+        sessionKey: "main",
+        maxChars: 0,
+      });
+      expect(zeroRes.ok).toBe(false);
+      expect((zeroRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
+        /invalid chat\.history params/i,
+      );
+
+      const tooLargeRes = await rpcReq(ws, "chat.history", {
+        sessionKey: "main",
+        maxChars: 500_001,
+      });
+      expect(tooLargeRes.ok).toBe(false);
+      expect((tooLargeRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
+        /invalid chat\.history params/i,
+      );
+    });
+  });
+
+  test("chat.history still drops assistant NO_REPLY entries before truncation", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { maxChars: 3 });
+      expect(messages).toEqual([]);
     });
   });
 

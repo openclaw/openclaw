@@ -4,4 +4,4 @@ export {
   describeVideoFile,
   runMediaUnderstandingFile,
   transcribeAudioFile,
-} from "../../media-understanding/runtime.js";
+} from "../../plugin-sdk/media-understanding-runtime.js";

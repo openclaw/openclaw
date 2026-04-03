@@ -174,6 +174,13 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "tasks",
+      nativeName: "tasks",
+      description: "List background tasks for this session.",
+      textAlias: "/tasks",
+      category: "status",
+    }),
+    defineChatCommand({
       key: "allowlist",
       description: "List/add/remove allowlist entries.",
       textAlias: "/allowlist",
@@ -257,7 +264,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
           "• On – Enable TTS for responses\n" +
           "• Off – Disable TTS\n" +
           "• Status – Show current settings\n" +
-          "• Provider – Set voice provider (edge, elevenlabs, openai)\n" +
+          "• Provider – Show or set the voice provider\n" +
           "• Limit – Set max characters for TTS\n" +
           "• Summary – Toggle AI summary for long texts\n" +
           "• Audio – Generate TTS from custom text\n" +

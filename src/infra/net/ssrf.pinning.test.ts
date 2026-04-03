@@ -166,9 +166,9 @@ describe("ssrf pinning", () => {
 
   it("sorts IPv4 addresses before IPv6 in pinned results", async () => {
     const lookup = vi.fn(async () => [
-      { address: "2001:db8::1", family: 6 },
+      { address: "2606:4700:4700::1111", family: 6 },
       { address: "93.184.216.34", family: 4 },
-      { address: "2001:db8::2", family: 6 },
+      { address: "2606:4700:4700::1001", family: 6 },
       { address: "93.184.216.35", family: 4 },
     ]) as unknown as LookupFn;
 
@@ -176,8 +176,8 @@ describe("ssrf pinning", () => {
     expect(pinned.addresses).toEqual([
       "93.184.216.34",
       "93.184.216.35",
-      "2001:db8::1",
-      "2001:db8::2",
+      "2606:4700:4700::1111",
+      "2606:4700:4700::1001",
     ]);
   });
 

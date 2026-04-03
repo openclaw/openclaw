@@ -8,6 +8,11 @@ import Speech
 actor TalkModeRuntime {
     static let shared = TalkModeRuntime()
 
+    enum PlaybackPlan: Equatable {
+        case elevenLabsThenSystemVoice(apiKey: String, voiceId: String)
+        case systemVoiceOnly
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
@@ -330,6 +335,11 @@ actor TalkModeRuntime {
         self.lastHeard = nil
         self.phase = .thinking
         await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
+        // Play "send" chime when the user's speech is finalized and about to be sent
+        let sendChime = await MainActor.run { AppStateStore.shared.voiceWakeSendChime }
+        if sendChime != .none {
+            await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "talk.send") }
+        }
         await self.stopRecognition()
         await self.sendAndSpeak(text)
     }
@@ -451,17 +461,23 @@ actor TalkModeRuntime {
 
     private func playAssistant(text: String) async {
         guard let input = await self.preparePlaybackInput(text: text) else { return }
-        do {
-            if let apiKey = input.apiKey, !apiKey.isEmpty, let voiceId = input.voiceId {
+
+        switch Self.playbackPlan(apiKey: input.apiKey, voiceId: input.voiceId) {
+        case let .elevenLabsThenSystemVoice(apiKey, voiceId):
+            do {
                 try await self.playElevenLabs(input: input, apiKey: apiKey, voiceId: voiceId)
-            } else {
-                try await self.playSystemVoice(input: input)
+            } catch {
+                self.ttsLogger
+                    .error(
+                        "talk TTS failed: \(error.localizedDescription, privacy: .public); " +
+                            "falling back to system voice")
+                do {
+                    try await self.playSystemVoice(input: input)
+                } catch {
+                    self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
-        } catch {
-            self.ttsLogger
-                .error(
-                    "talk TTS failed: \(error.localizedDescription, privacy: .public); " +
-                        "falling back to system voice")
+        case .systemVoiceOnly:
             do {
                 try await self.playSystemVoice(input: input)
             } catch {
@@ -473,6 +489,13 @@ actor TalkModeRuntime {
             self.phase = .thinking
             await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
         }
+    }
+
+    static func playbackPlan(apiKey: String?, voiceId: String?) -> PlaybackPlan {
+        guard let apiKey, !apiKey.isEmpty, let voiceId else {
+            return .systemVoiceOnly
+        }
+        return .elevenLabsThenSystemVoice(apiKey: apiKey, voiceId: voiceId)
     }
 
     private struct TalkPlaybackInput {
@@ -664,9 +687,12 @@ actor TalkModeRuntime {
         await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
         self.phase = .speaking
         await TalkSystemSpeechSynthesizer.shared.stop()
+        // Use app locale as fallback when no explicit language is set (e.g. system voice without ElevenLabs directive).
+        let appLocale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        let ttsLanguage = input.language ?? appLocale
         try await TalkSystemSpeechSynthesizer.shared.speak(
             text: input.cleanedText,
-            language: input.language)
+            language: ttsLanguage)
         self.ttsLogger.info("talk system voice done")
     }
 

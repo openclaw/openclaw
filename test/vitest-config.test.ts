@@ -3,7 +3,22 @@ import {
   resolveExecutionBudget,
   resolveRuntimeCapabilities,
 } from "../scripts/test-planner/runtime-profile.mjs";
-import { resolveLocalVitestMaxWorkers } from "../vitest.config.ts";
+import baseConfig, { resolveLocalVitestMaxWorkers } from "../vitest.config.ts";
+
+function resolveHighMemoryLocalRuntime() {
+  return resolveRuntimeCapabilities(
+    {
+      RUNNER_OS: "macOS",
+    },
+    {
+      cpuCount: 16,
+      totalMemoryBytes: 128 * 1024 ** 3,
+      platform: "darwin",
+      mode: "local",
+      loadAverage: [0.2, 0.2, 0.2],
+    },
+  );
+}
 
 describe("resolveLocalVitestMaxWorkers", () => {
   it("derives a mid-tier local cap for 64 GiB hosts", () => {
@@ -130,7 +145,29 @@ describe("resolveLocalVitestMaxWorkers", () => {
     expect(runtime.memoryBand).toBe("mid");
     expect(runtime.loadBand).toBe("saturated");
     expect(budget.vitestMaxWorkers).toBe(2);
+    expect(budget.unitIsolatedWorkers).toBe(1);
     expect(budget.deferredRunConcurrency).toBe(1);
+  });
+
+  it("backs off isolated workers and shrinks unit batches on saturated high-memory locals", () => {
+    const runtime = resolveRuntimeCapabilities(
+      {
+        RUNNER_OS: "macOS",
+      },
+      {
+        cpuCount: 16,
+        totalMemoryBytes: 128 * 1024 ** 3,
+        platform: "darwin",
+        mode: "local",
+        loadAverage: [18, 18, 18],
+      },
+    );
+    const budget = resolveExecutionBudget(runtime);
+
+    expect(runtime.memoryBand).toBe("high");
+    expect(runtime.loadBand).toBe("saturated");
+    expect(budget.unitIsolatedWorkers).toBe(1);
+    expect(budget.unitFastBatchTargetMs).toBe(22_500);
   });
 
   it("keeps CI windows policy constrained independently of host load", () => {
@@ -152,5 +189,33 @@ describe("resolveLocalVitestMaxWorkers", () => {
     expect(runtime.runtimeProfileName).toBe("ci-windows");
     expect(budget.vitestMaxWorkers).toBe(2);
     expect(budget.topLevelParallelLimit).toBe(2);
+  });
+
+  it("enables shared channel batching on high-memory local hosts", () => {
+    const runtime = resolveHighMemoryLocalRuntime();
+    const budget = resolveExecutionBudget(runtime);
+
+    expect(runtime.memoryBand).toBe("high");
+    expect(runtime.loadBand).toBe("idle");
+    expect(budget.channelsBatchTargetMs).toBe(30_000);
+    expect(budget.channelSharedWorkers).toBe(5);
+    expect(budget.deferredRunConcurrency).toBe(8);
+    expect(budget.topLevelParallelLimitNoIsolate).toBe(14);
+  });
+
+  it("uses a coarser shared extension batch target on high-memory local hosts", () => {
+    const runtime = resolveHighMemoryLocalRuntime();
+    const budget = resolveExecutionBudget(runtime);
+
+    expect(runtime.memoryBand).toBe("high");
+    expect(runtime.loadBand).toBe("idle");
+    expect(budget.extensionsBatchTargetMs).toBe(300_000);
+    expect(budget.extensionWorkers).toBe(5);
+  });
+});
+
+describe("base vitest config", () => {
+  it("excludes fixture trees from test collection", () => {
+    expect(baseConfig.test?.exclude).toContain("test/fixtures/**");
   });
 });

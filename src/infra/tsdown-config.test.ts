@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { bundledPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import tsdownConfig from "../../tsdown.config.ts";
 
 type TsdownConfigEntry = {
+  deps?: {
+    neverBundle?: string[];
+  };
   entry?: Record<string, string> | string[];
   outDir?: string;
 };
@@ -17,6 +21,10 @@ function entryKeys(config: TsdownConfigEntry): string[] {
   return Object.keys(config.entry);
 }
 
+function bundledEntry(pluginId: string): string {
+  return `${bundledPluginRoot(pluginId)}/index`;
+}
+
 describe("tsdown config", () => {
   it("keeps core, plugin runtime, plugin-sdk, bundled plugins, and bundled hooks in one dist graph", () => {
     const configs = asConfigArray(tsdownConfig);
@@ -26,7 +34,7 @@ describe("tsdown config", () => {
         keys.includes("index") ||
         keys.includes("plugins/runtime/index") ||
         keys.includes("plugin-sdk/index") ||
-        keys.includes("extensions/openai/index") ||
+        keys.includes(bundledEntry("openai")) ||
         keys.includes("bundled/boot-md/handler")
       );
     });
@@ -37,16 +45,16 @@ describe("tsdown config", () => {
         "agents/auth-profiles.runtime",
         "agents/pi-model-discovery-runtime",
         "index",
-        "cli/memory-cli",
         "commands/status.summary.runtime",
         "plugins/provider-runtime.runtime",
+        "plugins/runtime/runtime-line.contract",
         "plugins/runtime/index",
         "plugin-sdk/compat",
         "plugin-sdk/index",
-        "extensions/openai/index",
-        "extensions/matrix/index",
-        "extensions/msteams/index",
-        "extensions/whatsapp/index",
+        bundledEntry("openai"),
+        bundledEntry("matrix"),
+        bundledEntry("msteams"),
+        bundledEntry("whatsapp"),
         "bundled/boot-md/handler",
       ]),
     );
@@ -63,5 +71,12 @@ describe("tsdown config", () => {
           : false,
       ),
     ).toBe(false);
+  });
+
+  it("externalizes staged bundled plugin runtime dependencies", () => {
+    const configs = asConfigArray(tsdownConfig);
+    const unifiedGraph = configs.find((config) => entryKeys(config).includes("index"));
+
+    expect(unifiedGraph?.deps?.neverBundle).toEqual(expect.arrayContaining(["silk-wasm", "ws"]));
   });
 });

@@ -9,15 +9,17 @@ import {
   resolveListedDefaultAccountId,
   resolveAccountWithDefaultFallback,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/account-resolution";
-import { isTruthyEnvValue } from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/account-core";
 import {
   listBoundAccountIds,
   resolveDefaultAgentBoundAccountId,
 } from "openclaw/plugin-sdk/routing";
 import { formatSetExplicitDefaultInstruction } from "openclaw/plugin-sdk/routing";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramAccountConfig, TelegramActionConfig } from "../runtime-api.js";
+import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import type {
+  TelegramAccountConfig,
+  TelegramActionConfig,
+} from "openclaw/plugin-sdk/telegram-core";
 import { resolveTelegramToken } from "./token.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;

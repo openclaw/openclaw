@@ -141,9 +141,37 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("suppresses JSON NO_REPLY action payloads", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: '{"action":"NO_REPLY"}' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("does not suppress JSON NO_REPLY objects with extra fields", () => {
+    const result = normalizeReplyPayload({
+      text: '{"action":"NO_REPLY","note":"example"}',
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe('{"action":"NO_REPLY","note":"example"}');
+  });
+
   it("strips NO_REPLY but keeps media payload", () => {
     const result = normalizeReplyPayload({
       text: "NO_REPLY",
+      mediaUrl: "https://example.com/img.png",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("");
+    expect(result!.mediaUrl).toBe("https://example.com/img.png");
+  });
+
+  it("strips JSON NO_REPLY action text but keeps media payload", () => {
+    const result = normalizeReplyPayload({
+      text: '{"action":"NO_REPLY"}',
       mediaUrl: "https://example.com/img.png",
     });
     expect(result).not.toBeNull();
@@ -257,14 +285,14 @@ describe("normalizeReplyPayload", () => {
   it("leaves complex Options lines as plain text", () => {
     const result = normalizeReplyPayload(
       {
-        text: "ACP runtime choices.\nOptions: host=sandbox|gateway|node, security=deny|allowlist|full.",
+        text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
       },
       { enableSlackInteractiveReplies: true },
     );
 
     expect(result).not.toBeNull();
     expect(result!.text).toBe(
-      "ACP runtime choices.\nOptions: host=sandbox|gateway|node, security=deny|allowlist|full.",
+      "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
     );
     expect(result!.interactive).toBeUndefined();
   });

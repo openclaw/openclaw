@@ -4,6 +4,7 @@ import {
   type GatewayRequestHandlerOptions,
   type OpenClawPluginApi,
 } from "./api.js";
+import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime-entry.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
   VoiceCallConfigSchema,
@@ -12,7 +13,6 @@ import {
   type VoiceCallConfig,
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
-import { createVoiceCallRuntime, type VoiceCallRuntime } from "./src/runtime.js";
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
@@ -84,21 +84,21 @@ const voiceCallConfigSchema = {
       help: "Deep-merges with messages.tts (Microsoft is ignored for calls).",
       advanced: true,
     },
-    "tts.openai.model": { label: "OpenAI TTS Model", advanced: true },
-    "tts.openai.voice": { label: "OpenAI TTS Voice", advanced: true },
-    "tts.openai.apiKey": {
+    "tts.providers.openai.model": { label: "OpenAI TTS Model", advanced: true },
+    "tts.providers.openai.voice": { label: "OpenAI TTS Voice", advanced: true },
+    "tts.providers.openai.apiKey": {
       label: "OpenAI API Key",
       sensitive: true,
       advanced: true,
     },
-    "tts.elevenlabs.modelId": { label: "ElevenLabs Model ID", advanced: true },
-    "tts.elevenlabs.voiceId": { label: "ElevenLabs Voice ID", advanced: true },
-    "tts.elevenlabs.apiKey": {
+    "tts.providers.elevenlabs.modelId": { label: "ElevenLabs Model ID", advanced: true },
+    "tts.providers.elevenlabs.voiceId": { label: "ElevenLabs Voice ID", advanced: true },
+    "tts.providers.elevenlabs.apiKey": {
       label: "ElevenLabs API Key",
       sensitive: true,
       advanced: true,
     },
-    "tts.elevenlabs.baseUrl": { label: "ElevenLabs Base URL", advanced: true },
+    "tts.providers.elevenlabs.baseUrl": { label: "ElevenLabs Base URL", advanced: true },
     publicUrl: { label: "Public Webhook URL", advanced: true },
     skipSignatureVerification: {
       label: "Skip Signature Verification",

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  buildPluginStatusReport,
+  buildPluginDiagnosticsReport,
   loadConfig,
   parseClawHubPluginSpec,
   promptYesNo,
@@ -12,6 +13,9 @@ import {
   uninstallPlugin,
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
+
+const CLI_STATE_ROOT = "/tmp/openclaw-state";
+const ALPHA_INSTALL_PATH = installedPluginRoot(CLI_STATE_ROOT, "alpha");
 
 describe("plugins cli uninstall", () => {
   beforeEach(() => {
@@ -29,13 +33,13 @@ describe("plugins cli uninstall", () => {
         installs: {
           alpha: {
             source: "path",
-            sourcePath: "/tmp/openclaw-state/extensions/alpha",
-            installPath: "/tmp/openclaw-state/extensions/alpha",
+            sourcePath: ALPHA_INSTALL_PATH,
+            installPath: ALPHA_INSTALL_PATH,
           },
         },
       },
     } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -56,8 +60,8 @@ describe("plugins cli uninstall", () => {
         installs: {
           alpha: {
             source: "path",
-            sourcePath: "/tmp/openclaw-state/extensions/alpha",
-            installPath: "/tmp/openclaw-state/extensions/alpha",
+            sourcePath: ALPHA_INSTALL_PATH,
+            installPath: ALPHA_INSTALL_PATH,
           },
         },
       },
@@ -70,7 +74,7 @@ describe("plugins cli uninstall", () => {
     } as OpenClawConfig;
 
     loadConfig.mockReturnValue(baseConfig);
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -107,7 +111,7 @@ describe("plugins cli uninstall", () => {
         installs: {},
       },
     } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -135,7 +139,7 @@ describe("plugins cli uninstall", () => {
         },
       },
     } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "linkmind-context", name: "linkmind-context" }],
       diagnostics: [],
     });
@@ -166,7 +170,7 @@ describe("plugins cli uninstall", () => {
         },
       },
     } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "linkmind-context", name: "linkmind-context" }],
       diagnostics: [],
     });

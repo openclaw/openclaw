@@ -99,6 +99,18 @@ function asProviderBaseUrl(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+const TALK_ADMIN_SCOPE = "operator.admin";
+
+function requiresAdminToSetVoice(
+  channel: string,
+  gatewayClientScopes?: readonly string[],
+): boolean {
+  if (Array.isArray(gatewayClientScopes)) {
+    return !gatewayClientScopes.includes(TALK_ADMIN_SCOPE);
+  }
+  return channel === "webchat";
+}
+
 export default definePluginEntry({
   id: "talk-voice",
   name: "Talk Voice",
@@ -164,12 +176,10 @@ export default definePluginEntry({
         }
 
         if (action === "set") {
-          // Persistent config writes require operator.admin for gateway clients.
-          // Without this check, a caller with only operator.write could bypass the
-          // admin-only config.patch RPC by reaching writeConfigFile indirectly
-          // through chat.send → /voice set.
-          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
-            return { text: `⚠️ ${commandLabel} set requires operator.admin for gateway clients.` };
+          // Gateway callers can override messageChannel, so scope presence is
+          // the reliable signal for internal admin-only mutations.
+          if (requiresAdminToSetVoice(ctx.channel, ctx.gatewayClientScopes)) {
+            return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
           }
 
           const query = tokens.slice(1).join(" ").trim();

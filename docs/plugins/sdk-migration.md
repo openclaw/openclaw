@@ -49,6 +49,29 @@ is a small, self-contained module with a clear purpose and documented contract.
 ## How to migrate
 
 <Steps>
+  <Step title="Audit Windows wrapper fallback behavior">
+    If your plugin uses `openclaw/plugin-sdk/windows-spawn`, unresolved Windows
+    `.cmd`/`.bat` wrappers now fail closed unless you explicitly pass
+    `allowShellFallback: true`.
+
+    ```typescript
+    // Before
+    const program = applyWindowsSpawnProgramPolicy({ candidate });
+
+    // After
+    const program = applyWindowsSpawnProgramPolicy({
+      candidate,
+      // Only set this for trusted compatibility callers that intentionally
+      // accept shell-mediated fallback.
+      allowShellFallback: true,
+    });
+    ```
+
+    If your caller does not intentionally rely on shell fallback, do not set
+    `allowShellFallback` and handle the thrown error instead.
+
+  </Step>
+
   <Step title="Find deprecated imports">
     Search your plugin for imports from either deprecated surface:
 
@@ -127,11 +150,19 @@ is a small, self-contained module with a clear purpose and documented contract.
   | `plugin-sdk/channel-runtime` | Runtime wiring helpers | Channel runtime utilities |
   | `plugin-sdk/channel-send-result` | Send result types | Reply result types |
   | `plugin-sdk/runtime-store` | Persistent plugin storage | `createPluginRuntimeStore` |
+  | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers |
+  | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
+  | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
+  | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, error graph helpers |
+  | `plugin-sdk/fetch-runtime` | Wrapped fetch/proxy helpers | `resolveFetch`, proxy helpers |
+  | `plugin-sdk/host-runtime` | Host normalization helpers | `normalizeHostname`, `normalizeScpRemoteHost` |
+  | `plugin-sdk/retry-runtime` | Retry helpers | `RetryConfig`, `retryAsync`, policy runners |
   | `plugin-sdk/allow-from` | Allowlist formatting | `formatAllowFromLowercase` |
   | `plugin-sdk/allowlist-resolution` | Allowlist input mapping | `mapAllowlistResolutionInputs` |
   | `plugin-sdk/command-auth` | Command gating | `resolveControlCommandGate` |
   | `plugin-sdk/secret-input` | Secret input parsing | Secret input helpers |
   | `plugin-sdk/webhook-ingress` | Webhook request helpers | Webhook target utilities |
+  | `plugin-sdk/webhook-request-guards` | Webhook body guard helpers | Request body read/limit helpers |
   | `plugin-sdk/reply-payload` | Message reply types | Reply payload types |
   | `plugin-sdk/provider-onboard` | Provider onboarding patches | Onboarding config helpers |
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |

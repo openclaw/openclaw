@@ -32,30 +32,44 @@ function createMockUsage(input: number, output: number) {
 let streamCallCount = 0;
 let observedContexts: Array<Array<{ role?: string; content?: unknown }>> = [];
 
-const bundleMcpRuntimeFactory = async () => ({
-  tools: [
-    {
-      name: "bundle_probe",
-      label: "bundle_probe",
-      description: "Bundle MCP probe",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({
-        content: [{ type: "text", text: "FROM-BUNDLE" }],
-        details: {
-          mcpServer: "bundleProbe",
-          mcpTool: "bundle_probe",
-        },
-      }),
-    },
-  ],
-  dispose: async () => {},
-});
-
 vi.mock("./pi-bundle-mcp-tools.js", () => ({
-  createBundleMcpToolRuntime: bundleMcpRuntimeFactory,
-  createEmbeddedBundleMcpRuntime: bundleMcpRuntimeFactory,
-  getPersistentMcpManager: () => null,
-  setPersistentMcpManager: () => {},
+  getOrCreateSessionMcpRuntime: async () => ({
+    sessionId: "bundle-mcp-runtime",
+    sessionKey: "agent:test:bundle-mcp-e2e",
+    workspaceDir: "/tmp",
+    configFingerprint: "test",
+    createdAt: Date.now(),
+    lastUsedAt: Date.now(),
+    markUsed: () => {},
+    getCatalog: async () => ({
+      version: 1,
+      generatedAt: Date.now(),
+      servers: {},
+      tools: [],
+    }),
+    callTool: async () => ({
+      content: [{ type: "text", text: "FROM-BUNDLE" }],
+    }),
+    dispose: async () => {},
+  }),
+  materializeBundleMcpToolsForRun: async () => ({
+    tools: [
+      {
+        name: "bundleProbe__bundle_probe",
+        label: "bundle_probe",
+        description: "Bundle MCP probe",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({
+          content: [{ type: "text", text: "FROM-BUNDLE" }],
+          details: {
+            mcpServer: "bundleProbe",
+            mcpTool: "bundle_probe",
+          },
+        }),
+      },
+    ],
+    dispose: async () => {},
+  }),
 }));
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
@@ -67,7 +81,7 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
       {
         type: "toolCall" as const,
         id: "tc-bundle-mcp-1",
-        name: "bundle_probe",
+        name: "bundleProbe__bundle_probe",
         arguments: {},
       },
     ],

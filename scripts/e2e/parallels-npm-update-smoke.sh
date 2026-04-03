@@ -6,7 +6,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MACOS_VM="macOS Tahoe"
 WINDOWS_VM="Windows 11"
 LINUX_VM="Ubuntu 24.04.3 ARM64"
-OPENAI_API_KEY_ENV="OPENAI_API_KEY"
+PROVIDER="openai"
+API_KEY_ENV=""
+AUTH_CHOICE=""
+AUTH_KEY_FLAG=""
+MODEL_ID=""
 PACKAGE_SPEC=""
 JSON_OUTPUT=0
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-npm-update.XXXXXX)"
@@ -19,7 +23,9 @@ HOST_PORT=""
 LATEST_VERSION=""
 CURRENT_HEAD=""
 CURRENT_HEAD_SHORT=""
-OPENAI_API_KEY_VALUE=""
+API_KEY_VALUE=""
+PROGRESS_INTERVAL_S=15
+PROGRESS_STALE_S=60
 
 MACOS_FRESH_STATUS="skip"
 WINDOWS_FRESH_STATUS="skip"
@@ -59,7 +65,11 @@ Usage: bash scripts/e2e/parallels-npm-update-smoke.sh [options]
 
 Options:
   --package-spec <npm-spec>  Baseline npm package spec. Default: openclaw@latest
-  --openai-api-key-env <var> Host env var name for OpenAI API key. Default: OPENAI_API_KEY
+  --provider <openai|anthropic|minimax>
+                             Provider auth/model lane. Default: openai
+  --api-key-env <var>        Host env var name for provider API key.
+                             Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
+  --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
 EOF
@@ -74,8 +84,12 @@ while [[ $# -gt 0 ]]; do
       PACKAGE_SPEC="$2"
       shift 2
       ;;
-    --openai-api-key-env)
-      OPENAI_API_KEY_ENV="$2"
+    --provider)
+      PROVIDER="$2"
+      shift 2
+      ;;
+    --api-key-env|--openai-api-key-env)
+      API_KEY_ENV="$2"
       shift 2
       ;;
     --json)
@@ -92,8 +106,32 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-OPENAI_API_KEY_VALUE="${!OPENAI_API_KEY_ENV:-}"
-[[ -n "$OPENAI_API_KEY_VALUE" ]] || die "$OPENAI_API_KEY_ENV is required"
+case "$PROVIDER" in
+  openai)
+    AUTH_CHOICE="openai-api-key"
+    AUTH_KEY_FLAG="openai-api-key"
+    MODEL_ID="openai/gpt-5.4"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
+    ;;
+  anthropic)
+    AUTH_CHOICE="apiKey"
+    AUTH_KEY_FLAG="anthropic-api-key"
+    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
+    ;;
+  minimax)
+    AUTH_CHOICE="minimax-global-api"
+    AUTH_KEY_FLAG="minimax-api-key"
+    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
+    ;;
+  *)
+    die "invalid --provider: $PROVIDER"
+    ;;
+esac
+
+API_KEY_VALUE="${!API_KEY_ENV:-}"
+[[ -n "$API_KEY_VALUE" ]] || die "$API_KEY_ENV is required"
 
 resolve_linux_vm_name() {
   local json requested
@@ -103,12 +141,25 @@ resolve_linux_vm_name() {
 import difflib
 import json
 import os
+import re
 import sys
 
 payload = json.loads(os.environ["PRL_VM_JSON"])
 requested = os.environ["REQUESTED_VM_NAME"].strip()
 requested_lower = requested.lower()
 names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
+
+def parse_ubuntu_version(name: str) -> tuple[int, ...] | None:
+    match = re.search(r"ubuntu\s+(\d+(?:\.\d+)*)", name, re.IGNORECASE)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+def version_distance(version: tuple[int, ...], target: tuple[int, ...]) -> tuple[int, ...]:
+    width = max(len(version), len(target))
+    padded_version = version + (0,) * (width - len(version))
+    padded_target = target + (0,) * (width - len(target))
+    return tuple(abs(a - b) for a, b in zip(padded_version, padded_target))
 
 if requested in names:
     print(requested)
@@ -117,6 +168,27 @@ if requested in names:
 ubuntu_names = [name for name in names if "ubuntu" in name.lower()]
 if not ubuntu_names:
     sys.exit(f"default vm not found and no Ubuntu fallback available: {requested}")
+
+requested_version = parse_ubuntu_version(requested) or (24,)
+ubuntu_with_versions = [
+    (name, parse_ubuntu_version(name)) for name in ubuntu_names
+]
+ubuntu_ge_24 = [
+    (name, version)
+    for name, version in ubuntu_with_versions
+    if version and version[0] >= 24
+]
+if ubuntu_ge_24:
+    best_name = min(
+        ubuntu_ge_24,
+        key=lambda item: (
+            version_distance(item[1], requested_version),
+            -len(item[1]),
+            item[0].lower(),
+        ),
+    )[0]
+    print(best_name)
+    raise SystemExit(0)
 
 best_name = max(
     ubuntu_names,
@@ -173,6 +245,9 @@ param(
   [Parameter(Mandatory = $true)][string]$TgzUrl,
   [Parameter(Mandatory = $true)][string]$HeadShort,
   [Parameter(Mandatory = $true)][string]$SessionId,
+  [Parameter(Mandatory = $true)][string]$ModelId,
+  [Parameter(Mandatory = $true)][string]$ProviderKeyEnv,
+  [Parameter(Mandatory = $true)][string]$ProviderKey,
   [Parameter(Mandatory = $true)][string]$LogPath,
   [Parameter(Mandatory = $true)][string]$DonePath
 )
@@ -180,22 +255,35 @@ param(
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
+function Write-ProgressLog {
+  param([Parameter(Mandatory = $true)][string]$Stage)
+
+  "==> $Stage" | Tee-Object -FilePath $LogPath -Append | Out-Null
+}
+
 function Invoke-Logged {
   param(
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][scriptblock]$Command
   )
 
+  $output = $null
   $previousErrorActionPreference = $ErrorActionPreference
   $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
   try {
     $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
-    & $Command *>> $LogPath
+    # Merge native stderr into stdout before logging so npm/openclaw warnings do not
+    # surface as PowerShell error records and abort a healthy in-place update.
+    $output = & $Command *>&1
     $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorActionPreference
     $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+  }
+
+  if ($null -ne $output) {
+    $output | Tee-Object -FilePath $LogPath -Append | Out-Null
   }
 
   if ($exitCode -ne 0) {
@@ -214,7 +302,7 @@ function Invoke-CaptureLogged {
   try {
     $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
-    $output = & $Command 2>&1
+    $output = & $Command *>&1
     $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorActionPreference
@@ -236,24 +324,35 @@ try {
   $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
   $tgz = Join-Path $env:TEMP 'openclaw-main-update.tgz'
   Remove-Item $tgz, $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
+  Write-ProgressLog 'update.start'
+  Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
+  Write-ProgressLog 'update.download-tgz'
   Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
+  Write-ProgressLog 'update.install-tgz'
   Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  Write-ProgressLog 'update.verify-version'
   $version = Invoke-CaptureLogged 'openclaw --version' { & $openclaw --version }
   if ($version -notmatch [regex]::Escape($HeadShort)) {
     throw "version mismatch: expected substring $HeadShort"
   }
-  Invoke-Logged 'openclaw models set' { & $openclaw models set openai/gpt-5.4 }
+  Write-ProgressLog $version
+  Write-ProgressLog 'update.set-model'
+  Invoke-Logged 'openclaw models set' { & $openclaw models set $ModelId }
   # Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
   # Restart the gateway/service before verifying status or the next agent turn.
+  Write-ProgressLog 'update.restart-gateway'
   Invoke-Logged 'openclaw gateway restart' { & $openclaw gateway restart }
   Start-Sleep -Seconds 5
+  Write-ProgressLog 'update.gateway-status'
   Invoke-Logged 'openclaw gateway status' { & $openclaw gateway status --deep --require-rpc }
+  Write-ProgressLog 'update.agent-turn'
   Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
   $exitCode = $LASTEXITCODE
   if ($null -eq $exitCode) {
     $exitCode = 0
   }
+  Write-ProgressLog 'update.done'
   Set-Content -Path $DonePath -Value ([string]$exitCode)
   exit $exitCode
 } catch {
@@ -284,11 +383,97 @@ start_server() {
 wait_job() {
   local label="$1"
   local pid="$2"
+  local log_path="${3:-}"
   if wait "$pid"; then
     return 0
   fi
   warn "$label failed"
+  if [[ -n "$log_path" ]]; then
+    dump_log_tail "$label" "$log_path"
+  fi
   return 1
+}
+
+extract_log_progress() {
+  local log_path="$1"
+  python3 - "$log_path" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+text = path.read_text(encoding="utf-8", errors="replace")
+lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+for line in reversed(lines):
+    if line.startswith("==> "):
+        print(line[4:].strip())
+        raise SystemExit(0)
+
+for line in reversed(lines):
+    if line.startswith("warn:") or line.startswith("error:"):
+        print(line)
+        raise SystemExit(0)
+
+if lines:
+    print(lines[-1][:240])
+else:
+    print("")
+PY
+}
+
+dump_log_tail() {
+  local label="$1"
+  local log_path="$2"
+  [[ -f "$log_path" ]] || return 0
+  warn "$label log tail ($log_path)"
+  tail -n 40 "$log_path" >&2 || true
+}
+
+monitor_jobs_progress() {
+  local group="$1"
+  shift
+
+  local labels=()
+  local pids=()
+  local logs=()
+  local last_progress=()
+  local last_print=()
+  local i summary now running
+
+  while [[ $# -gt 0 ]]; do
+    labels+=("$1")
+    pids+=("$2")
+    logs+=("$3")
+    last_progress+=("")
+    last_print+=(0)
+    shift 3
+  done
+
+  say "$group progress; run dir: $RUN_DIR"
+
+  while :; do
+    running=0
+    now=$SECONDS
+    for ((i = 0; i < ${#pids[@]}; i++)); do
+      if ! kill -0 "${pids[$i]}" >/dev/null 2>&1; then
+        continue
+      fi
+      running=1
+      summary="$(extract_log_progress "${logs[$i]}")"
+      [[ -n "$summary" ]] || summary="waiting for first log line"
+      if [[ "${last_progress[$i]}" != "$summary" ]] || (( now - last_print[$i] >= PROGRESS_STALE_S )); then
+        say "$group ${labels[$i]}: $summary"
+        last_progress[$i]="$summary"
+        last_print[$i]=$now
+      fi
+    done
+    (( running )) || break
+    sleep "$PROGRESS_INTERVAL_S"
+  done
 }
 
 extract_last_version() {
@@ -321,16 +506,68 @@ PY
   prlctl exec "$WINDOWS_VM" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
 }
 
+host_timeout_exec() {
+  local timeout_s="$1"
+  shift
+  HOST_TIMEOUT_S="$timeout_s" python3 - "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+timeout = int(os.environ["HOST_TIMEOUT_S"])
+args = sys.argv[1:]
+
+try:
+    completed = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+except subprocess.TimeoutExpired as exc:
+    if exc.stdout:
+        sys.stdout.buffer.write(exc.stdout)
+    if exc.stderr:
+        sys.stderr.buffer.write(exc.stderr)
+    sys.stderr.write(f"host timeout after {timeout}s\n")
+    raise SystemExit(124)
+
+if completed.stdout:
+    sys.stdout.buffer.write(completed.stdout)
+if completed.stderr:
+    sys.stderr.buffer.write(completed.stderr)
+raise SystemExit(completed.returncode)
+PY
+}
+
+guest_powershell_poll() {
+  local timeout_s="$1"
+  local script="$2"
+  local encoded
+  encoded="$(
+    SCRIPT_CONTENT="$script" python3 - <<'PY'
+import base64
+import os
+
+script = "$ProgressPreference = 'SilentlyContinue'\n" + os.environ["SCRIPT_CONTENT"]
+payload = script.encode("utf-16le")
+print(base64.b64encode(payload).decode("ascii"))
+PY
+  )"
+  host_timeout_exec "$timeout_s" prlctl exec "$WINDOWS_VM" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
+}
+
 run_windows_script_via_log() {
   local script_url="$1"
   local tgz_url="$2"
   local head_short="$3"
   local session_id="$4"
-  local runner_name log_name done_name done_status launcher_state
-  local start_seconds poll_deadline startup_checked
+  local model_id="$5"
+  local provider_key_env="$6"
+  local provider_key="$7"
+  local runner_name log_name done_name done_status launcher_state guest_log
+  local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
+  local log_state_path
   runner_name="openclaw-update-$RANDOM-$RANDOM.ps1"
   log_name="openclaw-update-$RANDOM-$RANDOM.log"
   done_name="openclaw-update-$RANDOM-$RANDOM.done"
+  log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-update-log-state.XXXXXX")"
+  : >"$log_state_path"
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + 900))
   startup_checked=0
@@ -348,35 +585,94 @@ Start-Process powershell.exe -ArgumentList @(
   '-TgzUrl', '$tgz_url',
   '-HeadShort', '$head_short',
   '-SessionId', '$session_id',
+  '-ModelId', '$model_id',
+  '-ProviderKeyEnv', '$provider_key_env',
+  '-ProviderKey', '$provider_key',
   '-LogPath', \$log,
   '-DonePath', \$done
 ) -WindowStyle Hidden | Out-Null
 EOF
 )"
 
-  while :; do
-    done_status="$(
-      guest_powershell "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+  stream_windows_update_log() {
+    set +e
+    guest_log="$(
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
     )"
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]] || [[ -z "$guest_log" ]]; then
+      return "$log_rc"
+    fi
+    GUEST_LOG="$guest_log" python3 - "$log_state_path" <<'PY'
+import os
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+previous = state_path.read_text(encoding="utf-8", errors="replace")
+current = os.environ["GUEST_LOG"].replace("\r\n", "\n").replace("\r", "\n")
+
+if current.startswith(previous):
+    sys.stdout.write(current[len(previous):])
+else:
+    sys.stdout.write(current)
+
+state_path.write_text(current, encoding="utf-8")
+PY
+  }
+
+  while :; do
+    set +e
+    done_status="$(
+      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+    )"
+    poll_rc=$?
+    set -e
     done_status="${done_status//$'\r'/}"
+    if [[ $poll_rc -ne 0 ]]; then
+      warn "windows update helper poll failed; retrying"
+      if (( SECONDS >= poll_deadline )); then
+        warn "windows update helper timed out while polling done file"
+        return 1
+      fi
+      sleep 2
+      continue
+    fi
+    set +e
+    stream_windows_update_log
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]]; then
+      warn "windows update helper live log poll failed; retrying"
+    fi
     if [[ -n "$done_status" ]]; then
-      guest_powershell "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      if ! stream_windows_update_log; then
+        warn "windows update helper log drain failed after completion"
+      fi
+      rm -f "$log_state_path"
       [[ "$done_status" == "0" ]]
       return $?
     fi
     if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
+      set +e
       launcher_state="$(
-        guest_powershell "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
       )"
+      state_rc=$?
+      set -e
       launcher_state="${launcher_state//$'\r'/}"
       startup_checked=1
-      if [[ "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
+      if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
         warn "windows update helper failed to materialize guest files"
         return 1
       fi
     fi
     if (( SECONDS >= poll_deadline )); then
-      guest_powershell "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      if ! stream_windows_update_log; then
+        warn "windows update helper log drain failed after timeout"
+      fi
+      rm -f "$log_state_path"
       warn "windows update helper timed out waiting for done file"
       return 1
     fi
@@ -403,9 +699,9 @@ case "\$version" in
     exit 1
     ;;
 esac
-/opt/homebrew/bin/openclaw models set openai/gpt-5.4
+/opt/homebrew/bin/openclaw models set "$MODEL_ID"
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
-/opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
+/usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
 EOF
   prlctl exec "$MACOS_VM" --current-user /bin/bash /tmp/openclaw-main-update.sh
 }
@@ -414,7 +710,14 @@ run_windows_update() {
   local tgz_url="$1"
   local head_short="$2"
   local script_url="$3"
-  run_windows_script_via_log "$script_url" "$tgz_url" "$head_short" "parallels-npm-update-windows-$head_short"
+  run_windows_script_via_log \
+    "$script_url" \
+    "$tgz_url" \
+    "$head_short" \
+    "parallels-npm-update-windows-$head_short" \
+    "$MODEL_ID" \
+    "$API_KEY_ENV" \
+    "$API_KEY_VALUE"
 }
 
 run_linux_update() {
@@ -435,10 +738,10 @@ case "\$version" in
     exit 1
     ;;
 esac
-openclaw models set openai/gpt-5.4
+openclaw models set "$MODEL_ID"
 openclaw agent --local --agent main --session-id parallels-npm-update-linux-$head_short --message "Reply with exact ASCII text OK only." --json
 EOF
-  prlctl exec "$LINUX_VM" /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" /bin/bash /tmp/openclaw-main-update.sh
+  prlctl exec "$LINUX_VM" /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /bin/bash /tmp/openclaw-main-update.sh
 }
 
 write_summary_json() {
@@ -450,6 +753,7 @@ import sys
 
 summary = {
     "packageSpec": os.environ["SUMMARY_PACKAGE_SPEC"],
+    "provider": os.environ["SUMMARY_PROVIDER"],
     "latestVersion": os.environ["SUMMARY_LATEST_VERSION"],
     "currentHead": os.environ["SUMMARY_CURRENT_HEAD"],
     "runDir": os.environ["SUMMARY_RUN_DIR"],
@@ -470,7 +774,7 @@ summary = {
         "linux": {
             "status": os.environ["SUMMARY_LINUX_UPDATE_STATUS"],
             "version": os.environ["SUMMARY_LINUX_UPDATE_VERSION"],
-            "mode": "local-with-openai-env",
+            "mode": "local-with-provider-env",
         },
     },
 }
@@ -492,27 +796,39 @@ if [[ "$RESOLVED_LINUX_VM" != "$LINUX_VM" ]]; then
 fi
 
 say "Run fresh npm baseline: $PACKAGE_SPEC"
+say "Run dir: $RUN_DIR"
 bash "$ROOT_DIR/scripts/e2e/parallels-macos-smoke.sh" \
   --mode fresh \
+  --provider "$PROVIDER" \
+  --api-key-env "$API_KEY_ENV" \
   --target-package-spec "$PACKAGE_SPEC" \
   --json >"$RUN_DIR/macos-fresh.log" 2>&1 &
 macos_fresh_pid=$!
 
 bash "$ROOT_DIR/scripts/e2e/parallels-windows-smoke.sh" \
   --mode fresh \
+  --provider "$PROVIDER" \
+  --api-key-env "$API_KEY_ENV" \
   --target-package-spec "$PACKAGE_SPEC" \
   --json >"$RUN_DIR/windows-fresh.log" 2>&1 &
 windows_fresh_pid=$!
 
 bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
   --mode fresh \
+  --provider "$PROVIDER" \
+  --api-key-env "$API_KEY_ENV" \
   --target-package-spec "$PACKAGE_SPEC" \
   --json >"$RUN_DIR/linux-fresh.log" 2>&1 &
 linux_fresh_pid=$!
 
-wait_job "macOS fresh" "$macos_fresh_pid" && MACOS_FRESH_STATUS="pass" || MACOS_FRESH_STATUS="fail"
-wait_job "Windows fresh" "$windows_fresh_pid" && WINDOWS_FRESH_STATUS="pass" || WINDOWS_FRESH_STATUS="fail"
-wait_job "Linux fresh" "$linux_fresh_pid" && LINUX_FRESH_STATUS="pass" || LINUX_FRESH_STATUS="fail"
+monitor_jobs_progress "fresh" \
+  "macOS" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" \
+  "Windows" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" \
+  "Linux" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log"
+
+wait_job "macOS fresh" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" && MACOS_FRESH_STATUS="pass" || MACOS_FRESH_STATUS="fail"
+wait_job "Windows fresh" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" && WINDOWS_FRESH_STATUS="pass" || WINDOWS_FRESH_STATUS="fail"
+wait_job "Linux fresh" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log" && LINUX_FRESH_STATUS="pass" || LINUX_FRESH_STATUS="fail"
 
 [[ "$MACOS_FRESH_STATUS" == "pass" ]] || die "macOS fresh baseline failed"
 [[ "$WINDOWS_FRESH_STATUS" == "pass" ]] || die "Windows fresh baseline failed"
@@ -533,9 +849,14 @@ windows_update_pid=$!
 run_linux_update "$tgz_url" "$CURRENT_HEAD_SHORT" >"$RUN_DIR/linux-update.log" 2>&1 &
 linux_update_pid=$!
 
-wait_job "macOS update" "$macos_update_pid" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
-wait_job "Windows update" "$windows_update_pid" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"
-wait_job "Linux update" "$linux_update_pid" && LINUX_UPDATE_STATUS="pass" || LINUX_UPDATE_STATUS="fail"
+monitor_jobs_progress "update" \
+  "macOS" "$macos_update_pid" "$RUN_DIR/macos-update.log" \
+  "Windows" "$windows_update_pid" "$RUN_DIR/windows-update.log" \
+  "Linux" "$linux_update_pid" "$RUN_DIR/linux-update.log"
+
+wait_job "macOS update" "$macos_update_pid" "$RUN_DIR/macos-update.log" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
+wait_job "Windows update" "$windows_update_pid" "$RUN_DIR/windows-update.log" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"
+wait_job "Linux update" "$linux_update_pid" "$RUN_DIR/linux-update.log" && LINUX_UPDATE_STATUS="pass" || LINUX_UPDATE_STATUS="fail"
 
 [[ "$MACOS_UPDATE_STATUS" == "pass" ]] || die "macOS update failed"
 [[ "$WINDOWS_UPDATE_STATUS" == "pass" ]] || die "Windows update failed"
@@ -546,6 +867,7 @@ WINDOWS_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/windows-update.log")"
 LINUX_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/linux-update.log")"
 
 SUMMARY_PACKAGE_SPEC="$PACKAGE_SPEC" \
+SUMMARY_PROVIDER="$PROVIDER" \
 SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
 SUMMARY_CURRENT_HEAD="$CURRENT_HEAD_SHORT" \
 SUMMARY_RUN_DIR="$RUN_DIR" \

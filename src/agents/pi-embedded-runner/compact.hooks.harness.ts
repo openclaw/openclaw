@@ -259,6 +259,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../model-auth.js", () => ({
+    applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
     resolveModelAuthMode: vi.fn(() => "env"),
@@ -427,8 +428,8 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveMemorySearchConfig: resolveMemorySearchConfigMock,
   }));
 
-  vi.doMock("../../memory/index.js", () => ({
-    getMemorySearchManager: getMemorySearchManagerMock,
+  vi.doMock("../../plugins/memory-runtime.js", () => ({
+    getActiveMemorySearchManager: getMemorySearchManagerMock,
   }));
 
   vi.doMock("../date-time.js", () => ({

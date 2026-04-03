@@ -5,6 +5,16 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
 
+// Mock the plugin manifest registry so we can register a fake channel whose
+// AJV JSON Schema carries a `default` value.  This lets the #56772 regression
+// test exercise the exact code path that caused the bug: AJV injecting
+// defaults during the write-back validation pass.
+const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+}));
+
 describe("config io write", () => {
   let fixtureRoot = "";
   let homeCaseId = 0;
@@ -21,6 +31,13 @@ describe("config io write", () => {
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-io-"));
+
+    // Default: return an empty plugin list so existing tests that don't need
+    // plugin-owned channel schemas keep working unchanged.
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [],
+    });
   });
 
   afterAll(async () => {
@@ -62,7 +79,7 @@ describe("config io write", () => {
   }
 
   async function writeTokenAuthAndReadConfig(params: {
-    io: { writeConfigFile: (config: Record<string, unknown>) => Promise<void> };
+    io: { writeConfigFile: (config: Record<string, unknown>) => Promise<unknown> };
     snapshot: { config: Record<string, unknown> };
     configPath: string;
   }) {
@@ -353,6 +370,95 @@ describe("config io write", () => {
     });
   });
 
+  it("does not leak channel plugin AJV defaults into persisted config (issue #56772)", async () => {
+    // Regression test for #56772. Mock the BlueBubbles channel metadata so
+    // read-time AJV validation injects the same default that triggered the
+    // write-back leak.
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "bluebubbles",
+          origin: "bundled",
+          channels: ["bluebubbles"],
+          channelCatalogMeta: {
+            id: "bluebubbles",
+            label: "BlueBubbles",
+            blurb: "BlueBubbles channel",
+          },
+          channelConfigs: {
+            bluebubbles: {
+              schema: {
+                type: "object",
+                properties: {
+                  enrichGroupParticipantsFromContacts: {
+                    type: "boolean",
+                    default: true,
+                  },
+                  serverUrl: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: true,
+              },
+              uiHints: {},
+            },
+          },
+        },
+      ],
+    });
+
+    await withSuiteHome(async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          gateway: { port: 18789 },
+          channels: {
+            bluebubbles: {
+              serverUrl: "http://localhost:1234",
+            },
+          },
+        },
+      });
+
+      // Simulate doctor: clone snapshot.config, make a small change, write back.
+      const next = structuredClone(snapshot.config);
+      const gateway =
+        next.gateway && typeof next.gateway === "object"
+          ? (next.gateway as Record<string, unknown>)
+          : {};
+      next.gateway = {
+        ...gateway,
+        auth: { mode: "token" },
+      };
+      await io.writeConfigFile(next);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+
+      // The persisted config should contain only explicitly set values.
+      expect(persisted.gateway).toEqual({
+        port: 18789,
+        auth: { mode: "token" },
+      });
+
+      // The critical assertion: the AJV-injected BlueBubbles default must not
+      // appear in the persisted config.
+      const channels = persisted.channels as Record<string, Record<string, unknown>> | undefined;
+      expect(channels?.bluebubbles).toBeDefined();
+      expect(channels?.bluebubbles).not.toHaveProperty("enrichGroupParticipantsFromContacts");
+      expect(channels?.bluebubbles?.serverUrl).toBe("http://localhost:1234");
+    });
+
+    // Restore the default empty-plugins mock for subsequent tests.
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [],
+    });
+  });
+
   it("does not reintroduce Slack/Discord legacy dm.policy defaults when writing", async () => {
     await withSuiteHome(async (home) => {
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({
@@ -541,6 +647,10 @@ describe("config io write", () => {
       expect(last.hasMetaAfter).toBe(true);
       expect(last.previousHash).toBeTypeOf("string");
       expect(last.nextHash).toBeTypeOf("string");
+      expect(last.previousMode).toBeTypeOf("number");
+      expect(last.nextMode).toBeTypeOf("number");
+      expect(last.previousIno).toBeTypeOf("string");
+      expect(last.nextIno).toBeTypeOf("string");
       expect(last.result === "rename" || last.result === "copy-fallback").toBe(true);
     });
   });

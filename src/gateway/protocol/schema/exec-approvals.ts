@@ -5,6 +5,7 @@ export const ExecApprovalsAllowlistEntrySchema = Type.Object(
   {
     id: Type.Optional(NonEmptyString),
     pattern: Type.String(),
+    argPattern: Type.Optional(Type.String()),
     lastUsedAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastUsedCommand: Type.Optional(Type.String()),
     lastResolvedPath: Type.Optional(Type.String()),

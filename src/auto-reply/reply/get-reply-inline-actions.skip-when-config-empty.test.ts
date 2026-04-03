@@ -3,11 +3,14 @@ import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
+import { stripInlineStatus } from "./reply-inline.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
 const handleCommandsMock = vi.fn();
 const getChannelPluginMock = vi.fn();
+const createOpenClawToolsMock = vi.fn();
+const buildStatusReplyMock = vi.fn();
 
 let handleInlineActions: typeof import("./get-reply-inline-actions.js").handleInlineActions;
 type HandleInlineActionsInput = Parameters<
@@ -18,7 +21,10 @@ async function loadFreshInlineActionsModuleForTest() {
   vi.resetModules();
   vi.doMock("./commands.runtime.js", () => ({
     handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
-    buildStatusReply: vi.fn(),
+    buildStatusReply: (...args: unknown[]) => buildStatusReplyMock(...args),
+  }));
+  vi.doMock("../../agents/openclaw-tools.runtime.js", () => ({
+    createOpenClawTools: (...args: unknown[]) => createOpenClawToolsMock(...args),
   }));
   vi.doMock("../../channels/plugins/index.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
@@ -115,6 +121,10 @@ describe("handleInlineActions", () => {
     handleCommandsMock.mockReset();
     handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
     getChannelPluginMock.mockReset();
+    createOpenClawToolsMock.mockReset();
+    buildStatusReplyMock.mockReset();
+    buildStatusReplyMock.mockResolvedValue({ text: "status" });
+    createOpenClawToolsMock.mockReturnValue([]);
     getChannelPluginMock.mockImplementation((channelId?: string) =>
       channelId === "whatsapp" ? { commands: { skipWhenConfigEmpty: true } } : undefined,
     );
@@ -172,6 +182,74 @@ describe("handleInlineActions", () => {
         agentDir,
       }),
     );
+  });
+
+  it("does not run command handlers after replying to an inline status-only turn", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "/status",
+      CommandBody: "/status",
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: stripInlineStatus("/status").cleaned,
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: "/status",
+          commandBodyNormalized: "/status",
+        },
+        overrides: {
+          allowTextCommands: true,
+          inlineStatusRequested: true,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: undefined });
+    expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalled();
+  });
+
+  it("does not continue into the agent after a mention-wrapped inline status-only turn", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "<@123> /status",
+      CommandBody: "<@123> /status",
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "channel",
+      WasMentioned: true,
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "<@123>",
+        command: {
+          surface: "discord",
+          channel: "discord",
+          channelId: "discord",
+          isAuthorizedSender: true,
+          rawBodyNormalized: "<@123> /status",
+          commandBodyNormalized: "<@123> /status",
+        },
+        overrides: {
+          allowTextCommands: true,
+          inlineStatusRequested: true,
+          isGroup: true,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: undefined });
+    expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalled();
   });
 
   it("skips stale queued messages that are at or before the /stop cutoff", async () => {
@@ -292,5 +370,64 @@ describe("handleInlineActions", () => {
         }),
       }),
     );
+  });
+
+  it("passes requesterAgentIdOverride into inline tool runtimes", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ text: "spawned" }));
+    createOpenClawToolsMock.mockReturnValue([
+      {
+        name: "sessions_spawn",
+        execute: toolExecute,
+      },
+    ]);
+
+    const ctx = buildTestCtx({
+      Body: "/spawn_subagent investigate",
+      CommandBody: "/spawn_subagent investigate",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "spawn_subagent",
+        skillName: "spawn-subagent",
+        description: "Spawn a subagent",
+        dispatch: {
+          kind: "tool",
+          toolName: "sessions_spawn",
+          argMode: "raw",
+        },
+        sourceFilePath: "/tmp/plugin/commands/spawn-subagent.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/spawn_subagent investigate",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          senderIsOwner: true,
+          abortKey: "sender-1",
+          rawBodyNormalized: "/spawn_subagent investigate",
+          commandBodyNormalized: "/spawn_subagent investigate",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          agentId: "named-worker",
+          allowTextCommands: true,
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterAgentIdOverride: "named-worker",
+      }),
+    );
+    expect(toolExecute).toHaveBeenCalled();
   });
 });

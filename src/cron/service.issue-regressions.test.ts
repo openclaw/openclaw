@@ -28,6 +28,7 @@ import { createCronServiceState, type CronEvent } from "./service/state.js";
 import {
   DEFAULT_JOB_TIMEOUT_MS,
   applyJobResult,
+  executeJob,
   executeJobCore,
   onTimer,
   runMissedJobs,
@@ -1295,7 +1296,7 @@ describe("Cron issue regressions", () => {
     expect(job?.state.lastError).toContain("timed out");
   });
 
-  it("respects abort signals while retrying main-session wake-now heartbeat runs", async () => {
+  it("respects abort signals while retrying one-shot main-session wake-now heartbeat runs", async () => {
     const abortController = new AbortController();
     const runHeartbeatOnce = vi.fn(
       async (): Promise<HeartbeatRunResult> => ({
@@ -1311,7 +1312,7 @@ describe("Cron issue regressions", () => {
       enabled: true,
       createdAtMs: Date.now(),
       updatedAtMs: Date.now(),
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
@@ -1344,6 +1345,60 @@ describe("Cron issue regressions", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(runHeartbeatOnce).toHaveBeenCalled();
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
+  });
+
+  it("finishes recurring wake-now main jobs quickly when the main lane is busy (#58833)", async () => {
+    let now = 0;
+    const nowMs = () => {
+      now += 10;
+      return now;
+    };
+    const runHeartbeatOnce = vi.fn(
+      async (): Promise<HeartbeatRunResult> => ({
+        status: "skipped",
+        reason: "requests-in-flight",
+      }),
+    );
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const job: CronJob = {
+      id: "busy-recurring-main",
+      name: "busy recurring main",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron", expr: "*/3 * * * *", tz: "UTC", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: 0 },
+    };
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/openclaw-cron-busy-main-test/jobs.json",
+      log: noopLogger,
+      nowMs,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runHeartbeatOnce,
+      wakeNowHeartbeatBusyMaxWaitMs: 120_000,
+      wakeNowHeartbeatBusyRetryDelayMs: 250,
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    state.store = { version: 1, jobs: [job] };
+
+    await executeJob(state, job, nowMs(), { forced: false });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "cron:busy-recurring-main",
+      }),
+    );
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.lastDurationMs).toBeLessThan(100);
+    expect(job.state.runningAtMs).toBeUndefined();
   });
 
   it("retries cron schedule computation from the next second when the first attempt returns undefined (#17821)", () => {
@@ -1556,12 +1611,17 @@ describe("Cron issue regressions", () => {
     let now = dueAt;
     let activeRuns = 0;
     let peakActiveRuns = 0;
+    const firstStarted = createDeferred<void>();
     const firstRun = createDeferred<{ status: "ok"; summary: string }>();
     const secondRun = createDeferred<{ status: "ok"; summary: string }>();
     const secondStarted = createDeferred<void>();
+    const bothFinished = createDeferred<void>();
     const runIsolatedAgentJob = vi.fn(async (params: { job: { id: string } }) => {
       activeRuns += 1;
       peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
+      if (params.job.id === first.id) {
+        firstStarted.resolve();
+      }
       if (params.job.id === second.id) {
         secondStarted.resolve();
       }
@@ -1583,6 +1643,11 @@ describe("Cron issue regressions", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob,
+      onEvent: (evt) => {
+        if (evt.action === "finished" && evt.jobId === second.id && evt.status === "ok") {
+          bothFinished.resolve();
+        }
+      },
     });
 
     const firstAck = await enqueueRun(state, first.id, "force");
@@ -1590,7 +1655,7 @@ describe("Cron issue regressions", () => {
     expect(firstAck).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
     expect(secondAck).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
 
-    await vi.waitFor(() => expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1));
+    await firstStarted.promise;
     expect(runIsolatedAgentJob.mock.calls[0]?.[0]).toMatchObject({ job: { id: first.id } });
     expect(peakActiveRuns).toBe(1);
 
@@ -1601,11 +1666,10 @@ describe("Cron issue regressions", () => {
     expect(peakActiveRuns).toBe(1);
 
     secondRun.resolve({ status: "ok", summary: "second queued run" });
-    await vi.waitFor(() => {
-      const jobs = state.store?.jobs ?? [];
-      expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
-      expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
-    });
+    await bothFinished.promise;
+    const jobs = state.store?.jobs ?? [];
+    expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
+    expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
 
     clearCommandLane(CommandLane.Cron);
   });
@@ -1618,6 +1682,10 @@ describe("Cron issue regressions", () => {
     const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
     const job = createDueIsolatedJob({ id: "queued-failure", nowMs: dueAt, nextRunAtMs: dueAt });
     const log = createNoopLogger();
+    const errorLogged = createDeferred<void>();
+    log.error.mockImplementation(() => {
+      errorLogged.resolve();
+    });
     const badStore = `${makeStorePath().storePath}.dir`;
     await fs.mkdir(badStore, { recursive: true });
     const state = createRunningCronServiceState({
@@ -1630,7 +1698,8 @@ describe("Cron issue regressions", () => {
     const result = await enqueueRun(state, job.id, "force");
     expect(result).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
 
-    await vi.waitFor(() => expect(log.error).toHaveBeenCalledTimes(1));
+    await errorLogged.promise;
+    expect(log.error).toHaveBeenCalledTimes(1);
     expect(log.error.mock.calls[0]?.[1]).toBe(
       "cron: queued manual run background execution failed",
     );

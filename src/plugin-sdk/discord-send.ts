@@ -1,5 +1,6 @@
-import type { DiscordSendResult } from "../../extensions/discord/api.js";
+import type { OutboundMediaAccess } from "../media/load-options.js";
 import { attachChannelToResult } from "./channel-send-result.js";
+import type { DiscordSendResult } from "./discord.js";
 
 type DiscordSendOptionInput = {
   replyToId?: string | null;
@@ -9,7 +10,9 @@ type DiscordSendOptionInput = {
 
 type DiscordSendMediaOptionInput = DiscordSendOptionInput & {
   mediaUrl?: string;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
 /** Build the common Discord send options from SDK-level reply payload fields. */
@@ -27,7 +30,9 @@ export function buildDiscordSendMediaOptions(input: DiscordSendMediaOptionInput)
   return {
     ...buildDiscordSendOptions(input),
     mediaUrl: input.mediaUrl,
+    mediaAccess: input.mediaAccess,
     mediaLocalRoots: input.mediaLocalRoots,
+    mediaReadFile: input.mediaReadFile,
   };
 }
 

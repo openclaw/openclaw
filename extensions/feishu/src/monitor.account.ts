@@ -12,6 +12,7 @@ import {
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import { createEventDispatcher } from "./client.js";
+import { handleFeishuCommentEvent } from "./comment-handler.js";
 import {
   hasProcessedFeishuMessage,
   recordProcessedFeishuMessage,
@@ -21,6 +22,7 @@ import {
 } from "./dedup.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
+import { parseFeishuDriveCommentNoticeEventPayload } from "./monitor.comment.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
@@ -158,6 +160,142 @@ type RegisterEventHandlersContext = {
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
 };
+
+type FeishuBotMenuEvent = {
+  event_key?: string;
+  timestamp?: string | number;
+  operator?: {
+    operator_name?: string;
+    operator_id?: { open_id?: string; user_id?: string; union_id?: string };
+  };
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function readStringOrNumber(value: unknown): string | number | undefined {
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const sender = value.sender;
+  const message = value.message;
+  if (!isRecord(sender) || !isRecord(message)) {
+    return null;
+  }
+  const senderId = sender.sender_id;
+  if (!isRecord(senderId)) {
+    return null;
+  }
+  const messageId = readString(message.message_id);
+  const chatId = readString(message.chat_id);
+  const chatType = normalizeFeishuChatType(message.chat_type);
+  const messageType = readString(message.message_type);
+  const content = readString(message.content);
+  if (!messageId || !chatId || !chatType || !messageType || !content) {
+    return null;
+  }
+  return value as FeishuMessageEvent;
+}
+
+function parseFeishuBotAddedEventPayload(value: unknown): FeishuBotAddedEvent | null {
+  if (!isRecord(value) || !readString(value.chat_id) || !isRecord(value.operator_id)) {
+    return null;
+  }
+  return value as FeishuBotAddedEvent;
+}
+
+function parseFeishuBotRemovedChatId(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return readString(value.chat_id) ?? null;
+}
+
+function parseFeishuBotMenuEvent(value: unknown): FeishuBotMenuEvent | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const operator = value.operator;
+  if (operator !== undefined && !isRecord(operator)) {
+    return null;
+  }
+  return {
+    event_key: readString(value.event_key),
+    timestamp: readStringOrNumber(value.timestamp),
+    operator: operator
+      ? {
+          operator_name: readString(operator.operator_name),
+          operator_id: isRecord(operator.operator_id)
+            ? {
+                open_id: readString(operator.operator_id.open_id),
+                user_id: readString(operator.operator_id.user_id),
+                union_id: readString(operator.operator_id.union_id),
+              }
+            : undefined,
+        }
+      : undefined,
+  };
+}
+
+function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEvent | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const operator = value.operator;
+  const action = value.action;
+  const context = value.context;
+  if (!isRecord(operator) || !isRecord(action) || !isRecord(context)) {
+    return null;
+  }
+  const token = readString(value.token);
+  const openId = readString(operator.open_id);
+  const userId = readString(operator.user_id);
+  const unionId = readString(operator.union_id);
+  const tag = readString(action.tag);
+  const actionValue = action.value;
+  const contextOpenId = readString(context.open_id);
+  const contextUserId = readString(context.user_id);
+  const chatId = readString(context.chat_id);
+  if (
+    !token ||
+    !openId ||
+    !userId ||
+    !unionId ||
+    !tag ||
+    !isRecord(actionValue) ||
+    !contextOpenId ||
+    !contextUserId ||
+    !chatId
+  ) {
+    return null;
+  }
+  return {
+    operator: {
+      open_id: openId,
+      user_id: userId,
+      union_id: unionId,
+    },
+    token,
+    action: {
+      value: actionValue,
+      tag,
+    },
+    context: {
+      open_id: contextOpenId,
+      user_id: contextUserId,
+      chat_id: chatId,
+    },
+  };
+}
 
 /**
  * Per-chat serial queue that ensures messages from the same chat are processed
@@ -410,7 +548,11 @@ function registerEventHandlers(
 
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
-      const event = data as unknown as FeishuMessageEvent;
+      const event = parseFeishuMessageEventPayload(data);
+      if (!event) {
+        error(`feishu[${accountId}]: ignoring malformed message event payload`);
+        return;
+      }
       const messageId = event.message?.message_id?.trim();
       if (!tryBeginFeishuMessageProcessing(messageId, accountId)) {
         log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
@@ -438,7 +580,10 @@ function registerEventHandlers(
     },
     "im.chat.member.bot.added_v1": async (data) => {
       try {
-        const event = data as unknown as FeishuBotAddedEvent;
+        const event = parseFeishuBotAddedEventPayload(data);
+        if (!event) {
+          return;
+        }
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot added event: ${String(err)}`);
@@ -446,11 +591,68 @@ function registerEventHandlers(
     },
     "im.chat.member.bot.deleted_v1": async (data) => {
       try {
-        const event = data as unknown as { chat_id: string };
-        log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
+        const chatId = parseFeishuBotRemovedChatId(data);
+        if (!chatId) {
+          return;
+        }
+        log(`feishu[${accountId}]: bot removed from chat ${chatId}`);
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
       }
+    },
+    "drive.notice.comment_add_v1": async (data: unknown) => {
+      await runFeishuHandler({
+        errorMessage: `feishu[${accountId}]: error handling drive comment notice`,
+        task: async () => {
+          const event = parseFeishuDriveCommentNoticeEventPayload(data);
+          if (!event) {
+            error(`feishu[${accountId}]: ignoring malformed drive comment notice payload`);
+            return;
+          }
+          const eventId = event.event_id?.trim();
+          const syntheticMessageId = eventId ? `drive-comment:${eventId}` : undefined;
+          if (
+            syntheticMessageId &&
+            (await hasProcessedFeishuMessage(syntheticMessageId, accountId, log))
+          ) {
+            log(`feishu[${accountId}]: dropping duplicate comment event ${syntheticMessageId}`);
+            return;
+          }
+          if (
+            syntheticMessageId &&
+            !tryBeginFeishuMessageProcessing(syntheticMessageId, accountId)
+          ) {
+            log(`feishu[${accountId}]: dropping in-flight comment event ${syntheticMessageId}`);
+            return;
+          }
+          log(
+            `feishu[${accountId}]: received drive comment notice ` +
+              `event=${event.event_id ?? "unknown"} ` +
+              `type=${event.notice_meta?.notice_type ?? "unknown"} ` +
+              `file=${event.notice_meta?.file_type ?? "unknown"}:${event.notice_meta?.file_token ?? "unknown"} ` +
+              `comment=${event.comment_id ?? "unknown"} ` +
+              `reply=${event.reply_id ?? "none"} ` +
+              `from=${event.notice_meta?.from_user_id?.open_id ?? "unknown"} ` +
+              `mentioned=${event.is_mentioned === true ? "yes" : "no"}`,
+          );
+          try {
+            await handleFeishuCommentEvent({
+              cfg,
+              accountId,
+              event,
+              botOpenId: botOpenIds.get(accountId),
+              runtime,
+            });
+            if (syntheticMessageId) {
+              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
+            }
+          } finally {
+            if (syntheticMessageId) {
+              releaseFeishuMessageProcessing(syntheticMessageId, accountId);
+            }
+          }
+        },
+      });
     },
     "im.message.reaction.created_v1": async (data) => {
       await runFeishuHandler({
@@ -513,14 +715,10 @@ function registerEventHandlers(
     },
     "application.bot.menu_v6": async (data) => {
       try {
-        const event = data as {
-          event_key?: string;
-          timestamp?: string | number;
-          operator?: {
-            operator_name?: string;
-            operator_id?: { open_id?: string; user_id?: string; union_id?: string };
-          };
-        };
+        const event = parseFeishuBotMenuEvent(data);
+        if (!event) {
+          return;
+        }
         const operatorOpenId = event.operator?.operator_id?.open_id?.trim();
         const eventKey = event.event_key?.trim();
         if (!operatorOpenId || !eventKey) {
@@ -598,7 +796,11 @@ function registerEventHandlers(
     },
     "card.action.trigger": async (data: unknown) => {
       try {
-        const event = data as unknown as FeishuCardActionEvent;
+        const event = parseFeishuCardActionEventPayload(data);
+        if (!event) {
+          error(`feishu[${accountId}]: ignoring malformed card action payload`);
+          return;
+        }
         const promise = handleFeishuCardAction({
           cfg,
           event,

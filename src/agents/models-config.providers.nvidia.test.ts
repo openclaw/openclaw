@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveApiKeyForProvider } from "./model-auth.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-import { buildNvidiaProvider } from "./models-config.providers.js";
 
 describe("NVIDIA provider", () => {
   it("should include nvidia when NVIDIA_API_KEY is configured", async () => {
@@ -30,22 +29,6 @@ describe("NVIDIA provider", () => {
       expect(auth.mode).toBe("api-key");
       expect(auth.source).toContain("NVIDIA_API_KEY");
     });
-  });
-
-  it("should build nvidia provider with correct configuration", () => {
-    const provider = buildNvidiaProvider();
-    expect(provider.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
-    expect(provider.api).toBe("openai-completions");
-    expect(provider.models).toBeDefined();
-    expect(provider.models.length).toBeGreaterThan(0);
-  });
-
-  it("should include default nvidia models", () => {
-    const provider = buildNvidiaProvider();
-    const modelIds = provider.models.map((m) => m.id);
-    expect(modelIds).toContain("nvidia/llama-3.1-nemotron-70b-instruct");
-    expect(modelIds).toContain("meta/llama-3.3-70b-instruct");
-    expect(modelIds).toContain("nvidia/mistral-nemo-minitron-8b-8k-instruct");
   });
 });
 

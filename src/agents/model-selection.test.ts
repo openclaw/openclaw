@@ -12,6 +12,7 @@ import {
   modelKey,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
+  resolveSubagentConfiguredModelSelection,
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
@@ -283,7 +284,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -303,7 +304,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -322,7 +323,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -341,7 +342,7 @@ describe("model-selection", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as unknown as OpenClawConfig;
 
       expect(
         inferUniqueProviderFromConfiguredModels({
@@ -349,6 +350,47 @@ describe("model-selection", () => {
           model: "anthropic/claude-sonnet-4-6",
         }),
       ).toBe("vercel-ai-gateway");
+    });
+
+    it("infers provider from configured provider catalogs when allowlist is absent", () => {
+      const cfg = {
+        models: {
+          providers: {
+            "qwen-dashscope": {
+              models: [{ id: "qwen-max" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "qwen-max",
+        }),
+      ).toBe("qwen-dashscope");
+    });
+
+    it("returns undefined when provider catalog matches are ambiguous", () => {
+      const cfg = {
+        models: {
+          providers: {
+            "qwen-dashscope": {
+              models: [{ id: "qwen-max" }],
+            },
+            modelstudio: {
+              models: [{ id: "qwen-max" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "qwen-max",
+        }),
+      ).toBeUndefined();
     });
   });
 
@@ -692,6 +734,28 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
     });
 
+    it("can skip plugin-backed model normalization for display-only callers", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "google-vertex/gemini-3.1-flash-lite" },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        allowPluginNormalization: false,
+      });
+
+      expect(result).toEqual({
+        provider: "google-vertex",
+        model: "gemini-3.1-flash-lite",
+      });
+    });
+
     it("should fall back to hardcoded default when no custom providers have models", () => {
       const cfg = createProviderWithModelsConfig("empty-provider", []);
       const result = resolveConfiguredRefForTest(cfg);
@@ -833,5 +897,50 @@ describe("normalizeModelSelection", () => {
     expect(normalizeModelSelection(undefined)).toBeUndefined();
     expect(normalizeModelSelection(null)).toBeUndefined();
     expect(normalizeModelSelection(42)).toBeUndefined();
+  });
+});
+
+describe("resolveSubagentConfiguredModelSelection", () => {
+  it("prefers the agent primary model over agents.defaults.subagents.model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          subagents: { model: "openai/gpt-5.4" },
+        },
+        list: [
+          {
+            id: "research",
+            model: { primary: "anthropic/claude-opus-4-6" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
+      "anthropic/claude-opus-4-6",
+    );
+  });
+
+  it("still prefers agent subagents.model over the agent primary model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          subagents: { model: "openai/gpt-5.4" },
+        },
+        list: [
+          {
+            id: "research",
+            model: { primary: "anthropic/claude-opus-4-6" },
+            subagents: { model: "google/gemini-2.5-pro" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
+      "google/gemini-2.5-pro",
+    );
   });
 });
