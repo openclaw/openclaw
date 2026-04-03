@@ -20,7 +20,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- fix(hooks): harden before_tool_call hook runner to fail-closed on error [AI]. (#59822) Thanks @pgondhi987.
 - Skills/uv install: block workspace `.env` from overriding `UV_PYTHON` and strip related interpreter override keys from uv skill-install subprocesses so repository-controlled env files cannot steer the selected Python runtime. (#59178) Thanks @pgondhi987.
 - Telegram/reactions: preserve `reactionNotifications: "own"` across gateway restarts by persisting sent-message ownership state instead of treating cold cache as a permissive fallback. (#59207) Thanks @samzong.
 - Gateway/startup: detect PID recycling in gateway lock files on Windows and macOS, and add startup progress so stale lock conflicts no longer block healthy restarts. (#59843) Thanks @TonyDerek-dot.
@@ -95,6 +94,7 @@ Docs: https://docs.openclaw.ai
 - Agents/workspace: respect `agents.defaults.workspace` for non-default agents by resolving them under the configured base path instead of falling back to `workspace-<id>`. (#59858) Thanks @joelnishanth.
 - Config/All Settings: keep the raw config view intact when sensitive fields are blank instead of corrupting or dropping the snapshot during redaction. (#28214) thanks @solodmd.
 - Plugins/runtime: honor explicit capability allowlists during fallback speech, media-understanding, and image-generation provider loading so bundled capability plugins do not bypass restrictive `plugins.allow` config. (#52262) Thanks @PerfectPan.
+- Hooks/tool policy: block tool calls when a `before_tool_call` hook crashes so hook failures fail closed instead of silently allowing execution. (#59822) Thanks @pgondhi987.
 
 ## 2026.4.2
 
