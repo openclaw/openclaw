@@ -1,0 +1,463 @@
+import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
+import {
+  applyShortTermPromotions,
+  DEFAULT_PROMOTION_MIN_RECALL_COUNT,
+  DEFAULT_PROMOTION_MIN_SCORE,
+  DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
+  rankShortTermPromotionCandidates,
+} from "./short-term-promotion.js";
+
+const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
+const MANAGED_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
+const DREAMING_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
+const DEFAULT_DREAMING_CRON_EXPR = "0 3 * * *";
+const DEFAULT_DREAMING_LIMIT = 10;
+const DEFAULT_DREAMING_MIN_SCORE = DEFAULT_PROMOTION_MIN_SCORE;
+const DEFAULT_DREAMING_MIN_RECALL_COUNT = DEFAULT_PROMOTION_MIN_RECALL_COUNT;
+const DEFAULT_DREAMING_MIN_UNIQUE_QUERIES = DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES;
+
+type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
+
+type CronSchedule = { kind: "cron"; expr: string; tz?: string };
+type CronPayload = { kind: "systemEvent"; text: string };
+type ManagedCronJobCreate = {
+  name: string;
+  description: string;
+  enabled: boolean;
+  schedule: CronSchedule;
+  sessionTarget: "main";
+  wakeMode: "next-heartbeat";
+  payload: CronPayload;
+};
+
+type ManagedCronJobPatch = {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  schedule?: CronSchedule;
+  sessionTarget?: "main";
+  wakeMode?: "next-heartbeat";
+  payload?: CronPayload;
+};
+
+type ManagedCronJobLike = {
+  id: string;
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  schedule?: {
+    kind?: string;
+    expr?: string;
+    tz?: string;
+  };
+  sessionTarget?: string;
+  wakeMode?: string;
+  payload?: {
+    kind?: string;
+    text?: string;
+  };
+  createdAtMs?: number;
+};
+
+type CronServiceLike = {
+  list: (opts?: { includeDisabled?: boolean }) => Promise<ManagedCronJobLike[]>;
+  add: (input: ManagedCronJobCreate) => Promise<unknown>;
+  update: (id: string, patch: ManagedCronJobPatch) => Promise<unknown>;
+  remove: (id: string) => Promise<{ removed?: boolean }>;
+};
+
+export type ShortTermPromotionDreamingConfig = {
+  enabled: boolean;
+  cron: string;
+  timezone?: string;
+  limit: number;
+  minScore: number;
+  minRecallCount: number;
+  minUniqueQueries: number;
+};
+
+type ReconcileResult =
+  | { status: "unavailable"; removed: number }
+  | { status: "disabled"; removed: number }
+  | { status: "added"; removed: number }
+  | { status: "updated"; removed: number }
+  | { status: "noop"; removed: number };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function normalizeTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizePositiveInt(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const floored = Math.floor(value);
+  return floored > 0 ? floored : fallback;
+}
+
+function normalizeNonNegativeInt(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const floored = Math.floor(value);
+  if (floored < 0) {
+    return fallback;
+  }
+  return floored;
+}
+
+function normalizeScore(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  if (value < 0 || value > 1) {
+    return fallback;
+  }
+  return value;
+}
+
+function formatErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
+}
+
+function resolveTimezoneFallback(cfg: OpenClawConfig | undefined): string | undefined {
+  const agents = asRecord(cfg?.agents);
+  const defaults = asRecord(agents?.defaults);
+  return normalizeTrimmedString(defaults?.userTimezone);
+}
+
+function resolveManagedCronDescription(config: ShortTermPromotionDreamingConfig): string {
+  return `${MANAGED_DREAMING_CRON_TAG} Promote weighted short-term recalls into MEMORY.md (limit=${config.limit}, minScore=${config.minScore.toFixed(3)}, minRecallCount=${config.minRecallCount}, minUniqueQueries=${config.minUniqueQueries}).`;
+}
+
+function buildManagedDreamingCronJob(
+  config: ShortTermPromotionDreamingConfig,
+): ManagedCronJobCreate {
+  return {
+    name: MANAGED_DREAMING_CRON_NAME,
+    description: resolveManagedCronDescription(config),
+    enabled: true,
+    schedule: {
+      kind: "cron",
+      expr: config.cron,
+      ...(config.timezone ? { tz: config.timezone } : {}),
+    },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: {
+      kind: "systemEvent",
+      text: DREAMING_SYSTEM_EVENT_TEXT,
+    },
+  };
+}
+
+function isManagedDreamingJob(job: ManagedCronJobLike): boolean {
+  const description = normalizeTrimmedString(job.description);
+  if (description?.includes(MANAGED_DREAMING_CRON_TAG)) {
+    return true;
+  }
+  const name = normalizeTrimmedString(job.name);
+  const payloadText = normalizeTrimmedString(job.payload?.text);
+  return name === MANAGED_DREAMING_CRON_NAME && payloadText === DREAMING_SYSTEM_EVENT_TEXT;
+}
+
+function compareOptionalStrings(a: string | undefined, b: string | undefined): boolean {
+  return (a ?? undefined) === (b ?? undefined);
+}
+
+function buildManagedDreamingPatch(
+  job: ManagedCronJobLike,
+  desired: ManagedCronJobCreate,
+): ManagedCronJobPatch | null {
+  const patch: ManagedCronJobPatch = {};
+
+  if (!compareOptionalStrings(normalizeTrimmedString(job.name), desired.name)) {
+    patch.name = desired.name;
+  }
+  if (!compareOptionalStrings(normalizeTrimmedString(job.description), desired.description)) {
+    patch.description = desired.description;
+  }
+  if (job.enabled !== true) {
+    patch.enabled = true;
+  }
+
+  const scheduleKind = normalizeTrimmedString(job.schedule?.kind)?.toLowerCase();
+  const scheduleExpr = normalizeTrimmedString(job.schedule?.expr);
+  const scheduleTz = normalizeTrimmedString(job.schedule?.tz);
+  if (
+    scheduleKind !== "cron" ||
+    !compareOptionalStrings(scheduleExpr, desired.schedule.expr) ||
+    !compareOptionalStrings(scheduleTz, desired.schedule.tz)
+  ) {
+    patch.schedule = desired.schedule;
+  }
+
+  const sessionTarget = normalizeTrimmedString(job.sessionTarget)?.toLowerCase();
+  if (sessionTarget !== "main") {
+    patch.sessionTarget = "main";
+  }
+  const wakeMode = normalizeTrimmedString(job.wakeMode)?.toLowerCase();
+  if (wakeMode !== "next-heartbeat") {
+    patch.wakeMode = "next-heartbeat";
+  }
+
+  const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
+  const payloadText = normalizeTrimmedString(job.payload?.text);
+  if (payloadKind !== "systemevent" || !compareOptionalStrings(payloadText, desired.payload.text)) {
+    patch.payload = desired.payload;
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+function sortManagedJobs(managed: ManagedCronJobLike[]): ManagedCronJobLike[] {
+  return managed.toSorted((a, b) => {
+    const aCreated =
+      typeof a.createdAtMs === "number" && Number.isFinite(a.createdAtMs)
+        ? a.createdAtMs
+        : Number.MAX_SAFE_INTEGER;
+    const bCreated =
+      typeof b.createdAtMs === "number" && Number.isFinite(b.createdAtMs)
+        ? b.createdAtMs
+        : Number.MAX_SAFE_INTEGER;
+    if (aCreated !== bCreated) {
+      return aCreated - bCreated;
+    }
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function resolveCronServiceFromStartupEvent(event: unknown): CronServiceLike | null {
+  const payload = asRecord(event);
+  if (!payload) {
+    return null;
+  }
+  if (payload.type !== "gateway" || payload.action !== "startup") {
+    return null;
+  }
+  const context = asRecord(payload.context);
+  const deps = asRecord(context?.deps);
+  const cronCandidate = deps?.cron;
+  if (!cronCandidate || typeof cronCandidate !== "object") {
+    return null;
+  }
+  const cron = cronCandidate as Partial<CronServiceLike>;
+  if (
+    typeof cron.list !== "function" ||
+    typeof cron.add !== "function" ||
+    typeof cron.update !== "function" ||
+    typeof cron.remove !== "function"
+  ) {
+    return null;
+  }
+  return cron as CronServiceLike;
+}
+
+export function resolveShortTermPromotionDreamingConfig(params: {
+  pluginConfig?: Record<string, unknown>;
+  cfg?: OpenClawConfig;
+}): ShortTermPromotionDreamingConfig {
+  const shortTermPromotion = asRecord(params.pluginConfig?.shortTermPromotion);
+  const dreaming = asRecord(shortTermPromotion?.dreaming);
+
+  const enabled = dreaming?.enabled === true;
+  const cron = normalizeTrimmedString(dreaming?.cron) ?? DEFAULT_DREAMING_CRON_EXPR;
+  const timezone =
+    normalizeTrimmedString(dreaming?.timezone) ?? resolveTimezoneFallback(params.cfg);
+  const limit = normalizePositiveInt(dreaming?.limit, DEFAULT_DREAMING_LIMIT);
+  const minScore = normalizeScore(dreaming?.minScore, DEFAULT_DREAMING_MIN_SCORE);
+  const minRecallCount = normalizeNonNegativeInt(
+    dreaming?.minRecallCount,
+    DEFAULT_DREAMING_MIN_RECALL_COUNT,
+  );
+  const minUniqueQueries = normalizeNonNegativeInt(
+    dreaming?.minUniqueQueries,
+    DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+  );
+
+  return {
+    enabled,
+    cron,
+    ...(timezone ? { timezone } : {}),
+    limit,
+    minScore,
+    minRecallCount,
+    minUniqueQueries,
+  };
+}
+
+export async function reconcileShortTermDreamingCronJob(params: {
+  cron: CronServiceLike | null;
+  config: ShortTermPromotionDreamingConfig;
+  logger: Logger;
+}): Promise<ReconcileResult> {
+  const cron = params.cron;
+  if (!cron) {
+    return { status: "unavailable", removed: 0 };
+  }
+
+  const allJobs = await cron.list({ includeDisabled: true });
+  const managed = allJobs.filter(isManagedDreamingJob);
+
+  if (!params.config.enabled) {
+    let removed = 0;
+    for (const job of managed) {
+      const result = await cron.remove(job.id);
+      if (result.removed !== false) {
+        removed += 1;
+      }
+    }
+    if (removed > 0) {
+      params.logger.info(`memory-core: removed ${removed} managed dreaming cron job(s).`);
+    }
+    return { status: "disabled", removed };
+  }
+
+  const desired = buildManagedDreamingCronJob(params.config);
+  if (managed.length === 0) {
+    await cron.add(desired);
+    params.logger.info("memory-core: created managed dreaming cron job.");
+    return { status: "added", removed: 0 };
+  }
+
+  const [primary, ...duplicates] = sortManagedJobs(managed);
+  let removed = 0;
+  for (const duplicate of duplicates) {
+    const result = await cron.remove(duplicate.id);
+    if (result.removed !== false) {
+      removed += 1;
+    }
+  }
+
+  const patch = buildManagedDreamingPatch(primary, desired);
+  if (!patch) {
+    if (removed > 0) {
+      params.logger.info("memory-core: pruned duplicate managed dreaming cron jobs.");
+    }
+    return { status: "noop", removed };
+  }
+
+  await cron.update(primary.id, patch);
+  params.logger.info("memory-core: updated managed dreaming cron job.");
+  return { status: "updated", removed };
+}
+
+export async function runShortTermDreamingPromotionIfTriggered(params: {
+  cleanedBody: string;
+  trigger?: string;
+  workspaceDir?: string;
+  config: ShortTermPromotionDreamingConfig;
+  logger: Logger;
+}): Promise<{ handled: true; reason: string } | undefined> {
+  if (params.trigger !== "heartbeat") {
+    return undefined;
+  }
+  if (params.cleanedBody.trim() !== DREAMING_SYSTEM_EVENT_TEXT) {
+    return undefined;
+  }
+  if (!params.config.enabled) {
+    return { handled: true, reason: "memory-core: short-term dreaming disabled" };
+  }
+
+  const workspaceDir = normalizeTrimmedString(params.workspaceDir);
+  if (!workspaceDir) {
+    params.logger.warn(
+      "memory-core: dreaming promotion skipped because workspaceDir is unavailable.",
+    );
+    return { handled: true, reason: "memory-core: short-term dreaming missing workspace" };
+  }
+
+  try {
+    const candidates = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      limit: params.config.limit,
+      minScore: params.config.minScore,
+      minRecallCount: params.config.minRecallCount,
+      minUniqueQueries: params.config.minUniqueQueries,
+    });
+    const applied = await applyShortTermPromotions({
+      workspaceDir,
+      candidates,
+      limit: params.config.limit,
+      minScore: params.config.minScore,
+      minRecallCount: params.config.minRecallCount,
+      minUniqueQueries: params.config.minUniqueQueries,
+    });
+    params.logger.info(
+      `memory-core: dreaming promotion complete (candidates=${candidates.length}, applied=${applied.applied}).`,
+    );
+  } catch (err) {
+    params.logger.error(`memory-core: dreaming promotion failed: ${formatErrorMessage(err)}`);
+  }
+
+  return { handled: true, reason: "memory-core: short-term dreaming processed" };
+}
+
+export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void {
+  api.registerHook(
+    "gateway:startup",
+    async (event: unknown) => {
+      const config = resolveShortTermPromotionDreamingConfig({
+        pluginConfig: api.pluginConfig,
+        cfg: api.config,
+      });
+      const cron = resolveCronServiceFromStartupEvent(event);
+      if (!cron && config.enabled) {
+        api.logger.warn(
+          "memory-core: managed dreaming cron could not be reconciled (cron service unavailable).",
+        );
+      }
+      await reconcileShortTermDreamingCronJob({
+        cron,
+        config,
+        logger: api.logger,
+      });
+    },
+    { name: "memory-core-short-term-dreaming-cron" },
+  );
+
+  api.on("before_agent_reply", async (event, ctx) => {
+    const config = resolveShortTermPromotionDreamingConfig({
+      pluginConfig: api.pluginConfig,
+      cfg: api.config,
+    });
+    return await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: event.cleanedBody,
+      trigger: ctx.trigger,
+      workspaceDir: ctx.workspaceDir,
+      config,
+      logger: api.logger,
+    });
+  });
+}
+
+export const __testing = {
+  buildManagedDreamingCronJob,
+  buildManagedDreamingPatch,
+  isManagedDreamingJob,
+  resolveCronServiceFromStartupEvent,
+  constants: {
+    MANAGED_DREAMING_CRON_NAME,
+    MANAGED_DREAMING_CRON_TAG,
+    DREAMING_SYSTEM_EVENT_TEXT,
+    DEFAULT_DREAMING_CRON_EXPR,
+    DEFAULT_DREAMING_LIMIT,
+    DEFAULT_DREAMING_MIN_SCORE,
+    DEFAULT_DREAMING_MIN_RECALL_COUNT,
+    DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+  },
+};

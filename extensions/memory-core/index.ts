@@ -1,5 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerMemoryCli } from "./src/cli.js";
+import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import {
   buildMemoryFlushPlan,
   DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
@@ -25,6 +26,7 @@ export default definePluginEntry({
   kind: "memory",
   register(api) {
     registerBuiltInMemoryEmbeddingProviders(api);
+    registerShortTermPromotionDreaming(api);
     api.registerMemoryPromptSection(buildPromptSection);
     api.registerMemoryFlushPlan(buildMemoryFlushPlan);
     api.registerMemoryRuntime(memoryRuntime);

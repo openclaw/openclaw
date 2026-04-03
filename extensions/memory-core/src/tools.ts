@@ -5,6 +5,7 @@ import {
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   clampResultsByInjectedChars,
   decorateCitations,
@@ -55,6 +56,13 @@ export function createMemorySearchTool(options: {
             sessionKey: options.agentSessionKey,
           });
           const status = memory.manager.status();
+          await recordShortTermRecalls({
+            workspaceDir: status.workspaceDir,
+            query,
+            results: rawResults,
+          }).catch(() => {
+            // Recall tracking is best-effort and must never block memory recall.
+          });
           const decorated = decorateCitations(rawResults, includeCitations);
           const resolved = resolveMemoryBackendConfig({ cfg, agentId });
           const results =

@@ -1,9 +1,84 @@
 {
   "id": "memory-core",
   "kind": "memory",
+  "uiHints": {
+    "shortTermPromotion.dreaming.enabled": {
+      "label": "Enable Dreaming Promotion",
+      "help": "Automatically schedule nightly short-term to long-term memory promotion."
+    },
+    "shortTermPromotion.dreaming.cron": {
+      "label": "Dreaming Cron",
+      "placeholder": "0 3 * * *",
+      "help": "Cron expression for the managed dreaming job."
+    },
+    "shortTermPromotion.dreaming.timezone": {
+      "label": "Dreaming Timezone",
+      "placeholder": "America/Los_Angeles",
+      "help": "IANA timezone for the managed dreaming cron schedule."
+    },
+    "shortTermPromotion.dreaming.limit": {
+      "label": "Promotion Limit",
+      "placeholder": "10",
+      "help": "Maximum short-term candidates promoted per dreaming run."
+    },
+    "shortTermPromotion.dreaming.minScore": {
+      "label": "Promotion Min Score",
+      "placeholder": "0.75",
+      "help": "Minimum weighted rank required for automatic promotion."
+    },
+    "shortTermPromotion.dreaming.minRecallCount": {
+      "label": "Promotion Min Recalls",
+      "placeholder": "3",
+      "help": "Minimum recall count required for automatic promotion."
+    },
+    "shortTermPromotion.dreaming.minUniqueQueries": {
+      "label": "Promotion Min Queries",
+      "placeholder": "2",
+      "help": "Minimum unique query count required for automatic promotion."
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "shortTermPromotion": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "dreaming": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "cron": {
+                "type": "string"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "number",
+                "minimum": 1
+              },
+              "minScore": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "minRecallCount": {
+                "type": "number",
+                "minimum": 0
+              },
+              "minUniqueQueries": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }

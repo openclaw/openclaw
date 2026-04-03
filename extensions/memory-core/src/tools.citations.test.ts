@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   getMemorySearchManagerMockCalls,
@@ -6,6 +9,7 @@ import {
   setMemoryBackend,
   setMemoryReadFileImpl,
   setMemorySearchImpl,
+  setMemoryWorkspaceDir,
   type MemoryReadParams,
 } from "../../../test/helpers/memory-tool-manager-mock.js";
 import {
@@ -149,5 +153,40 @@ describe("memory tools", () => {
     });
     expect(getReadAgentMemoryFileMockCalls()).toBe(1);
     expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("persists short-term recall events from memory_search tool hits", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-tools-recall-"));
+    try {
+      setMemoryBackend("builtin");
+      setMemoryWorkspaceDir(workspaceDir);
+      setMemorySearchImpl(async () => [
+        {
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.95,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory" as const,
+        },
+      ]);
+
+      const tool = createMemorySearchToolOrThrow();
+      await tool.execute("call_recall_persist", { query: "glacier backup" });
+
+      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+      const storeRaw = await fs.readFile(storePath, "utf-8");
+      const store = JSON.parse(storeRaw) as {
+        entries?: Record<string, { path: string; recallCount: number }>;
+      };
+      const entries = Object.values(store.entries ?? {});
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        path: "memory/2026-04-03.md",
+        recallCount: 1,
+      });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 });
