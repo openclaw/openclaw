@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getMessageContentMock = vi.hoisted(() => vi.fn());
 
@@ -38,11 +38,13 @@ async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
 }
 
 describe("downloadLineMedia", () => {
-  beforeEach(async () => {
-    vi.restoreAllMocks();
-    vi.resetModules();
-    getMessageContentMock.mockReset();
+  beforeAll(async () => {
     ({ downloadLineMedia } = await import("./download.js"));
+  });
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    getMessageContentMock.mockReset();
   });
 
   it("does not derive temp file path from external messageId", async () => {

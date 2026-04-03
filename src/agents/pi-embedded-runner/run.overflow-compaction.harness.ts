@@ -341,6 +341,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
       ...actual,
       prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
       resolveProviderCapabilitiesWithPlugin: mockedResolveProviderCapabilitiesWithPlugin,
+      prepareProviderExtraParams: vi.fn(async () => ({})),
+      wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
     };
   });
 

@@ -71,7 +71,6 @@ async function handleDirectMessage(
 
 describe("createSlackMessageHandler", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ createSlackMessageHandler } = await import("./message-handler.js"));
   });
 

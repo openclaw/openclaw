@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
@@ -22,9 +22,11 @@ vi.mock("@larksuiteoapi/node-sdk", () => {
 describe("feishu_doc account selection", () => {
   let registerFeishuDocTools: typeof import("./docx.js").registerFeishuDocTools;
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ registerFeishuDocTools } = await import("./docx.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
   });
 

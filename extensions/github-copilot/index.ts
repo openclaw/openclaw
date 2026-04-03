@@ -12,6 +12,14 @@ import { fetchCopilotUsage } from "./usage.js";
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
 
+function buildGithubCopilotReplayPolicy(modelId?: string) {
+  return (modelId?.toLowerCase() ?? "").includes("claude")
+    ? {
+        dropThinkingBlocks: true,
+      }
+    : {};
+}
+
 function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
   githubToken: string;
   hasProfile: boolean;
@@ -144,9 +152,7 @@ export default definePluginEntry({
         },
       },
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
-      capabilities: {
-        dropThinkingBlockModelHints: ["claude"],
-      },
+      buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       supportsXHighThinking: ({ modelId }) =>
         COPILOT_XHIGH_MODEL_IDS.includes(modelId.trim().toLowerCase() as never),
       prepareRuntimeAuth: async (ctx) => {

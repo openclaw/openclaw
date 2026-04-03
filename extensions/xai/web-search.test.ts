@@ -1,7 +1,7 @@
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
+import { capturePluginRegistration } from "../../src/plugins/captured-registration.js";
 import { withEnv } from "../../test/helpers/plugins/env.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import xaiPlugin from "./index.js";

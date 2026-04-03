@@ -1,24 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const randomMocks = vi.hoisted(() => ({
   generateSecureInt: vi.fn(),
 }));
 
+vi.mock("../infra/secure-random.js", () => ({
+  generateSecureInt: randomMocks.generateSecureInt,
+}));
+
 let createSessionSlug: typeof import("./session-slug.js").createSessionSlug;
 
-beforeEach(async () => {
-  vi.resetModules();
-  randomMocks.generateSecureInt.mockReset();
-  vi.doMock("../infra/secure-random.js", () => ({
-    generateSecureInt: randomMocks.generateSecureInt,
-  }));
+beforeAll(async () => {
   ({ createSessionSlug } = await import("./session-slug.js"));
 });
 
 describe("session slug", () => {
-  afterEach(() => {
-    vi.doUnmock("../infra/secure-random.js");
-    vi.restoreAllMocks();
+  beforeEach(() => {
+    randomMocks.generateSecureInt.mockReset();
   });
 
   it("generates a two-word slug by default", () => {

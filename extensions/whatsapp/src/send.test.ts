@@ -32,7 +32,6 @@ describe("web outbound", () => {
   const sendReaction = vi.fn(async () => {});
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
     ({ setActiveWebListener } = await import("./active-listener.js"));
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));

@@ -1,5 +1,5 @@
-import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { installCommonResolveTargetErrorCases } from "../../../src/test-helpers/resolve-target-error-cases.js";
 import {
   isWhatsAppGroupJid,
   isWhatsAppUserTarget,
@@ -77,7 +77,6 @@ let resolveTarget: NonNullable<
 
 describe("whatsapp resolveTarget", () => {
   beforeAll(async () => {
-    vi.resetModules();
     const outbound = (await import("./channel.js")).whatsappPlugin.outbound;
     if (!outbound?.resolveTarget) {
       throw new Error("expected whatsapp outbound resolveTarget");

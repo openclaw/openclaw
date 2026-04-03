@@ -61,10 +61,6 @@ import {
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
-import {
-  resolveProviderRequestConfig,
-  sanitizeRuntimeProviderRequestOverrides,
-} from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
@@ -102,17 +98,12 @@ import {
 } from "./compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
-import {
-  logToolSchemasForGoogle,
-  sanitizeSessionHistory,
-  sanitizeToolsForGoogle,
-  validateReplayTurns,
-} from "./google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
+import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { truncateSessionAfterCompaction } from "./session-truncation.js";
@@ -123,6 +114,10 @@ import {
   createSystemPromptOverride,
 } from "./system-prompt.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
+import {
+  logProviderToolSchemaDiagnostics,
+  normalizeProviderToolSchemas,
+} from "./tool-schema-runtime.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { describeUnknownError, mapThinkingLevel } from "./utils.js";
@@ -364,24 +359,8 @@ export async function compactEmbeddedPiSessionDirect(
           profileId: apiKeyInfo.profileId,
         },
       });
-      if (preparedAuth?.baseUrl || preparedAuth?.request) {
-        const runtimeRequestConfig = resolveProviderRequestConfig({
-          provider: runtimeModel.provider,
-          api: runtimeModel.api,
-          baseUrl: preparedAuth?.baseUrl ?? runtimeModel.baseUrl,
-          providerHeaders:
-            runtimeModel.headers && typeof runtimeModel.headers === "object"
-              ? runtimeModel.headers
-              : undefined,
-          request: sanitizeRuntimeProviderRequestOverrides(preparedAuth?.request),
-          capability: "llm",
-          transport: "stream",
-        });
-        runtimeModel = {
-          ...runtimeModel,
-          ...(preparedAuth?.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
-          ...(runtimeRequestConfig.headers ? { headers: runtimeRequestConfig.headers } : {}),
-        };
+      if (preparedAuth?.baseUrl) {
+        runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
       }
       const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
       hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
@@ -502,7 +481,7 @@ export async function compactEmbeddedPiSessionDirect(
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
     const toolsEnabled = supportsModelTools(runtimeModel);
-    const tools = sanitizeToolsForGoogle({
+    const tools = normalizeProviderToolSchemas({
       tools: toolsEnabled ? toolsRaw : [],
       provider,
       config: params.config,
@@ -535,7 +514,7 @@ export async function compactEmbeddedPiSessionDirect(
       ...(bundleLspRuntime?.tools ?? []),
     ];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
-    logToolSchemasForGoogle({
+    logProviderToolSchemaDiagnostics({
       tools: effectiveTools,
       provider,
       config: params.config,
@@ -962,14 +941,30 @@ export async function compactEmbeddedPiSessionDirect(
           },
         };
       } finally {
-        await flushPendingToolResultsAfterIdle({
-          agent: session?.agent,
-          sessionManager,
-          clearPendingOnTimeout: true,
-        });
-        session.dispose();
-        await bundleMcpRuntime?.dispose();
-        await bundleLspRuntime?.dispose();
+        try {
+          await flushPendingToolResultsAfterIdle({
+            agent: session?.agent,
+            sessionManager,
+            clearPendingOnTimeout: true,
+          });
+        } catch {
+          /* best-effort */
+        }
+        try {
+          session.dispose();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await bundleMcpRuntime?.dispose();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await bundleLspRuntime?.dispose();
+        } catch {
+          /* best-effort */
+        }
       }
     } finally {
       await sessionLock.release();

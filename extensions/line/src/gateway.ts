@@ -6,6 +6,9 @@ import {
   type OpenClawConfig,
   type ResolvedLineAccount,
 } from "../api.js";
+import { resolveLineAccount } from "./accounts.js";
+import { monitorLineProvider } from "./monitor.js";
+import { probeLineBot } from "./probe.js";
 import { getLineRuntime } from "./runtime.js";
 
 export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["gateway"]> = {
@@ -26,7 +29,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     let lineBotLabel = "";
     try {
-      const probe = await getLineRuntime().channel.line.probeLineBot(token, 2500);
+      const probe = await probeLineBot(token, 2500);
       const displayName = probe.ok ? probe.bot?.displayName?.trim() : null;
       if (displayName) {
         lineBotLabel = ` (${displayName})`;
@@ -39,7 +42,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
 
-    return await getLineRuntime().channel.line.monitorLineProvider({
+    return await (getLineRuntime().channel.line?.monitorLineProvider ?? monitorLineProvider)({
       channelAccessToken: token,
       channelSecret: secret,
       accountId: account.accountId,
@@ -106,7 +109,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
       await getLineRuntime().config.writeConfigFile(nextCfg);
     }
 
-    const resolved = getLineRuntime().channel.line.resolveLineAccount({
+    const resolved = resolveLineAccount({
       cfg: changed ? nextCfg : cfg,
       accountId,
     });
