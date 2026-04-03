@@ -387,7 +387,6 @@ function expectUnauthorizedNewCommandBlocked(sendMessage: ReturnType<typeof vi.f
 
 describe("registerTelegramNativeCommands — session metadata", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
   });
 
