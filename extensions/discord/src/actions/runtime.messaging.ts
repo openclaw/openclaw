@@ -114,7 +114,9 @@ export async function handleDiscordMessagingAction(
         cfg,
         accountId: accountId ?? "default",
       })
-    : undefined;
+    : accountId
+      ? { accountId }
+      : undefined;
   const withReactionRuntimeOptions = <T extends Record<string, unknown>>(extra?: T) => ({
     ...(reactionRuntimeOptions ?? cfgOptions),
     ...(extra ?? {}),

@@ -940,7 +940,10 @@ export async function processDiscordMessage(
         }
       }
     } else if (shouldSendAckReaction && ackReaction && removeAckAfterReply) {
-      void discordAdapter.removeReaction?.(ackReaction)?.catch((err) => {
+      void removeReactionDiscord(messageChannelId, message.id, ackReaction, {
+        rest: discordRest,
+        accountId,
+      }).catch((err) => {
         logAckFailure({
           log: logVerbose,
           channel: "discord",
