@@ -2680,4 +2680,30 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.channel).toBe("whatsapp");
     expect(result.sessionEntry.deliveryContext?.to).toBe("+15555550123");
   });
+
+  it("uses the configured default account for persisted routing when AccountId is omitted", async () => {
+    const storePath = await createStorePath("default-account-routing-context-");
+    const cfg = {
+      session: { store: storePath },
+      channels: {
+        discord: {
+          defaultAccount: "work",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: "agent:main:discord:channel:24680",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastAccountId).toBe("work");
+    expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
+  });
 });
