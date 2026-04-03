@@ -1,4 +1,4 @@
-import { Separator, TextDisplay } from "@buape/carbon";
+import { createRequire } from "node:module";
 import {
   buildLegacyDmAccountAllowlistAdapter,
   createAccountScopedAllowlistNameResolver,
@@ -67,14 +67,21 @@ import { discordSetupAdapter } from "./setup-core.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./targets.js";
-import { DiscordUiContainer } from "./ui.js";
 
 type DiscordSendFn = typeof sendMessageDiscord;
+type DiscordUiModule = typeof import("./ui.js");
+type DiscordCarbonModule = typeof import("@buape/carbon");
+type DiscordTextDisplay = InstanceType<DiscordCarbonModule["TextDisplay"]>;
+type DiscordSeparator = InstanceType<DiscordCarbonModule["Separator"]>;
 
 let discordProviderRuntimePromise:
   | Promise<typeof import("./monitor/provider.runtime.js")>
   | undefined;
 let discordProbeRuntimePromise: Promise<typeof import("./probe.runtime.js")> | undefined;
+let discordUiModuleCache: DiscordUiModule | null = null;
+let discordCarbonModuleCache: DiscordCarbonModule | null = null;
+
+const require = createRequire(import.meta.url);
 
 async function loadDiscordProviderRuntime() {
   discordProviderRuntimePromise ??= import("./monitor/provider.runtime.js");
@@ -84,6 +91,16 @@ async function loadDiscordProviderRuntime() {
 async function loadDiscordProbeRuntime() {
   discordProbeRuntimePromise ??= import("./probe.runtime.js");
   return await discordProbeRuntimePromise;
+}
+
+function loadDiscordCarbonModule() {
+  discordCarbonModuleCache ??= require("@buape/carbon") as DiscordCarbonModule;
+  return discordCarbonModuleCache;
+}
+
+function loadDiscordUiModule() {
+  discordUiModuleCache ??= require("./ui.js") as DiscordUiModule;
+  return discordUiModuleCache;
 }
 
 const meta = getChatChannelMeta("discord");
@@ -186,8 +203,10 @@ function buildDiscordCrossContextComponents(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
+  const { Separator, TextDisplay } = loadDiscordCarbonModule();
+  const { DiscordUiContainer } = loadDiscordUiModule();
   const trimmed = params.message.trim();
-  const components: Array<TextDisplay | Separator> = [];
+  const components: Array<DiscordTextDisplay | DiscordSeparator> = [];
   if (trimmed) {
     components.push(new TextDisplay(params.message));
     components.push(new Separator({ divider: true, spacing: "small" }));
