@@ -217,6 +217,34 @@ describe("bluebubbles setup surface", () => {
     expect(next?.channels?.bluebubbles?.accounts?.work?.dmPolicy).toBe("open");
   });
 
+  it("uses configured defaultAccount when accountId is omitted in account resolution", async () => {
+    const { resolveBlueBubblesAccount } = await import("./accounts.js");
+
+    const resolved = resolveBlueBubblesAccount({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            defaultAccount: "work",
+            serverUrl: "http://localhost:3000",
+            password: "top-secret",
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:1234",
+                password: "secret",
+                name: "Work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.name).toBe("Work");
+    expect(resolved.baseUrl).toBe("http://localhost:1234");
+    expect(resolved.configured).toBe(true);
+  });
+
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
     const { blueBubblesSetupWizard } = await import("./setup-surface.js");
 

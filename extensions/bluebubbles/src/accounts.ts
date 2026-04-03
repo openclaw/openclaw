@@ -41,7 +41,9 @@ export function resolveBlueBubblesAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedBlueBubblesAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultBlueBubblesAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.bluebubbles?.enabled;
   const merged = mergeBlueBubblesAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
