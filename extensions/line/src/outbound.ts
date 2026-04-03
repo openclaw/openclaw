@@ -11,6 +11,17 @@ import {
 } from "../api.js";
 import { resolveLineOutboundMedia, type LineOutboundMediaResolved } from "./outbound-media.js";
 import { getLineRuntime } from "./runtime.js";
+import {
+  createQuickReplyItems,
+  pushFlexMessage,
+  pushLocationMessage,
+  pushMessageLine,
+  pushMessagesLine,
+  pushTemplateMessage,
+  pushTextMessageWithQuickReplies,
+  sendMessageLine,
+} from "./send.js";
+import { buildTemplateMessageFromPayload } from "./template-messages.js";
 
 type LineChannelDataWithMedia = LineChannelData & {
   mediaKind?: "image" | "video" | "audio";
@@ -77,14 +88,13 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   sendPayload: async ({ to, payload, accountId, cfg }) => {
     const runtime = getLineRuntime();
     const lineData = (payload.channelData?.line as LineChannelDataWithMedia | undefined) ?? {};
-    const sendText = runtime.channel.line.pushMessageLine;
-    const sendBatch = runtime.channel.line.pushMessagesLine;
-    const sendFlex = runtime.channel.line.pushFlexMessage;
-    const sendTemplate = runtime.channel.line.pushTemplateMessage;
-    const sendLocation = runtime.channel.line.pushLocationMessage;
-    const sendQuickReplies = runtime.channel.line.pushTextMessageWithQuickReplies;
-    const buildTemplate = runtime.channel.line.buildTemplateMessageFromPayload;
-    const createQuickReplyItems = runtime.channel.line.createQuickReplyItems;
+    const sendText = pushMessageLine;
+    const sendBatch = pushMessagesLine;
+    const sendFlex = pushFlexMessage;
+    const sendTemplate = pushTemplateMessage;
+    const sendLocation = pushLocationMessage;
+    const sendQuickReplies = pushTextMessageWithQuickReplies;
+    const buildTemplate = buildTemplateMessageFromPayload;
 
     let lastResult: { messageId: string; chatId: string } | null = null;
     const quickReplies = lineData.quickReplies ?? [];
@@ -129,7 +139,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           continue;
         }
         if (!useLineSpecificMedia) {
-          lastResult = await runtime.channel.line.sendMessageLine(to, "", {
+          lastResult = await sendMessageLine(to, "", {
             verbose: false,
             mediaUrl: trimmed,
             cfg,
@@ -143,7 +153,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           durationMs: lineData.durationMs,
           trackingId: lineData.trackingId,
         });
-        lastResult = await runtime.channel.line.sendMessageLine(to, "", {
+        lastResult = await sendMessageLine(to, "", {
           verbose: false,
           mediaUrl: resolved.mediaUrl,
           mediaKind: resolved.mediaKind,
@@ -294,8 +304,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     channel: "line",
     sendText: async ({ cfg, to, text, accountId }) => {
       const runtime = getLineRuntime();
-      const sendText = runtime.channel.line.pushMessageLine;
-      const sendFlex = runtime.channel.line.pushFlexMessage;
+      const sendText = pushMessageLine;
+      const sendFlex = pushFlexMessage;
       const processed = processLineMessage(text);
       let result: { messageId: string; chatId: string };
       if (processed.text.trim()) {
@@ -318,7 +328,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       return result;
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) =>
-      await getLineRuntime().channel.line.sendMessageLine(to, text, {
+      await sendMessageLine(to, text, {
         verbose: false,
         mediaUrl,
         cfg,

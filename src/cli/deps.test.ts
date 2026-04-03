@@ -19,15 +19,6 @@ const sendFns = vi.hoisted(() => ({
   imessage: vi.fn(async () => ({ messageId: "i1", chatId: "imessage:1" })),
 }));
 
-const whatsappBoundaryLoads = vi.hoisted(() => vi.fn());
-
-vi.mock("../plugins/runtime/runtime-web-channel-boundary.js", async (importOriginal) => {
-  whatsappBoundaryLoads();
-  return await importOriginal<
-    typeof import("../plugins/runtime/runtime-web-channel-boundary.js")
-  >();
-});
-
 vi.mock("./send-runtime/whatsapp.js", () => {
   moduleLoads.whatsapp();
   return { runtimeSend: { sendMessage: sendFns.whatsapp } };
@@ -111,14 +102,5 @@ describe("createDefaultDeps", () => {
 
     expect(moduleLoads.discord).toHaveBeenCalledTimes(1);
     expect(sendFns.discord).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not import the whatsapp runtime boundary on deps module load", async () => {
-    await importFreshModule<typeof import("./deps.js")>(
-      import.meta.url,
-      "./deps.js?scope=no-whatsapp-runtime-on-import",
-    );
-
-    expect(whatsappBoundaryLoads).not.toHaveBeenCalled();
   });
 });

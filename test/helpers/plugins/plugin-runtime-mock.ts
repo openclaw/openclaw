@@ -333,12 +333,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         setMaxAgeBySessionKey:
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setMaxAgeBySessionKey"],
       },
-      discord: {} as PluginRuntime["channel"]["discord"],
       activity: {} as PluginRuntime["channel"]["activity"],
-      line: {} as PluginRuntime["channel"]["line"],
-      slack: {} as PluginRuntime["channel"]["slack"],
-      matrix: {} as PluginRuntime["channel"]["matrix"],
-      signal: {} as PluginRuntime["channel"]["signal"],
     },
     events: {
       onAgentEvent: vi.fn(() => () => {}) as unknown as PluginRuntime["events"]["onAgentEvent"],

@@ -1,9 +1,7 @@
-import { sendMessageWhatsApp as sendMessageWhatsAppImpl } from "../../plugins/runtime/runtime-web-channel-boundary.js";
+import { createPluginBoundaryRuntimeSend } from "./plugin-boundary-send.js";
 
-type RuntimeSend = {
-  sendMessage: typeof import("../../plugins/runtime/runtime-web-channel-boundary.js").sendMessageWhatsApp;
-};
-
-export const runtimeSend = {
-  sendMessage: sendMessageWhatsAppImpl,
-} satisfies RuntimeSend;
+export const runtimeSend = createPluginBoundaryRuntimeSend({
+  pluginId: "whatsapp",
+  exportName: "sendMessageWhatsApp",
+  missingLabel: "WhatsApp plugin runtime",
+});

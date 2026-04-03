@@ -37,7 +37,6 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
 
   const runtime = {
     config: { writeConfigFile },
-    channel: { line: { resolveLineAccount } },
   } as unknown as PluginRuntime;
 
   return { runtime, mocks: { writeConfigFile, resolveLineAccount } };

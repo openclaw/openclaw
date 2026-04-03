@@ -397,6 +397,10 @@ export type ChannelThreadingToolContext = {
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  normalizeExplicitSessionKey?: (params: {
+    sessionKey: string;
+    ctx: MsgContext;
+  }) => string | undefined;
   /**
    * Canonical plugin-owned session conversation grammar.
    * Use this when the provider encodes thread or scoped-conversation semantics

@@ -120,6 +120,7 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     accountId?: string | null;
     allowFrom: Array<string | number>;
   }) => string[];
+  hasPersistedAuthState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
   resolveDefaultTo?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -415,6 +416,7 @@ export type ChannelAuthAdapter = {
     accountId?: string | null;
     action: "approve";
   }) => ChannelActionAvailabilityState;
+  resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
 };
 
 export type ChannelHeartbeatAdapter = {
@@ -520,6 +522,11 @@ export type ChannelApprovalDeliveryAdapter = {
 
 export type ChannelApprovalKind = "exec" | "plugin";
 
+export type ChannelApproveCommandBehavior =
+  | { kind: "allow" }
+  | { kind: "ignore" }
+  | { kind: "reply"; text: string };
+
 export type ChannelApprovalNativeSurface = "origin" | "approver-dm";
 
 export type ChannelApprovalNativeTarget = {
@@ -592,6 +599,12 @@ export type ChannelApprovalRenderAdapter = {
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
   authorizeActorAction?: ChannelAuthAdapter["authorizeActorAction"];
   getActionAvailabilityState?: ChannelAuthAdapter["getActionAvailabilityState"];
+  resolveApproveCommandBehavior?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    senderId?: string | null;
+    approvalKind: ChannelApprovalKind;
+  }) => ChannelApproveCommandBehavior | undefined;
 };
 
 export type ChannelApprovalAdapter = {

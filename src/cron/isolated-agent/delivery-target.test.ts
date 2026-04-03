@@ -4,10 +4,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
-const whatsappAccountMocks = vi.hoisted(() => ({
-  resolveWhatsAppAccount: vi.fn<() => { allowFrom: string[] }>(() => ({ allowFrom: [] })),
-}));
-
 vi.mock("../../config/sessions.js", () => ({
   loadSessionStore: vi.fn().mockReturnValue({}),
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
@@ -28,16 +24,11 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStoreSync: vi.fn(() => []),
 }));
 
-vi.mock("../../../extensions/whatsapp/api.js", () => ({
-  resolveWhatsAppAccount: whatsappAccountMocks.resolveWhatsAppAccount,
-}));
-
 const mockedModuleIds = [
   "../../config/sessions.js",
   "../../infra/outbound/channel-selection.js",
   "../../infra/outbound/target-resolver.js",
   "../../pairing/pairing-store.js",
-  "../../../extensions/whatsapp/api.js",
 ];
 
 import { loadSessionStore } from "../../config/sessions.js";
@@ -65,6 +56,22 @@ function createStubOutbound(label: string): ChannelOutboundAdapter {
   };
 }
 
+function createAllowlistAwareStubOutbound(label: string): ChannelOutboundAdapter {
+  return {
+    deliveryMode: "gateway",
+    resolveTarget: ({ to, allowFrom }) => {
+      const trimmed = typeof to === "string" ? to.trim() : "";
+      if (!trimmed) {
+        return { ok: false, error: new Error(`${label} requires target`) };
+      }
+      if (allowFrom && allowFrom.length > 0 && !allowFrom.includes(trimmed)) {
+        return { ok: false, error: new Error(`${label} target blocked`) };
+      }
+      return { ok: true, to: trimmed };
+    },
+  };
+}
+
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(
@@ -79,10 +86,18 @@ beforeEach(() => {
       },
       {
         pluginId: "whatsapp",
-        plugin: createOutboundTestPlugin({
-          id: "whatsapp",
-          outbound: createStubOutbound("WhatsApp"),
-        }),
+        plugin: {
+          ...createOutboundTestPlugin({
+            id: "whatsapp",
+            outbound: createAllowlistAwareStubOutbound("WhatsApp"),
+          }),
+          config: {
+            listAccountIds: () => [],
+            resolveAccount: () => ({}),
+            resolveAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
+              (cfg.channels?.whatsapp as { allowFrom?: string[] } | undefined)?.allowFrom,
+          },
+        },
         source: "test",
       },
     ]),
@@ -142,10 +157,6 @@ function setLastSessionEntry(params: {
   });
 }
 
-function setWhatsAppAllowFrom(allowFrom: string[]) {
-  vi.mocked(whatsappAccountMocks.resolveWhatsAppAccount).mockReturnValue({ allowFrom });
-}
-
 function setStoredWhatsAppAllowFrom(allowFrom: string[]) {
   vi.mocked(readChannelAllowFromStoreSync).mockReturnValue(allowFrom);
 }
@@ -176,10 +187,9 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "whatsapp",
       lastTo: "+15550000099",
     });
-    setWhatsAppAllowFrom([]);
     setStoredWhatsAppAllowFrom(["+15550000001"]);
 
-    const cfg = makeCfg({ bindings: [] });
+    const cfg = makeCfg({ bindings: [], channels: { whatsapp: { allowFrom: [] } } });
     const result = await resolveLastTarget(cfg);
 
     expect(result.channel).toBe("whatsapp");
@@ -192,10 +202,9 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "whatsapp",
       lastTo: "+15550000099",
     });
-    setWhatsAppAllowFrom([]);
     setStoredWhatsAppAllowFrom(["+15550000001"]);
 
-    const cfg = makeCfg({ bindings: [] });
+    const cfg = makeCfg({ bindings: [], channels: { whatsapp: { allowFrom: [] } } });
     const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
       channel: "whatsapp",
       to: "+15550000099",

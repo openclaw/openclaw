@@ -1,4 +1,8 @@
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import {
+  setChannelConversationBindingIdleTimeoutBySessionKey,
+  setChannelConversationBindingMaxAgeBySessionKey,
+} from "../../channels/plugins/conversation-bindings.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
@@ -7,7 +11,6 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
@@ -32,12 +35,6 @@ const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
-let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | undefined;
-
-function getChannelRuntime() {
-  cachedChannelRuntime ??= createPluginRuntime().channel;
-  return cachedChannelRuntime;
-}
 
 function resolveSessionCommandUsage() {
   return "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)";
@@ -462,20 +459,14 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       })
     : undefined;
   const telegramConversationId = onTelegram ? resolveTelegramConversationId(params) : undefined;
-  const channelRuntime = getChannelRuntime();
-
-  const discordManager = onDiscord
-    ? channelRuntime.discord.threadBindings.getManager(accountId)
-    : null;
-  if (onDiscord && !discordManager) {
-    return {
-      shouldContinue: false,
-      reply: { text: "⚠️ Discord thread bindings are unavailable for this account." },
-    };
-  }
-
   const discordBinding =
-    onDiscord && threadId ? discordManager?.getByThreadId(threadId) : undefined;
+    onDiscord && threadId
+      ? sessionBindingService.resolveByConversation({
+          channel: "discord",
+          accountId,
+          conversationId: threadId,
+        })
+      : null;
   const telegramBinding =
     onTelegram && telegramConversationId
       ? sessionBindingService.resolveByConversation({
@@ -538,39 +529,18 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const idleTimeoutMs = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveIdleTimeoutMs({
-        record: discordBinding!,
-        defaultIdleTimeoutMs: discordManager!.getIdleTimeoutMs(),
-      })
-    : resolveSessionBindingDurationMs(
-        (onMatrix ? matrixBinding : telegramBinding)!,
-        "idleTimeoutMs",
-        24 * 60 * 60 * 1000,
-      );
-  const idleExpiresAt = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveInactivityExpiresAt({
-        record: discordBinding!,
-        defaultIdleTimeoutMs: discordManager!.getIdleTimeoutMs(),
-      })
-    : idleTimeoutMs > 0
-      ? resolveSessionBindingLastActivityAt((onMatrix ? matrixBinding : telegramBinding)!) +
-        idleTimeoutMs
+  const activeBinding = (onDiscord ? discordBinding : onMatrix ? matrixBinding : telegramBinding)!;
+  const idleTimeoutMs = resolveSessionBindingDurationMs(
+    activeBinding,
+    "idleTimeoutMs",
+    24 * 60 * 60 * 1000,
+  );
+  const idleExpiresAt =
+    idleTimeoutMs > 0
+      ? resolveSessionBindingLastActivityAt(activeBinding) + idleTimeoutMs
       : undefined;
-  const maxAgeMs = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveMaxAgeMs({
-        record: discordBinding!,
-        defaultMaxAgeMs: discordManager!.getMaxAgeMs(),
-      })
-    : resolveSessionBindingDurationMs((onMatrix ? matrixBinding : telegramBinding)!, "maxAgeMs", 0);
-  const maxAgeExpiresAt = onDiscord
-    ? channelRuntime.discord.threadBindings.resolveMaxAgeExpiresAt({
-        record: discordBinding!,
-        defaultMaxAgeMs: discordManager!.getMaxAgeMs(),
-      })
-    : maxAgeMs > 0
-      ? (onMatrix ? matrixBinding : telegramBinding)!.boundAt + maxAgeMs
-      : undefined;
+  const maxAgeMs = resolveSessionBindingDurationMs(activeBinding, "maxAgeMs", 0);
+  const maxAgeExpiresAt = maxAgeMs > 0 ? activeBinding.boundAt + maxAgeMs : undefined;
 
   const durationArgRaw = tokens.slice(1).join("");
   if (!durationArgRaw) {
@@ -612,9 +582,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   }
 
   const senderId = params.command.senderId?.trim() || "";
-  const boundBy = onDiscord
-    ? discordBinding!.boundBy
-    : resolveSessionBindingBoundBy((onMatrix ? matrixBinding : telegramBinding)!);
+  const boundBy = resolveSessionBindingBoundBy(activeBinding);
   if (boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
     return {
       shouldContinue: false,
@@ -638,47 +606,21 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const updatedBindings = (() => {
-    if (onDiscord) {
-      return action === SESSION_ACTION_IDLE
-        ? channelRuntime.discord.threadBindings.setIdleTimeoutBySessionKey({
-            targetSessionKey: discordBinding!.targetSessionKey,
-            accountId,
-            idleTimeoutMs: durationMs,
-          })
-        : channelRuntime.discord.threadBindings.setMaxAgeBySessionKey({
-            targetSessionKey: discordBinding!.targetSessionKey,
-            accountId,
-            maxAgeMs: durationMs,
-          });
-    }
-    if (onMatrix) {
-      return action === SESSION_ACTION_IDLE
-        ? channelRuntime.matrix.threadBindings.setIdleTimeoutBySessionKey({
-            targetSessionKey: matrixBinding!.targetSessionKey,
-            accountId,
-            idleTimeoutMs: durationMs,
-          })
-        : channelRuntime.matrix.threadBindings.setMaxAgeBySessionKey({
-            targetSessionKey: matrixBinding!.targetSessionKey,
-            accountId,
-            maxAgeMs: durationMs,
-          });
-    }
-    return action === SESSION_ACTION_IDLE
-      ? channelRuntime.threadBindings.setIdleTimeoutBySessionKey({
-          channelId: "telegram",
-          targetSessionKey: telegramBinding!.targetSessionKey,
+  const channelId = onDiscord ? "discord" : onMatrix ? "matrix" : "telegram";
+  const updatedBindings =
+    action === SESSION_ACTION_IDLE
+      ? setChannelConversationBindingIdleTimeoutBySessionKey({
+          channelId,
+          targetSessionKey: activeBinding.targetSessionKey,
           accountId,
           idleTimeoutMs: durationMs,
         })
-      : channelRuntime.threadBindings.setMaxAgeBySessionKey({
-          channelId: "telegram",
-          targetSessionKey: telegramBinding!.targetSessionKey,
+      : setChannelConversationBindingMaxAgeBySessionKey({
+          channelId,
+          targetSessionKey: activeBinding.targetSessionKey,
           accountId,
           maxAgeMs: durationMs,
         });
-  })();
   if (updatedBindings.length === 0) {
     return {
       shouldContinue: false,

@@ -29,17 +29,17 @@ describe("loadSiblingRuntimeModuleSync", () => {
   it("loads a sibling runtime module from the caller directory", () => {
     const root = createTempDir();
     const moduleUrl = pathToFileURL(
-      path.join(root, "src", "plugins", "runtime", "runtime-line.js"),
+      path.join(root, "src", "plugins", "runtime", "runtime.js"),
     ).href;
 
     writeFile(
-      path.join(root, "src", "plugins", "runtime", "runtime-line.contract.js"),
+      path.join(root, "src", "plugins", "runtime", "runtime.contract.js"),
       "module.exports = { runtimeLine: { source: 'sibling' } };",
     );
 
     const loaded = loadSiblingRuntimeModuleSync<{ runtimeLine: { source: string } }>({
       moduleUrl,
-      relativeBase: "./runtime-line.contract",
+      relativeBase: "./runtime.contract",
     });
 
     expect(loaded.runtimeLine.source).toBe("sibling");
@@ -50,13 +50,13 @@ describe("loadSiblingRuntimeModuleSync", () => {
     const moduleUrl = pathToFileURL(path.join(root, "dist", "runtime-9DLN_Ai5.js")).href;
 
     writeFile(
-      path.join(root, "dist", "plugins", "runtime", "runtime-line.contract.js"),
+      path.join(root, "dist", "plugins", "runtime", "runtime.contract.js"),
       "module.exports = { runtimeLine: { source: 'dist-runtime' } };",
     );
 
     const loaded = loadSiblingRuntimeModuleSync<{ runtimeLine: { source: string } }>({
       moduleUrl,
-      relativeBase: "./runtime-line.contract",
+      relativeBase: "./runtime.contract",
     });
 
     expect(loaded.runtimeLine.source).toBe("dist-runtime");
@@ -69,8 +69,8 @@ describe("loadSiblingRuntimeModuleSync", () => {
     expect(() =>
       loadSiblingRuntimeModuleSync({
         moduleUrl,
-        relativeBase: "./runtime-line.contract",
+        relativeBase: "./runtime.contract",
       }),
-    ).toThrow("Unable to resolve runtime module ./runtime-line.contract");
+    ).toThrow("Unable to resolve runtime module ./runtime.contract");
   });
 });
