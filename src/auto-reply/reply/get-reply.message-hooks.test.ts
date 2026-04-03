@@ -186,6 +186,19 @@ describe("getReplyFromConfig message hooks", () => {
     expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
   });
 
+  it("skips pre-agent hooks and requests ephemeral session init when skipHooks is set", async () => {
+    await getReplyFromConfig(buildCtx(), { skipHooks: true, skipSessionPersistence: true }, {});
+
+    expect(mocks.createInternalHookEvent).not.toHaveBeenCalled();
+    expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skipHooks: true,
+        skipPersistence: true,
+      }),
+    );
+  });
+
   it("skips message hooks when SessionKey is unavailable", async () => {
     await getReplyFromConfig(buildCtx({ SessionKey: undefined }), undefined, {});
 

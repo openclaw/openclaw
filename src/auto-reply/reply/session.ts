@@ -98,7 +98,7 @@ export type SessionInitResult = {
   resetTriggered: boolean;
   systemSent: boolean;
   abortedLastRun: boolean;
-  storePath: string;
+  storePath?: string;
   sessionScope: SessionScope;
   groupResolution?: GroupKeyResolution;
   isGroup: boolean;
@@ -215,8 +215,12 @@ export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
+  skipHooks?: boolean;
+  skipPersistence?: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
+  const skipHooks = params.skipHooks === true;
+  const skipPersistence = params.skipPersistence === true;
   const conversationBindingContext = resolveSessionConversationBindingContext(cfg, ctx);
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
@@ -629,62 +633,68 @@ export async function initSessionState(params: {
   const fallbackSessionFile = !sessionEntry.sessionFile
     ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)
     : undefined;
-  const resolvedSessionFile = await resolveAndPersistSessionFile({
-    sessionId: sessionEntry.sessionId,
-    sessionKey,
-    sessionStore,
-    storePath,
-    sessionEntry,
-    agentId,
-    sessionsDir: path.dirname(storePath),
-    fallbackSessionFile,
-    activeSessionKey: sessionKey,
-  });
-  sessionEntry = resolvedSessionFile.sessionEntry;
-  if (isNewSession) {
-    sessionEntry.compactionCount = 0;
-    sessionEntry.memoryFlushCompactionCount = undefined;
-    sessionEntry.memoryFlushAt = undefined;
-    // Clear stale context hash so the first flush in the new session is not
-    // incorrectly skipped due to a hash match with the old transcript (#30115).
-    sessionEntry.memoryFlushContextHash = undefined;
-    // Clear stale token metrics from previous session so /status doesn't
-    // display the old session's context usage after /new or /reset.
-    sessionEntry.totalTokens = undefined;
-    sessionEntry.inputTokens = undefined;
-    sessionEntry.outputTokens = undefined;
-    sessionEntry.estimatedCostUsd = undefined;
-    sessionEntry.contextTokens = undefined;
-  }
-  // Preserve per-session overrides while resetting compaction state on /new.
-  sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
-  await updateSessionStore(
-    storePath,
-    (store) => {
-      // Preserve per-session overrides while resetting compaction state on /new.
-      store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
-      if (retiredLegacyMainDelivery) {
-        store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
-      }
-    },
-    {
+  if (skipPersistence) {
+    if (fallbackSessionFile) {
+      sessionEntry.sessionFile = fallbackSessionFile;
+    }
+  } else {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionStore,
+      storePath,
+      sessionEntry,
+      agentId,
+      sessionsDir: path.dirname(storePath),
+      fallbackSessionFile,
       activeSessionKey: sessionKey,
-      onWarn: (warning) =>
-        deliverSessionMaintenanceWarning({
-          cfg,
-          sessionKey,
-          entry: sessionEntry,
-          warning,
-        }),
-    },
-  );
+    });
+    sessionEntry = resolvedSessionFile.sessionEntry;
+    if (isNewSession) {
+      sessionEntry.compactionCount = 0;
+      sessionEntry.memoryFlushCompactionCount = undefined;
+      sessionEntry.memoryFlushAt = undefined;
+      // Clear stale context hash so the first flush in the new session is not
+      // incorrectly skipped due to a hash match with the old transcript (#30115).
+      sessionEntry.memoryFlushContextHash = undefined;
+      // Clear stale token metrics from previous session so /status doesn't
+      // display the old session's context usage after /new or /reset.
+      sessionEntry.totalTokens = undefined;
+      sessionEntry.inputTokens = undefined;
+      sessionEntry.outputTokens = undefined;
+      sessionEntry.estimatedCostUsd = undefined;
+      sessionEntry.contextTokens = undefined;
+    }
+    // Preserve per-session overrides while resetting compaction state on /new.
+    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        // Preserve per-session overrides while resetting compaction state on /new.
+        store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+        if (retiredLegacyMainDelivery) {
+          store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
+        }
+      },
+      {
+        activeSessionKey: sessionKey,
+        onWarn: (warning) =>
+          deliverSessionMaintenanceWarning({
+            cfg,
+            sessionKey,
+            entry: sessionEntry,
+            warning,
+          }),
+      },
+    );
+  }
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   let previousSessionTranscript: {
     sessionFile?: string;
     transcriptArchived?: boolean;
   } = {};
-  if (previousSessionEntry?.sessionId) {
+  if (!skipPersistence && previousSessionEntry?.sessionId) {
     const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
       await loadSessionArchiveRuntime();
     const archivedTranscripts = archiveSessionTranscriptsDetailed({
@@ -730,7 +740,7 @@ export async function initSessionState(params: {
 
   // Run session plugin hooks (fire-and-forget)
   const hookRunner = getGlobalHookRunner();
-  if (hookRunner && isNewSession) {
+  if (!skipHooks && hookRunner && isNewSession) {
     const effectiveSessionId = sessionId ?? "";
 
     // If replacing an existing session, fire session_end for the old one
@@ -772,7 +782,7 @@ export async function initSessionState(params: {
     resetTriggered,
     systemSent,
     abortedLastRun,
-    storePath,
+    storePath: skipPersistence ? undefined : storePath,
     sessionScope,
     groupResolution,
     isGroup,

@@ -215,11 +215,13 @@ export async function getReplyFromConfig(
       cfg,
     });
   }
-  emitPreAgentMessageHooks({
-    ctx: finalized,
-    cfg,
-    isFastTestEnv,
-  });
+  if (resolvedOpts?.skipHooks !== true) {
+    emitPreAgentMessageHooks({
+      ctx: finalized,
+      cfg,
+      isFastTestEnv,
+    });
+  }
 
   const commandAuthorized = finalized.CommandAuthorized;
   resolveCommandAuthorization({
@@ -231,6 +233,8 @@ export async function getReplyFromConfig(
     ctx: finalized,
     cfg,
     commandAuthorized,
+    skipHooks: resolvedOpts?.skipHooks === true,
+    skipPersistence: resolvedOpts?.skipSessionPersistence === true,
   });
   let {
     sessionCtx,

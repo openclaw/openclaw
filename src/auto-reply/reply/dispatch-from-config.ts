@@ -673,6 +673,8 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
+        skipHooks: skipHooks || params.replyOptions?.skipHooks === true,
+        skipSessionPersistence: skipHooks || params.replyOptions?.skipSessionPersistence === true,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {

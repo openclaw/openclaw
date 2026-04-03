@@ -29,6 +29,10 @@ export type GetReplyOptions = {
   runId?: string;
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
+  /** Skip pre-agent/internal/session hooks for side-effect-free evaluation runs. */
+  skipHooks?: boolean;
+  /** Skip session-store persistence for side-effect-free evaluation runs. */
+  skipSessionPersistence?: boolean;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */

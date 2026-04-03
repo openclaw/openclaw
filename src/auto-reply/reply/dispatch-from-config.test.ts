@@ -2351,6 +2351,14 @@ describe("dispatchReplyFromConfig", () => {
     expect(hookMocks.runner.runBeforeDispatch).not.toHaveBeenCalled();
     expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
     expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(replyResolver).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        skipHooks: true,
+        skipSessionPersistence: true,
+      }),
+      undefined,
+    );
   });
 
   it("emits diagnostics when enabled", async () => {
