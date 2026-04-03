@@ -38,6 +38,7 @@ Docs: https://docs.openclaw.ai
 - Android/assistant: keep queued App Actions prompts pending when auto-send enqueue is rejected, so transient chat-health drops do not silently lose the assistant request. Thanks @obviyus.
 - Plugins/Google: separate OAuth CSRF state from PKCE code verifier during Gemini browser sign-in so state validation and token exchange use independent values. (#59116) Thanks @eleqtrizit.
 - Agents/subagents: honor `agents.defaults.subagents.allowAgents` for `sessions_spawn` and `agents_list`, so default cross-agent allowlists work without duplicating per-agent config. (#59944) Thanks @hclsys.
+- Agents/tools: normalize only truly empty MCP tool schemas to `{ type: "object", properties: {} }` so OpenAI accepts parameter-free tools without rewriting unrelated conditional schemas. (#60176) Thanks @Bartok9.
 - Plugins/browser: block SSRF redirect bypass by installing a real-time Playwright route handler before `page.goto()` so navigation to private/internal IPs is intercepted and aborted mid-redirect instead of checked post-hoc. (#58771) Thanks @pgondhi987.
 - Android/gateway: require TLS for non-loopback remote gateway endpoints while still allowing local loopback and emulator cleartext setup flows. (#58475) Thanks @eleqtrizit.
 - Exec/Windows: hide transient console windows for `runExec` and `runCommandWithTimeout` child-process launches, matching other Windows exec paths and stopping visible shell flashes during tool runs. (#59466) Thanks @lawrence3699.
