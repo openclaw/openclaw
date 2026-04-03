@@ -28,6 +28,8 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK/context engines: pass `availableTools` and `citationsMode` into `assemble()`, and expose `buildMemorySystemPromptAddition(...)` so non-legacy context engines can adopt the active memory prompt path without reimplementing it. Thanks @vincentkoc.
 - Providers/inferrs: add string-content compatibility for stricter OpenAI-compatible chat backends, document `inferrs` setup with a full config example, and add troubleshooting guidance for local backends that pass direct probes but fail on full agent-runtime prompts.
 - Agents/context engine: expose prompt-cache runtime context to context engines and keep current-turn prompt-cache usage aligned with the active attempt instead of stale prior-turn assistant state. (#62179) Thanks @jalehman.
+- Tools/media: document per-provider music and video generation capabilities, and add shared live video-to-video sweep coverage for providers that support local reference clips.
+- Compaction: add pluggable compaction provider registry so plugins can replace the built-in summarization pipeline. Configure via `agents.defaults.compaction.provider`; falls back to LLM summarization on provider failure. (#56224) Thanks @DhruvBhatia0.
 
 ### Fixes
 
@@ -823,7 +825,6 @@ Docs: https://docs.openclaw.ai
 - Docs: add `pnpm docs:check-links:anchors` for Mintlify anchor validation while keeping `scripts/docs-link-audit.mjs` as the stable link-audit entrypoint. (#55912) Thanks @velvet-shark.
 - Tavily: mark outbound API requests with `X-Client-Source: openclaw` so Tavily can attribute OpenClaw-originated traffic. (#55335) Thanks @lakshyaag-tavily.
 - Plugins/hooks: add async `requireApproval` to `before_tool_call` hooks, letting plugins pause tool execution and prompt the user for approval via the exec approval overlay, Telegram buttons, Discord interactions, or the `/approve` command on any channel. The `/approve` command now handles both exec and plugin approvals with automatic fallback. (#55339) Thanks @vaclavbelak and @joshavant.
-- Compaction: add pluggable compaction provider registry so plugins can replace the built-in summarization pipeline. Configure via `agents.defaults.compaction.provider`; falls back to LLM summarization on provider failure. (#56224) Thanks @DhruvBhatia0.
 
 ### Fixes
 
