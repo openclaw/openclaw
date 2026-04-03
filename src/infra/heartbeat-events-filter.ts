@@ -84,7 +84,13 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
 }
 
 export function isExecCompletionEvent(evt: string): boolean {
-  return evt.toLowerCase().includes("exec finished");
+  // FORK: Match events emitted by maybeNotifyOnExit in bash-tools.exec-runtime.ts:
+  // "Exec completed (<id>, <exit>) :: <output>" or "Exec failed (<id>, <exit>)"
+  // The old check ("exec finished") never matched — causing exec-event wakes to fall
+  // through to the interval heartbeat prompt ("Read HEARTBEAT.md"), which caused
+  // non-main sessions to run the full HEARTBEAT.md checklist on exec completion.
+  const lower = evt.toLowerCase();
+  return lower.startsWith("exec completed") || lower.startsWith("exec failed");
 }
 
 // Returns true when a system event should be treated as real cron reminder content.
