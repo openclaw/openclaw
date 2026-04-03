@@ -135,6 +135,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveRequireMention: resolveIMessageGroupRequireMention,
         resolveToolPolicy: resolveIMessageGroupToolPolicy,
       },
+      doctor: {
+        groupAllowFromFallbackToAllowFrom: false,
+      },
       conversationBindings: {
         supportsCurrentConversationBinding: true,
         createManager: ({ cfg, accountId }) =>
@@ -195,7 +198,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             dbPath: snapshot.dbPath ?? null,
           }),
         probeAccount: async ({ account, timeoutMs }) =>
-          await (await loadIMessageChannelRuntime()).probeIMessageAccount({
+          await (
+            await loadIMessageChannelRuntime()
+          ).probeIMessageAccount({
             timeoutMs,
             cliPath: account.config.cliPath,
             dbPath: account.config.dbPath,

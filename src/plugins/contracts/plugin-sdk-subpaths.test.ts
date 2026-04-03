@@ -700,12 +700,7 @@ describe("plugin-sdk subpath exports", () => {
       "createTopLevelChannelDmPolicy",
       "mergeAllowFromEntries",
     ]);
-    expectSourceMentions("setup-tools", [
-      "formatCliCommand",
-      "detectBinary",
-      "installSignalCli",
-      "formatDocsLink",
-    ]);
+    expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceContract("self-hosted-provider-setup", {
       mentions: [

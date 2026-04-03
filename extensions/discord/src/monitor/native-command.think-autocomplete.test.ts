@@ -11,22 +11,34 @@ import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtim
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
+type ConversationRuntimeModule = typeof import("openclaw/plugin-sdk/conversation-runtime");
+type ResolveConfiguredBindingRoute = ConversationRuntimeModule["resolveConfiguredBindingRoute"];
+type ConfiguredBindingRouteResult = ReturnType<ResolveConfiguredBindingRoute>;
 type EnsureConfiguredBindingRouteReady =
-  typeof import("openclaw/plugin-sdk/conversation-runtime").ensureConfiguredBindingRouteReady;
-type ResolveConfiguredBindingRoute =
-  typeof import("openclaw/plugin-sdk/conversation-runtime").resolveConfiguredBindingRoute;
+  ConversationRuntimeModule["ensureConfiguredBindingRouteReady"];
 
+function createUnboundConfiguredRouteResult(): ConfiguredBindingRouteResult {
+  return {
+    bindingResolution: null,
+    route: {
+      agentId: "main",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: SESSION_KEY,
+      mainSessionKey: SESSION_KEY,
+      lastRoutePolicy: "main",
+      matchedBy: "default",
+    },
+  };
+}
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
   vi.fn<EnsureConfiguredBindingRouteReady>(async () => ({ ok: true })),
 );
 const resolveConfiguredBindingRouteMock = vi.hoisted(() =>
-  vi.fn<ResolveConfiguredBindingRoute>(({ route }) => ({
-    bindingResolution: null,
-    route,
-  })),
+  vi.fn<ResolveConfiguredBindingRoute>(() => createUnboundConfiguredRouteResult()),
 );
 
-type ConfiguredBindingRoute = ReturnType<ResolveConfiguredBindingRoute>;
+type ConfiguredBindingRoute = ConfiguredBindingRouteResult;
 type ConfiguredBindingResolution = NonNullable<ConfiguredBindingRoute["bindingResolution"]>;
 
 function createConfiguredRouteResult(
@@ -35,6 +47,11 @@ function createConfiguredRouteResult(
   return {
     bindingResolution: {
       record: {
+        bindingId: "binding-1",
+        targetSessionKey: SESSION_KEY,
+        targetKind: "session",
+        status: "active",
+        boundAt: Date.now(),
         conversation: {
           channel: "discord",
           accountId: "default",
@@ -87,10 +104,7 @@ describe("discord native /think autocomplete", () => {
     ensureConfiguredBindingRouteReadyMock.mockReset();
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
     resolveConfiguredBindingRouteMock.mockReset();
-    resolveConfiguredBindingRouteMock.mockImplementation(({ route }) => ({
-      bindingResolution: null,
-      route,
-    }));
+    resolveConfiguredBindingRouteMock.mockReturnValue(createUnboundConfiguredRouteResult());
     fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
     fs.writeFileSync(
       STORE_PATH,

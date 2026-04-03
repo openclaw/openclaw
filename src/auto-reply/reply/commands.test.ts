@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildTelegramModelsProviderChannelData } from "../../../extensions/telegram/api.js";
-import { whatsappCommandPolicy } from "../../../extensions/whatsapp/api.js";
+import {
+  buildTelegramModelsProviderChannelData,
+  whatsappCommandPolicy,
+} from "../../../test/helpers/channels/command-contract.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";

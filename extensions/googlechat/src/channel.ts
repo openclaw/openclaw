@@ -50,6 +50,7 @@ import {
   type OpenClawConfig,
   type ResolvedGoogleChatAccount,
 } from "./channel.deps.runtime.js";
+import { collectGoogleChatMutableAllowlistWarnings } from "./doctor.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
@@ -218,6 +219,7 @@ export const googlechatPlugin = createChatChannelPlugin({
       groupModel: "route",
       groupAllowFromFallbackToAllowFrom: false,
       warnOnEmptyGroupSenderAllowlist: false,
+      collectMutableAllowlistWarnings: collectGoogleChatMutableAllowlistWarnings,
     },
     status: createComputedAccountStatusAdapter<ResolvedGoogleChatAccount>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
