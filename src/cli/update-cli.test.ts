@@ -143,16 +143,6 @@ vi.mock("../plugins/update.js", () => ({
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
 }));
 
-vi.mock("./update-cli/shared.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./update-cli/shared.js")>();
-  return {
-    ...actual,
-    readPackageName,
-    readPackageVersion,
-    resolveGlobalManager,
-  };
-});
-
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: vi.fn(() => ({
     isLoaded: (...args: unknown[]) => serviceLoaded(...args),
@@ -196,7 +186,8 @@ const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
 const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime } = await import("../runtime.js");
 const { updateCommand, updateStatusCommand, updateWizardCommand } = await import("./update-cli.js");
-const { resolveGitInstallDir } = await import("./update-cli/shared.js");
+const updateCliShared = await import("./update-cli/shared.js");
+const { resolveGitInstallDir } = updateCliShared;
 
 type UpdateCliScenario = {
   name: string;
@@ -404,6 +395,9 @@ describe("update-cli", () => {
       killed: false,
       termination: "exit",
     });
+    vi.spyOn(updateCliShared, "readPackageName").mockImplementation(readPackageName);
+    vi.spyOn(updateCliShared, "readPackageVersion").mockImplementation(readPackageVersion);
+    vi.spyOn(updateCliShared, "resolveGlobalManager").mockImplementation(resolveGlobalManager);
     readPackageName.mockResolvedValue("openclaw");
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
