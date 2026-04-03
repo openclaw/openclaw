@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -27,6 +28,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { resolveGatewayAuth } from "../auth.js";
 import { diffConfigPaths } from "../config-reload.js";
 import {
   formatControlPlaneActor,
@@ -47,7 +49,7 @@ import {
 } from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import { parseRestartRequestParams } from "./restart-request.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
@@ -218,6 +220,51 @@ function parseValidateConfigFromRawOrRespond(
     return null;
   }
   return { config: validated.config, schema };
+}
+
+function getEffectiveSharedGatewayAuth(config: OpenClawConfig): {
+  mode: "token" | "password";
+  secret: string | undefined;
+} | null {
+  const resolvedAuth = resolveGatewayAuth({
+    authConfig: config.gateway?.auth,
+    env: process.env,
+    tailscaleMode: config.gateway?.tailscale?.mode,
+  });
+  if (resolvedAuth.mode === "token") {
+    return {
+      mode: "token",
+      secret: resolvedAuth.token,
+    };
+  }
+  if (resolvedAuth.mode === "password") {
+    return {
+      mode: "password",
+      secret: resolvedAuth.password,
+    };
+  }
+  return null;
+}
+
+function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
+  const prevAuth = getEffectiveSharedGatewayAuth(prev);
+  const nextAuth = getEffectiveSharedGatewayAuth(next);
+  if (prevAuth === null || nextAuth === null) {
+    return prevAuth !== nextAuth;
+  }
+  return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
+}
+
+function queueSharedGatewayAuthDisconnect(
+  shouldDisconnect: boolean,
+  context?: GatewayRequestContext,
+): void {
+  if (!shouldDisconnect) {
+    return;
+  }
+  queueMicrotask(() => {
+    context?.disconnectClientsUsingSharedGatewayAuth?.();
+  });
 }
 
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
@@ -501,6 +548,12 @@ export const configHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `config.patch write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.patch`,
     );
+    // Compare before the write so we invalidate clients authenticated against the
+    // previous shared secret immediately after the config update succeeds.
+    const disconnectSharedAuthClients = didSharedGatewayAuthChange(
+      snapshot.config,
+      validated.config,
+    );
     await writeConfigFile(validated.config, writeOptions);
 
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
@@ -543,6 +596,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.apply": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
@@ -564,6 +618,9 @@ export const configHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,
     );
+    // Compare before the write so we invalidate clients authenticated against the
+    // previous shared secret immediately after the config update succeeds.
+    const disconnectSharedAuthClients = didSharedGatewayAuthChange(snapshot.config, parsed.config);
     await writeConfigFile(parsed.config, writeOptions);
 
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
@@ -606,6 +663,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.openFile": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.openFile", respond)) {

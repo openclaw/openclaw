@@ -7,7 +7,6 @@ import {
   logAckFailure,
   logTypingFailure,
   shouldAckReaction as shouldAckReactionGate,
-  type StatusReactionAdapter,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   formatInboundEnvelope,
@@ -39,12 +38,15 @@ import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
-import { createDiscordRuntimeAccountContext } from "../client.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
-import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
+import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
-import type { DiscordReactionRuntimeContext } from "../send.types.js";
+import {
+  createDiscordAckReactionAdapter,
+  createDiscordAckReactionContext,
+  queueInitialDiscordAckReaction,
+} from "./ack-reactions.js";
 import { normalizeDiscordSlug } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import {
@@ -79,65 +81,6 @@ let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtim
 async function loadReplyRuntime() {
   replyRuntimePromise ??= import("openclaw/plugin-sdk/reply-runtime");
   return await replyRuntimePromise;
-}
-
-function createDiscordAckReactionContext(params: {
-  rest: RequestClient;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): DiscordReactionRuntimeContext {
-  return {
-    rest: params.rest,
-    ...createDiscordRuntimeAccountContext({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }),
-  };
-}
-
-function createDiscordAckReactionAdapter(params: {
-  channelId: string;
-  messageId: string;
-  reactionContext: DiscordReactionRuntimeContext;
-}): StatusReactionAdapter {
-  return {
-    setReaction: async (emoji) => {
-      await reactMessageDiscord(params.channelId, params.messageId, emoji, params.reactionContext);
-    },
-    removeReaction: async (emoji) => {
-      await removeReactionDiscord(
-        params.channelId,
-        params.messageId,
-        emoji,
-        params.reactionContext,
-      );
-    },
-  };
-}
-
-function queueInitialDiscordAckReaction(params: {
-  enabled: boolean;
-  shouldSendAckReaction: boolean;
-  ackReaction: string | undefined;
-  statusReactions: ReturnType<typeof createStatusReactionController>;
-  reactionAdapter: StatusReactionAdapter;
-  target: string;
-}) {
-  if (params.enabled) {
-    void params.statusReactions.setQueued();
-    return;
-  }
-  if (!params.shouldSendAckReaction || !params.ackReaction) {
-    return;
-  }
-  void params.reactionAdapter.setReaction(params.ackReaction).catch((err) => {
-    logAckFailure({
-      log: logVerbose,
-      channel: "discord",
-      target: params.target,
-      error: err,
-    });
-  });
 }
 
 function isProcessAborted(abortSignal?: AbortSignal): boolean {
@@ -998,7 +941,12 @@ export async function processDiscordMessage(
         }
       }
     } else if (shouldSendAckReaction && ackReaction && removeAckAfterReply) {
-      void discordAdapter.removeReaction?.(ackReaction)?.catch((err) => {
+      void removeReactionDiscord(
+        messageChannelId,
+        message.id,
+        ackReaction,
+        ackReactionContext,
+      ).catch((err: unknown) => {
         logAckFailure({
           log: logVerbose,
           channel: "discord",

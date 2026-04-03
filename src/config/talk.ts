@@ -115,35 +115,6 @@ function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConf
   return Object.keys(providers).length > 0 ? providers : undefined;
 }
 
-function normalizedLegacyTalkFields(source: Record<string, unknown>): Partial<TalkConfig> {
-  const legacy: Partial<TalkConfig> = {};
-  const voiceId = normalizeString(source.voiceId);
-  if (voiceId) {
-    legacy.voiceId = voiceId;
-  }
-  const voiceAliases = normalizeVoiceAliases(source.voiceAliases);
-  if (voiceAliases) {
-    legacy.voiceAliases = voiceAliases;
-  }
-  const modelId = normalizeString(source.modelId);
-  if (modelId) {
-    legacy.modelId = modelId;
-  }
-  const outputFormat = normalizeString(source.outputFormat);
-  if (outputFormat) {
-    legacy.outputFormat = outputFormat;
-  }
-  const apiKey = normalizeTalkSecretInput(source.apiKey);
-  if (apiKey !== undefined) {
-    legacy.apiKey = apiKey;
-  }
-  const silenceTimeoutMs = normalizeSilenceTimeoutMs(source.silenceTimeoutMs);
-  if (silenceTimeoutMs !== undefined) {
-    legacy.silenceTimeoutMs = silenceTimeoutMs;
-  }
-  return legacy;
-}
-
 function legacyProviderConfigFromTalk(
   source: Record<string, unknown>,
 ): TalkProviderConfig | undefined {
@@ -169,38 +140,6 @@ function activeProviderFromTalk(talk: TalkConfig): string | undefined {
   return providerIds.length === 1 ? providerIds[0] : undefined;
 }
 
-function legacyTalkFieldsFromProviderConfig(
-  config: TalkProviderConfig | undefined,
-): Partial<TalkConfig> {
-  if (!config) {
-    return {};
-  }
-  const legacy: Partial<TalkConfig> = {};
-  if (typeof config.voiceId === "string") {
-    legacy.voiceId = config.voiceId;
-  }
-  if (
-    config.voiceAliases &&
-    typeof config.voiceAliases === "object" &&
-    !Array.isArray(config.voiceAliases)
-  ) {
-    const aliases = normalizeVoiceAliases(config.voiceAliases);
-    if (aliases) {
-      legacy.voiceAliases = aliases;
-    }
-  }
-  if (typeof config.modelId === "string") {
-    legacy.modelId = config.modelId;
-  }
-  if (typeof config.outputFormat === "string") {
-    legacy.outputFormat = config.outputFormat;
-  }
-  if (config.apiKey !== undefined) {
-    legacy.apiKey = config.apiKey;
-  }
-  return legacy;
-}
-
 export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig | undefined {
   if (!isPlainObject(value)) {
     return undefined;
@@ -209,12 +148,12 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   const source = value as Record<string, unknown>;
   const hasNormalizedShape = typeof source.provider === "string" || isPlainObject(source.providers);
   const normalized: TalkConfig = {};
-  const legacy = normalizedLegacyTalkFields(source);
-  if (Object.keys(legacy).length > 0) {
-    Object.assign(normalized, legacy);
-  }
   if (typeof source.interruptOnSpeech === "boolean") {
     normalized.interruptOnSpeech = source.interruptOnSpeech;
+  }
+  const silenceTimeoutMs = normalizeSilenceTimeoutMs(source.silenceTimeoutMs);
+  if (silenceTimeoutMs !== undefined) {
+    normalized.silenceTimeoutMs = silenceTimeoutMs;
   }
 
   if (hasNormalizedShape) {
@@ -286,22 +225,15 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
   if (normalized.providers && Object.keys(normalized.providers).length > 0) {
     payload.providers = normalized.providers;
   }
-  if (typeof normalized.provider === "string") {
-    payload.provider = normalized.provider;
-  }
 
   const resolved = resolveActiveTalkProviderConfig(normalized);
+  const activeProvider = normalizeString(normalized.provider) ?? resolved?.provider;
+  if (activeProvider) {
+    payload.provider = activeProvider;
+  }
   if (resolved) {
     payload.resolved = resolved;
   }
-
-  const providerConfig = resolved?.config;
-  const providerCompatibilityLegacy = legacyTalkFieldsFromProviderConfig(providerConfig);
-  const compatibilityLegacy =
-    Object.keys(providerCompatibilityLegacy).length > 0
-      ? providerCompatibilityLegacy
-      : normalizedLegacyTalkFields(normalized as unknown as Record<string, unknown>);
-  Object.assign(payload, compatibilityLegacy);
 
   return Object.keys(payload).length > 0 ? payload : undefined;
 }

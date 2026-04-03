@@ -5,6 +5,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 
+function asLegacyConfig(value: unknown): OpenClawConfig {
+  return value as OpenClawConfig;
+}
+
+function getLegacyProperty(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return (value as Record<string, unknown>)[key];
+}
 describe("normalizeCompatibilityConfigValues", () => {
   let previousOauthDir: string | undefined;
   let tempOauthDir: string | undefined;
@@ -180,23 +190,27 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("migrates Discord streaming boolean alias to streaming enum", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        discord: {
-          streaming: true,
-          accounts: {
-            work: {
-              streaming: false,
+    const res = normalizeCompatibilityConfigValues(
+      asLegacyConfig({
+        channels: {
+          discord: {
+            streaming: true,
+            accounts: {
+              work: {
+                streaming: false,
+              },
             },
           },
         },
-      },
-    });
+      }),
+    );
 
     expect(res.config.channels?.discord?.streaming).toBe("partial");
-    expect(res.config.channels?.discord?.streamMode).toBeUndefined();
+    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
     expect(res.config.channels?.discord?.accounts?.work?.streaming).toBe("off");
-    expect(res.config.channels?.discord?.accounts?.work?.streamMode).toBeUndefined();
+    expect(
+      getLegacyProperty(res.config.channels?.discord?.accounts?.work, "streamMode"),
+    ).toBeUndefined();
     expect(res.changes).toContain(
       "Normalized channels.discord.streaming boolean → enum (partial).",
     );
@@ -206,17 +220,19 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("migrates Discord legacy streamMode into streaming enum", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        discord: {
-          streaming: false,
-          streamMode: "block",
+    const res = normalizeCompatibilityConfigValues(
+      asLegacyConfig({
+        channels: {
+          discord: {
+            streaming: false,
+            streamMode: "block",
+          },
         },
-      },
-    });
+      }),
+    );
 
     expect(res.config.channels?.discord?.streaming).toBe("block");
-    expect(res.config.channels?.discord?.streamMode).toBeUndefined();
+    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.discord.streamMode → channels.discord.streaming (block).",
       "Normalized channels.discord.streaming boolean → enum (block).",
@@ -224,34 +240,38 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("migrates Telegram streamMode into streaming enum", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        telegram: {
-          streamMode: "block",
+    const res = normalizeCompatibilityConfigValues(
+      asLegacyConfig({
+        channels: {
+          telegram: {
+            streamMode: "block",
+          },
         },
-      },
-    });
+      }),
+    );
 
     expect(res.config.channels?.telegram?.streaming).toBe("block");
-    expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
+    expect(getLegacyProperty(res.config.channels?.telegram, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.telegram.streamMode → channels.telegram.streaming (block).",
     ]);
   });
 
   it("migrates Slack legacy streaming keys to unified config", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        slack: {
-          streaming: false,
-          streamMode: "status_final",
+    const res = normalizeCompatibilityConfigValues(
+      asLegacyConfig({
+        channels: {
+          slack: {
+            streaming: false,
+            streamMode: "status_final",
+          },
         },
-      },
-    });
+      }),
+    );
 
     expect(res.config.channels?.slack?.streaming).toBe("progress");
     expect(res.config.channels?.slack?.nativeStreaming).toBe(false);
-    expect(res.config.channels?.slack?.streamMode).toBeUndefined();
+    expect(getLegacyProperty(res.config.channels?.slack, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved channels.slack.streamMode → channels.slack.streaming (progress).",
       "Moved channels.slack.streaming (boolean) → channels.slack.nativeStreaming (false).",
@@ -306,7 +326,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.browser?.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
+    expect(
+      (res.config.browser?.ssrfPolicy as Record<string, unknown> | undefined)?.allowPrivateNetwork,
+    ).toBeUndefined();
     expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(true);
     expect(res.config.browser?.ssrfPolicy?.allowedHostnames).toEqual(["localhost"]);
     expect(res.changes).toContain(
@@ -324,7 +346,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.browser?.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
+    expect(
+      (res.config.browser?.ssrfPolicy as Record<string, unknown> | undefined)?.allowPrivateNetwork,
+    ).toBeUndefined();
     expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(true);
     expect(res.changes).toContain(
       "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
@@ -648,13 +672,6 @@ describe("normalizeCompatibilityConfigValues", () => {
           apiKey: "secret-key",
         },
       },
-      voiceId: "voice-123",
-      voiceAliases: {
-        Clawd: "EXAVITQu4vr4xnSDxMaL",
-      },
-      modelId: "eleven_v3",
-      outputFormat: "pcm_44100",
-      apiKey: "secret-key",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
@@ -681,7 +698,6 @@ describe("normalizeCompatibilityConfigValues", () => {
           voiceId: "voice-123",
         },
       },
-      apiKey: "secret-key",
     });
     expect(res.changes).toEqual([
       "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",

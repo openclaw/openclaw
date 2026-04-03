@@ -18,6 +18,8 @@ export type BlueBubblesAccountConfig = {
   capabilities?: string[];
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
+  /** Per-action tool gating (default: true for all). */
+  actions?: BlueBubblesActionConfig;
   /** If false, do not start this BlueBubbles account. Default: true. */
   enabled?: boolean;
   /** Base URL for the BlueBubbles API. */
@@ -61,6 +63,8 @@ export type BlueBubblesAccountConfig = {
   allowPrivateNetwork?: boolean;
   /** Per-group configuration keyed by chat GUID or identifier. */
   groups?: Record<string, BlueBubblesGroupConfig>;
+  /** Per-action tool gating for this account. */
+  actions?: BlueBubblesActionConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: {
     enabled?: boolean;
@@ -74,6 +78,7 @@ export type BlueBubblesActionConfig = {
   reply?: boolean;
   sendWithEffect?: boolean;
   renameGroup?: boolean;
+  setGroupIcon?: boolean;
   addParticipant?: boolean;
   removeParticipant?: boolean;
   leaveGroup?: boolean;

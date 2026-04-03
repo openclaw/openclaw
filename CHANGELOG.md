@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 - Outbound/runtime seams: split delivery, target-resolution, and session/transcript helper loading into narrower runtime seams so outbound hot paths and their owner tests avoid broader setup fan-out. (#60311) Thanks @shakkernerd.
 - Plugins/browser seams: split browser and WhatsApp plugin-sdk seams into narrower browser, approval-auth, and target-helper facades so hot paths and owner tests avoid broader runtime fan-out. (#60376) Thanks @shakkernerd.
 - Tests/runtime: trim local unit-test import/runtime fan-out across browser, WhatsApp, cron, task, and reply flows so owner suites start faster with lower shared-worker overhead while preserving the same focused behavior coverage. (#60249) Thanks @shakkernerd.
+- Tests/secrets runtime: restore split secrets suite cache and env isolation cleanup so broader runs do not leak stale plugin or provider snapshot state. (#60395) Thanks @shakkernerd.
 
 ### Fixes
 
@@ -29,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/native commands: clean up metadata-driven progress placeholders when replies fall back, edits fail, or local exec approval prompts are suppressed. (#59300) Thanks @jalehman.
 - Media/request overrides: resolve shared and capability-filtered media request SecretRefs correctly and expose media transport override fields to schema-driven config consumers. (#59848) Thanks @vincentkoc.
 - Providers/request overrides: stop advertising unsupported proxy and TLS transport settings on `models.providers.*.request`, and fail closed if unvalidated config tries to route LLM model-provider traffic through dead transport fields. (#59682) Thanks @vincentkoc.
+- Discord/mentions: treat `@everyone` and `@here` as valid mention-gate triggers in guild preflight so mention-required bots still respond to those broadcasts. (#60343) Thanks @geekhuashan.
 - Matrix: allow secret-storage recreation during automatic repair bootstrap so clients that lose their recovery key can recover and persist new cross-signing keys. (#59846) Thanks @al3mart.
 - Matrix/crypto persistence: capture and write the IndexedDB snapshot while holding the snapshot file lock so concurrent gateway and CLI persists cannot overwrite newer crypto state. (#59851) Thanks @al3mart.
 - Ollama/auth: prefer real cloud auth over local marker during model auth resolution so cloud-backed Ollama auth does not get shadowed by stale local-only markers.
@@ -65,6 +67,7 @@ Docs: https://docs.openclaw.ai
 - Mobile pairing/Android: stop generating Tailscale and public mobile setup codes that point at unusable cleartext remote gateways, keep private LAN pairing allowed, and make Android reject insecure remote endpoints with clearer guidance while mixed bootstrap approvals honor operator scopes correctly. (#60128) Thanks @obviyus.
 - Telegram/media: add `channels.telegram.network.dangerouslyAllowPrivateNetwork` for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve `api.telegram.org` to private/internal/special-use addresses.
 - Discord/proxy: keep Carbon REST, monitor startup, and webhook sends on the configured Discord proxy while falling back cleanly when the proxy URL is invalid, so Discord replies and deploys do not hard-fail on malformed proxy config. (#57465) Thanks @geekhuashan.
+- Discord/components: keep modal-trigger and spoiler-file component messages on the component path when sending media, so classic-message fallback does not silently drop component-only behavior. (#60361) Thanks @geekhuashan.
 - Mobile pairing/device approval: mint both node and operator device tokens when one approval grants merged roles, so mixed mobile bootstrap pairings stop reconnecting as operator-only and showing the node offline. (#60208) Thanks @obviyus.
 - Agents/tool policy: stop `tools.profile` warnings from flagging runtime-gated baseline core tools as unknown when the coding profile is missing tools like `code_execution`, `x_search`, `image`, or `image_generate`, while still warning on explicit extra allowlist entries. Thanks @vincentkoc.
 - Sessions/resolution: collapse alias-duplicate session-id matches before scoring, keep distinct structural ties ambiguous, and prefer current-store reuse when resolving equal cross-store duplicates so follow-up turns stop dropping or duplicating sessions on timestamp ties.
@@ -74,6 +77,10 @@ Docs: https://docs.openclaw.ai
 - Control UI/skills: clear stale ClawHub results immediately when the search query changes, so debounced searches cannot keep outdated install targets visible. Related #60134.
 - Discord/ack reactions: keep automatic ACK reaction auth on the active hydrated Discord account so SecretRef-backed and non-default-account reactions stop falling back to stale default config resolution. (#60081) Thanks @FunJim.
 - Telegram/model switching: render non-default `/model` callback confirmations with HTML formatting so Telegram shows the selected model in bold instead of raw `**...**` markers. (#60042) Thanks @GitZhangChi.
+- Plugins/update: allow `openclaw plugins update` to use `--dangerously-force-unsafe-install` for built-in dangerous-code false positives during plugin updates. (#60066) Thanks @huntharo.
+- Gateway/auth: disconnect shared-auth websocket sessions only for effective auth rotations on restart-capable config writes, and keep `config.set` auth edits from dropping still-valid live sessions. (#60387) Thanks @mappel-nv.
+- Control UI/chat: keep the Stop button visible during tool-only execution so abortable runs do not fall back to Send while tools are still running. (#54528) thanks @chziyue.
+- Discord/voice: make READY auto-join fire-and-forget while keeping the shorter initial voice-connect timeout separate from the longer playback-start wait. (#60345) Thanks @geekhuashan.
 
 ## 2026.4.2
 

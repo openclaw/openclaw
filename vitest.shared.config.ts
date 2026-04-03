@@ -52,7 +52,7 @@ export function resolveLocalVitestMaxWorkers(
   if (totalMemoryGb <= 64) {
     return Math.min(inferred, 4);
   }
-  return Math.min(inferred, 6);
+  return Math.min(inferred, 8);
 }
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));

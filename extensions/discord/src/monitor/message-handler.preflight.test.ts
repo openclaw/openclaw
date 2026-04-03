@@ -529,6 +529,45 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
   });
 
+  it("treats @everyone as a mention when requireMention is true", async () => {
+    const channelId = "channel-everyone-mention";
+    const guildId = "guild-everyone-mention";
+    const message = createDiscordMessage({
+      id: "m-everyone-mention",
+      channelId,
+      content: "@everyone standup time!",
+      mentionedEveryone: true,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Peter",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        botId: "openclaw-bot",
+      } as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              allow: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.shouldRequireMention).toBe(true);
+    expect(result?.wasMentioned).toBe(true);
+  });
+
   it("accepts allowlisted guild messages when guild object is missing", async () => {
     const message = createDiscordMessage({
       id: "m-guild-id-only",
@@ -694,6 +733,47 @@ describe("preflightDiscordMessage", () => {
 
     expect(result).not.toBeNull();
     expect(result?.hasAnyMention).toBe(false);
+  });
+
+  it("does not treat bot-sent @everyone as wasMentioned", async () => {
+    const channelId = "channel-everyone-2";
+    const guildId = "guild-everyone-2";
+    const client = createGuildTextClient(channelId);
+    const message = createDiscordMessage({
+      id: "m-everyone-2",
+      channelId,
+      content: "@everyone relay message",
+      mentionedEveryone: true,
+      author: {
+        id: "relay-bot-2",
+        bot: true,
+        username: "RelayBot",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: true,
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      guildEntries: {
+        [guildId]: {
+          requireMention: false,
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.wasMentioned).toBe(false);
   });
 
   it("uses attachment content_type for guild audio preflight mention detection", async () => {

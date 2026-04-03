@@ -14,17 +14,33 @@ vi.mock("./facade-runtime.js", () => ({
   tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 }));
 
-vi.mock("node:fs/promises", () => {
-  const mocked = { mkdir, access, rename };
-  return { ...mocked, default: mocked };
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      mkdir,
+      access,
+      rename,
+    },
+    mkdir,
+    access,
+    rename,
+  };
 });
 
-vi.mock("node:os", () => ({
-  default: {
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      homedir: () => "/home/test",
+    },
     homedir: () => "/home/test",
-  },
-  homedir: () => "/home/test",
-}));
+  };
+});
 
 describe("browser maintenance", () => {
   beforeEach(() => {

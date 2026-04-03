@@ -185,11 +185,11 @@ export const zaloSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 10,
     includeStatusLine: true,
-    resolveConfigured: ({ cfg }) =>
-      listZaloAccountIds(cfg).some((accountId) => {
+    resolveConfigured: ({ cfg, accountId }) =>
+      (accountId ? [accountId] : listZaloAccountIds(cfg)).some((resolvedAccountId) => {
         const account = resolveZaloAccount({
           cfg,
-          accountId,
+          accountId: resolvedAccountId,
           allowUnresolvedSecretRef: true,
         });
         return (

@@ -583,7 +583,7 @@ describe("processDiscordMessage ack reactions", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getReactionEmojis()).toEqual(["👀"]);
-    expectRemoveAckCallAt(1, "👀", {
+    expectRemoveAckCallAt(0, "👀", {
       accountId: "default",
       ackReaction: "👀",
       removeAckAfterReply: true,

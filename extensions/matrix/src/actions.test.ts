@@ -196,16 +196,21 @@ describe("matrixMessageActions", () => {
       },
     } as CoreConfig;
 
-    const assistantActions =
-      matrixMessageActions.describeMessageTool!({
-        cfg,
-        accountId: "assistant",
-      } as never).actions;
-    const opsActions =
-      matrixMessageActions.describeMessageTool!({
-        cfg,
-        accountId: "ops",
-      } as never).actions;
+    const assistantDiscovery = matrixMessageActions.describeMessageTool!({
+      cfg,
+      accountId: "assistant",
+    } as never);
+    const opsDiscovery = matrixMessageActions.describeMessageTool!({
+      cfg,
+      accountId: "ops",
+    } as never);
+
+    if (!assistantDiscovery || !opsDiscovery) {
+      throw new Error("matrix action discovery returned null");
+    }
+
+    const assistantActions = assistantDiscovery.actions;
+    const opsActions = opsDiscovery.actions;
 
     expect(assistantActions).not.toContain("react");
     expect(assistantActions).not.toContain("reactions");

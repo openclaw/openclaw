@@ -4,9 +4,13 @@ const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnMock(...args),
+  };
+});
 
 let killProcessTree: typeof import("./kill-tree.js").killProcessTree;
 
