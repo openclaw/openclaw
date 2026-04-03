@@ -25,6 +25,7 @@ import {
   resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
 import {
+  setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
   findLatestTaskForFlowId,
   findTaskByRunId,
@@ -44,10 +45,6 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("./task-registry-delivery-runtime.js", () => ({
-  sendMessage: hoisted.sendMessageMock,
-}));
-
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: hoisted.cancelSessionMock,
@@ -60,6 +57,9 @@ vi.mock("../agents/subagent-control.js", () => ({
 
 async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>): Promise<void> {
   await withStateDirEnv("openclaw-task-executor-", async ({ stateDir }) => {
+    setTaskRegistryDeliveryRuntimeForTests({
+      sendMessage: hoisted.sendMessageMock,
+    });
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();

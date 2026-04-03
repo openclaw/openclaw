@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
 import {
   emitAgentEvent,
@@ -29,8 +29,10 @@ import {
   markTaskRunningByRunId,
   markTaskTerminalById,
   recordTaskProgressByRunId,
+  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   resolveTaskForLookupToken,
+  setTaskRegistryDeliveryRuntimeForTests,
   setTaskProgressById,
   setTaskTimingById,
   updateTaskNotifyPolicyById,
@@ -58,10 +60,6 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("./task-registry-delivery-runtime.js", () => ({
-  sendMessage: hoisted.sendMessageMock,
-}));
-
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: hoisted.cancelSessionMock,
@@ -74,9 +72,6 @@ vi.mock("../agents/subagent-control.js", () => ({
 
 async function loadFreshTaskRegistryModulesForControlTest() {
   vi.resetModules();
-  vi.doMock("./task-registry-delivery-runtime.js", () => ({
-    sendMessage: hoisted.sendMessageMock,
-  }));
   vi.doMock("../acp/control-plane/manager.js", () => ({
     getAcpSessionManager: () => ({
       cancelSession: hoisted.cancelSessionMock,
@@ -85,7 +80,11 @@ async function loadFreshTaskRegistryModulesForControlTest() {
   vi.doMock("../agents/subagent-control.js", () => ({
     killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
   }));
-  return await import("./task-registry.js");
+  const registry = await import("./task-registry.js");
+  registry.setTaskRegistryDeliveryRuntimeForTests({
+    sendMessage: hoisted.sendMessageMock,
+  });
+  return registry;
 }
 
 async function loadFreshTaskRegistryMaintenanceModuleForTest(params: {
@@ -211,6 +210,12 @@ function configureInMemoryTaskStoresForLinkValidationTests() {
 }
 
 describe("task-registry", () => {
+  beforeEach(() => {
+    setTaskRegistryDeliveryRuntimeForTests({
+      sendMessage: hoisted.sendMessageMock,
+    });
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     if (ORIGINAL_STATE_DIR === undefined) {
@@ -221,6 +226,7 @@ describe("task-registry", () => {
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
+    resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
