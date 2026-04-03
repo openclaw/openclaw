@@ -576,6 +576,21 @@ The current classifier uses a simple priority model:
 
 Policy now chooses action from `primary_issue`, keeps `secondary_issues` in `policy_trace`, and can fall back to `fallback_action` when no deterministic rule matches.
 
+Manager policy output is now two-stage:
+
+- `manager_action`
+  - main action for `primary_issue`
+- `secondary_action`
+  - optional follow-up action for `secondary_issues[0]`
+- `fallback_action`
+  - safe fallback when confidence is low or no deterministic rule matches
+
+Current confidence gate is intentionally small:
+
+- if `confidence < 0.5`
+  - `secondary_action = null`
+  - `confidence_gate_applied = true`
+
 Routing loop can now stop more specifically as:
 
 - `default_model_missing`

@@ -8,6 +8,14 @@ import sys
 from sense_runtime_manager_signal_classifier import classify_manager_signal
 
 
+POLICY_OUTPUT_DEFAULTS = {
+    'secondary_action': None,
+    'secondary_reason': None,
+    'fallback_action': 'manual_review',
+    'confidence_gate_applied': False,
+}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description='Manager policy table for Sense runtime routing evaluation.'
@@ -29,15 +37,35 @@ def build_policy_output(
     *,
     manager_action: str,
     manager_reason: str,
+    secondary_action: str | None = None,
+    secondary_reason: str | None = None,
     next_step: str,
+    fallback_action: str = 'manual_review',
+    confidence_gate_applied: bool = False,
     retry_decision: str | None,
     policy_input: dict,
     policy_trace: dict,
 ) -> dict:
+    resolved_secondary_action = (
+        secondary_action if secondary_action is not None else POLICY_OUTPUT_DEFAULTS.get('secondary_action')
+    )
+    resolved_secondary_reason = (
+        secondary_reason if secondary_reason is not None else POLICY_OUTPUT_DEFAULTS.get('secondary_reason')
+    )
+    resolved_fallback_action = (
+        fallback_action if fallback_action != 'manual_review' else POLICY_OUTPUT_DEFAULTS.get('fallback_action', 'manual_review')
+    )
+    resolved_confidence_gate_applied = (
+        confidence_gate_applied if confidence_gate_applied is not False else POLICY_OUTPUT_DEFAULTS.get('confidence_gate_applied', False)
+    )
     return {
         'manager_action': manager_action,
         'manager_reason': manager_reason,
+        'secondary_action': resolved_secondary_action,
+        'secondary_reason': resolved_secondary_reason,
         'next_step': next_step,
+        'fallback_action': resolved_fallback_action,
+        'confidence_gate_applied': resolved_confidence_gate_applied,
         'retry_decision': retry_decision,
         'policy_table_version': 'v1',
         'policy_trace': policy_trace,
@@ -58,6 +86,50 @@ def build_classifier_matched_on(classification: dict) -> dict:
     }
 
 
+def build_secondary_plan(classification: dict) -> tuple[str | None, str | None, bool]:
+    secondary_issues = classification.get('secondary_issues')
+    if not isinstance(secondary_issues, list) or not secondary_issues:
+        return None, None, False
+
+    confidence = classification.get('confidence')
+    if not isinstance(confidence, (int, float)) or confidence < 0.5:
+        return None, None, True
+
+    secondary_issue = secondary_issues[0]
+    mapping = {
+        'provider_api_key_issue': (
+            'configure_provider',
+            'secondary issue indicates provider API key remediation may also be needed after the primary action',
+        ),
+        'provider_recognition_issue': (
+            'configure_provider',
+            'secondary issue indicates provider recognition remediation may also be needed after the primary action',
+        ),
+        'runtime_capability_issue_nim': (
+            'start_nim_runtime',
+            'secondary issue indicates NIM runtime remediation should follow the primary action',
+        ),
+        'runtime_capability_issue_gpu': (
+            'configure_gpu_runtime',
+            'secondary issue indicates GPU/runtime capability remediation should follow the primary action',
+        ),
+        'selected_model_retry_issue': (
+            'retry_once',
+            'secondary issue indicates a single runtime confirmation retry may still be useful after the primary action',
+        ),
+        'selected_model_mismatch_issue': (
+            'configure_model',
+            'secondary issue indicates model remediation should follow the primary action',
+        ),
+        'selected_model_provider_issue': (
+            'configure_provider',
+            'secondary issue indicates provider remediation should follow the primary action',
+        ),
+    }
+    action, reason = mapping.get(secondary_issue, (None, None))
+    return action, reason, False
+
+
 def main() -> int:
     args = build_parser().parse_args()
     payload = load_payload(args)
@@ -69,6 +141,18 @@ def main() -> int:
     policy_input = payload.get('policy_input', {})
     classification = classify_manager_signal(payload)
     classified_issue = classification.get('primary_issue') or classification.get('classified_issue')
+    fallback_action = str(classification.get('fallback_action') or 'manual_review')
+    secondary_action, secondary_reason, confidence_gate_applied = build_secondary_plan(classification)
+    classifier_confidence = classification.get('confidence')
+    low_confidence_gate = isinstance(classifier_confidence, (int, float)) and classifier_confidence < 0.5
+    POLICY_OUTPUT_DEFAULTS.update(
+        {
+            'secondary_action': secondary_action,
+            'secondary_reason': secondary_reason,
+            'fallback_action': fallback_action,
+            'confidence_gate_applied': confidence_gate_applied or low_confidence_gate,
+        }
+    )
 
     if classified_issue == 'provider_api_key_issue':
         output = build_policy_output(
