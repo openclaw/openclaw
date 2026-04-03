@@ -806,6 +806,12 @@ export const FIELD_HELP: Record<string, string> = {
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
   "channels.matrix.allowBots":
     'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to only accept bot messages that visibly mention this bot.',
+  "channels.matrix.semanticBotLoopTermination":
+    "Opt in to semantic no-progress loop termination for configured Matrix bot chains (default: false). After the first bot turn in a chain, Matrix runs an extra judge call and stops the chain when turns stop making meaningful progress.",
+  "channels.matrix.groups.*.semanticBotLoopTermination":
+    "Room-level override for semantic no-progress loop termination on configured Matrix bot chains. Use this to enable or disable the guard for one Matrix room without changing the account-wide default.",
+  "channels.matrix.rooms.*.semanticBotLoopTermination":
+    "Legacy room-map alias for the Matrix semantic no-progress loop guard. Prefer channels.matrix.groups.*.semanticBotLoopTermination for new config.",
   "channels.mattermost.botToken":
     "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
   "channels.mattermost.baseUrl":
