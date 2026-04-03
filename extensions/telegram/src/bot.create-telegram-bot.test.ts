@@ -1,7 +1,9 @@
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { withEnvAsync as withEnvAsyncPluginSdk } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnvAsync } from "../../../src/test-utils/env.js";
+import { withEnvAsync as withEnvAsyncCompat } from "../../../src/test-utils/env.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+const withEnvAsync = withEnvAsyncCompat ?? withEnvAsyncPluginSdk;
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const EYES_EMOJI = "\u{1F440}";
 const {

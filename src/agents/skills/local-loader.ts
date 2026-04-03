@@ -74,8 +74,14 @@ function loadSingleSkillDirectory(params: {
     filePath,
     baseDir,
     source: params.source,
+    sourceInfo: {
+      source: params.source,
+      baseDir,
+      scope: "project",
+      origin: "top-level",
+    },
     disableModelInvocation: invocation.disableModelInvocation,
-  };
+  } as Skill;
 }
 
 function listCandidateSkillDirs(dir: string): string[] {
