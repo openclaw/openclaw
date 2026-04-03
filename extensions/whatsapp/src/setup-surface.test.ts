@@ -48,11 +48,12 @@ async function runFinalizeWithHarness(params: {
   cfg?: Parameters<NonNullable<typeof whatsappSetupWizard.finalize>>[0]["cfg"];
   runtime?: RuntimeEnv;
   forceAllowFrom?: boolean;
+  accountId?: string;
 }) {
   return await runSetupWizardFinalize({
     finalize: whatsappSetupWizard.finalize,
     cfg: params.cfg ?? {},
-    accountId: DEFAULT_ACCOUNT_ID,
+    accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
     runtime: params.runtime ?? createRuntime(),
     prompter: params.harness.prompter,
     forceAllowFrom: params.forceAllowFrom ?? false,
@@ -133,6 +134,47 @@ describe("whatsapp setup wizard", () => {
     expect(result.cfg.channels?.whatsapp?.dmPolicy).toBe("disabled");
     expect(result.cfg.channels?.whatsapp?.allowFrom).toBeUndefined();
     expect(harness.text).not.toHaveBeenCalled();
+  });
+
+  it("writes named-account DM policy and allowFrom instead of the channel root", async () => {
+    hoisted.pathExists.mockResolvedValue(true);
+    const harness = createSeparatePhoneHarness({
+      selectValues: ["separate", "open"],
+    });
+
+    const named = expectFinalizeResult(
+      await runFinalizeWithHarness({
+        harness,
+        accountId: "work",
+        cfg: {
+          channels: {
+            whatsapp: {
+              dmPolicy: "disabled",
+              allowFrom: ["+15555550123"],
+              accounts: {
+                work: {
+                  authDir: "/tmp/work",
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(named.cfg.channels?.whatsapp?.dmPolicy).toBe("disabled");
+    expect(named.cfg.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
+    expect(named.cfg.channels?.whatsapp?.accounts?.work?.dmPolicy).toBe("open");
+    expect(named.cfg.channels?.whatsapp?.accounts?.work?.allowFrom).toEqual([
+      "*",
+      "+15555550123",
+    ]);
+    expect(harness.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "`channels.whatsapp.accounts.work.dmPolicy` + `channels.whatsapp.accounts.work.allowFrom`",
+      ),
+      "WhatsApp DM access",
+    );
   });
 
   it("normalizes allowFrom entries when list mode is selected", async () => {
