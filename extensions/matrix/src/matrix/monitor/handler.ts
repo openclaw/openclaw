@@ -53,7 +53,11 @@ import {
   type RuntimeEnv,
   type RuntimeLogger,
 } from "./runtime-api.js";
-import { runMatrixSemanticLoopJudge, type MatrixSemanticLoopTurn } from "./semantic-loop-judge.js";
+import {
+  runMatrixSemanticLoopJudge,
+  type MatrixSemanticLoopJudgeResult,
+  type MatrixSemanticLoopTurn,
+} from "./semantic-loop-judge.js";
 import { createMatrixThreadContextResolver } from "./thread-context.js";
 import {
   resolveMatrixReplyToEventId,
@@ -360,6 +364,72 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     delete state.reasonCode;
     delete state.terminatedOrder;
     state.lastUpdatedOrder = reopenOrder;
+  };
+
+  const getBotChainStateOrder = (state: MatrixBotChainState): number =>
+    state.terminatedOrder ?? state.lastUpdatedOrder;
+
+  const isBotChainEventCurrent = (routeKey: string, eventOrder: number): boolean =>
+    getBotChainRouteReopenOrder(routeKey) <= eventOrder;
+
+  const maybeReopenBotChainState = (state: MatrixBotChainState, routeKey: string) => {
+    if (!state.terminated) {
+      return;
+    }
+    const reopenOrder = getBotChainRouteReopenOrder(routeKey);
+    if (reopenOrder < getBotChainStateOrder(state)) {
+      return;
+    }
+    resetBotChainStateForReopen(state, reopenOrder);
+  };
+
+  const markBotChainTerminated = (params: {
+    state: MatrixBotChainState;
+    routeKey: string;
+    eventOrder: number;
+    senderId: string;
+    roomId: string;
+    decision: MatrixSemanticLoopJudgeResult;
+  }) => {
+    if (!isBotChainEventCurrent(params.routeKey, params.eventOrder)) {
+      return;
+    }
+    params.state.terminated = true;
+    params.state.reasonCode = params.decision.reasonCode;
+    params.state.terminatedOrder = params.eventOrder;
+    params.state.lastUpdatedOrder = params.eventOrder;
+    logVerboseMessage(
+      `matrix: terminate bot-to-bot chain room=${params.roomId} sender=${params.senderId} reason=${params.decision.reasonCode} confidence=${params.decision.confidence.toFixed(2)}`,
+    );
+  };
+
+  const commitBotChainTurns = (params: {
+    state: MatrixBotChainState;
+    routeKey: string;
+    eventOrder: number;
+    agentId: string;
+    turns: MatrixSemanticLoopTurn[];
+    semanticFinalText: string;
+  }) => {
+    if (!isBotChainEventCurrent(params.routeKey, params.eventOrder)) {
+      return;
+    }
+    const botReply = params.semanticFinalText.trim();
+    const nextTurns = botReply
+      ? [
+          ...params.turns,
+          {
+            senderId: `agent:${params.agentId}`,
+            text: botReply,
+            timestampMs: Date.now(),
+          },
+        ]
+      : params.turns;
+    params.state.turns = nextTurns.slice(-MAX_BOT_CHAIN_TURNS);
+    params.state.terminated = false;
+    delete params.state.reasonCode;
+    delete params.state.terminatedOrder;
+    params.state.lastUpdatedOrder = params.eventOrder;
   };
 
   const acquireBotChainLock = async (key: string): Promise<() => void> => {
@@ -771,14 +841,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (isRoom && isConfiguredBotSender) {
           releaseBotChainLock = await acquireBotChainLock(botChainKey);
           activeBotChainState = upsertBotChainState(botChainKey);
-          const reopenOrder = getBotChainRouteReopenOrder(botChainRouteKey);
-          if (
-            activeBotChainState.terminated &&
-            reopenOrder >=
-              (activeBotChainState.terminatedOrder ?? activeBotChainState.lastUpdatedOrder)
-          ) {
-            resetBotChainStateForReopen(activeBotChainState, reopenOrder);
-          }
+          maybeReopenBotChainState(activeBotChainState, botChainRouteKey);
           if (activeBotChainState.terminated) {
             logVerboseMessage(
               `matrix: drop configured bot sender=${senderId} (semantic stop_loop active reason=${activeBotChainState.reasonCode ?? "unknown"})`,
@@ -966,15 +1029,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               turns: nextTurns,
             });
             if (semanticDecision.decision === "stop_loop") {
-              if (getBotChainRouteReopenOrder(botChainRouteKey) <= eventOrder) {
-                activeBotChainState.terminated = true;
-                activeBotChainState.reasonCode = semanticDecision.reasonCode;
-                activeBotChainState.terminatedOrder = eventOrder;
-                activeBotChainState.lastUpdatedOrder = eventOrder;
-                logVerboseMessage(
-                  `matrix: terminate bot-to-bot chain room=${roomId} sender=${senderId} reason=${semanticDecision.reasonCode} confidence=${semanticDecision.confidence.toFixed(2)}`,
-                );
-              }
+              markBotChainTerminated({
+                state: activeBotChainState,
+                routeKey: botChainRouteKey,
+                eventOrder,
+                senderId,
+                roomId,
+                decision: semanticDecision,
+              });
               await commitInboundEventIfClaimed();
               return;
             }
@@ -1692,24 +1754,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         pendingBotChainTurns &&
         !activeBotChainState.terminated
       ) {
-        if (getBotChainRouteReopenOrder(botChainRouteKey) <= eventOrder) {
-          const botReply = semanticFinalText.trim();
-          const withReply = botReply
-            ? [
-                ...pendingBotChainTurns,
-                {
-                  senderId: `agent:${_route.agentId}`,
-                  text: botReply,
-                  timestampMs: Date.now(),
-                },
-              ]
-            : pendingBotChainTurns;
-          activeBotChainState.turns = withReply.slice(-MAX_BOT_CHAIN_TURNS);
-          activeBotChainState.terminated = false;
-          delete activeBotChainState.reasonCode;
-          delete activeBotChainState.terminatedOrder;
-          activeBotChainState.lastUpdatedOrder = eventOrder;
-        }
+        commitBotChainTurns({
+          state: activeBotChainState,
+          routeKey: botChainRouteKey,
+          eventOrder,
+          agentId: _route.agentId,
+          turns: pendingBotChainTurns,
+          semanticFinalText,
+        });
       }
       if (isRoom && !isConfiguredBotSender) {
         markBotChainRouteReopened(botChainRouteKey, eventOrder);
