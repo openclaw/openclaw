@@ -5,6 +5,7 @@ import {
   createImageUpdate,
   createLifecycleMonitorSetup,
   expectImageLifecycleDelivery,
+  settleAsyncWork,
 } from "../test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
@@ -71,7 +72,11 @@ describe("Zalo polling image handling", () => {
     getUpdatesMock
       .mockResolvedValueOnce({
         ok: true,
-        result: createImageUpdate(),
+        result: createImageUpdate({
+          messageId: "msg-unauthorized-1",
+          userId: "user-unauthorized-1",
+          chatId: "chat-unauthorized-1",
+        }),
       })
       .mockImplementation(() => new Promise(() => {}));
 
@@ -91,11 +96,12 @@ describe("Zalo polling image handling", () => {
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1));
+    await settleAsyncWork();
     expect(fetchRemoteMediaMock).not.toHaveBeenCalled();
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
     expect(finalizeInboundContextMock).not.toHaveBeenCalled();
     expect(recordInboundSessionMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
 
     abort.abort();
     await run;

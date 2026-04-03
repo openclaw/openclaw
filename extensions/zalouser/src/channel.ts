@@ -42,6 +42,7 @@ import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { probeZalouser, type ZalouserProbeResult } from "./probe.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import { getZalouserRuntime } from "./runtime.js";
+import { collectZalouserSecurityAuditFindings } from "./security-audit.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import {
   normalizeZalouserTarget,
@@ -488,6 +489,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     },
     security: {
       resolveDmPolicy: resolveZalouserDmPolicy,
+      collectAuditFindings: collectZalouserSecurityAuditFindings,
     },
     threading: {
       resolveReplyToMode: createStaticReplyToModeResolver("off"),

@@ -3,7 +3,7 @@ import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
+import { resolveOutboundSendDep, sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolveSendableOutboundReplyParts,
   sendTextMediaPayload,
@@ -22,6 +22,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   chunker: chunkText,
   chunkerMode: "text",
   textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeForPlainText(text),
   pollMaxOptions: 12,
   resolveTarget: ({ to, allowFrom, mode }) =>
     resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),

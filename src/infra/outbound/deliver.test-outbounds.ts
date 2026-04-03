@@ -1,6 +1,7 @@
 import { chunkMarkdownTextWithMode, chunkText } from "../../auto-reply/chunk.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { sanitizeForPlainText } from "../../plugin-sdk/outbound-runtime.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 
 type SignalSendFn = (
@@ -57,6 +58,7 @@ function withSignalChannel(result: Awaited<ReturnType<SignalSendFn>>) {
 export const signalOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeForPlainText(text),
   sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) => {
     const send = resolveSignalSender(deps);
     const maxBytes = resolveSignalMaxBytes(cfg, accountId ?? undefined);
@@ -169,6 +171,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   chunker: chunkText,
   chunkerMode: "text",
   textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeForPlainText(text),
   sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
     const send = resolveWhatsAppSender(deps);
     return withWhatsAppChannel(

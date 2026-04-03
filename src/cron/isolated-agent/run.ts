@@ -1,48 +1,5 @@
-import {
-  resolveAgentConfig,
-  resolveAgentDir,
-  resolveAgentModelFallbacksOverride,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
-import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
-import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { lookupContextTokens } from "../../agents/context.js";
-import { resolveCronStyleNow } from "../../agents/current-time.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { resolveNestedAgentLane } from "../../agents/lanes.js";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { isCliProvider, resolveThinkingDefault } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import {
-  countActiveDescendantRuns,
-  listDescendantRunsForRequester,
-} from "../../agents/subagent-registry-read.js";
-import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
-import { ensureAgentWorkspace } from "../../agents/workspace.js";
-import {
-  normalizeThinkLevel,
-  normalizeVerboseLevel,
-  supportsXHighThinking,
-} from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
-import { setSessionRuntimeModel } from "../../config/sessions/types.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { logWarn } from "../../logger.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import {
-  buildSafeExternalPrompt,
-  detectSuspiciousPatterns,
-  mapHookExternalContentSource,
-  isExternalHookSession,
-  resolveHookExternalContentSource,
-} from "../../security/external-content.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
@@ -58,10 +15,49 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  LiveSessionModelSwitchError,
+  buildSafeExternalPrompt,
+  countActiveDescendantRuns,
+  deriveSessionTotalTokens,
+  detectSuspiciousPatterns,
+  ensureAgentWorkspace,
+  hasNonzeroUsage,
+  isCliProvider,
+  isExternalHookSession,
+  listDescendantRunsForRequester,
+  loadModelCatalog,
+  logWarn,
+  lookupContextTokens,
+  mapHookExternalContentSource,
+  normalizeAgentId,
+  normalizeThinkLevel,
+  normalizeVerboseLevel,
+  registerAgentRunContext,
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveAgentModelFallbacksOverride,
+  resolveAgentTimeoutMs,
+  resolveAgentWorkspaceDir,
+  resolveBootstrapWarningSignaturesSeen,
+  resolveCronStyleNow,
+  resolveDefaultAgentId,
+  resolveFastModeState,
+  resolveHookExternalContentSource,
+  resolveNestedAgentLane,
+  resolveSessionAuthProfileOverride,
+  resolveSessionTranscriptPath,
+  resolveThinkingDefault,
+  runEmbeddedPiAgent,
+  runWithModelFallback,
+  setSessionRuntimeModel,
+  supportsXHighThinking,
+} from "./run.runtime.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
-import { isLikelyInterimCronMessage } from "./subagent-followup.js";
+import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 let sessionStoreRuntimePromise:
   | Promise<typeof import("../../config/sessions/store.runtime.js")>

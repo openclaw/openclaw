@@ -6,9 +6,12 @@ const spawnMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
 const scheduleDetachedLaunchdRestartHandoffMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(importOriginal, {
+    spawn: (...args: unknown[]) => spawnMock(...args),
+  });
+});
 vi.mock("./restart.js", () => ({
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
 }));

@@ -30,7 +30,7 @@ export function setFeishuNamedAccountEnabled(
 }
 
 export const feishuSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: () => DEFAULT_ACCOUNT_ID,
+  resolveAccountId: ({ accountId }) => accountId?.trim() || DEFAULT_ACCOUNT_ID,
   applyAccountConfig: ({ cfg, accountId }) => {
     const isDefault = !accountId || accountId === DEFAULT_ACCOUNT_ID;
     if (isDefault) {

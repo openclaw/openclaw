@@ -9,6 +9,7 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
+  resolveAgentSkillsFilter,
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
@@ -321,7 +322,7 @@ describe("resolveAgentConfig", () => {
   });
 
   it("should return agent-specific sandbox config", () => {
-    const cfg: OpenClawConfig = {
+    const cfg = {
       agents: {
         list: [
           {
@@ -337,7 +338,7 @@ describe("resolveAgentConfig", () => {
           },
         ],
       },
-    };
+    } as unknown as OpenClawConfig;
     const result = resolveAgentConfig(cfg, "work");
     expect(result?.sandbox).toEqual({
       mode: "all",
@@ -519,5 +520,46 @@ describe("resolveAgentIdsByWorkspacePath", () => {
       "ops",
       "main",
     ]);
+  });
+});
+
+describe("resolveAgentSkillsFilter", () => {
+  it("inherits agents.defaults.skills when the agent omits skills", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["github", "weather"],
+        },
+        list: [{ id: "writer" }],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["github", "weather"]);
+  });
+
+  it("uses agents.list[].skills as a full replacement", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["github", "weather"],
+        },
+        list: [{ id: "writer", skills: ["docs-search"] }],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["docs-search"]);
+  });
+
+  it("keeps explicit empty agent skills as no skills", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["github", "weather"],
+        },
+        list: [{ id: "writer", skills: [] }],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual([]);
   });
 });

@@ -27,8 +27,14 @@ export {
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 export {
+  autoMigrateLegacyMatrixState,
+  autoPrepareLegacyMatrixCrypto,
+  detectLegacyMatrixCrypto,
+  detectLegacyMatrixState,
   dispatchReplyFromConfigWithSettledDispatcher,
   ensureConfiguredAcpBindingReady,
+  hasActionableMatrixMigration,
+  hasPendingMatrixMigration,
   maybeCreateMatrixMigrationSnapshot,
   resolveConfiguredAcpBindingRecord,
 } from "openclaw/plugin-sdk/matrix-runtime-heavy";

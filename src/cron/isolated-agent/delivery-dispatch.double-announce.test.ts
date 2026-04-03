@@ -53,9 +53,12 @@ vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
 
-vi.mock("./subagent-followup.js", () => ({
+vi.mock("./subagent-followup-hints.js", () => ({
   expectsSubagentFollowup: vi.fn().mockReturnValue(false),
   isLikelyInterimCronMessage: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock("./subagent-followup.runtime.js", () => ({
   readDescendantSubagentFallbackReply: vi.fn().mockResolvedValue(undefined),
   waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
 }));
@@ -73,12 +76,11 @@ import {
 } from "./delivery-dispatch.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import type { RunCronAgentTurnResult } from "./run.js";
+import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import {
-  expectsSubagentFollowup,
-  isLikelyInterimCronMessage,
   readDescendantSubagentFallbackReply,
   waitForDescendantSubagentSummary,
-} from "./subagent-followup.js";
+} from "./subagent-followup.runtime.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

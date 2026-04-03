@@ -52,6 +52,20 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("auth.cooldowns auth_permanent backoff config", () => {
+  it("accepts auth_permanent backoff knobs", () => {
+    const result = OpenClawSchema.safeParse({
+      auth: {
+        cooldowns: {
+          authPermanentBackoffMinutes: 10,
+          authPermanentMaxMinutes: 60,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
@@ -645,6 +659,89 @@ describe("config strict validation", () => {
     });
   });
 
+  it("accepts legacy x_search auth via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: "test-key",
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "tools.web.x_search.apiKey")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
+        apiKey: "test-key",
+      });
+      expect(
+        (snap.sourceConfig.tools?.web?.x_search as Record<string, unknown> | undefined)?.apiKey,
+      ).toBeUndefined();
+    });
+  });
+
+  it("accepts legacy thread binding ttlHours via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        session: {
+          threadBindings: {
+            ttlHours: 24,
+          },
+        },
+        channels: {
+          discord: {
+            threadBindings: {
+              ttlHours: 12,
+            },
+            accounts: {
+              alpha: {
+                threadBindings: {
+                  ttlHours: 6,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "session.threadBindings")).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels")).toBe(true);
+      expect(snap.sourceConfig.session?.threadBindings).toMatchObject({
+        idleHours: 24,
+      });
+      expect(snap.sourceConfig.channels?.discord?.threadBindings).toMatchObject({
+        idleHours: 12,
+      });
+      expect(snap.sourceConfig.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
+        idleHours: 6,
+      });
+      expect(
+        (snap.sourceConfig.session?.threadBindings as Record<string, unknown> | undefined)
+          ?.ttlHours,
+      ).toBeUndefined();
+      expect(
+        (snap.sourceConfig.channels?.discord?.threadBindings as Record<string, unknown> | undefined)
+          ?.ttlHours,
+      ).toBeUndefined();
+      expect(
+        (
+          snap.sourceConfig.channels?.discord?.accounts?.alpha?.threadBindings as
+            | Record<string, unknown>
+            | undefined
+        )?.ttlHours,
+      ).toBeUndefined();
+    });
+  });
+
   it("accepts legacy channel streaming aliases via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
@@ -694,6 +791,32 @@ describe("config strict validation", () => {
     });
   });
 
+  it("accepts telegram groupMentionsOnly via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        channels: {
+          telegram: {
+            groupMentionsOnly: true,
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(
+        snap.legacyIssues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly"),
+      ).toBe(true);
+      expect(snap.sourceConfig.channels?.telegram?.groups?.["*"]).toMatchObject({
+        requireMention: true,
+      });
+      expect(
+        (snap.sourceConfig.channels?.telegram as Record<string, unknown> | undefined)
+          ?.groupMentionsOnly,
+      ).toBeUndefined();
+    });
+  });
+
   it("accepts legacy plugins.entries.*.config.tts provider keys via auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
@@ -738,6 +861,65 @@ describe("config strict validation", () => {
         voice: "alloy",
       });
       expect(voiceCallTts?.openai).toBeUndefined();
+    });
+  });
+
+  it("accepts legacy discord voice tts provider keys via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        channels: {
+          discord: {
+            voice: {
+              tts: {
+                provider: "elevenlabs",
+                elevenlabs: {
+                  voiceId: "voice-1",
+                },
+              },
+            },
+            accounts: {
+              main: {
+                voice: {
+                  tts: {
+                    edge: {
+                      voice: "en-US-AvaNeural",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.voice.tts")).toBe(
+        true,
+      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.channels?.discord?.voice?.tts?.providers?.elevenlabs).toEqual({
+        voiceId: "voice-1",
+      });
+      expect(
+        snap.sourceConfig.channels?.discord?.accounts?.main?.voice?.tts?.providers?.microsoft,
+      ).toEqual({
+        voice: "en-US-AvaNeural",
+      });
+      expect(
+        (snap.sourceConfig.channels?.discord?.voice?.tts as Record<string, unknown> | undefined)
+          ?.elevenlabs,
+      ).toBeUndefined();
+      expect(
+        (
+          snap.sourceConfig.channels?.discord?.accounts?.main?.voice?.tts as
+            | Record<string, unknown>
+            | undefined
+        )?.edge,
+      ).toBeUndefined();
     });
   });
 

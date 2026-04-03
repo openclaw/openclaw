@@ -3,6 +3,8 @@ import {
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderCatalogContext,
+  type ProviderReplayPolicy,
+  type ProviderReplayPolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   MINIMAX_OAUTH_MARKER,
@@ -37,6 +39,36 @@ function resolveMinimaxReasoningOutputMode(): "native" {
   // Keep MiniMax on native reasoning mode. Tagged enforcement previously
   // suppressed normal assistant replies on this Anthropic-compatible surface.
   return "native";
+}
+
+function buildMinimaxReplayPolicy(
+  ctx: ProviderReplayPolicyContext,
+): ProviderReplayPolicy | undefined {
+  if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
+    const modelId = ctx.modelId?.toLowerCase() ?? "";
+    return {
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveSignatures: true,
+      repairToolUseResultPairing: true,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+      ...(modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+    };
+  }
+
+  if (ctx.modelApi === "openai-completions") {
+    return {
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+    };
+  }
+
+  return undefined;
 }
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {
@@ -235,6 +267,7 @@ export default definePluginEntry({
         });
         return apiKey ? { token: apiKey } : null;
       },
+      buildReplayPolicy: (ctx) => buildMinimaxReplayPolicy(ctx),
       wrapStreamFn: (ctx) =>
         createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
@@ -287,6 +320,7 @@ export default definePluginEntry({
           run: createOAuthHandler("cn"),
         },
       ],
+      buildReplayPolicy: (ctx) => buildMinimaxReplayPolicy(ctx),
       wrapStreamFn: (ctx) =>
         createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),

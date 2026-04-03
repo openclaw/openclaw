@@ -50,7 +50,7 @@ function isXaiBaseUrl(baseUrl: unknown): boolean {
   }
 }
 
-function isXaiModelHint(modelId: string): boolean {
+export function isXaiModelHint(modelId: string): boolean {
   return modelId.trim().toLowerCase().startsWith("x-ai/");
 }
 

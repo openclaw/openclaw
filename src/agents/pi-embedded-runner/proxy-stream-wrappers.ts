@@ -1,7 +1,9 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { isXaiModelHint } from "../../../extensions/xai/api.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
+import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
@@ -10,10 +12,6 @@ const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
 function resolveKilocodeAppHeaders(): Record<string, string> {
   const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
   return { [KILOCODE_FEATURE_HEADER]: feature };
-}
-
-function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
-  return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
 }
 
 function mapThinkingLevelToOpenRouterReasoningEffort(
@@ -62,7 +60,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
     if (
       typeof model.provider !== "string" ||
       typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModel(model.provider, model.id)
+      !isOpenRouterAnthropicModelRef(model.provider, model.id)
     ) {
       return underlying(model, context, options);
     }
@@ -136,7 +134,7 @@ export function createOpenRouterWrapper(
 }
 
 export function isProxyReasoningUnsupported(modelId: string): boolean {
-  return modelId.toLowerCase().startsWith("x-ai/");
+  return isXaiModelHint(modelId);
 }
 
 export function createKilocodeWrapper(

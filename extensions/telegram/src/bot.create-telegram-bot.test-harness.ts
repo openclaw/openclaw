@@ -137,7 +137,6 @@ async function dispatchHarnessReplies(
       await params.dispatcherOptions.deliver?.(payload, info);
     },
     responsePrefix: params.dispatcherOptions.responsePrefix,
-    enableSlackInteractiveReplies: params.dispatcherOptions.enableSlackInteractiveReplies,
     responsePrefixContextProvider: params.dispatcherOptions.responsePrefixContextProvider,
     responsePrefixContext: params.dispatcherOptions.responsePrefixContext,
     onHeartbeatStrip: params.dispatcherOptions.onHeartbeatStrip,

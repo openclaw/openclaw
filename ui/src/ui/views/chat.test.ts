@@ -689,6 +689,27 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("New session");
   });
 
+  it("shows a stop button when aborting is available without an active stream", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          canAbort: true,
+          sending: false,
+          stream: null,
+          onAbort: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
+    const sendButton = container.querySelector<HTMLButtonElement>('button[title="Send"]');
+    expect(stopButton).not.toBeNull();
+    expect(sendButton).toBeNull();
+    expect(container.textContent).not.toContain("New session");
+  });
+
   it("shows a new session button when aborting is unavailable", () => {
     const container = document.createElement("div");
     const onNewSession = vi.fn();

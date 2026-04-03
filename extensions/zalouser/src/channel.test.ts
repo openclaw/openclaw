@@ -4,8 +4,8 @@ import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 
-vi.mock("./send.js", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
+vi.mock("./send.js", async () => {
+  const actual = (await vi.importActual("./send.js")) as Record<string, unknown>;
   return {
     ...actual,
     sendMessageZalouser: vi.fn(async () => ({ ok: true, messageId: "mid-1" })),
@@ -239,5 +239,30 @@ describe("zalouser channel policies", () => {
         threadId: "123456",
       },
     });
+  });
+
+  it("honors the selected Zalouser account during discovery", () => {
+    const actions = zalouserPlugin.actions;
+    const cfg = {
+      channels: {
+        zalouser: {
+          enabled: true,
+          profile: "default",
+          accounts: {
+            default: {
+              enabled: false,
+              profile: "default",
+            },
+            work: {
+              enabled: true,
+              profile: "work",
+            },
+          },
+        },
+      },
+    };
+
+    expect(actions?.describeMessageTool?.({ cfg, accountId: "default" })).toBeNull();
+    expect(actions?.describeMessageTool?.({ cfg, accountId: "work" })?.actions).toEqual(["react"]);
   });
 });

@@ -1,7 +1,6 @@
-import { createPluginBoundaryRuntimeSend } from "./plugin-boundary-send.js";
+import { createChannelOutboundRuntimeSend } from "./channel-outbound-send.js";
 
-export const runtimeSend = createPluginBoundaryRuntimeSend({
-  pluginId: "slack",
-  exportName: "sendMessageSlack",
-  missingLabel: "Slack plugin runtime",
+export const runtimeSend = createChannelOutboundRuntimeSend({
+  channelId: "slack",
+  unavailableMessage: "Slack outbound adapter is unavailable.",
 });

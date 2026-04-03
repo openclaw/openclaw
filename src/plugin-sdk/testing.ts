@@ -6,7 +6,7 @@ export {
   expectChannelInboundContextContract,
   primeChannelOutboundSendMock,
 } from "../channels/plugins/contracts/test-helpers.js";
-export { createSlackOutboundPayloadHarness } from "../channels/plugins/contracts/suites.js";
+export { createSlackOutboundPayloadHarness } from "../channels/plugins/contracts/slack-outbound-harness.js";
 export { buildDispatchInboundCaptureMock } from "../channels/plugins/contracts/inbound-testkit.js";
 export {
   createCliRuntimeCapture,
@@ -61,6 +61,7 @@ export {
   loadBundledPluginTestApiSync,
   resolveRelativeBundledPluginPublicModuleId,
 } from "../test-utils/bundled-plugin-public-surface.js";
+export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";
 export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js";
 export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";

@@ -227,6 +227,37 @@ describe("provider attribution", () => {
     });
   });
 
+  it("classifies native OpenAI-compatible vendor hosts centrally", () => {
+    expect(resolveProviderEndpoint("https://api.x.ai/v1")).toMatchObject({
+      endpointClass: "xai-native",
+      hostname: "api.x.ai",
+    });
+    expect(resolveProviderEndpoint("https://api.z.ai/api/coding/paas/v4")).toMatchObject({
+      endpointClass: "zai-native",
+      hostname: "api.z.ai",
+    });
+    expect(resolveProviderEndpoint("https://api.deepseek.com")).toMatchObject({
+      endpointClass: "deepseek-native",
+      hostname: "api.deepseek.com",
+    });
+    expect(resolveProviderEndpoint("https://llm.chutes.ai/v1")).toMatchObject({
+      endpointClass: "chutes-native",
+      hostname: "llm.chutes.ai",
+    });
+    expect(resolveProviderEndpoint("https://api.groq.com/openai/v1")).toMatchObject({
+      endpointClass: "groq-native",
+      hostname: "api.groq.com",
+    });
+    expect(resolveProviderEndpoint("https://api.cerebras.ai/v1")).toMatchObject({
+      endpointClass: "cerebras-native",
+      hostname: "api.cerebras.ai",
+    });
+    expect(resolveProviderEndpoint("https://opencode.ai/api")).toMatchObject({
+      endpointClass: "opencode-native",
+      hostname: "opencode.ai",
+    });
+  });
+
   it("treats OpenRouter-hosted Responses routes as explicit proxy-like endpoints", () => {
     expect(
       resolveProviderRequestPolicy({
@@ -477,6 +508,7 @@ describe("provider attribution", () => {
     ).toMatchObject({
       endpointClass: "openai-public",
       allowsOpenAIServiceTier: true,
+      supportsOpenAIReasoningCompatPayload: true,
       allowsResponsesStore: true,
       supportsResponsesStoreField: true,
       shouldStripResponsesPromptCache: false,
@@ -505,6 +537,7 @@ describe("provider attribution", () => {
     ).toMatchObject({
       endpointClass: "custom",
       allowsOpenAIServiceTier: false,
+      supportsOpenAIReasoningCompatPayload: false,
       allowsResponsesStore: false,
       supportsResponsesStoreField: true,
       shouldStripResponsesPromptCache: true,

@@ -209,8 +209,7 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
   }
 
   const existingProviderApiKeyConfigured = hasConfiguredSecretInput(active?.config?.apiKey);
-  const existingLegacyApiKeyConfigured = hasConfiguredSecretInput(talk?.apiKey);
-  if (existingProviderApiKeyConfigured || existingLegacyApiKeyConfigured) {
+  if (existingProviderApiKeyConfigured) {
     return normalized;
   }
 
@@ -221,7 +220,6 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
 
   const nextTalk = {
     ...talk,
-    apiKey: resolved,
     providers,
   };
 

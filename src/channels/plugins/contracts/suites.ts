@@ -1,5 +1,4 @@
-import { expect, it, vi, type Mock } from "vitest";
-import type { ReplyPayload } from "../../../auto-reply/types.js";
+import { expect, it, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type {
   ResolveProviderRuntimeGroupPolicyParams,
@@ -10,7 +9,6 @@ import type {
   SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { createNonExitingRuntime } from "../../../runtime.js";
-import { loadBundledPluginTestApiSync } from "../../../test-utils/bundled-plugin-public-surface.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
@@ -23,7 +21,6 @@ import type {
 import type {
   ChannelMessageActionName,
   ChannelMessageCapability,
-  ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../types.js";
 import { primeChannelOutboundSendMock } from "./test-helpers.js";
@@ -55,16 +52,6 @@ function resolveContractMessageDiscovery(params: {
 }
 
 const contractRuntime = createNonExitingRuntime();
-let slackOutboundCache: ChannelOutboundAdapter | undefined;
-
-function getSlackOutbound(): ChannelOutboundAdapter {
-  if (!slackOutboundCache) {
-    ({ slackOutbound: slackOutboundCache } = loadBundledPluginTestApiSync<{
-      slackOutbound: ChannelOutboundAdapter;
-    }>("slack"));
-  }
-  return slackOutboundCache;
-}
 
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
   expect(["user", "group", "channel"]).toContain(entry.kind);
@@ -126,40 +113,6 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(["current", "child"]).toContain(binding.placement);
   expect(typeof binding.labelNoun).toBe("string");
   expect(binding.labelNoun.trim()).not.toBe("");
-}
-
-type OutboundSendMock = Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
-
-type SlackOutboundPayloadHarness = {
-  run: () => Promise<Record<string, unknown>>;
-  sendMock: OutboundSendMock;
-  to: string;
-};
-
-export function createSlackOutboundPayloadHarness(params: {
-  payload: ReplyPayload;
-  sendResults?: Array<{ messageId: string }>;
-}): SlackOutboundPayloadHarness {
-  const sendSlack: OutboundSendMock = vi.fn();
-  primeChannelOutboundSendMock(
-    sendSlack,
-    { messageId: "sl-1", channelId: "C12345", ts: "1234.5678" },
-    params.sendResults,
-  );
-  const ctx = {
-    cfg: {},
-    to: "C12345",
-    text: "",
-    payload: params.payload,
-    deps: {
-      sendSlack,
-    },
-  };
-  return {
-    run: async () => await getSlackOutbound().sendPayload!(ctx),
-    sendMock: sendSlack,
-    to: ctx.to,
-  };
 }
 
 export function installChannelPluginContractSuite(params: {

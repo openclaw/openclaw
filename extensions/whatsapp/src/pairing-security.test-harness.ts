@@ -4,7 +4,6 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { vi } from "vitest";
-import { resolveDmGroupAccessWithLists } from "../../../src/security/dm-policy-shared.js";
 
 export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {
   (...args: TArgs): Promise<TResult>;
@@ -38,8 +37,12 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/security-runtime", () => {
+vi.mock("openclaw/plugin-sdk/security-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+    "openclaw/plugin-sdk/security-runtime",
+  );
   return {
+    ...actual,
     readStoreAllowFromForDmPolicy: async (params: {
       provider: string;
       accountId: string;
@@ -55,6 +58,5 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => {
         return [];
       }
     },
-    resolveDmGroupAccessWithLists,
   };
 });

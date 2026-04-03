@@ -6,34 +6,31 @@ import type {
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
 const testEnv = installSharedTestSetup();
 
-const [
-  { resetContextWindowCacheForTest },
-  { resetModelsJsonReadyCacheForTest },
-  { drainSessionWriteLockStateForTest, resetSessionWriteLockStateForTest },
-  { createTopLevelChannelReplyToModeResolver },
-  { createTestRegistry },
-  { cleanupSessionStateForTest },
-] = await Promise.all([
-  import("../src/agents/context.js"),
-  import("../src/agents/models-config.js"),
-  import("../src/agents/session-write-lock.js"),
-  import("../src/channels/plugins/threading-helpers.js"),
-  import("../src/test-utils/channel-plugins.js"),
-  import("../src/test-utils/session-state-cleanup.js"),
-]);
-
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
+const WORKER_CLEANUP_DEPS = Symbol.for("openclaw.testSetupCleanupDeps");
 
 type WorkerRuntimeState = {
   defaultPluginRegistry: PluginRegistry | null;
   materializedDefaultPluginRegistry: PluginRegistry | null;
 };
+
+type WorkerCleanupDeps = {
+  resetContextWindowCacheForTest: typeof import("../src/agents/context.js").resetContextWindowCacheForTest;
+  resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config.js").resetModelsJsonReadyCacheForTest;
+  drainSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").drainSessionWriteLockStateForTest;
+  resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").resetSessionWriteLockStateForTest;
+  cleanupSessionStateForTest: typeof import("../src/test-utils/session-state-cleanup.js").cleanupSessionStateForTest;
+};
+
+type ReplyToModeResolver = NonNullable<
+  NonNullable<ChannelPlugin["threading"]>["resolveReplyToMode"]
+>;
 
 const workerRuntimeState = (() => {
   const globalState = globalThis as typeof globalThis & {
@@ -48,9 +45,84 @@ const workerRuntimeState = (() => {
   return globalState[WORKER_RUNTIME_STATE];
 })();
 
+async function loadWorkerCleanupDeps(): Promise<WorkerCleanupDeps> {
+  const [
+    { resetContextWindowCacheForTest },
+    { resetModelsJsonReadyCacheForTest },
+    { drainSessionWriteLockStateForTest, resetSessionWriteLockStateForTest },
+    { cleanupSessionStateForTest },
+  ] = await Promise.all([
+    import("../src/agents/context.js"),
+    import("../src/agents/models-config.js"),
+    import("../src/agents/session-write-lock.js"),
+    import("../src/test-utils/session-state-cleanup.js"),
+  ]);
+
+  return {
+    resetContextWindowCacheForTest,
+    resetModelsJsonReadyCacheForTest,
+    drainSessionWriteLockStateForTest,
+    resetSessionWriteLockStateForTest,
+    cleanupSessionStateForTest,
+  };
+}
+
+function getWorkerCleanupDeps(): Promise<WorkerCleanupDeps> {
+  const globalState = globalThis as typeof globalThis & {
+    [WORKER_CLEANUP_DEPS]?: Promise<WorkerCleanupDeps>;
+  };
+  globalState[WORKER_CLEANUP_DEPS] ??= loadWorkerCleanupDeps();
+  return globalState[WORKER_CLEANUP_DEPS];
+}
+
+// Preload cleanup/runtime helpers before per-file vi.mock hoists run in
+// non-isolated workers, otherwise test-scoped module mocks can leak into the
+// shared cleanup dependency graph.
+void getWorkerCleanupDeps();
+
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
 };
+
+function createTopLevelChannelReplyToModeResolverForTest(channelId: string): ReplyToModeResolver {
+  return ({ cfg }) => {
+    const channelConfig = (
+      cfg.channels as Record<string, { replyToMode?: "off" | "first" | "all" }> | undefined
+    )?.[channelId];
+    return channelConfig?.replyToMode ?? "off";
+  };
+}
+
+function createTestRegistryForSetup(
+  channels: Array<{ pluginId: string; plugin: ChannelPlugin; source: string }> = [],
+): PluginRegistry {
+  return {
+    plugins: [],
+    tools: [],
+    hooks: [],
+    typedHooks: [],
+    channels: channels as unknown as PluginRegistry["channels"],
+    channelSetups: channels.map((entry) => ({
+      pluginId: entry.pluginId,
+      plugin: entry.plugin,
+      source: entry.source,
+      enabled: true,
+    })),
+    providers: [],
+    speechProviders: [],
+    mediaUnderstandingProviders: [],
+    imageGenerationProviders: [],
+    webFetchProviders: [],
+    webSearchProviders: [],
+    gatewayHandlers: {},
+    httpRoutes: [],
+    cliRegistrars: [],
+    services: [],
+    commands: [],
+    conversationBindingResolvedHandlers: [],
+    diagnostics: [],
+  };
+}
 
 function resolveSlackStubReplyToMode(params: {
   cfg: OpenClawConfig;
@@ -174,13 +246,13 @@ const createStubPlugin = (params: {
 });
 
 const createDefaultRegistry = () =>
-  createTestRegistry([
+  createTestRegistryForSetup([
     {
       pluginId: "discord",
       plugin: createStubPlugin({
         id: "discord",
         label: "Discord",
-        resolveReplyToMode: createTopLevelChannelReplyToModeResolver("discord"),
+        resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest("discord"),
       }),
       source: "test",
     },
@@ -199,7 +271,7 @@ const createDefaultRegistry = () =>
         ...createStubPlugin({
           id: "telegram",
           label: "Telegram",
-          resolveReplyToMode: createTopLevelChannelReplyToModeResolver("telegram"),
+          resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest("telegram"),
         }),
         status: {
           buildChannelSummary: async () => ({
@@ -280,6 +352,12 @@ beforeAll(() => {
 });
 
 afterEach(async () => {
+  const {
+    cleanupSessionStateForTest,
+    resetContextWindowCacheForTest,
+    resetModelsJsonReadyCacheForTest,
+    resetSessionWriteLockStateForTest,
+  } = await getWorkerCleanupDeps();
   await cleanupSessionStateForTest();
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
@@ -288,6 +366,8 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
+  const { cleanupSessionStateForTest, drainSessionWriteLockStateForTest } =
+    await getWorkerCleanupDeps();
   await cleanupSessionStateForTest();
   await drainSessionWriteLockStateForTest();
   testEnv.cleanup();

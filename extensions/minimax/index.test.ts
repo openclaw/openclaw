@@ -36,6 +36,43 @@ describe("minimax provider hooks", () => {
     ).toBe("native");
   });
 
+  it("owns replay policy for Anthropic and OpenAI-compatible MiniMax transports", () => {
+    const { providers } = registerProviderPlugin({
+      plugin: minimaxPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const apiProvider = requireRegisteredProvider(providers, "minimax");
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+
+    expect(
+      apiProvider.buildReplayPolicy?.({
+        provider: "minimax",
+        modelApi: "anthropic-messages",
+        modelId: "MiniMax-M2.7",
+      } as never),
+    ).toMatchObject({
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      preserveSignatures: true,
+      validateAnthropicTurns: true,
+    });
+
+    expect(
+      portalProvider.buildReplayPolicy?.({
+        provider: "minimax-portal",
+        modelApi: "openai-completions",
+        modelId: "MiniMax-M2.7",
+      } as never),
+    ).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+    });
+  });
+
   it("owns fast-mode stream wrapping for MiniMax transports", () => {
     const { providers } = registerProviderPlugin({
       plugin: minimaxPlugin,

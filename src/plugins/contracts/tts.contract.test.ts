@@ -85,6 +85,10 @@ const {
   sanitizeTtsErrorForLog,
 } = _test;
 
+function asLegacyTtsConfig(value: unknown): OpenClawConfig {
+  return value as OpenClawConfig;
+}
+
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
   role: "assistant",
   content,
@@ -119,20 +123,26 @@ function createSummarizeTextDeps() {
   };
 }
 
+function asLegacyOpenClawConfig(value: Record<string, unknown>): OpenClawConfig {
+  return value as unknown as OpenClawConfig;
+}
+
 function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawConfig {
-  return {
+  return asLegacyTtsConfig({
     messages: {
       tts: {
         provider: "openai",
-        openai: {
-          apiKey: "test-key",
-          model,
-          voice: "alloy",
-          instructions: "Speak warmly",
+        providers: {
+          openai: {
+            apiKey: "test-key",
+            model,
+            voice: "alloy",
+            instructions: "Speak warmly",
+          },
         },
       },
     },
-  };
+  });
 }
 
 function createAudioBuffer(length = 2): Buffer {
@@ -160,13 +170,37 @@ function resolveBaseUrl(rawValue: unknown, fallback: string): string {
   return typeof rawValue === "string" && rawValue.trim() ? rawValue.replace(/\/+$/u, "") : fallback;
 }
 
+function resolveTestProviderConfig(
+  rawConfig: Record<string, unknown>,
+  providerId: string,
+  ...aliases: string[]
+): Record<string, unknown> {
+  const providers =
+    typeof rawConfig.providers === "object" &&
+    rawConfig.providers !== null &&
+    !Array.isArray(rawConfig.providers)
+      ? (rawConfig.providers as Record<string, unknown>)
+      : {};
+  for (const key of [providerId, ...aliases]) {
+    const direct = rawConfig[key];
+    if (typeof direct === "object" && direct !== null && !Array.isArray(direct)) {
+      return direct as Record<string, unknown>;
+    }
+    const nested = providers[key];
+    if (typeof nested === "object" && nested !== null && !Array.isArray(nested)) {
+      return nested as Record<string, unknown>;
+    }
+  }
+  return {};
+}
+
 function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
   return {
     id: "openai",
     label: "OpenAI",
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => {
-      const config = (rawConfig.openai ?? {}) as Record<string, unknown>;
+      const config = resolveTestProviderConfig(rawConfig, "openai");
       return {
         ...config,
         baseUrl: resolveBaseUrl(
@@ -265,7 +299,7 @@ function buildTestMicrosoftSpeechProvider(): SpeechProviderPlugin {
     aliases: ["edge"],
     autoSelectOrder: 30,
     resolveConfig: ({ rawConfig }) => {
-      const edgeConfig = (rawConfig.edge ?? rawConfig.microsoft ?? {}) as Record<string, unknown>;
+      const edgeConfig = resolveTestProviderConfig(rawConfig, "microsoft", "edge");
       return {
         ...edgeConfig,
         outputFormat: edgeConfig.outputFormat ?? "audio-24khz-48kbitrate-mono-mp3",
@@ -287,6 +321,7 @@ function buildTestElevenLabsSpeechProvider(): SpeechProviderPlugin {
     id: "elevenlabs",
     label: "ElevenLabs",
     autoSelectOrder: 20,
+    resolveConfig: ({ rawConfig }) => resolveTestProviderConfig(rawConfig, "elevenlabs"),
     parseDirectiveToken: ({ key, value, currentOverrides }) => {
       if (key === "voiceid") {
         return { handled: true, overrides: { voiceId: value } };
@@ -376,7 +411,7 @@ describe("tts", () => {
               edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
             },
           },
-        } as OpenClawConfig,
+        } as unknown as OpenClawConfig,
         expected: "audio-24khz-96kbitrate-mono-mp3",
       },
     ] as const)("$name", ({ cfg, expected, name }) => {
@@ -640,17 +675,21 @@ describe("tts", () => {
 
   describe("resolveTtsConfig provider normalization", () => {
     it("normalizes legacy edge provider ids to microsoft", () => {
-      const config = resolveTtsConfig({
-        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-        messages: {
-          tts: {
-            provider: "edge",
-            edge: {
-              enabled: true,
+      const config = resolveTtsConfig(
+        asLegacyOpenClawConfig({
+          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+          messages: {
+            tts: {
+              provider: "edge",
+              providers: {
+                edge: {
+                  enabled: true,
+                },
+              },
             },
           },
-        },
-      });
+        }),
+      );
 
       expect(config.provider).toBe("microsoft");
       expect(getTtsProvider(config, "/tmp/tts-prefs-normalized.json")).toBe("microsoft");
@@ -880,9 +919,9 @@ describe("tts", () => {
         cfg: {
           ...baseCfg,
           messages: {
-            tts: { openai: { baseUrl: "http://my-server:9000/v1" } },
+            tts: { ...baseCfg.messages!.tts, openai: { baseUrl: "http://my-server:9000/v1" } },
           },
-        } as OpenClawConfig,
+        } as unknown as OpenClawConfig,
         env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
         expected: "http://my-server:9000/v1",
       },
@@ -891,9 +930,9 @@ describe("tts", () => {
         cfg: {
           ...baseCfg,
           messages: {
-            tts: { openai: { baseUrl: "http://my-server:9000/v1///" } },
+            tts: { ...baseCfg.messages!.tts, openai: { baseUrl: "http://my-server:9000/v1///" } },
           },
-        } as OpenClawConfig,
+        } as unknown as OpenClawConfig,
         env: { OPENAI_TTS_BASE_URL: undefined },
         expected: "http://my-server:9000/v1",
       },
@@ -965,16 +1004,18 @@ describe("tts", () => {
   });
 
   describe("maybeApplyTtsToPayload", () => {
-    const baseCfg: OpenClawConfig = {
+    const baseCfg: OpenClawConfig = asLegacyOpenClawConfig({
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: {
         tts: {
           auto: "inbound",
           provider: "openai",
-          openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+          providers: {
+            openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+          },
         },
       },
-    };
+    });
 
     const withMockedAutoTtsFetch = async (
       run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,

@@ -1748,7 +1748,10 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
-- `removeAckAfterReply`: removes ack after reply (Slack/Discord/Telegram/Google Chat only).
+- `removeAckAfterReply`: removes ack after reply on Slack, Discord, and Telegram.
+- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, and Telegram.
+  On Slack and Discord, unset keeps status reactions enabled when ack reactions are active.
+  On Telegram, set it explicitly to `true` to enable lifecycle status reactions.
 
 ### Inbound debounce
 
@@ -3034,6 +3037,8 @@ Notes:
       billingBackoffHours: 5,
       billingBackoffHoursByProvider: { anthropic: 3, openai: 8 },
       billingMaxHours: 24,
+      authPermanentBackoffMinutes: 10,
+      authPermanentMaxMinutes: 60,
       failureWindowHours: 24,
       overloadedProfileRotations: 1,
       overloadedBackoffMs: 0,
@@ -3046,6 +3051,8 @@ Notes:
 - `billingBackoffHours`: base backoff in hours when a profile fails due to billing/insufficient credits (default: `5`).
 - `billingBackoffHoursByProvider`: optional per-provider overrides for billing backoff hours.
 - `billingMaxHours`: cap in hours for billing backoff exponential growth (default: `24`).
+- `authPermanentBackoffMinutes`: base backoff in minutes for high-confidence `auth_permanent` failures (default: `10`).
+- `authPermanentMaxMinutes`: cap in minutes for `auth_permanent` backoff growth (default: `60`).
 - `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).
 - `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`).
 - `overloadedBackoffMs`: fixed delay before retrying an overloaded provider/profile rotation (default: `0`).

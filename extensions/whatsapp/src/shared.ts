@@ -18,6 +18,7 @@ import {
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
+import { whatsappDoctor } from "./doctor.js";
 import {
   formatWhatsAppConfigAllowFromEntries,
   getChatChannelMeta,
@@ -159,6 +160,7 @@ export function createWhatsAppPluginBase(params: {
       resolveDmPolicy: whatsappResolveDmPolicy,
       collectWarnings: collectWhatsAppSecurityWarnings,
     },
+    doctor: whatsappDoctor,
     setup: params.setup,
     groups: params.groups,
   });
@@ -183,6 +185,7 @@ export function createWhatsAppPluginBase(params: {
     | "configSchema"
     | "config"
     | "security"
+    | "doctor"
     | "setup"
     | "groups"
   >;

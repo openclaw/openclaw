@@ -11,7 +11,11 @@ import {
   makeTrackedTempDir,
   mkdirSafeDir,
 } from "../plugins/test-helpers/fs-fixtures.js";
-import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import {
+  applyPluginAutoEnable,
+  detectPluginAutoEnableCandidates,
+  resolvePluginAutoEnableCandidateReason,
+} from "./plugin-auto-enable.js";
 import { validateConfigObject } from "./validation.js";
 
 const tempDirs: string[] = [];
@@ -121,6 +125,33 @@ afterEach(() => {
 });
 
 describe("applyPluginAutoEnable", () => {
+  it("detects typed channel-configured candidates", () => {
+    const candidates = detectPluginAutoEnableCandidates({
+      config: {
+        channels: { slack: { botToken: "x" } },
+      },
+      env: {},
+    });
+
+    expect(candidates).toEqual([
+      {
+        pluginId: "slack",
+        kind: "channel-configured",
+        channelId: "slack",
+      },
+    ]);
+  });
+
+  it("formats typed provider-auth candidates into stable reasons", () => {
+    expect(
+      resolvePluginAutoEnableCandidateReason({
+        pluginId: "google",
+        kind: "provider-auth-configured",
+        providerId: "google",
+      }),
+    ).toBe("google auth configured");
+  });
+
   it("treats an undefined config as empty", () => {
     const result = applyPluginAutoEnable({
       config: undefined,

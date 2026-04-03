@@ -6,6 +6,7 @@ import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
@@ -38,10 +39,6 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import {
-  detectPluginInstallPathIssue,
-  formatPluginInstallPathIssue,
-} from "../infra/plugin-install-path-warnings.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import {
   primeRemoteSkillsCache,
@@ -52,7 +49,6 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { resolveBundledPluginInstallCommandHint } from "../plugins/bundled-sources.js";
 import {
   resolveConfiguredDeferredChannelPluginIds,
   resolveGatewayStartupPluginIds,
@@ -124,7 +120,6 @@ import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
-import { runStartupMatrixMigration } from "./server-startup-matrix-migration.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
@@ -554,7 +549,7 @@ export async function startGatewayServer(
     const startupSnapshot = await readConfigFileSnapshot();
     startupInternalWriteHash = startupSnapshot.hash ?? null;
   }
-  await runStartupMatrixMigration({
+  await runChannelPluginStartupMaintenance({
     cfg: cfgAtStart,
     env: process.env,
     log,
@@ -564,26 +559,6 @@ export async function startGatewayServer(
     env: process.env,
     log,
   });
-  const matrixInstallPathIssue = await detectPluginInstallPathIssue({
-    pluginId: "matrix",
-    install: cfgAtStart.plugins?.installs?.matrix,
-  });
-  if (matrixInstallPathIssue) {
-    const lines = formatPluginInstallPathIssue({
-      issue: matrixInstallPathIssue,
-      pluginLabel: "Matrix",
-      defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-      repoInstallCommand: resolveBundledPluginInstallCommandHint({
-        pluginId: "matrix",
-        workspaceDir: process.cwd(),
-      }),
-      formatCommand: formatCliCommand,
-    });
-    log.warn(
-      `gateway: matrix install path warning:\n${lines.map((entry) => `- ${entry}`).join("\n")}`,
-    );
-  }
-
   initSubagentRegistry();
   const gatewayPluginConfigAtStart = applyPluginAutoEnable({
     config: cfgAtStart,
@@ -613,6 +588,7 @@ export async function startGatewayServer(
   if (!minimalTestGateway) {
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayStartupPlugins({
       cfg: gatewayPluginConfigAtStart,
+      activationSourceConfig: cfgAtStart,
       workspaceDir: defaultWorkspaceDir,
       log,
       coreGatewayHandlers,
@@ -1271,6 +1247,20 @@ export async function startGatewayServer(
           }
           try {
             gatewayClient.socket.close(4001, "device removed");
+          } catch {
+            /* ignore */
+          }
+        }
+      },
+      disconnectClientsUsingSharedGatewayAuth: () => {
+        for (const gatewayClient of clients) {
+          // Trusted-proxy sessions stay up here; only token/password-authenticated
+          // clients should be invalidated when the shared gateway secret changes.
+          if (!gatewayClient.usesSharedGatewayAuth) {
+            continue;
+          }
+          try {
+            gatewayClient.socket.close(4001, "gateway auth changed");
           } catch {
             /* ignore */
           }

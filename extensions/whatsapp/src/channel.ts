@@ -1,21 +1,23 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
-import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-// WhatsApp-specific imports from local extension code (moved from src/web/ and src/channels/plugins/)
 import {
   listWhatsAppAccountIds,
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
-import { handleWhatsAppAction } from "./action-runtime.js";
 import { createWhatsAppLoginTool } from "./agent-tools-login.js";
 import { whatsappApprovalAuth } from "./approval-auth.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
+import {
+  describeWhatsAppMessageActions,
+  resolveWhatsAppAgentReactionGuidance,
+} from "./channel-actions.js";
+import { whatsappChannelOutbound } from "./channel-outbound.js";
+import { handleWhatsAppReactAction } from "./channel-react-action.js";
 import {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
@@ -25,38 +27,25 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
-import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 import {
-  createActionGate,
-  createWhatsAppOutboundBase,
   DEFAULT_ACCOUNT_ID,
   formatWhatsAppConfigAllowFromEntries,
-  readStringParam,
   resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppOutboundTarget,
   resolveWhatsAppHeartbeatRecipients,
   resolveWhatsAppMentionStripRegexes,
-  type ChannelMessageActionName,
   type ChannelPlugin,
-  type OpenClawConfig,
   isWhatsAppGroupJid,
   normalizeWhatsAppTarget,
 } from "./runtime-api.js";
 import { getWhatsAppRuntime } from "./runtime.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 import {
   createWhatsAppPluginBase,
   loadWhatsAppChannelRuntime,
   whatsappSetupWizardProxy,
-  WHATSAPP_CHANNEL,
 } from "./shared.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
-
-function normalizeWhatsAppPayloadText(text: string | undefined): string {
-  return (text ?? "").replace(/^(?:[ \t]*\r?\n)+/, "");
-}
 
 function parseWhatsAppExplicitTarget(raw: string) {
   const normalized = normalizeWhatsAppTarget(raw);
@@ -69,73 +58,12 @@ function parseWhatsAppExplicitTarget(raw: string) {
   };
 }
 
-function areWhatsAppAgentReactionsEnabled(params: { cfg: OpenClawConfig; accountId?: string }) {
-  if (!params.cfg.channels?.whatsapp) {
-    return false;
-  }
-  const gate = createActionGate(params.cfg.channels.whatsapp.actions);
-  if (!gate("reactions")) {
-    return false;
-  }
-  return resolveWhatsAppReactionLevel({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).agentReactionsEnabled;
-}
-
-function hasAnyWhatsAppAccountWithAgentReactionsEnabled(cfg: OpenClawConfig) {
-  if (!cfg.channels?.whatsapp) {
-    return false;
-  }
-  return listWhatsAppAccountIds(cfg).some((accountId) => {
-    const account = resolveWhatsAppAccount({ cfg, accountId });
-    if (!account.enabled) {
-      return false;
-    }
-    return areWhatsAppAgentReactionsEnabled({
-      cfg,
-      accountId,
-    });
-  });
-}
-
-function resolveWhatsAppAgentReactionGuidance(params: { cfg: OpenClawConfig; accountId?: string }) {
-  if (!params.cfg.channels?.whatsapp) {
-    return undefined;
-  }
-  const gate = createActionGate(params.cfg.channels.whatsapp.actions);
-  if (!gate("reactions")) {
-    return undefined;
-  }
-  const resolved = resolveWhatsAppReactionLevel({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  if (!resolved.agentReactionsEnabled) {
-    return undefined;
-  }
-  return resolved.agentReactionGuidance;
-}
-
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
   createChatChannelPlugin<ResolvedWhatsAppAccount>({
     pairing: {
       idLabel: "whatsappSenderId",
     },
-    outbound: {
-      ...createWhatsAppOutboundBase({
-        chunker: chunkText,
-        sendMessageWhatsApp,
-        sendPollWhatsApp,
-        shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
-        resolveTarget: ({ to, allowFrom, mode }) =>
-          resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-      }),
-      normalizePayload: ({ payload }) => ({
-        ...payload,
-        text: normalizeWhatsAppPayloadText(payload.text),
-      }),
-    },
+    outbound: whatsappChannelOutbound,
     base: {
       ...createWhatsAppPluginBase({
         groups: {
@@ -163,6 +91,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
       commands: {
         enforceOwnerForCommands: true,
+        preferSenderE164ForCommands: true,
         skipWhenConfigEmpty: true,
       },
       agentPrompt: {
@@ -203,79 +132,11 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         listGroups: async (params) => listWhatsAppDirectoryGroupsFromConfig(params),
       },
       actions: {
-        describeMessageTool: ({ cfg, accountId }) => {
-          if (!cfg.channels?.whatsapp) {
-            return null;
-          }
-          const gate = createActionGate(cfg.channels.whatsapp.actions);
-          const actions = new Set<ChannelMessageActionName>();
-          const canReact =
-            accountId != null
-              ? areWhatsAppAgentReactionsEnabled({
-                  cfg,
-                  accountId: accountId ?? undefined,
-                })
-              : hasAnyWhatsAppAccountWithAgentReactionsEnabled(cfg);
-          if (canReact) {
-            actions.add("react");
-          }
-          if (gate("polls")) {
-            actions.add("poll");
-          }
-          return { actions: Array.from(actions) };
-        },
+        describeMessageTool: ({ cfg, accountId }) =>
+          describeWhatsAppMessageActions({ cfg, accountId }),
         supportsAction: ({ action }) => action === "react",
-        handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
-          if (action !== "react") {
-            throw new Error(`Action ${action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
-          }
-          // Only fall back to the inbound message id when the current turn
-          // originates from WhatsApp and targets the same chat. Skip the
-          // fallback when the source is another provider (the message id
-          // would be meaningless) or when the caller routes to a different
-          // WhatsApp chat (the id would belong to the wrong conversation).
-          const isWhatsAppSource = toolContext?.currentChannelProvider === WHATSAPP_CHANNEL;
-          const explicitTarget =
-            readStringParam(params, "chatJid") ?? readStringParam(params, "to");
-          const normalizedTarget = explicitTarget ? normalizeWhatsAppTarget(explicitTarget) : null;
-          const normalizedCurrent =
-            isWhatsAppSource && toolContext?.currentChannelId
-              ? normalizeWhatsAppTarget(toolContext.currentChannelId)
-              : null;
-          // When an explicit target is provided, require a known current chat
-          // to compare against. If currentChannelId is missing/unparseable,
-          // treat it as ineligible for fallback to avoid cross-chat leaks.
-          const isCrossChat =
-            normalizedTarget != null &&
-            (normalizedCurrent == null || normalizedTarget !== normalizedCurrent);
-          const scopedContext = !isWhatsAppSource || isCrossChat ? undefined : toolContext;
-          const messageIdRaw = resolveReactionMessageId({
-            args: params,
-            toolContext: scopedContext,
-          });
-          if (messageIdRaw == null) {
-            // Delegate to readStringParam so the gateway maps the error to 400.
-            readStringParam(params, "messageId", { required: true });
-          }
-          const messageId = String(messageIdRaw);
-          const emoji = readStringParam(params, "emoji", { allowEmpty: true });
-          const remove = typeof params.remove === "boolean" ? params.remove : undefined;
-          return await handleWhatsAppAction(
-            {
-              action: "react",
-              chatJid:
-                readStringParam(params, "chatJid") ??
-                readStringParam(params, "to", { required: true }),
-              messageId,
-              emoji,
-              remove,
-              participant: readStringParam(params, "participant"),
-              accountId: accountId ?? undefined,
-              fromMe: typeof params.fromMe === "boolean" ? params.fromMe : undefined,
-            },
-            cfg,
-          );
-        },
+        handleAction: async ({ action, params, cfg, accountId, toolContext }) =>
+          await handleWhatsAppReactAction({ action, params, cfg, accountId, toolContext }),
       },
       auth: {
         ...whatsappApprovalAuth,
