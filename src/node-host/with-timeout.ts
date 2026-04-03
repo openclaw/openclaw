@@ -1,3 +1,11 @@
+/** Sentinel error thrown exclusively by {@link withTimeout} when the deadline fires. */
+export class TimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
 export async function withTimeout<T>(
   work: (signal: AbortSignal | undefined) => Promise<T>,
   timeoutMs?: number,
@@ -12,7 +20,7 @@ export async function withTimeout<T>(
   }
 
   const abortCtrl = new AbortController();
-  const timeoutError = new Error(`${label ?? "request"} timed out`);
+  const timeoutError = new TimeoutError(`${label ?? "request"} timed out`);
   const timer = setTimeout(() => abortCtrl.abort(timeoutError), resolved);
   timer.unref?.();
 

@@ -6,7 +6,7 @@
  */
 
 import { formatErrorMessage } from "../infra/errors.js";
-import { withTimeout } from "../node-host/with-timeout.js";
+import { TimeoutError, withTimeout } from "../node-host/with-timeout.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import type { PluginRegistry } from "./registry.js";
 import type {
@@ -302,7 +302,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         `${hookName} handler from ${pluginId}`,
       );
     } catch (err) {
-      if (err instanceof Error && err.message.includes("timed out")) {
+      if (err instanceof TimeoutError) {
         quarantinedHandlers.add(quarantineKey);
         logger?.warn?.(
           `[hooks] quarantined ${hookName} handler from ${pluginId} after timeout — future invocations will be skipped`,
