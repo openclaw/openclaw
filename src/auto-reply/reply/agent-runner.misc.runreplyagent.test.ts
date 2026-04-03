@@ -521,6 +521,10 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
     expect(updateSessionStoreSpy).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ text: "ok" });
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:openclaw");
+    expect(sessionEntry.authProfileOverrideSource).toBe("auto");
   });
 
   it("rolls back the persisted fallback candidate when that candidate fails", async () => {

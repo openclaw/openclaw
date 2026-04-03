@@ -178,7 +178,7 @@ export async function runAgentTurnWithFallback(params: {
       return;
     }
 
-    const writeEntry = async (snapshot: SessionEntry) => {
+    const applySnapshot = (snapshot: SessionEntry) => {
       for (const key of Object.keys(activeSessionEntry)) {
         if (!(key in snapshot)) {
           delete activeSessionEntry[key as keyof SessionEntry];
@@ -186,6 +186,9 @@ export async function runAgentTurnWithFallback(params: {
       }
       Object.assign(activeSessionEntry, snapshot);
       params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
+    };
+
+    const persistEntry = async () => {
       if (params.storePath) {
         await updateSessionStore(params.storePath, (store) => {
           store[params.sessionKey!] = activeSessionEntry;
@@ -193,10 +196,17 @@ export async function runAgentTurnWithFallback(params: {
       }
     };
 
-    await writeEntry(activeSessionEntry);
+    applySnapshot(activeSessionEntry);
+    try {
+      await persistEntry();
+    } catch (error) {
+      applySnapshot(previousEntry);
+      throw error;
+    }
 
     return async () => {
-      await writeEntry({ ...previousEntry });
+      applySnapshot({ ...previousEntry });
+      await persistEntry();
     };
   };
 
