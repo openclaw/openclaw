@@ -1323,7 +1323,6 @@ async function processOpenAICompletionsStream(
 
 function detectCompat(model: OpenAIModeModel) {
   const provider = model.provider;
-  const baseUrl = model.baseUrl ?? "";
   const capabilities = resolveProviderRequestCapabilities({
     provider,
     api: model.api,
@@ -1336,20 +1335,26 @@ function detectCompat(model: OpenAIModeModel) {
         ? (model.compat as { supportsStore?: boolean })
         : undefined,
   });
-  const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
+  const endpointClass = capabilities.endpointClass;
+  const isDefaultRoute = endpointClass === "default";
+  const isZai = endpointClass === "zai-native" || (isDefaultRoute && provider === "zai");
   const isNonStandard =
-    provider === "cerebras" ||
-    baseUrl.includes("cerebras.ai") ||
-    provider === "xai" ||
-    baseUrl.includes("api.x.ai") ||
-    baseUrl.includes("chutes.ai") ||
-    baseUrl.includes("deepseek.com") ||
+    endpointClass === "cerebras-native" ||
+    endpointClass === "chutes-native" ||
+    endpointClass === "deepseek-native" ||
+    endpointClass === "opencode-native" ||
+    endpointClass === "xai-native" ||
     isZai ||
-    provider === "opencode" ||
-    baseUrl.includes("opencode.ai");
-  const useMaxTokens = baseUrl.includes("chutes.ai");
-  const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
-  const isGroq = provider === "groq" || baseUrl.includes("groq.com");
+    (isDefaultRoute &&
+      (provider === "cerebras" ||
+        provider === "chutes" ||
+        provider === "deepseek" ||
+        provider === "opencode" ||
+        provider === "xai"));
+  const useMaxTokens =
+    endpointClass === "chutes-native" || (isDefaultRoute && provider === "chutes");
+  const isGrok = endpointClass === "xai-native" || (isDefaultRoute && provider === "xai");
+  const isGroq = endpointClass === "groq-native" || (isDefaultRoute && provider === "groq");
   const reasoningEffortMap: Record<string, string> =
     isGroq && model.id === "qwen/qwen3-32b"
       ? {
@@ -1464,7 +1469,7 @@ function convertTools(tools: NonNullable<Context["tools"]>, compat: ReturnType<t
   }));
 }
 
-function buildOpenAICompletionsParams(
+export function buildOpenAICompletionsParams(
   model: OpenAIModeModel,
   context: Context,
   options: OpenAICompletionsOptions | undefined,
