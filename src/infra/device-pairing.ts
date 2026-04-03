@@ -351,19 +351,19 @@ function resolveApprovedTokenScopes(params: {
   approvedScopes?: string[];
   existing?: PairedDevice;
 }): string[] {
-  if (params.role === "operator") {
-    const requestedScopes = normalizeDeviceAuthScopes(params.pending.scopes);
-    if (requestedScopes.length > 0) {
+  const requestedScopes = normalizeDeviceAuthScopes(params.pending.scopes);
+  if (requestedScopes.length > 0) {
+    if (params.role === "operator") {
       return requestedScopes;
     }
-    return normalizeDeviceAuthScopes(
-      params.existingToken?.scopes ??
-        params.approvedScopes ??
-        params.existing?.approvedScopes ??
-        params.existing?.scopes,
-    );
+    return requestedScopes.filter((scope) => !scope.startsWith(OPERATOR_SCOPE_PREFIX));
   }
-  return normalizeDeviceAuthScopes(params.existingToken?.scopes);
+  return normalizeDeviceAuthScopes(
+    params.existingToken?.scopes ??
+      params.approvedScopes ??
+      params.existing?.approvedScopes ??
+      params.existing?.scopes,
+  );
 }
 
 function resolveApprovedDeviceScopeBaseline(device: PairedDevice): string[] | null {
