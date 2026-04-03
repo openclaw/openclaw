@@ -1166,6 +1166,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       config: normalized,
       rootConfig: cfg,
       enabledByDefault: manifestRecord.enabledByDefault,
+      sourceConfig: activationSourceNormalized,
+      sourceRootConfig: activationSourceConfig,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
@@ -1717,6 +1719,8 @@ export async function loadOpenClawPluginCliRegistry(
       config: normalized,
       rootConfig: cfg,
       enabledByDefault: manifestRecord.enabledByDefault,
+      sourceConfig: activationSourceNormalized,
+      sourceRootConfig: activationSourceConfig,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({

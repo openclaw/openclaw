@@ -1,10 +1,12 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { fetchWithSsrFGuard } from "../runtime-api.js";
-import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
-import { getNextcloudTalkRuntime } from "./runtime.js";
-import { generateNextcloudTalkSignature } from "./signature.js";
+import {
+  convertMarkdownTables,
+  fetchWithSsrFGuard,
+  generateNextcloudTalkSignature,
+  getNextcloudTalkRuntime,
+  resolveMarkdownTableMode,
+  resolveNextcloudTalkAccount,
+} from "./send.runtime.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 type NextcloudTalkSendOpts = {

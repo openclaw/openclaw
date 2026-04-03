@@ -9,9 +9,13 @@ const acquireSessionWriteLockMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => ({ release: acquireSessionWriteLockReleaseMock })),
 );
 
-vi.mock("../session-write-lock.js", () => ({
-  acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
-}));
+vi.mock("../session-write-lock.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../session-write-lock.js")>();
+  return {
+    ...original,
+    acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
+  };
+});
 
 let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
@@ -26,9 +30,13 @@ let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.j
 
 async function loadFreshToolResultTruncationModuleForTest() {
   vi.resetModules();
-  vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
-  }));
+  vi.doMock("../session-write-lock.js", async (importOriginal) => {
+    const original = await importOriginal<typeof import("../session-write-lock.js")>();
+    return {
+      ...original,
+      acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
+    };
+  });
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({
     truncateToolResultText,
