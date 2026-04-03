@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveProviderWebSearchPluginConfig } from "../plugin-sdk/provider-web-search.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -14,7 +13,6 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
-import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "./xai-auth-trace.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -48,7 +46,6 @@ export type ProviderAuthResolver = (
 };
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
-const log = createSubsystemLogger("agents/model-providers");
 
 export function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
@@ -439,15 +436,7 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
     }) ?? resolveXaiConfigFallbackAuth(params);
   const apiKey = synthetic?.apiKey?.trim();
   if (!apiKey) {
-    if (shouldTraceProviderAuth(params.provider)) {
-      log.info("[xai-auth] bootstrap config fallback: no config-backed key found");
-    }
     return undefined;
-  }
-  if (shouldTraceProviderAuth(params.provider)) {
-    log.info(
-      `[xai-auth] bootstrap config fallback: key=${summarizeProviderAuthKey(apiKey)} marker=${isNonSecretApiKeyMarker(apiKey) ? "kept" : "secretref-managed"} source=config`,
-    );
   }
   return isNonSecretApiKeyMarker(apiKey)
     ? {
@@ -507,24 +496,5 @@ function resolveXaiConfigFallbackAuth(params: { provider: string; config?: OpenC
       mode: "api-key",
     };
   }
-  const grokApiKey = normalizeOptionalSecretInput(params.config?.tools?.web?.search?.grok?.apiKey);
-  if (grokApiKey) {
-    return {
-      apiKey: grokApiKey,
-      source: "tools.web.search.grok.apiKey",
-      mode: "api-key",
-    };
-  }
-  const grokApiKeyRef = coerceSecretRef(params.config?.tools?.web?.search?.grok?.apiKey);
-  if (!grokApiKeyRef) {
-    return undefined;
-  }
-  return {
-    apiKey:
-      grokApiKeyRef.source === "env"
-        ? grokApiKeyRef.id.trim()
-        : resolveNonEnvSecretRefApiKeyMarker(grokApiKeyRef.source),
-    source: "tools.web.search.grok.apiKey",
-    mode: "api-key",
-  };
+  return undefined;
 }

@@ -190,6 +190,43 @@ describe("browser config", () => {
     expect(profile?.cdpIsLoopback).toBe(true);
   });
 
+  it("prefers cdpPort over stale WebSocket devtools cdpUrl when both are set", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "chrome-cdp": {
+          cdpPort: 9222,
+          cdpUrl: "ws://127.0.0.1:9222/devtools/browser/old-stale-id",
+          attachOnly: true,
+          color: "#F59E0B",
+        },
+      },
+    });
+    const profile = resolveProfile(resolved, "chrome-cdp");
+    // cdpPort produces a stable HTTP endpoint; the stale WS session ID is dropped.
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
+    expect(profile?.cdpPort).toBe(9222);
+    expect(profile?.cdpIsLoopback).toBe(true);
+    expect(profile?.attachOnly).toBe(true);
+  });
+
+  it("preserves profile host when dropping stale devtools WS path", () => {
+    const resolved = resolveBrowserConfig({
+      cdpUrl: "http://devbox.local:9000",
+      profiles: {
+        "chrome-local": {
+          cdpPort: 9222,
+          cdpUrl: "ws://10.0.0.42:9222/devtools/browser/stale-id",
+          color: "#0066CC",
+        },
+      },
+    });
+    const profile = resolveProfile(resolved, "chrome-local");
+    // Host comes from the profile WS URL, not the global cdpUrl.
+    expect(profile?.cdpUrl).toBe("http://10.0.0.42:9222");
+    expect(profile?.cdpHost).toBe("10.0.0.42");
+    expect(profile?.cdpIsLoopback).toBe(false);
+  });
+
   it("rejects unsupported protocols", () => {
     expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(
       "must be http(s) or ws(s)",

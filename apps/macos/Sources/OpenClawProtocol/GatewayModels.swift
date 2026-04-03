@@ -2235,21 +2235,29 @@ public struct AgentSummary: Codable, Sendable {
     public let id: String
     public let name: String?
     public let identity: [String: AnyCodable]?
+    public let workspace: String?
+    public let model: [String: AnyCodable]?
 
     public init(
         id: String,
         name: String?,
-        identity: [String: AnyCodable]?)
+        identity: [String: AnyCodable]?,
+        workspace: String?,
+        model: [String: AnyCodable]?)
     {
         self.id = id
         self.name = name
         self.identity = identity
+        self.workspace = workspace
+        self.model = model
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case name
         case identity
+        case workspace
+        case model
     }
 }
 
@@ -3702,18 +3710,22 @@ public struct DevicePairResolvedEvent: Codable, Sendable {
 public struct ChatHistoryParams: Codable, Sendable {
     public let sessionkey: String
     public let limit: Int?
+    public let maxchars: Int?
 
     public init(
         sessionkey: String,
-        limit: Int?)
+        limit: Int?,
+        maxchars: Int?)
     {
         self.sessionkey = sessionkey
         self.limit = limit
+        self.maxchars = maxchars
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case limit
+        case maxchars = "maxChars"
     }
 }
 

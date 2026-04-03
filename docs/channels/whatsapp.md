@@ -330,9 +330,35 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
   </Accordion>
 </AccordionGroup>
 
+## Reaction level
+
+`channels.whatsapp.reactionLevel` controls how broadly the agent uses emoji reactions on WhatsApp:
+
+| Level         | Ack reactions | Agent-initiated reactions | Description                                      |
+| ------------- | ------------- | ------------------------- | ------------------------------------------------ |
+| `"off"`       | No            | No                        | No reactions at all                              |
+| `"ack"`       | Yes           | No                        | Ack reactions only (pre-reply receipt)           |
+| `"minimal"`   | Yes           | Yes (conservative)        | Ack + agent reactions with conservative guidance |
+| `"extensive"` | Yes           | Yes (encouraged)          | Ack + agent reactions with encouraged guidance   |
+
+Default: `"minimal"`.
+
+Per-account overrides use `channels.whatsapp.accounts.<id>.reactionLevel`.
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      reactionLevel: "ack",
+    },
+  },
+}
+```
+
 ## Acknowledgment reactions
 
 WhatsApp supports immediate ack reactions on inbound receipt via `channels.whatsapp.ackReaction`.
+Ack reactions are gated by `reactionLevel` — they are suppressed when `reactionLevel` is `"off"`.
 
 ```json5
 {
@@ -447,7 +473,7 @@ Primary reference:
 High-signal WhatsApp fields:
 
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
-- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`
+- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
 - operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
@@ -455,6 +481,8 @@ High-signal WhatsApp fields:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)

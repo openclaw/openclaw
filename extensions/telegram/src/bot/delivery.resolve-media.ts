@@ -41,7 +41,7 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
     // enforcing SSRF checks on the resolved and redirected targets.
     hostnameAllowlist: hostnames,
     ...(allowedHostnames ? { allowedHostnames } : {}),
-    allowRfc2544BenchmarkRange: false,
+    allowRfc2544BenchmarkRange: true,
   };
 }
 
@@ -87,6 +87,17 @@ function resolveTelegramFileName(msg: TelegramContext["message"]): string | unde
     msg.audio?.file_name ??
     msg.video?.file_name ??
     msg.animation?.file_name
+  );
+}
+
+function resolveTelegramMimeType(msg: TelegramContext["message"]): string | undefined {
+  return (
+    msg.audio?.mime_type ??
+    msg.voice?.mime_type ??
+    msg.video?.mime_type ??
+    msg.document?.mime_type ??
+    msg.animation?.mime_type ??
+    undefined
   );
 }
 
@@ -152,10 +163,11 @@ async function downloadAndSaveTelegramFile(params: {
   transport: TelegramTransport;
   maxBytes: number;
   telegramFileName?: string;
+  mimeType?: string;
   apiRoot?: string;
 }) {
   if (path.isAbsolute(params.filePath)) {
-    return { path: params.filePath, contentType: undefined };
+    return { path: params.filePath, contentType: params.mimeType };
   }
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/file/bot${params.token}/${params.filePath}`;
@@ -320,6 +332,7 @@ export async function resolveMedia(
     transport: resolveRequiredTelegramTransport(transport),
     maxBytes,
     telegramFileName: resolveTelegramFileName(msg),
+    mimeType: resolveTelegramMimeType(msg),
     apiRoot,
   });
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";

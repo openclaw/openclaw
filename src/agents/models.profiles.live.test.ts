@@ -192,6 +192,15 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
   );
 }
 
+function isOllamaUnavailableErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("ollama could not be reached") ||
+    (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
+    (msg.includes("localhost:11434") && msg.includes("econnrefused"))
+  );
+}
+
 function toInt(value: string | undefined, fallback: number): number {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -764,6 +773,15 @@ describeLive("live models (profile keys)", () => {
             if (allowNotFoundSkip && isProviderUnavailableErrorMessage(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (provider unavailable)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "ollama" &&
+              isOllamaUnavailableErrorMessage(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (ollama unavailable)`);
               break;
             }
             logProgress(`${progressLabel}: failed`);

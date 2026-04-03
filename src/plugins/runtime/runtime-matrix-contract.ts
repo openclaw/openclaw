@@ -1,5 +1,5 @@
-// Narrow plugin-sdk surface for the bundled matrix plugin.
-// Keep this list additive and scoped to symbols used under extensions/matrix.
+// Narrow plugin-sdk surface for the bundled Matrix plugin.
+// Keep this list additive and scoped to the runtime contract only.
 
 import { createOptionalChannelSetupSurface } from "../../plugin-sdk/channel-setup.js";
 
@@ -85,7 +85,7 @@ export {
 export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
-} from "../../plugin-sdk/matrix.js";
+} from "../../plugin-sdk/matrix-thread-bindings.js";
 export { createTypingCallbacks } from "../../channels/typing.js";
 export { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../../config/config.js";
@@ -160,12 +160,12 @@ export {
   resolveMatrixCredentialsDir,
   resolveMatrixCredentialsPath,
   resolveMatrixLegacyFlatStoragePaths,
-} from "../../plugin-sdk/matrix.js";
-export { getMatrixScopedEnvVarNames } from "../../plugin-sdk/matrix.js";
+} from "../../plugin-sdk/matrix-helper.js";
+export { getMatrixScopedEnvVarNames } from "../../plugin-sdk/matrix-helper.js";
 export {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
-} from "../../plugin-sdk/matrix.js";
+} from "../../plugin-sdk/matrix-helper.js";
 
 const matrixSetup = createOptionalChannelSetupSurface({
   channel: "matrix",

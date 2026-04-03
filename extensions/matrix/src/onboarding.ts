@@ -1,5 +1,8 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { type ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+import {
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizardAdapter,
+} from "openclaw/plugin-sdk/setup";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import {
@@ -37,54 +40,6 @@ import {
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
-
-type MatrixOnboardingStatus = {
-  channel: typeof channel;
-  configured: boolean;
-  statusLines: string[];
-  selectionHint?: string;
-  quickstartScore?: number;
-};
-
-type MatrixAccountOverrides = Partial<Record<typeof channel, string>>;
-
-type MatrixOnboardingConfigureContext = {
-  cfg: CoreConfig;
-  runtime: RuntimeEnv;
-  prompter: WizardPrompter;
-  options?: unknown;
-  forceAllowFrom: boolean;
-  accountOverrides: MatrixAccountOverrides;
-  shouldPromptAccountIds: boolean;
-};
-
-type MatrixOnboardingInteractiveContext = MatrixOnboardingConfigureContext & {
-  configured: boolean;
-  label?: string;
-};
-
-type MatrixOnboardingAdapter = {
-  channel: typeof channel;
-  getStatus: (ctx: {
-    cfg: CoreConfig;
-    options?: unknown;
-    accountOverrides: MatrixAccountOverrides;
-  }) => Promise<MatrixOnboardingStatus>;
-  configure: (
-    ctx: MatrixOnboardingConfigureContext,
-  ) => Promise<{ cfg: CoreConfig; accountId?: string }>;
-  configureInteractive?: (
-    ctx: MatrixOnboardingInteractiveContext,
-  ) => Promise<{ cfg: CoreConfig; accountId?: string } | "skip">;
-  afterConfigWritten?: (ctx: {
-    previousCfg: CoreConfig;
-    cfg: CoreConfig;
-    accountId: string;
-    runtime: RuntimeEnv;
-  }) => Promise<void> | void;
-  dmPolicy?: ChannelSetupDmPolicy;
-  disable?: (cfg: CoreConfig) => CoreConfig;
-};
 
 function resolveMatrixOnboardingAccountId(cfg: CoreConfig, accountId?: string): string {
   return normalizeAccountId(
@@ -556,7 +511,7 @@ async function runMatrixConfigure(params: {
   return { cfg: next, accountId };
 }
 
-export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
+export const matrixOnboardingAdapter: ChannelSetupWizardAdapter = {
   channel,
   getStatus: async ({ cfg, accountOverrides }) => {
     const resolvedCfg = cfg as CoreConfig;
@@ -566,7 +521,7 @@ export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
         channel,
         configured: false,
         statusLines: ['Matrix: set "channels.matrix.defaultAccount" to select a named account'],
-        selectionHint: !sdkReady ? "install matrix-js-sdk" : "set defaultAccount",
+        selectionHint: !sdkReady ? "install Matrix deps" : "set defaultAccount",
       };
     }
     const account = resolveMatrixAccount({
@@ -580,7 +535,7 @@ export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
       statusLines: [
         `Matrix: ${configured ? "configured" : "needs homeserver + access token or password"}`,
       ],
-      selectionHint: !sdkReady ? "install matrix-js-sdk" : configured ? "configured" : "needs auth",
+      selectionHint: !sdkReady ? "install Matrix deps" : configured ? "configured" : "needs auth",
     };
   },
   configure: async ({

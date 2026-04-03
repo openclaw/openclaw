@@ -39,6 +39,12 @@ import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import {
+  buildTelegramErrorScopeKey,
+  isSilentErrorPolicy,
+  resolveTelegramErrorPolicy,
+  shouldSuppressTelegramError,
+} from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
@@ -166,6 +172,7 @@ export const dispatchTelegramMessage = async ({
     chatId,
     isGroup,
     groupConfig,
+    topicConfig,
     threadSpec,
     historyKey,
     historyLimit,
@@ -570,7 +577,9 @@ export const dispatchTelegramMessage = async ({
     void statusReactionController.setThinking();
   }
 
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  const { onModelSelected, ...replyPipeline } = (
+    telegramDeps.createChannelReplyPipeline ?? createChannelReplyPipeline
+  )({
     cfg,
     agentId: route.agentId,
     channel: "telegram",
@@ -724,6 +733,28 @@ export const dispatchTelegramMessage = async ({
           }
         },
         onError: (err, info) => {
+          const errorPolicy = resolveTelegramErrorPolicy({
+            accountConfig: telegramCfg,
+            groupConfig,
+            topicConfig,
+          });
+          if (isSilentErrorPolicy(errorPolicy.policy)) {
+            return;
+          }
+          if (
+            errorPolicy.policy === "once" &&
+            shouldSuppressTelegramError({
+              scopeKey: buildTelegramErrorScopeKey({
+                accountId: route.accountId,
+                chatId,
+                threadId: threadSpec.id,
+              }),
+              cooldownMs: errorPolicy.cooldownMs,
+              errorMessage: String(err),
+            })
+          ) {
+            return;
+          }
           deliveryState.markNonSilentFailure();
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },

@@ -1,6 +1,17 @@
 export const runNodeWatchedPaths: string[];
 export function isBuildRelevantRunNodePath(repoPath: string): boolean;
 export function isRestartRelevantRunNodePath(repoPath: string): boolean;
+export function resolveBuildRequirement(deps: {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  fs: unknown;
+  spawnSync: unknown;
+  distRoot: string;
+  distEntry: string;
+  buildStampPath: string;
+  sourceRoots: Array<{ name: string; path: string }>;
+  configFiles: string[];
+}): { shouldBuild: boolean; reason: string };
 
 export function runNodeMain(params?: {
   spawn?: (

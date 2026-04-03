@@ -8,6 +8,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { formatClawHubSpecifier, installPluginFromClawHub } from "../plugins/clawhub.js";
+import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
@@ -231,7 +232,11 @@ export async function loadConfigForInstall(
 
 export async function runPluginInstallCommand(params: {
   raw: string;
-  opts: { link?: boolean; pin?: boolean; marketplace?: string };
+  opts: InstallSafetyOverrides & {
+    link?: boolean;
+    pin?: boolean;
+    marketplace?: string;
+  };
 }) {
   const shorthand = !params.opts.marketplace
     ? await resolveMarketplaceInstallShortcut(params.raw)
@@ -276,6 +281,7 @@ export async function runPluginInstallCommand(params: {
 
   if (opts.marketplace) {
     const result = await installPluginFromMarketplace({
+      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
       marketplace: opts.marketplace,
       plugin: raw,
       logger: createPluginInstallLogger(),
@@ -347,6 +353,7 @@ export async function runPluginInstallCommand(params: {
     }
 
     const result = await installPluginFromPath({
+      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
       path: resolved,
       logger: createPluginInstallLogger(),
     });
@@ -417,6 +424,7 @@ export async function runPluginInstallCommand(params: {
   const clawhubSpec = parseClawHubPluginSpec(raw);
   if (clawhubSpec) {
     const result = await installPluginFromClawHub({
+      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
       spec: raw,
       logger: createPluginInstallLogger(),
     });
@@ -451,6 +459,7 @@ export async function runPluginInstallCommand(params: {
   const preferredClawHubSpec = buildPreferredClawHubSpec(raw);
   if (preferredClawHubSpec) {
     const clawhubResult = await installPluginFromClawHub({
+      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
       spec: preferredClawHubSpec,
       logger: createPluginInstallLogger(),
     });
@@ -484,6 +493,7 @@ export async function runPluginInstallCommand(params: {
   }
 
   const result = await installPluginFromNpmSpec({
+    dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
     spec: raw,
     logger: createPluginInstallLogger(),
   });

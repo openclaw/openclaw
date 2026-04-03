@@ -1,8 +1,8 @@
 import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedAgentRoute } from "../../../src/routing/resolve-route.js";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import {
@@ -258,13 +258,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     }),
   };
 });
-
-vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
-  getSessionBindingService: () => ({
-    resolveByConversation: mockResolveBoundConversation,
-    touch: mockTouchBinding,
-  }),
-}));
 
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
   const runtime = createRuntimeEnv();
@@ -1153,6 +1146,109 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("drops quoted group context from senders outside the group sender allowlist in allowlist mode", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_blocked",
+      chatId: "oc-group",
+      senderId: "ou-blocked",
+      senderType: "user",
+      content: "blocked quoted content",
+      contentType: "text",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groupSenderAllowFrom: ["ou-allowed"],
+          contextVisibility: "allowlist",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-allowed",
+        },
+      },
+      message: {
+        message_id: "msg-group-quoted-filter",
+        parent_id: "om_parent_blocked",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ReplyToId: "om_parent_blocked",
+        ReplyToBody: undefined,
+      }),
+    );
+  });
+
+  it("keeps quoted group context from non-allowlisted senders in default all mode", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_visible",
+      chatId: "oc-group",
+      senderId: "ou-blocked",
+      senderType: "user",
+      content: "visible quoted content",
+      contentType: "text",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groupSenderAllowFrom: ["ou-allowed"],
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-allowed",
+        },
+      },
+      message: {
+        message_id: "msg-group-quoted-visible",
+        parent_id: "om_parent_visible",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ReplyToId: "om_parent_visible",
+        ReplyToBody: "visible quoted content",
+      }),
+    );
   });
 
   it("dispatches group image message when groupPolicy is open (requireMention defaults to false)", async () => {
@@ -2461,6 +2557,83 @@ describe("handleFeishuMessage command authorization", () => {
         ThreadHistoryBody: "assistant reply\n\nfollow-up question",
         ThreadLabel: "Feishu thread in oc-group",
         MessageThreadId: "om_topic_root",
+      }),
+    );
+  });
+
+  it("filters topic bootstrap context to allowlisted group senders", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValue({
+      messageId: "om_topic_root",
+      chatId: "oc-group",
+      senderId: "ou-blocked",
+      senderType: "user",
+      content: "blocked root starter",
+      contentType: "text",
+      threadId: "omt_topic_1",
+    });
+    mockListFeishuThreadMessages.mockResolvedValue([
+      {
+        messageId: "om_blocked_reply",
+        senderId: "ou-blocked",
+        senderType: "user",
+        content: "blocked follow-up",
+        contentType: "text",
+        createTime: 1710000000000,
+      },
+      {
+        messageId: "om_bot_reply",
+        senderId: "app_1",
+        senderType: "app",
+        content: "assistant reply",
+        contentType: "text",
+        createTime: 1710000001000,
+      },
+      {
+        messageId: "om_allowed_reply",
+        senderId: "ou-allowed",
+        senderType: "user",
+        content: "allowed follow-up",
+        contentType: "text",
+        createTime: 1710000002000,
+      },
+    ]);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groupSenderAllowFrom: ["ou-allowed"],
+          contextVisibility: "allowlist",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-allowed" } },
+      message: {
+        message_id: "om_topic_followup_allowlisted",
+        root_id: "om_topic_root",
+        thread_id: "omt_topic_1",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "current turn" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ThreadStarterBody: "assistant reply",
+        ThreadHistoryBody: "assistant reply\n\nallowed follow-up",
       }),
     );
   });

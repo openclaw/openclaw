@@ -16,6 +16,7 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
+import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -66,6 +67,9 @@ function isOpenAIProvider(provider?: string) {
 const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
   voice: ["tts"],
 };
+const TOOL_ALLOW_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
+  node: ["canvas", "image", "pdf", "tts", "web_fetch", "web_search"],
+};
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
 function normalizeMessageProvider(messageProvider?: string): string | undefined {
@@ -81,6 +85,11 @@ function applyMessageProviderToolPolicy(
   if (!normalizedProvider) {
     return tools;
   }
+  const allowedTools = TOOL_ALLOW_BY_MESSAGE_PROVIDER[normalizedProvider];
+  if (allowedTools && allowedTools.length > 0) {
+    const allowedSet = new Set(allowedTools);
+    return tools.filter((tool) => allowedSet.has(tool.name));
+  }
   const deniedTools = TOOL_DENY_BY_MESSAGE_PROVIDER[normalizedProvider];
   if (!deniedTools || deniedTools.length === 0) {
     return tools;
@@ -91,9 +100,26 @@ function applyMessageProviderToolPolicy(
 
 function applyModelProviderToolPolicy(
   tools: AnyAgentTool[],
-  params?: { modelCompat?: ModelCompatConfig },
+  params?: {
+    config?: OpenClawConfig;
+    modelProvider?: string;
+    modelApi?: string;
+    modelId?: string;
+    agentDir?: string;
+    modelCompat?: ModelCompatConfig;
+  },
 ): AnyAgentTool[] {
-  void params;
+  if (
+    shouldSuppressManagedWebSearchTool({
+      config: params?.config,
+      modelProvider: params?.modelProvider,
+      modelApi: params?.modelApi,
+      agentDir: params?.agentDir,
+    })
+  ) {
+    return tools.filter((tool) => tool.name !== "web_search");
+  }
+
   return tools;
 }
 
@@ -226,6 +252,8 @@ export function createOpenClawCodingTools(options?: {
   modelProvider?: string;
   /** Model id for the current provider (used for model-specific tool gating). */
   modelId?: string;
+  /** Model API for the current provider (used for provider-native tool arbitration). */
+  modelApi?: string;
   /** Model context window in tokens (used to scale read-tool output budget). */
   modelContextWindowTokens?: number;
   /** Resolved runtime model compatibility hints. */
@@ -416,6 +444,7 @@ export function createOpenClawCodingTools(options?: {
     host: options?.exec?.host ?? execConfig.host,
     security: options?.exec?.security ?? execConfig.security,
     ask: options?.exec?.ask ?? execConfig.ask,
+    trigger: options?.trigger,
     node: options?.exec?.node ?? execConfig.node,
     pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
     safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
@@ -570,6 +599,11 @@ export function createOpenClawCodingTools(options?: {
     options?.messageProvider,
   );
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
+    config: options?.config,
+    modelProvider: options?.modelProvider,
+    modelApi: options?.modelApi,
+    modelId: options?.modelId,
+    agentDir: options?.agentDir,
     modelCompat: options?.modelCompat,
   });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)

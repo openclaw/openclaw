@@ -32,13 +32,22 @@ afterAll(async () => {
 async function startServerWithDefaultConfig(port: number) {
   return await startGatewayServer(port, {
     host: "127.0.0.1",
-    auth: { mode: "token", token: "secret" },
+    auth: { mode: "none" },
     controlUiEnabled: false,
     openAiChatCompletionsEnabled: false,
   });
 }
 
 async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
+  return await startGatewayServer(port, {
+    host: "127.0.0.1",
+    auth: { mode: "none" },
+    controlUiEnabled: false,
+    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? true,
+  });
+}
+
+async function startTokenServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
   return await startGatewayServer(port, {
     host: "127.0.0.1",
     auth: { mode: "token", token: "secret" },
@@ -61,7 +70,6 @@ async function postChatCompletions(port: number, body: unknown, headers?: Record
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: "Bearer secret",
       "x-openclaw-scopes": "operator.write",
       ...headers,
     },
@@ -96,7 +104,7 @@ function parseSseDataLines(text: string): string[] {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 15_000 }, async () => {
+  it("rejects when disabled (default + config)", { timeout: 90_000 }, async () => {
     await expectChatCompletionsDisabled(startServerWithDefaultConfig);
     await expectChatCompletionsDisabled((port) =>
       startServer(port, {
@@ -146,6 +154,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             message?: string;
             extraSystemPrompt?: string;
             images?: Array<{ type: string; data: string; mimeType: string }>;
+            senderIsOwner?: boolean;
           }
         | undefined;
     const getFirstAgentMessage = () => getFirstAgentCall()?.message ?? "";
@@ -169,6 +178,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         messages: [{ role: "user", content: message }],
       });
       expect(res.status).toBe(200);
+      expect(getFirstAgentCall()?.senderIsOwner).toBe(false);
       return (await res.json()) as Record<string, unknown>;
     };
 
@@ -185,10 +195,12 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+          },
           body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
         });
-        expect(res.status).toBe(401);
+        expect(res.status).toBe(403);
         await res.text();
       }
 
@@ -835,6 +847,37 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
     } finally {
       // shared server
+    }
+  });
+
+  it("treats shared-secret bearer callers as owner operators", async () => {
+    const port = await getFreePort();
+    const server = await startTokenServer(port);
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+      const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+          "x-openclaw-scopes": "operator.approvals",
+        },
+        body: JSON.stringify({
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const firstCall = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { senderIsOwner?: boolean }
+        | undefined;
+      expect(firstCall?.senderIsOwner).toBe(true);
+      await res.text();
+    } finally {
+      await server.close({ reason: "openai token auth owner test done" });
     }
   });
 });

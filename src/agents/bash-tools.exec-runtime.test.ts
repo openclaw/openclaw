@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
@@ -8,9 +8,10 @@ let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExe
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
+let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 
 describe("detectCursorKeyMode", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({ detectCursorKeyMode } = await import("./bash-tools.exec-runtime.js"));
   });
 
@@ -38,6 +39,123 @@ describe("detectCursorKeyMode", () => {
     expect(detectCursorKeyMode("\x1b[?1l\x1b[?1h")).toBe("application");
     // Multiple toggles - last one wins
     expect(detectCursorKeyMode("\x1b[?1h\x1b[?1l\x1b[?1h")).toBe("application");
+  });
+});
+
+describe("resolveExecTarget", () => {
+  beforeAll(async () => {
+    ({ resolveExecTarget } = await import("./bash-tools.exec-runtime.js"));
+  });
+
+  it("keeps implicit auto on sandbox when a sandbox runtime is available", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: null,
+      selectedTarget: "auto",
+      effectiveHost: "sandbox",
+    });
+  });
+
+  it("keeps implicit auto on gateway when no sandbox runtime is available", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: null,
+      selectedTarget: "auto",
+      effectiveHost: "gateway",
+    });
+  });
+
+  it("rejects host overrides when configured host is auto", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+    ).toThrow("exec host not allowed");
+  });
+
+  it("also rejects gateway override when configured host is auto", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "gateway",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toThrow("exec host not allowed");
+  });
+
+  it("allows explicit auto request when configured host is auto", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "auto",
+      selectedTarget: "auto",
+      effectiveHost: "sandbox",
+    });
+  });
+
+  it("requires an exact match for non-auto configured targets", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "gateway",
+        requestedTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toThrow("exec host not allowed");
+  });
+
+  it("allows exact node matches", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "node",
+        requestedTarget: "node",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "node",
+      requestedTarget: "node",
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
+  });
+
+  it("still forces elevated requests onto the gateway host", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "sandbox",
+        elevatedRequested: true,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "sandbox",
+      selectedTarget: "gateway",
+      effectiveHost: "gateway",
+    });
   });
 });
 

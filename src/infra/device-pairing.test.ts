@@ -8,9 +8,12 @@ import {
   clearDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
+  hasEffectivePairedDeviceRole,
+  listEffectivePairedDeviceRoles,
   listDevicePairing,
   removePairedDevice,
   requestDevicePairing,
+  revokeDeviceToken,
   rotateDeviceToken,
   verifyDeviceToken,
   type PairedDevice,
@@ -29,6 +32,19 @@ async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
     baseDir,
   );
   await approveDevicePairing(request.request.requestId, { callerScopes: scopes }, baseDir);
+}
+
+async function setupPairedNodeDevice(baseDir: string) {
+  const request = await requestDevicePairing(
+    {
+      deviceId: "node-1",
+      publicKey: "public-key-node-1",
+      role: "node",
+      scopes: [],
+    },
+    baseDir,
+  );
+  await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
 }
 
 async function setupOperatorToken(scopes: string[]) {
@@ -52,7 +68,7 @@ function verifyOperatorToken(params: { baseDir: string; token: string; scopes: s
 function requireToken(token: string | undefined): string {
   expect(typeof token).toBe("string");
   if (typeof token !== "string") {
-    throw new Error("expected operator token to be issued");
+    throw new Error("expected device token to be issued");
   }
   return token;
 }
@@ -386,6 +402,35 @@ describe("device pairing tokens", () => {
     expect(after?.approvedScopes).toEqual(["operator.read"]);
   });
 
+  test("preserves explicit empty scope baselines for node device tokens", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedNodeDevice(baseDir);
+
+    const paired = await getPairedDevice("node-1", baseDir);
+    expect(paired?.scopes).toEqual([]);
+    expect(paired?.approvedScopes).toEqual([]);
+
+    const seededToken = requireToken(paired?.tokens?.node?.token);
+    await expect(
+      ensureDeviceToken({
+        deviceId: "node-1",
+        role: "node",
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ token: seededToken, scopes: [] }));
+
+    await expect(
+      verifyDeviceToken({
+        deviceId: "node-1",
+        token: seededToken,
+        role: "node",
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   test("verifies token and rejects mismatches", async () => {
     const { baseDir, token } = await setupOperatorToken(["operator.read"]);
 
@@ -513,6 +558,54 @@ describe("device pairing tokens", () => {
         scopes: ["operator.read"],
       }),
     ).resolves.toEqual({ ok: false, reason: "token-mismatch" });
+  });
+
+  test("derives effective roles from active tokens instead of sticky historical roles", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+      },
+      baseDir,
+    );
+    await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
+
+    let paired = await getPairedDevice("device-1", baseDir);
+    expect(paired).toBeDefined();
+    if (!paired) {
+      throw new Error("expected paired node device");
+    }
+    expect(paired?.roles).toContain("node");
+    expect(listEffectivePairedDeviceRoles(paired)).toEqual(["node"]);
+    expect(hasEffectivePairedDeviceRole(paired, "node")).toBe(true);
+
+    await revokeDeviceToken({ deviceId: "device-1", role: "node", baseDir });
+
+    paired = await getPairedDevice("device-1", baseDir);
+    expect(paired).toBeDefined();
+    if (!paired) {
+      throw new Error("expected paired node device after revoke");
+    }
+    expect(paired?.roles).toContain("node");
+    expect(listEffectivePairedDeviceRoles(paired)).toEqual([]);
+    expect(hasEffectivePairedDeviceRole(paired, "node")).toBe(false);
+  });
+
+  test("falls back to legacy role fields when tokens map is empty", async () => {
+    const device: PairedDevice = {
+      deviceId: "device-fallback",
+      publicKey: "pk-fallback",
+      role: "node",
+      roles: ["node", "operator"],
+      tokens: {},
+      createdAtMs: Date.now(),
+      approvedAtMs: Date.now(),
+    };
+    expect(listEffectivePairedDeviceRoles(device)).toEqual(["node", "operator"]);
+    expect(hasEffectivePairedDeviceRole(device, "node")).toBe(true);
+    expect(hasEffectivePairedDeviceRole(device, "operator")).toBe(true);
   });
 
   test("removes paired devices by device id", async () => {

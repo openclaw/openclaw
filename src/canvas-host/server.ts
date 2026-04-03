@@ -121,11 +121,18 @@ function defaultIndexHTML() {
         typeof window.openclawCanvasA2UIAction.postMessage === "function")
     );
   const hasHelper = () => typeof window.openclawSendUserAction === "function";
-  statusEl.innerHTML =
-    "Bridge: " +
-    (hasHelper() ? "<span class='ok'>ready</span>" : "<span class='bad'>missing</span>") +
-    " · iOS=" + (hasIOS() ? "yes" : "no") +
-    " · Android=" + (hasAndroid() ? "yes" : "no");
+  const helperReady = hasHelper();
+  statusEl.textContent = "";
+  statusEl.appendChild(document.createTextNode("Bridge: "));
+  const bridgeStatus = document.createElement("span");
+  bridgeStatus.className = helperReady ? "ok" : "bad";
+  bridgeStatus.textContent = helperReady ? "ready" : "missing";
+  statusEl.appendChild(bridgeStatus);
+  statusEl.appendChild(
+    document.createTextNode(
+      " · iOS=" + (hasIOS() ? "yes" : "no") + " · Android=" + (hasAndroid() ? "yes" : "no"),
+    ),
+  );
 
   const onStatus = (ev) => {
     const d = ev && ev.detail || {};
@@ -285,7 +292,9 @@ export async function createCanvasHostHandler(
       debounce = null;
       broadcastReload();
     }, reloadDebounceMs);
-    debounce.unref?.();
+    if (!testMode) {
+      debounce.unref?.();
+    }
   };
 
   let watcherClosed = false;

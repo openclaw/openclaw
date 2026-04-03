@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   formatThreadBindingDurationLabel,
   registerSessionBindingAdapter,
@@ -15,6 +16,8 @@ import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { createForumTopicTelegram } from "./send.js";
+import { resolveTelegramToken } from "./token.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
@@ -556,18 +559,63 @@ export function createTelegramThreadBindingManager(
     channel: "telegram",
     accountId,
     capabilities: {
-      placements: ["current"],
+      placements: ["current", "child"],
     },
     bind: async (input) => {
       if (input.conversation.channel !== "telegram") {
         return null;
       }
-      if (input.placement === "child") {
+      const targetSessionKey = input.targetSessionKey.trim();
+      if (!targetSessionKey) {
         return null;
       }
-      const conversationId = normalizeConversationId(input.conversation.conversationId);
-      const targetSessionKey = input.targetSessionKey.trim();
-      if (!conversationId || !targetSessionKey) {
+      const placement = input.placement === "child" ? "child" : "current";
+      const metadata = input.metadata ?? {};
+      let conversationId: string | undefined;
+
+      if (placement === "child") {
+        const rawConversationId = input.conversation.conversationId?.trim() ?? "";
+        const rawParent = input.conversation.parentConversationId?.trim() ?? "";
+        const cfg = loadConfig();
+        let chatId = rawParent || rawConversationId;
+        if (!chatId) {
+          logVerbose(
+            `telegram: child bind failed: could not resolve group chat ID from conversationId=${rawConversationId}`,
+          );
+          return null;
+        }
+        if (!chatId.startsWith("-")) {
+          logVerbose(
+            `telegram: child bind failed: conversationId "${chatId}" looks like a bare topic ID, not a group chat ID (expected to start with "-"). Provide a full chatId:topic:topicId conversationId or set parentConversationId to the group chat ID.`,
+          );
+          return null;
+        }
+        const threadName =
+          (typeof metadata.threadName === "string" ? metadata.threadName.trim() : "") ||
+          (typeof metadata.label === "string" ? metadata.label.trim() : "") ||
+          `Agent: ${targetSessionKey.split(":").pop()}`;
+        try {
+          const tokenResolution = resolveTelegramToken(cfg, { accountId });
+          if (!tokenResolution.token) {
+            return null;
+          }
+          const result = await createForumTopicTelegram(chatId, threadName, {
+            cfg,
+            token: tokenResolution.token,
+            accountId,
+          });
+          conversationId = `${result.chatId}:topic:${result.topicId}`;
+        } catch (err) {
+          logVerbose(
+            `telegram: child thread-binding failed for ${chatId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return null;
+        }
+      } else {
+        conversationId = normalizeConversationId(input.conversation.conversationId);
+      }
+
+      if (!conversationId) {
         return null;
       }
       const record = fromSessionBindingInput({

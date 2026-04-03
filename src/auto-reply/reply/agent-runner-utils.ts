@@ -93,7 +93,14 @@ export const formatBunFetchSocketError = (message: string) => {
 };
 
 export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
-  Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
+  Boolean(
+    run.enforceFinalTag ||
+    isReasoningTagProvider(provider, {
+      config: run.config,
+      workspaceDir: run.workspaceDir,
+      modelId: run.model,
+    }),
+  );
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
   return {
@@ -127,6 +134,7 @@ export function buildEmbeddedRunBaseParams(params: {
     inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
     enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider),
+    silentExpected: params.run.silentExpected,
     provider: params.provider,
     model: params.model,
     ...params.authProfile,

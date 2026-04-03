@@ -1,26 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
-const mocks = vi.hoisted(() => ({
-  clackIntro: vi.fn(),
-  clackOutro: vi.fn(),
-  clackSelect: vi.fn(),
-  clackText: vi.fn(),
-  clackConfirm: vi.fn(),
-  resolveSearchProviderOptions: vi.fn(),
-  setupSearch: vi.fn(),
-  readConfigFileSnapshot: vi.fn(),
-  writeConfigFile: vi.fn(),
-  resolveGatewayPort: vi.fn(),
-  ensureControlUiAssetsBuilt: vi.fn(),
-  createClackPrompter: vi.fn(),
-  note: vi.fn(),
-  printWizardHeader: vi.fn(),
-  probeGatewayReachable: vi.fn(),
-  waitForGatewayReachable: vi.fn(),
-  resolveControlUiLinks: vi.fn(),
-  summarizeExistingConfig: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const writeConfigFile = vi.fn();
+  return {
+    clackIntro: vi.fn(),
+    clackOutro: vi.fn(),
+    clackSelect: vi.fn(),
+    clackText: vi.fn(),
+    clackConfirm: vi.fn(),
+    resolveSearchProviderOptions: vi.fn(),
+    setupSearch: vi.fn(),
+    readConfigFileSnapshot: vi.fn(),
+    writeConfigFile,
+    replaceConfigFile: vi.fn(async (params: { nextConfig: unknown }) => {
+      await writeConfigFile(params.nextConfig);
+    }),
+    resolveGatewayPort: vi.fn(),
+    ensureControlUiAssetsBuilt: vi.fn(),
+    createClackPrompter: vi.fn(),
+    note: vi.fn(),
+    printWizardHeader: vi.fn(),
+    probeGatewayReachable: vi.fn(),
+    waitForGatewayReachable: vi.fn(),
+    resolveControlUiLinks: vi.fn(),
+    summarizeExistingConfig: vi.fn(),
+  };
+});
 
 vi.mock("@clack/prompts", () => ({
   intro: mocks.clackIntro,
@@ -34,6 +40,7 @@ vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "~/.openclaw/openclaw.json",
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   writeConfigFile: mocks.writeConfigFile,
+  replaceConfigFile: mocks.replaceConfigFile,
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
@@ -147,8 +154,11 @@ function createEnabledWebSearchConfig(provider: string, pluginEntry: Record<stri
   });
 }
 
-function setupBaseWizardState() {
-  mocks.readConfigFileSnapshot.mockResolvedValue(EMPTY_CONFIG_SNAPSHOT);
+function setupBaseWizardState(config: OpenClawConfig = {}) {
+  mocks.readConfigFileSnapshot.mockResolvedValue({
+    ...EMPTY_CONFIG_SNAPSHOT,
+    config,
+  });
   mocks.resolveGatewayPort.mockReturnValue(18789);
   mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
   mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
@@ -356,6 +366,89 @@ describe("runConfigureWizard", () => {
     await runWebConfigureWizard();
 
     expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.setupSearch).toHaveBeenCalledOnce();
+  });
+
+  it("can enable native Codex search without configuring a managed provider", async () => {
+    setupBaseWizardState({
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+    });
+    queueWizardPrompts({
+      select: ["local", "cached"],
+      confirm: [true, true, false, true],
+    });
+
+    await runWebConfigureWizard();
+
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          web: expect.objectContaining({
+            search: expect.objectContaining({
+              enabled: true,
+              openaiCodex: expect.objectContaining({
+                enabled: true,
+                mode: "cached",
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(mocks.setupSearch).not.toHaveBeenCalled();
+  });
+
+  it("preserves disabled native Codex search when toggled off", async () => {
+    setupBaseWizardState({
+      auth: {
+        profiles: {
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            openaiCodex: {
+              enabled: true,
+              mode: "live",
+            },
+          },
+        },
+      },
+    });
+    queueWizardPrompts({
+      select: ["firecrawl"],
+      confirm: [true, false, true, false],
+    });
+
+    await runWebConfigureWizard();
+
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          web: expect.objectContaining({
+            search: expect.objectContaining({
+              enabled: true,
+              openaiCodex: expect.objectContaining({
+                enabled: false,
+                mode: "live",
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
   });
 });

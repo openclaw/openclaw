@@ -136,6 +136,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       },
       conversationBindings: {
         supportsCurrentConversationBinding: true,
+        createManager: ({ cfg, accountId }) =>
+          createIMessageConversationBindingManager({
+            cfg,
+            accountId: accountId ?? undefined,
+          }),
       },
       bindings: {
         compileConfiguredBinding: ({ conversationId }) =>

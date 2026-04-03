@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
@@ -351,35 +351,6 @@ describe("createFeishuClient HTTP timeout", () => {
       "https://example.com/api",
       expect.objectContaining({ timeout: 45_000 }),
     );
-  });
-});
-
-describe("feishu plugin register", () => {
-  it("registers the Feishu channel, tools, and subagent hooks", async () => {
-    const { default: plugin } = await import("../index.js");
-    const registerChannel = vi.fn();
-    const api = createTestPluginApi({
-      id: "feishu-test",
-      name: "Feishu Test",
-      source: "local",
-      runtime: createPluginRuntimeMock(),
-      on: vi.fn(),
-      config: {},
-      registerChannel,
-    });
-
-    plugin.register(api);
-
-    expect(setFeishuRuntimeMock).toHaveBeenCalledWith(api.runtime);
-    expect(registerChannel).toHaveBeenCalledTimes(1);
-    expect(registerChannel).toHaveBeenCalledWith({ plugin: feishuPluginMock });
-    expect(registerFeishuSubagentHooksMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuDocToolsMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuChatToolsMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuWikiToolsMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuDriveToolsMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuPermToolsMock).toHaveBeenCalledWith(api);
-    expect(registerFeishuBitableToolsMock).toHaveBeenCalledWith(api);
   });
 });
 

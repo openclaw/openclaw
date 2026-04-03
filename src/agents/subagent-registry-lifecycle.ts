@@ -1,6 +1,12 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import {
+  completeTaskRunByRunId,
+  failTaskRunByRunId,
+  setDetachedTaskDeliveryStatusByRunId,
+} from "../tasks/task-executor.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   captureSubagentCompletionReply,
@@ -53,14 +59,104 @@ export function createSubagentRegistryLifecycleController(params: {
     workspaceDir?: string;
   }): Promise<void>;
   resumeSubagentRun(runId: string): void;
+  captureSubagentCompletionReply: typeof captureSubagentCompletionReply;
+  runSubagentAnnounceFlow: typeof runSubagentAnnounceFlow;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
+  const maskRunId = (runId: string): string => {
+    const trimmed = runId.trim();
+    if (!trimmed) {
+      return "unknown";
+    }
+    if (trimmed.length <= 8) {
+      return "***";
+    }
+    return `${trimmed.slice(0, 4)}…${trimmed.slice(-4)}`;
+  };
+
+  const maskSessionKey = (sessionKey: string): string => {
+    const trimmed = sessionKey.trim();
+    if (!trimmed) {
+      return "unknown";
+    }
+    const prefix = trimmed.split(":").slice(0, 2).join(":") || "session";
+    return `${prefix}:…`;
+  };
+
+  const buildSafeLifecycleErrorMeta = (err: unknown): Record<string, string> => {
+    const message = formatErrorMessage(err);
+    const name = readErrorName(err);
+    return name ? { name, message } : { message };
+  };
+
+  const safeSetSubagentTaskDeliveryStatus = (args: {
+    runId: string;
+    childSessionKey: string;
+    deliveryStatus: "failed";
+  }) => {
+    try {
+      setDetachedTaskDeliveryStatusByRunId({
+        runId: args.runId,
+        runtime: "subagent",
+        sessionKey: args.childSessionKey,
+        deliveryStatus: args.deliveryStatus,
+      });
+    } catch (err) {
+      params.warn("failed to update subagent background task delivery state", {
+        error: buildSafeLifecycleErrorMeta(err),
+        runId: maskRunId(args.runId),
+        childSessionKey: maskSessionKey(args.childSessionKey),
+        deliveryStatus: args.deliveryStatus,
+      });
+    }
+  };
+
+  const safeFinalizeSubagentTaskRun = (args: {
+    entry: SubagentRunRecord;
+    outcome: SubagentRunOutcome;
+  }) => {
+    const endedAt = args.entry.endedAt ?? Date.now();
+    const lastEventAt = endedAt;
+    try {
+      if (args.outcome.status === "ok") {
+        completeTaskRunByRunId({
+          runId: args.entry.runId,
+          runtime: "subagent",
+          sessionKey: args.entry.childSessionKey,
+          endedAt,
+          lastEventAt,
+          progressSummary: args.entry.frozenResultText ?? undefined,
+          terminalSummary: null,
+        });
+        return;
+      }
+      failTaskRunByRunId({
+        runId: args.entry.runId,
+        runtime: "subagent",
+        sessionKey: args.entry.childSessionKey,
+        status: args.outcome.status === "timeout" ? "timed_out" : "failed",
+        endedAt,
+        lastEventAt,
+        error: args.outcome.status === "error" ? args.outcome.error : undefined,
+        progressSummary: args.entry.frozenResultText ?? undefined,
+        terminalSummary: null,
+      });
+    } catch (err) {
+      params.warn("failed to finalize subagent background task state", {
+        error: buildSafeLifecycleErrorMeta(err),
+        runId: maskRunId(args.entry.runId),
+        childSessionKey: maskSessionKey(args.entry.childSessionKey),
+        outcomeStatus: args.outcome.status,
+      });
+    }
+  };
+
   const freezeRunResultAtCompletion = async (entry: SubagentRunRecord): Promise<boolean> => {
     if (entry.frozenResultText !== undefined) {
       return false;
     }
     try {
-      const captured = await captureSubagentCompletionReply(entry.childSessionKey);
+      const captured = await params.captureSubagentCompletionReply(entry.childSessionKey);
       entry.frozenResultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
       entry.frozenResultText = null;
@@ -151,6 +247,11 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
   }) => {
+    safeSetSubagentTaskDeliveryStatus({
+      runId: giveUpParams.runId,
+      childSessionKey: giveUpParams.entry.childSessionKey,
+      deliveryStatus: "failed",
+    });
     giveUpParams.entry.wakeOnDescendantSettle = undefined;
     giveUpParams.entry.fallbackFrozenResultText = undefined;
     giveUpParams.entry.fallbackFrozenResultCapturedAt = undefined;
@@ -263,6 +364,12 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
     if (didAnnounce) {
+      setDetachedTaskDeliveryStatusByRunId({
+        runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
+        deliveryStatus: "delivered",
+      });
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -315,6 +422,12 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (deferredDecision.kind === "give-up") {
+      setDetachedTaskDeliveryStatusByRunId({
+        runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
+        deliveryStatus: "failed",
+      });
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -362,26 +475,27 @@ export function createSubagentRegistryLifecycleController(params: {
       });
     };
 
-    void runSubagentAnnounceFlow({
-      childSessionKey: entry.childSessionKey,
-      childRunId: entry.runId,
-      requesterSessionKey: entry.requesterSessionKey,
-      requesterOrigin,
-      requesterDisplayKey: entry.requesterDisplayKey,
-      task: entry.task,
-      timeoutMs: params.subagentAnnounceTimeoutMs,
-      cleanup: entry.cleanup,
-      roundOneReply: entry.frozenResultText ?? undefined,
-      fallbackReply: entry.fallbackFrozenResultText ?? undefined,
-      waitForCompletion: false,
-      startedAt: entry.startedAt,
-      endedAt: entry.endedAt,
-      label: entry.label,
-      outcome: entry.outcome,
-      spawnMode: entry.spawnMode,
-      expectsCompletionMessage: entry.expectsCompletionMessage,
-      wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
-    })
+    void params
+      .runSubagentAnnounceFlow({
+        childSessionKey: entry.childSessionKey,
+        childRunId: entry.runId,
+        requesterSessionKey: entry.requesterSessionKey,
+        requesterOrigin,
+        requesterDisplayKey: entry.requesterDisplayKey,
+        task: entry.task,
+        timeoutMs: params.subagentAnnounceTimeoutMs,
+        cleanup: entry.cleanup,
+        roundOneReply: entry.frozenResultText ?? undefined,
+        fallbackReply: entry.fallbackFrozenResultText ?? undefined,
+        waitForCompletion: false,
+        startedAt: entry.startedAt,
+        endedAt: entry.endedAt,
+        label: entry.label,
+        outcome: entry.outcome,
+        spawnMode: entry.spawnMode,
+        expectsCompletionMessage: entry.expectsCompletionMessage,
+        wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
+      })
       .then((didAnnounce) => {
         finalizeAnnounceCleanup(didAnnounce);
       })
@@ -443,6 +557,10 @@ export function createSubagentRegistryLifecycleController(params: {
     if (mutated) {
       params.persist();
     }
+    safeFinalizeSubagentTaskRun({
+      entry,
+      outcome: completeParams.outcome,
+    });
 
     try {
       await persistSubagentSessionTiming(entry);

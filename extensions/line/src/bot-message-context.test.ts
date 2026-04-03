@@ -4,9 +4,9 @@ import path from "node:path";
 import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
+import { setDefaultChannelPluginRegistryForTests } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-helpers.js";
-import { __testing as sessionBindingTesting } from "../../../src/infra/outbound/session-binding-service.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
 import { linePlugin } from "./channel.js";
 import type { ResolvedLineAccount } from "./types.js";
@@ -317,6 +317,43 @@ describe("buildLineMessageContext", () => {
     });
 
     expect(compiled).toEqual({
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+    expect(
+      linePlugin.bindings?.matchInboundConversation({
+        binding: {
+          type: "acp",
+          agentId: "codex",
+          match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
+        } as AgentBinding,
+        compiledBinding: compiled!,
+        conversationId: "U1234567890abcdef1234567890abcdef",
+      }),
+    ).toEqual({
+      conversationId: "U1234567890abcdef1234567890abcdef",
+      matchPriority: 2,
+    });
+  });
+
+  it("normalizes canonical LINE targets through the plugin bindings surface", async () => {
+    const compiled = linePlugin.bindings?.compileConfiguredBinding({
+      binding: {
+        type: "acp",
+        agentId: "codex",
+        match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
+      } as AgentBinding,
+      conversationId: "line:U1234567890abcdef1234567890abcdef",
+    });
+
+    expect(compiled).toEqual({
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+    expect(
+      linePlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        originatingTo: "line:U1234567890abcdef1234567890abcdef",
+      }),
+    ).toEqual({
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(

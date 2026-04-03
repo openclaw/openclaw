@@ -105,6 +105,21 @@ type FieldMeta = {
   tags: string[];
 };
 
+function isSecretRefObject(value: unknown): value is {
+  source: string;
+  id: string;
+  provider?: string;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.source !== "string" || typeof candidate.id !== "string") {
+    return false;
+  }
+  return candidate.provider === undefined || typeof candidate.provider === "string";
+}
+
 type SensitiveRenderParams = {
   path: Array<string | number>;
   value: unknown;
@@ -392,6 +407,7 @@ export function renderNode(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
+  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
@@ -617,6 +633,7 @@ function renderTextInput(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
+  rawAvailable?: boolean;
   disabled: boolean;
   showLabel?: boolean;
   searchCriteria?: ConfigSearchCriteria;
@@ -637,14 +654,26 @@ function renderTextInput(params: {
     revealSensitive: params.revealSensitive ?? false,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
   });
-  const placeholder = sensitiveState.isRedacted
-    ? REDACTED_PLACEHOLDER
+  const isStructuredValue =
+    value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value);
+  const isStructuredSecretRef = isSecretRefObject(value);
+  const rawAvailable = params.rawAvailable ?? true;
+  const effectiveRedacted = sensitiveState.isRedacted || isStructuredSecretRef;
+  const placeholder = effectiveRedacted
+    ? isStructuredSecretRef
+      ? rawAvailable
+        ? "Structured value (SecretRef) - use Raw mode to edit"
+        : "Structured value (SecretRef) - edit the config file directly"
+      : REDACTED_PLACEHOLDER
     : (hint?.placeholder ??
       // oxlint-disable typescript/no-base-to-string
       (schema.default !== undefined ? `Default: ${String(schema.default)}` : ""));
-  const displayValue = sensitiveState.isRedacted ? "" : (value ?? "");
-  const effectiveInputType =
-    sensitiveState.isSensitive && !sensitiveState.isRedacted ? "text" : inputType;
+  const displayValue = effectiveRedacted
+    ? ""
+    : isStructuredValue
+      ? jsonValue(value)
+      : (value ?? "");
+  const effectiveInputType = sensitiveState.isSensitive && !effectiveRedacted ? "text" : inputType;
 
   return html`
     <div class="cfg-field">
@@ -653,18 +682,22 @@ function renderTextInput(params: {
       <div class="cfg-input-wrap">
         <input
           type=${effectiveInputType}
-          class="cfg-input${sensitiveState.isRedacted ? " cfg-input--redacted" : ""}"
+          class="cfg-input${effectiveRedacted ? " cfg-input--redacted" : ""}"
           placeholder=${placeholder}
           .value=${displayValue == null ? "" : String(displayValue)}
           ?disabled=${disabled}
-          ?readonly=${sensitiveState.isRedacted}
+          ?readonly=${effectiveRedacted}
           @click=${() => {
-            if (sensitiveState.isRedacted && params.onToggleSensitivePath) {
+            if (
+              sensitiveState.isRedacted &&
+              !isStructuredSecretRef &&
+              params.onToggleSensitivePath
+            ) {
               params.onToggleSensitivePath(path);
             }
           }}
           @input=${(e: Event) => {
-            if (sensitiveState.isRedacted) {
+            if (effectiveRedacted) {
               return;
             }
             const raw = (e.target as HTMLInputElement).value;
@@ -680,26 +713,28 @@ function renderTextInput(params: {
             onPatch(path, raw);
           }}
           @change=${(e: Event) => {
-            if (inputType === "number" || sensitiveState.isRedacted) {
+            if (inputType === "number" || effectiveRedacted) {
               return;
             }
             const raw = (e.target as HTMLInputElement).value;
             onPatch(path, raw.trim());
           }}
         />
-        ${renderSensitiveToggleButton({
-          path,
-          state: sensitiveState,
-          disabled,
-          onToggleSensitivePath: params.onToggleSensitivePath,
-        })}
+        ${isStructuredSecretRef
+          ? nothing
+          : renderSensitiveToggleButton({
+              path,
+              state: sensitiveState,
+              disabled,
+              onToggleSensitivePath: params.onToggleSensitivePath,
+            })}
         ${schema.default !== undefined
           ? html`
               <button
                 type="button"
                 class="cfg-input__reset"
                 title="Reset to default"
-                ?disabled=${disabled || sensitiveState.isRedacted}
+                ?disabled=${disabled || effectiveRedacted}
                 @click=${() => onPatch(path, schema.default)}
               >
                 ↺
@@ -879,6 +914,7 @@ function renderObject(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
+  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
@@ -897,6 +933,7 @@ function renderObject(params: {
     disabled,
     onPatch,
     searchCriteria,
+    rawAvailable,
     revealSensitive,
     isSensitivePathRevealed,
     onToggleSensitivePath,
@@ -938,6 +975,7 @@ function renderObject(params: {
         value: obj[propKey],
         path: [...path, propKey],
         hints,
+        rawAvailable,
         unsupported,
         disabled,
         searchCriteria: childSearchCriteria,
@@ -953,6 +991,7 @@ function renderObject(params: {
           value: obj,
           path,
           hints,
+          rawAvailable,
           unsupported,
           disabled,
           reservedKeys: reserved,
@@ -995,6 +1034,7 @@ function renderArray(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
+  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
@@ -1013,6 +1053,7 @@ function renderArray(params: {
     disabled,
     onPatch,
     searchCriteria,
+    rawAvailable,
     revealSensitive,
     isSensitivePathRevealed,
     onToggleSensitivePath,
@@ -1088,6 +1129,7 @@ function renderArray(params: {
                         value: item,
                         path: [...path, idx],
                         hints,
+                        rawAvailable,
                         unsupported,
                         disabled,
                         searchCriteria: childSearchCriteria,
@@ -1112,6 +1154,7 @@ function renderMapField(params: {
   value: Record<string, unknown>;
   path: Array<string | number>;
   hints: ConfigUiHints;
+  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   reservedKeys: Set<string>;
@@ -1126,6 +1169,7 @@ function renderMapField(params: {
     value,
     path,
     hints,
+    rawAvailable,
     unsupported,
     disabled,
     reservedKeys,
@@ -1278,6 +1322,7 @@ function renderMapField(params: {
                             value: entryValue,
                             path: valuePath,
                             hints,
+                            rawAvailable,
                             unsupported,
                             disabled,
                             searchCriteria,

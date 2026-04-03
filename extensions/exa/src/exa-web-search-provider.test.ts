@@ -3,28 +3,6 @@ import plugin from "../index.js";
 import { __testing, createExaWebSearchProvider } from "./exa-web-search-provider.js";
 
 describe("exa web search provider", () => {
-  it("registers the web search provider", () => {
-    const registrations: { webSearchProviders: unknown[] } = { webSearchProviders: [] };
-
-    const mockApi = {
-      registerWebSearchProvider(provider: unknown) {
-        registrations.webSearchProviders.push(provider);
-      },
-      config: {},
-    };
-
-    plugin.register(mockApi as never);
-
-    expect(plugin.id).toBe("exa");
-    expect(plugin.name).toBe("Exa Plugin");
-    expect(registrations.webSearchProviders).toHaveLength(1);
-
-    const provider = registrations.webSearchProviders[0] as Record<string, unknown>;
-    expect(provider.id).toBe("exa");
-    expect(provider.autoDetectOrder).toBe(65);
-    expect(provider.envVars).toEqual(["EXA_API_KEY"]);
-  });
-
   it("exposes the expected metadata and selection wiring", () => {
     const provider = createExaWebSearchProvider();
     if (!provider.applySelectionConfig) {

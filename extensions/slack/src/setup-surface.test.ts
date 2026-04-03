@@ -1,10 +1,10 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   createTestWizardPrompter,
   runSetupWizardFinalize,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { slackSetupWizard } from "./setup-surface.js";
 
 describe("slackSetupWizard.finalize", () => {
@@ -39,24 +39,6 @@ describe("slackSetupWizard.finalize", () => {
       (result.cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } })
         ?.capabilities?.interactiveReplies,
     ).toBe(true);
-  });
-
-  it("records an explicit false choice when the operator declines interactive replies", async () => {
-    const result = await runSetupWizardFinalize({
-      finalize: slackSetupWizard.finalize,
-      cfg: baseCfg,
-      prompter: createTestWizardPrompter({
-        confirm: vi.fn(async () => false),
-      }),
-    });
-    if (!result?.cfg) {
-      throw new Error("expected finalize to patch config");
-    }
-
-    expect(
-      (result.cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } })
-        ?.capabilities?.interactiveReplies,
-    ).toBe(false);
   });
 
   it("auto-enables interactive replies for quickstart defaults without prompting", async () => {

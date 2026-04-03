@@ -3,6 +3,8 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveEnableState,
+  resolveEffectivePluginActivationState,
+  resolveMemorySlotDecision,
 } from "./config-state.js";
 
 function normalizeVoiceCallEntry(entry: Record<string, unknown>) {
@@ -157,8 +159,28 @@ describe("resolveEffectiveEnableState", () => {
     });
   }
 
+  function resolveConfigOriginTelegramState(config: Parameters<typeof normalizePluginsConfig>[0]) {
+    const normalized = normalizePluginsConfig(config);
+    return resolveEffectiveEnableState({
+      id: "telegram",
+      origin: "config",
+      config: normalized,
+      rootConfig: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      },
+    });
+  }
+
   it.each([
     [{ enabled: true }, { enabled: true }],
+    [
+      { enabled: true, allow: ["browser"] as string[] },
+      { enabled: false, reason: "not in allowlist" },
+    ],
     [
       {
         enabled: true,
@@ -172,6 +194,222 @@ describe("resolveEffectiveEnableState", () => {
     ],
   ] as const)("resolves bundled telegram state for %o", (config, expected) => {
     expect(resolveBundledTelegramState(config)).toEqual(expected);
+  });
+
+  it("does not bypass allowlists for non-bundled plugins that reuse a channel id", () => {
+    expect(
+      resolveConfigOriginTelegramState({
+        enabled: true,
+        allow: ["browser"] as string[],
+      }),
+    ).toEqual({ enabled: false, reason: "not in allowlist" });
+  });
+});
+
+describe("resolveEffectivePluginActivationState", () => {
+  it("distinguishes explicit enablement from auto activation", () => {
+    const rawConfig: NonNullable<
+      Parameters<typeof resolveEffectivePluginActivationState>[0]["sourceRootConfig"]
+    > = {
+      channels: {
+        telegram: {
+          botToken: "x",
+        },
+      },
+    };
+    const effectiveConfig: NonNullable<
+      Parameters<typeof resolveEffectivePluginActivationState>[0]["rootConfig"]
+    > = {
+      channels: {
+        telegram: {
+          botToken: "x",
+          enabled: true,
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "telegram",
+        origin: "bundled",
+        config: normalizePluginsConfig(effectiveConfig.plugins),
+        rootConfig: effectiveConfig,
+        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
+        sourceRootConfig: rawConfig,
+        autoEnabledReason: "telegram configured",
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto",
+      reason: "telegram configured",
+    });
+  });
+
+  it("preserves explicit selection even when plugins are globally disabled", () => {
+    const rawConfig = {
+      plugins: {
+        enabled: false,
+        entries: {
+          browser: {
+            enabled: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "browser",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
+        sourceRootConfig: rawConfig,
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: true,
+      source: "disabled",
+      reason: "plugins disabled",
+    });
+  });
+
+  it("marks bundled default-enabled plugins as default activation", () => {
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "openai",
+        origin: "bundled",
+        config: normalizePluginsConfig({}),
+        enabledByDefault: true,
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "default",
+      reason: "bundled default enablement",
+    });
+  });
+
+  it("keeps allowlists authoritative over explicit bundled plugin enablement", () => {
+    const rawConfig = {
+      plugins: {
+        allow: ["browser"],
+        entries: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "telegram",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
+        sourceRootConfig: rawConfig,
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: true,
+      source: "disabled",
+      reason: "not in allowlist",
+    });
+  });
+
+  it("keeps allowlists authoritative over bundled channel activation", () => {
+    const rawConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        allow: ["browser"],
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "telegram",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
+        sourceRootConfig: rawConfig,
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: true,
+      source: "disabled",
+      reason: "not in allowlist",
+    });
+  });
+
+  it("does not let auto-enable reasons bypass the allowlist", () => {
+    const rawConfig = {
+      plugins: {
+        allow: ["browser"],
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "telegram",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
+        sourceRootConfig: rawConfig,
+        autoEnabledReason: "telegram configured",
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: false,
+      source: "disabled",
+      reason: "not in allowlist",
+    });
+  });
+
+  it("preserves activation when only the effective config enables a bundled plugin", () => {
+    const sourceConfig = {
+      plugins: {},
+    };
+    const effectiveConfig = {
+      plugins: {
+        entries: {
+          openai: {
+            enabled: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "openai",
+        origin: "bundled",
+        config: normalizePluginsConfig(effectiveConfig.plugins),
+        rootConfig: effectiveConfig,
+        sourceConfig: normalizePluginsConfig(sourceConfig.plugins),
+        sourceRootConfig: sourceConfig,
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: false,
+      source: "auto",
+      reason: "enabled by effective config",
+    });
   });
 });
 
@@ -265,5 +503,59 @@ describe("resolveEnableState", () => {
         reason: "workspace plugin (disabled by default)",
       },
     });
+  });
+});
+
+describe("resolveMemorySlotDecision", () => {
+  it("disables a memory-only plugin when slot points elsewhere", () => {
+    const result = resolveMemorySlotDecision({
+      id: "old-memory",
+      kind: "memory",
+      slot: "new-memory",
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(false);
+  });
+
+  it("keeps a dual-kind plugin enabled when memory slot points elsewhere", () => {
+    const result = resolveMemorySlotDecision({
+      id: "dual-plugin",
+      kind: ["memory", "context-engine"],
+      slot: "new-memory",
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(true);
+    expect(result.selected).toBeUndefined();
+  });
+
+  it("selects a dual-kind plugin when it owns the memory slot", () => {
+    const result = resolveMemorySlotDecision({
+      id: "dual-plugin",
+      kind: ["memory", "context-engine"],
+      slot: "dual-plugin",
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(true);
+    expect(result.selected).toBe(true);
+  });
+
+  it("keeps a dual-kind plugin enabled when memory slot is null", () => {
+    const result = resolveMemorySlotDecision({
+      id: "dual-plugin",
+      kind: ["memory", "context-engine"],
+      slot: null,
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(true);
+  });
+
+  it("disables a memory-only plugin when memory slot is null", () => {
+    const result = resolveMemorySlotDecision({
+      id: "old-memory",
+      kind: "memory",
+      slot: null,
+      selectedId: null,
+    });
+    expect(result.enabled).toBe(false);
   });
 });

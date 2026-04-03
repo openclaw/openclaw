@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { SignalDaemonExitEvent } from "./daemon.js";
 import {
   createSignalToolResultConfig,
@@ -12,7 +12,6 @@ import {
 
 installSignalToolResultTestHooks();
 
-vi.resetModules();
 const { monitorSignalProvider } = await import("./monitor.js");
 
 const { waitForTransportReadyMock, spawnSignalDaemonMock, streamMock } =

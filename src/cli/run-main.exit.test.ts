@@ -1,5 +1,6 @@
 import process from "node:process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runCli } from "./run-main.js";
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
 const loadDotEnvMock = vi.hoisted(() => vi.fn());
@@ -8,6 +9,8 @@ const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
+const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
+const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const buildProgramMock = vi.hoisted(() => vi.fn());
 const maybeRunCliInContainerMock = vi.hoisted(() =>
@@ -49,6 +52,14 @@ vi.mock("../plugins/memory-state.js", () => ({
   hasMemoryRuntime: hasMemoryRuntimeMock,
 }));
 
+vi.mock("../tasks/task-registry.js", () => ({
+  ensureTaskRegistryReady: ensureTaskRegistryReadyMock,
+}));
+
+vi.mock("../tasks/task-registry.maintenance.js", () => ({
+  startTaskRegistryMaintenance: startTaskRegistryMaintenanceMock,
+}));
+
 vi.mock("./program/root-help.js", () => ({
   outputRootHelp: outputRootHelpMock,
 }));
@@ -56,8 +67,6 @@ vi.mock("./program/root-help.js", () => ({
 vi.mock("./program.js", () => ({
   buildProgram: buildProgramMock,
 }));
-
-const { runCli } = await import("./run-main.js");
 
 describe("runCli exit behavior", () => {
   beforeEach(() => {
@@ -76,6 +85,8 @@ describe("runCli exit behavior", () => {
     expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
+    expect(ensureTaskRegistryReadyMock).not.toHaveBeenCalled();
+    expect(startTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });

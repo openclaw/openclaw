@@ -1,34 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { TelegramNetworkConfig } from "../../../config/types.telegram.js";
 
 const resolveCommandSecretRefsViaGatewayMock = vi.hoisted(() => vi.fn());
 const listTelegramAccountIdsMock = vi.hoisted(() => vi.fn());
 const inspectTelegramAccountMock = vi.hoisted(() => vi.fn());
-const lookupTelegramChatIdMock = vi.hoisted(() => vi.fn());
-const resolveTelegramAccountMock = vi.hoisted(() => vi.fn());
+const telegramResolverMock = vi.hoisted(() => vi.fn());
+const getChannelPluginMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: resolveCommandSecretRefsViaGatewayMock,
 }));
 
-vi.mock("../../../plugin-sdk/telegram.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../plugin-sdk/telegram.js")>();
+vi.mock("../../../channels/read-only-account-inspect.telegram.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../channels/read-only-account-inspect.telegram.js")
+    >();
   return {
     ...actual,
     listTelegramAccountIds: listTelegramAccountIdsMock,
     inspectTelegramAccount: inspectTelegramAccountMock,
-    lookupTelegramChatId: lookupTelegramChatIdMock,
   };
 });
 
-vi.mock("../../../plugin-sdk/account-resolution.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../plugin-sdk/account-resolution.js")>();
-  return {
-    ...actual,
-    resolveTelegramAccount: resolveTelegramAccountMock,
-  };
-});
+vi.mock("../../../channels/plugins/registry.js", () => ({
+  getChannelPlugin: getChannelPluginMock,
+}));
 
 import {
   collectTelegramAllowFromUsernameWarnings,
@@ -55,34 +52,16 @@ describe("doctor telegram provider warnings", () => {
       .mockReset()
       .mockImplementation((_params: { cfg: OpenClawConfig; accountId: string }) => ({
         enabled: true,
+        token: "tok",
+        tokenSource: "config",
         tokenStatus: "configured",
       }));
-    resolveTelegramAccountMock
-      .mockReset()
-      .mockImplementation((params: { cfg: OpenClawConfig; accountId?: string | null }) => {
-        const accountId = params.accountId?.trim() || "default";
-        const telegram = params.cfg.channels?.telegram ?? {};
-        const account =
-          accountId === "default"
-            ? telegram
-            : ((telegram.accounts?.[accountId] as Record<string, unknown> | undefined) ?? {});
-        const token =
-          typeof account.botToken === "string"
-            ? account.botToken
-            : typeof telegram.botToken === "string"
-              ? telegram.botToken
-              : "";
-        return {
-          accountId,
-          token,
-          tokenSource: token ? "config" : "none",
-          config:
-            account && typeof account === "object" && "network" in account
-              ? { network: account.network as TelegramNetworkConfig | undefined }
-              : {},
-        };
-      });
-    lookupTelegramChatIdMock.mockReset();
+    telegramResolverMock.mockReset();
+    getChannelPluginMock.mockReset().mockReturnValue({
+      resolver: {
+        resolveTargets: telegramResolverMock,
+      },
+    });
   });
 
   it("shows first-run guidance when groups are not configured yet", () => {
@@ -213,18 +192,18 @@ describe("doctor telegram provider warnings", () => {
   });
 
   it("repairs Telegram @username allowFrom entries to numeric ids", async () => {
-    lookupTelegramChatIdMock.mockImplementation(async ({ chatId }: { chatId: string }) => {
-      switch (chatId.toLowerCase()) {
+    telegramResolverMock.mockImplementation(async ({ inputs }: { inputs: string[] }) => {
+      switch (inputs[0]?.toLowerCase()) {
         case "@testuser":
-          return "111";
+          return [{ input: inputs[0], resolved: true, id: "111" }];
         case "@groupuser":
-          return "222";
+          return [{ input: inputs[0], resolved: true, id: "222" }];
         case "@topicuser":
-          return "333";
+          return [{ input: inputs[0], resolved: true, id: "333" }];
         case "@accountuser":
-          return "444";
+          return [{ input: inputs[0], resolved: true, id: "444" }];
         default:
-          return null;
+          return [{ input: inputs[0], resolved: false }];
       }
     });
 
@@ -268,11 +247,11 @@ describe("doctor telegram provider warnings", () => {
   });
 
   it("sanitizes Telegram allowFrom repair change lines before logging", async () => {
-    lookupTelegramChatIdMock.mockImplementation(async ({ chatId }: { chatId: string }) => {
-      if (chatId === "@\u001b[31mtestuser") {
-        return "12345";
+    telegramResolverMock.mockImplementation(async ({ inputs }: { inputs: string[] }) => {
+      if (inputs[0] === "@\u001b[31mtestuser") {
+        return [{ input: inputs[0], resolved: true, id: "12345" }];
       }
-      return null;
+      return [{ input: inputs[0], resolved: false }];
     });
 
     const result = await maybeRepairTelegramAllowFromUsernames({
@@ -296,13 +275,9 @@ describe("doctor telegram provider warnings", () => {
   it("keeps Telegram allowFrom entries unchanged when configured credentials are unavailable", async () => {
     inspectTelegramAccountMock.mockImplementation(() => ({
       enabled: true,
-      tokenStatus: "configured_unavailable",
-    }));
-    resolveTelegramAccountMock.mockImplementation(() => ({
-      accountId: "default",
       token: "",
-      tokenSource: "none",
-      config: {},
+      tokenSource: "env",
+      tokenStatus: "configured_unavailable",
     }));
 
     const result = await maybeRepairTelegramAllowFromUsernames({
@@ -332,7 +307,7 @@ describe("doctor telegram provider warnings", () => {
         line.includes("configured Telegram bot credentials are unavailable"),
       ),
     ).toBe(true);
-    expect(lookupTelegramChatIdMock).not.toHaveBeenCalled();
+    expect(telegramResolverMock).not.toHaveBeenCalled();
   });
 
   it("uses network settings for Telegram allowFrom repair but ignores apiRoot and proxy", async () => {
@@ -357,15 +332,7 @@ describe("doctor telegram provider warnings", () => {
       hadUnresolvedTargets: false,
     });
     listTelegramAccountIdsMock.mockImplementation(() => ["work"]);
-    resolveTelegramAccountMock.mockImplementation(() => ({
-      accountId: "work",
-      token: "tok",
-      tokenSource: "config",
-      config: {
-        network: { autoSelectFamily: false, dnsResultOrder: "ipv4first" },
-      },
-    }));
-    lookupTelegramChatIdMock.mockResolvedValue("12345");
+    telegramResolverMock.mockResolvedValue([{ input: "@testuser", resolved: true, id: "12345" }]);
 
     const result = await maybeRepairTelegramAllowFromUsernames({
       channels: {
@@ -388,11 +355,12 @@ describe("doctor telegram provider warnings", () => {
       };
     };
     expect(cfg.channels?.telegram?.accounts?.work?.allowFrom).toEqual(["12345"]);
-    expect(lookupTelegramChatIdMock).toHaveBeenCalledWith({
-      token: "tok",
-      chatId: "@testuser",
-      signal: expect.any(AbortSignal),
-      network: { autoSelectFamily: false, dnsResultOrder: "ipv4first" },
+    expect(telegramResolverMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      accountId: "work",
+      inputs: ["@testuser"],
+      kind: "user",
+      runtime: expect.any(Object),
     });
   });
 });

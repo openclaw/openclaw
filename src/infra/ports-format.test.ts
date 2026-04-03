@@ -4,6 +4,7 @@ import {
   classifyPortListener,
   formatPortDiagnostics,
   formatPortListener,
+  isDualStackLoopbackGatewayListeners,
 } from "./ports-format.js";
 
 describe("ports-format", () => {
@@ -33,6 +34,17 @@ describe("ports-format", () => {
       expect.stringContaining("Multiple listeners detected"),
     ]);
     expect(buildPortHints([], 18789)).toEqual([]);
+  });
+
+  it("treats single-process loopback dual-stack gateway listeners as benign", () => {
+    const listeners = [
+      { pid: 4242, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+      { pid: 4242, commandLine: "openclaw-gateway", address: "[::1]:18789" },
+    ];
+    expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(true);
+    expect(buildPortHints(listeners, 18789)).toEqual([
+      expect.stringContaining("Gateway already running locally."),
+    ]);
   });
 
   it.each([

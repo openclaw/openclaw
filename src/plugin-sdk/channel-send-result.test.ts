@@ -8,8 +8,8 @@ import {
   createRawChannelSendResultAdapter,
 } from "./channel-send-result.js";
 
-describe("attachChannelToResult", () => {
-  it("preserves the existing result shape and stamps the channel", () => {
+describe("attachChannelToResult(s)", () => {
+  it("stamps channel metadata on single and batch results", () => {
     expect(
       attachChannelToResult("discord", {
         messageId: "m1",
@@ -22,11 +22,7 @@ describe("attachChannelToResult", () => {
       ok: true,
       extra: "value",
     });
-  });
-});
 
-describe("attachChannelToResults", () => {
-  it("stamps each result in a list with the shared channel id", () => {
     expect(
       attachChannelToResults("signal", [
         { messageId: "m1", timestamp: 1 },
