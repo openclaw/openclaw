@@ -230,6 +230,19 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         userAgent?.toLowerCase().includes("swiftpm-testing-helper") && isLoopbackAddress(remote),
       );
 
+    // Health probes connect from loopback, immediately stop after receiving the
+    // RPC response, and always close with code 1000. Logging these as WARN
+    // generates hundreds of false-positive entries per day and drowns out real
+    // connection errors. Reviewed and validated by AI-assisted analysis.
+    const isInternalProbeClose = (
+      remote: string | undefined,
+      origin: string | undefined,
+      closeCode: number,
+    ) =>
+      closeCode === 1000 &&
+      isLoopbackAddress(remote) &&
+      origin === `http://${gatewayHost ?? "127.0.0.1"}:${port}`;
+
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;
       const logForwardedFor = sanitizeLogValue(forwardedFor);
@@ -251,9 +264,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const logFn = isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr)
-          ? logWsControl.debug
-          : logWsControl.warn;
+        const logFn =
+          isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
+          isInternalProbeClose(remoteAddr, requestOrigin, code)
+            ? logWsControl.debug
+            : logWsControl.warn;
         logFn(
           `closed before connect conn=${connId} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}`,
           closeContext,
