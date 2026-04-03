@@ -462,6 +462,11 @@ File contents here`,
         expected: "The actual answer.",
       },
       {
+        name: "antml namespaced thinking tag",
+        text: "<antml:thinking>This shows Robin Waslander DMing maintainers o...</antml:thinking>Actual reply.",
+        expected: "Actual reply.",
+      },
+      {
         name: "final wrapper",
         text: "<final>\nAnswer\n</final>",
         expected: "Answer",

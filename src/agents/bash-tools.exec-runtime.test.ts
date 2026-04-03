@@ -47,18 +47,114 @@ describe("resolveExecTarget", () => {
     ({ resolveExecTarget } = await import("./bash-tools.exec-runtime.js"));
   });
 
-  it("treats auto as a default strategy rather than a host allowlist", () => {
+  it("keeps implicit auto on sandbox when a sandbox runtime is available", () => {
     expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: null,
+      selectedTarget: "auto",
+      effectiveHost: "sandbox",
+    });
+  });
+
+  it("keeps implicit auto on gateway when no sandbox runtime is available", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: null,
+      selectedTarget: "auto",
+      effectiveHost: "gateway",
+    });
+  });
+
+  it("rejects host overrides when configured host is auto", () => {
+    expect(() =>
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "node",
         elevatedRequested: false,
         sandboxAvailable: false,
       }),
+    ).toThrow("exec host not allowed");
+  });
+
+  it("also rejects gateway override when configured host is auto", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "gateway",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toThrow("exec host not allowed");
+  });
+
+  it("allows explicit auto request when configured host is auto", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
     ).toMatchObject({
       configuredTarget: "auto",
+      requestedTarget: "auto",
+      selectedTarget: "auto",
+      effectiveHost: "sandbox",
+    });
+  });
+
+  it("requires an exact match for non-auto configured targets", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "gateway",
+        requestedTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toThrow("exec host not allowed");
+  });
+
+  it("allows exact node matches", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "node",
+        requestedTarget: "node",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "node",
+      requestedTarget: "node",
       selectedTarget: "node",
       effectiveHost: "node",
+    });
+  });
+
+  it("still forces elevated requests onto the gateway host", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "sandbox",
+        elevatedRequested: true,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "sandbox",
+      selectedTarget: "gateway",
+      effectiveHost: "gateway",
     });
   });
 });

@@ -22,7 +22,11 @@ import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
+import {
+  resolveExecApprovalRequestAllowedDecisions,
+  type ExecApprovalRequest,
+  type ExecApprovalResolved,
+} from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import {
   approvalDecisionLabel,
@@ -165,6 +169,7 @@ function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): Exec
 }
 
 function shouldSkipForwardingFallback(params: {
+  approvalKind: "exec" | "plugin";
   target: ExecApprovalForwardTarget;
   cfg: OpenClawConfig;
   routeRequest: ApprovalRouteRequest;
@@ -177,6 +182,7 @@ function shouldSkipForwardingFallback(params: {
   return (
     adapter?.delivery?.shouldSuppressForwardingFallback?.({
       cfg: params.cfg,
+      approvalKind: params.approvalKind,
       target: params.target,
       request: buildSyntheticApprovalRequest(params.routeRequest),
     }) ?? false
@@ -196,6 +202,8 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
 }
 
 function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
+  const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
+  const decisionText = allowedDecisions.join("|");
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
   const command = formatApprovalCommand(
     resolveExecApprovalCommandDisplay(request.request).commandText,
@@ -230,9 +238,16 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   lines.push(`Expires in: ${formatExecApprovalExpiresIn(request.expiresAtMs, nowMs)}`);
   lines.push("Mode: foreground (interactive approvals available in this chat).");
   lines.push(
-    "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off).",
+    allowedDecisions.includes("allow-always")
+      ? "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off)."
+      : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
   );
-  lines.push("Reply with: /approve <id> allow-once|allow-always|deny");
+  lines.push(`Reply with: /approve <id> ${decisionText}`);
+  if (!allowedDecisions.includes("allow-always")) {
+    lines.push(
+      "Allow Always is unavailable because the effective policy requires approval every time.",
+    );
+  }
   return lines.join("\n");
 }
 
@@ -338,6 +353,9 @@ function buildExecPendingPayload(params: {
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     text: buildRequestMessage(params.request, params.nowMs),
+    agentId: params.request.request.agentId ?? null,
+    allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
+    sessionKey: params.request.request.sessionKey ?? null,
   });
 }
 
@@ -488,8 +506,15 @@ function createApprovalHandlers<
             resolveSessionTarget: params.resolveSessionTarget,
           })
         : []),
-    ].filter((target) => !shouldSkipForwardingFallback({ target, cfg, routeRequest }));
-
+    ].filter(
+      (target) =>
+        !shouldSkipForwardingFallback({
+          approvalKind: params.strategy.kind,
+          target,
+          cfg,
+          routeRequest,
+        }),
+    );
     if (filteredTargets.length === 0) {
       return false;
     }
@@ -584,7 +609,15 @@ function createApprovalHandlers<
                 resolveSessionTarget: params.resolveSessionTarget,
               })
             : []),
-        ].filter((target) => !shouldSkipForwardingFallback({ target, cfg, routeRequest }));
+        ].filter(
+          (target) =>
+            !shouldSkipForwardingFallback({
+              approvalKind: params.strategy.kind,
+              target,
+              cfg,
+              routeRequest,
+            }),
+        );
       }
     }
     if (!targets?.length) {

@@ -96,6 +96,8 @@ Run a persistent OpenClaw Gateway on Oracle Cloud's **Always Free** ARM tier (up
     systemctl --user restart openclaw-gateway
     ```
 
+    `gateway.trustedProxies=["127.0.0.1"]` is for the local Tailscale Serve proxy. Diff viewer routes keep fail-closed behavior in this setup: raw `127.0.0.1` viewer requests without forwarded proxy headers can return `Diff not found`. Use `mode=file` / `mode=both` for attachments, or intentionally enable remote viewers and set `plugins.entries.diffs.config.viewerBaseUrl` (or pass a proxy `baseUrl`) if you need shareable viewer links.
+
   </Step>
 
   <Step title="Lock down VCN security">

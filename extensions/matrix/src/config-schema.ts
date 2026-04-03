@@ -1,6 +1,7 @@
 import {
   AllowFromListSchema,
   buildNestedDmConfigSchema,
+  ContextVisibilityModeSchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ToolPolicySchema,
@@ -27,6 +28,16 @@ const matrixThreadBindingsSchema = z
     maxAgeHours: z.number().nonnegative().optional(),
     spawnSubagentSessions: z.boolean().optional(),
     spawnAcpSessions: z.boolean().optional(),
+  })
+  .optional();
+
+const matrixExecApprovalsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    approvers: AllowFromListSchema,
+    agentFilter: z.array(z.string()).optional(),
+    sessionFilter: z.array(z.string()).optional(),
+    target: z.enum(["dm", "channel", "both"]).optional(),
   })
   .optional();
 
@@ -65,6 +76,8 @@ export const MatrixConfigSchema = z.object({
   allowlistOnly: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   groupPolicy: GroupPolicySchema.optional(),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
+  blockStreaming: z.boolean().optional(),
   streaming: z.union([z.enum(["partial", "off"]), z.boolean()]).optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
@@ -87,6 +100,7 @@ export const MatrixConfigSchema = z.object({
   dm: buildNestedDmConfigSchema({
     threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   }),
+  execApprovals: matrixExecApprovalsSchema,
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,

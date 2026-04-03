@@ -15,7 +15,7 @@ Hooks provide an extensible event-driven system for automating actions in respon
 Hooks are small scripts that run when something happens. There are two kinds:
 
 - **Hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
-- **Webhooks**: external HTTP webhooks that let other systems trigger work in OpenClaw. See [Webhook Hooks](/automation/webhook) or use `openclaw webhooks` for Gmail helper commands.
+- **Webhooks**: external HTTP webhooks that let other systems trigger work in OpenClaw. See [Webhooks](/automation/cron-jobs#webhooks) or use `openclaw webhooks` for Gmail helper commands.
 
 Hooks can also be bundled inside plugins; see [Plugin hooks](/plugins/architecture#provider-runtime-hooks). `openclaw hooks list` shows both standalone hooks and plugin-managed hooks.
 
@@ -607,7 +607,7 @@ Compaction lifecycle hooks exposed through the plugin hook runner:
 
 ### Complete Plugin Hook Reference
 
-All 27 hooks registered via the Plugin SDK. Hooks marked **sequential** run in priority order and can modify results; **parallel** hooks are fire-and-forget.
+All 28 hooks registered via the Plugin SDK. Hooks marked **sequential** run in priority order and can modify results; **parallel** hooks are fire-and-forget.
 
 #### Model and prompt hooks
 
@@ -616,6 +616,7 @@ All 27 hooks registered via the Plugin SDK. Hooks marked **sequential** run in p
 | `before_model_resolve` | Before model/provider lookup                 | Sequential | `{ modelOverride?, providerOverride? }`                    |
 | `before_prompt_build`  | After model resolved, session messages ready | Sequential | `{ systemPrompt?, prependContext?, appendSystemContext? }` |
 | `before_agent_start`   | Legacy combined hook (prefer the two above)  | Sequential | Union of both result shapes                                |
+| `before_agent_reply`   | After inline actions, before the LLM runs    | Sequential | `{ handled: boolean, reply?, reason? }`                    |
 | `llm_input`            | Immediately before the LLM API call          | Parallel   | `void`                                                     |
 | `llm_output`           | Immediately after LLM response received      | Parallel   | `void`                                                     |
 
@@ -1371,5 +1372,5 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 
 - [CLI Reference: hooks](/cli/hooks)
 - [Bundled Hooks README](https://github.com/openclaw/openclaw/tree/main/src/hooks/bundled)
-- [Webhook Hooks](/automation/webhook)
+- [Webhooks](/automation/cron-jobs#webhooks)
 - [Configuration](/gateway/configuration-reference#hooks)

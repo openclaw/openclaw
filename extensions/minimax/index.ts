@@ -166,7 +166,9 @@ export default definePluginEntry({
       id: API_PROVIDER_ID,
       label: PROVIDER_LABEL,
       docsPath: "/providers/minimax",
+      aliases: ["minimax-cn"],
       envVars: ["MINIMAX_API_KEY"],
+      resolveReasoningOutputMode: () => "native",
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: API_PROVIDER_ID,
@@ -240,6 +242,7 @@ export default definePluginEntry({
       label: PROVIDER_LABEL,
       docsPath: "/providers/minimax",
       envVars: ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+      resolveReasoningOutputMode: () => "native",
       catalog: {
         run: async (ctx) => resolvePortalCatalog(ctx),
       },
