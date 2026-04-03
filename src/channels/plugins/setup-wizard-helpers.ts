@@ -1324,23 +1324,33 @@ export function createTopLevelChannelParsedAllowFromPrompt(params: {
     channel: params.channel,
     ...(params.enabled ? { enabled: true } : {}),
   });
-  return createPromptParsedAllowFromForAccount({
-    defaultAccountId:
-      typeof params.defaultAccountId === "function"
-        ? params.defaultAccountId
-        : () => params.defaultAccountId,
+  const sharedParams = {
     ...(params.noteTitle ? { noteTitle: params.noteTitle } : {}),
     ...(params.noteLines ? { noteLines: params.noteLines } : {}),
     message: params.message,
     placeholder: params.placeholder,
     parseEntries: params.parseEntries,
-    getExistingAllowFrom: ({ cfg }) =>
+    getExistingAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
       params.getExistingAllowFrom?.(cfg) ??
       (cfg.channels?.[params.channel] as { allowFrom?: Array<string | number> } | undefined)
         ?.allowFrom ??
       [],
     ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
-    applyAllowFrom: ({ cfg, allowFrom }) => setAllowFrom(cfg, allowFrom),
+    applyAllowFrom: ({ cfg, allowFrom }: { cfg: OpenClawConfig; allowFrom: string[] }) =>
+      setAllowFrom(cfg, allowFrom),
+  };
+
+  if (typeof params.defaultAccountId === "function") {
+    return createPromptParsedAllowFromForAccount({
+      defaultAccountId: params.defaultAccountId,
+      ...sharedParams,
+    });
+  }
+
+  const defaultAccountId = params.defaultAccountId;
+  return createPromptParsedAllowFromForAccount({
+    defaultAccountId: () => defaultAccountId,
+    ...sharedParams,
   });
 }
 
