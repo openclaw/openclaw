@@ -5,5 +5,5 @@ export { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-
 export {
   evaluateSupplementalContextVisibility,
   filterSupplementalContextItems,
-} from "openclaw/plugin-sdk/feishu";
-export { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+  normalizeAgentId,
+} from "../runtime-api.js";
