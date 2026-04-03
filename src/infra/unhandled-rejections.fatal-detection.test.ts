@@ -170,6 +170,22 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       expectExitCodeFromUnhandled(slackErr, [1]);
     });
 
+    it("does not exit on undefined reason (e.g., Slack socket-mode reject())", () => {
+      expectExitCodeFromUnhandled(undefined, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (no error object):",
+        "undefined",
+      );
+    });
+
+    it("does not exit on null reason", () => {
+      expectExitCodeFromUnhandled(null, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (no error object):",
+        "null",
+      );
+    });
+
     it("does not exit on AbortError and logs suppression warning", () => {
       const abortErr = new Error("This operation was aborted");
       abortErr.name = "AbortError";

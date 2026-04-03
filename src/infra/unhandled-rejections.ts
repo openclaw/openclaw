@@ -345,6 +345,14 @@ export function installUnhandledRejectionHandler(): void {
       return;
     }
 
+    // Rejections with no reason (undefined/null) are almost always third-party SDK
+    // bugs (e.g., Slack socket-mode calling reject() without an argument after a
+    // WebSocket 408). There is zero diagnostic value in crashing — log and continue.
+    if (reason === undefined || reason === null) {
+      console.warn("[openclaw] Non-fatal unhandled rejection (no error object):", String(reason));
+      return;
+    }
+
     // AbortError is typically an intentional cancellation (e.g., during shutdown)
     // Log it but don't crash - these are expected during graceful shutdown
     if (isAbortError(reason)) {
