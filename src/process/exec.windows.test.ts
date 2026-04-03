@@ -1,3 +1,4 @@
+import type { execFile as execFileType } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -16,7 +17,7 @@ vi.mock("node:child_process", async () => {
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
       spawn: spawnMock,
-      execFile: execFileMock as unknown as typeof import("node:child_process").execFile,
+      execFile: execFileMock as unknown as typeof execFileType,
     },
   );
 });

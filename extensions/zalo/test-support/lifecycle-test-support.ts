@@ -1,6 +1,6 @@
 import { request as httpRequest } from "node:http";
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
 import { expect, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../src/types.js";
 
 export function createLifecycleConfig(params: {

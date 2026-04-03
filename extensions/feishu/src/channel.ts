@@ -51,6 +51,7 @@ import type {
 import { createFeishuClient } from "./client.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
+  buildFeishuModelOverrideParentCandidates,
   buildFeishuConversationId,
   parseFeishuConversationId,
   parseFeishuDirectConversationId,
@@ -59,6 +60,7 @@ import {
 import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
 import {
   resolveFeishuParentConversationCandidates,
   resolveFeishuSessionConversation,
@@ -146,7 +148,9 @@ function describeFeishuMessageTool({
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
   const enabledAccounts = accountId
-    ? [resolveFeishuAccount({ cfg, accountId })].filter((account) => account.enabled && account.configured)
+    ? [resolveFeishuAccount({ cfg, accountId })].filter(
+        (account) => account.enabled && account.configured,
+      )
     : listEnabledFeishuAccounts(cfg);
   const enabled =
     enabledAccounts.length > 0 ||
@@ -179,9 +183,9 @@ function describeFeishuMessageTool({
     "channel-list",
   ]);
   if (
-    (accountId
+    accountId
       ? enabledAccounts.some((account) => isFeishuReactionsActionEnabled({ cfg, account }))
-      : areAnyFeishuReactionActionsEnabled(cfg))
+      : areAnyFeishuReactionActionsEnabled(cfg)
   ) {
     actions.add("react");
     actions.add("reactions");
@@ -567,6 +571,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
       conversationBindings: {
         defaultTopLevelPlacement: "current",
+        buildModelOverrideParentCandidates: ({ parentConversationId }) =>
+          buildFeishuModelOverrideParentCandidates(parentConversationId),
       },
       mentions: {
         stripPatterns: () => ['<at user_id="[^"]*">[^<]*</at>'],
@@ -1180,6 +1186,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         cfg: ClawdbotConfig;
         accountId?: string | null;
       }>(collectFeishuSecurityWarnings),
+      collectAuditFindings: ({ cfg }) => collectFeishuSecurityAuditFindings({ cfg }),
     },
     pairing: {
       text: {

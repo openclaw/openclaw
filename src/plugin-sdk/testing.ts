@@ -6,7 +6,6 @@ export {
   expectChannelInboundContextContract,
   primeChannelOutboundSendMock,
 } from "../channels/plugins/contracts/test-helpers.js";
-export { createSlackOutboundPayloadHarness } from "../channels/plugins/contracts/slack-outbound-harness.js";
 export { buildDispatchInboundCaptureMock } from "../channels/plugins/contracts/inbound-testkit.js";
 export {
   createCliRuntimeCapture,
@@ -47,10 +46,6 @@ export { buildCommandTestParams } from "../auto-reply/reply/commands-spawn.test-
 export { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 export { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 export { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
-export {
-  createWhatsAppPollFixture,
-  expectWhatsAppPollSent,
-} from "../test-helpers/whatsapp-outbound.js";
 export { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 export { installCommonResolveTargetErrorCases } from "../test-helpers/resolve-target-error-cases.js";
 export { sanitizeTerminalText } from "../terminal/safe-text.js";

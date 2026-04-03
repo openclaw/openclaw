@@ -1,18 +1,17 @@
 import {
   type ChannelDoctorAdapter,
   type ChannelDoctorConfigMutation,
+  type ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
+import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime";
+import { isSlackMutableAllowEntry } from "./security-doctor.js";
 import {
   formatSlackStreamingBooleanMigrationMessage,
   formatSlackStreamModeMigrationMessage,
   resolveSlackNativeStreaming,
   resolveSlackStreamingMode,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import {
-  collectProviderDangerousNameMatchingScopes,
-  isSlackMutableAllowEntry,
-} from "openclaw/plugin-sdk/runtime";
+} from "./streaming-compat.js";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -294,11 +293,47 @@ export function collectSlackMutableAllowlistWarnings(cfg: OpenClawConfig): strin
   ];
 }
 
+function hasLegacySlackStreamingAliases(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  if (!entry) {
+    return false;
+  }
+  return (
+    entry.streamMode !== undefined ||
+    typeof entry.streaming === "boolean" ||
+    (typeof entry.streaming === "string" && entry.streaming !== resolveSlackStreamingMode(entry))
+  );
+}
+
+function hasLegacySlackAccountStreamingAliases(value: unknown): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasLegacySlackStreamingAliases(account));
+}
+
+const SLACK_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
+  {
+    path: ["channels", "slack"],
+    message:
+      "channels.slack.streamMode and boolean channels.slack.streaming are legacy; use channels.slack.streaming and channels.slack.nativeStreaming.",
+    match: hasLegacySlackStreamingAliases,
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      "channels.slack.accounts.<id>.streamMode and boolean channels.slack.accounts.<id>.streaming are legacy; use channels.slack.accounts.<id>.streaming and channels.slack.accounts.<id>.nativeStreaming.",
+    match: hasLegacySlackAccountStreamingAliases,
+  },
+];
+
 export const slackDoctor: ChannelDoctorAdapter = {
   dmAllowFromMode: "topOrNested",
   groupModel: "route",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
+  legacyConfigRules: SLACK_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: ({ cfg }) => normalizeSlackCompatibilityConfig(cfg),
   collectMutableAllowlistWarnings: ({ cfg }) => collectSlackMutableAllowlistWarnings(cfg),
 };

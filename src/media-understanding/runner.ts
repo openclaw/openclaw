@@ -20,10 +20,8 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import {
-  mergeInboundPathRoots,
-  resolveIMessageAttachmentRoots,
-} from "../media/inbound-path-policy.js";
+import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
+import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
@@ -178,10 +176,7 @@ export function resolveMediaAttachmentLocalRoots(params: {
 }): readonly string[] {
   return mergeInboundPathRoots(
     getDefaultMediaLocalRoots(),
-    resolveIMessageAttachmentRoots({
-      cfg: params.cfg,
-      accountId: params.ctx.AccountId,
-    }),
+    resolveChannelInboundAttachmentRoots(params),
   );
 }
 

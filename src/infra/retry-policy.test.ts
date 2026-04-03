@@ -1,17 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTelegramRetryRunner } from "./retry-policy.js";
+import { createChannelApiRetryRunner } from "./retry-policy.js";
 
 const ZERO_DELAY_RETRY = { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
 
 async function runRetryCase(params: {
-  runnerOptions: Parameters<typeof createTelegramRetryRunner>[0];
+  runnerOptions: Parameters<typeof createChannelApiRetryRunner>[0];
   fnSteps: Array<{ type: "reject" | "resolve"; value: unknown }>;
   expectedCalls: number;
   expectedValue?: unknown;
   expectedError?: string;
 }): Promise<void> {
   vi.useFakeTimers();
-  const runner = createTelegramRetryRunner(params.runnerOptions);
+  const runner = createChannelApiRetryRunner(params.runnerOptions);
   const fn = vi.fn();
   const allRejects =
     params.fnSteps.length > 0 && params.fnSteps.every((step) => step.type === "reject");
@@ -39,7 +39,7 @@ async function runRetryCase(params: {
   expect(fn).toHaveBeenCalledTimes(params.expectedCalls);
 }
 
-describe("createTelegramRetryRunner", () => {
+describe("createChannelApiRetryRunner", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();

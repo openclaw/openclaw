@@ -51,7 +51,7 @@ export function resolveScopedChannelMediaMaxBytes(params: {
   });
 }
 
-export function createScopedChannelMediaMaxBytesResolver(channel: "imessage" | "signal") {
+export function createScopedChannelMediaMaxBytesResolver(channel: string) {
   return (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     resolveScopedChannelMediaMaxBytes({
       cfg: params.cfg,
@@ -66,7 +66,7 @@ export function createDirectTextMediaOutbound<
   TOpts extends Record<string, unknown>,
   TResult extends DirectSendResult,
 >(params: {
-  channel: "imessage" | "signal";
+  channel: string;
   resolveSender: (deps: OutboundSendDeps | undefined) => DirectSendFn<TOpts, TResult>;
   resolveMaxBytes: (params: {
     cfg: OpenClawConfig;

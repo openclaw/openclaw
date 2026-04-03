@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { matrixSetupAdapter, matrixSetupWizard } from "../../test/helpers/plugins/matrix-setup.js";
+import {
+  matrixSetupAdapter,
+  matrixSetupWizard,
+} from "../../test/helpers/channels/matrix-setup-contract.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
