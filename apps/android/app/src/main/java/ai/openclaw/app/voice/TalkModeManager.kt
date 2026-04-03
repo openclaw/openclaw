@@ -679,15 +679,24 @@ class TalkModeManager(
   ) {
     val currentJob = coroutineContext[Job]
     var shouldResumeAfterSpeak = false
+    var previousJob: Job? = null
     try {
       shouldResumeAfterSpeak = true
       onBeforeSpeak()
-      val previousJob =
+      val claimedPlayback =
         synchronized(ttsJobLock) {
-          val previous = ttsJob
-          ttsJob = currentJob
-          previous
+          if (!playbackEnabled || playbackToken != playbackGeneration.get()) {
+            false
+          } else {
+            previousJob = ttsJob
+            ttsJob = currentJob
+            true
+          }
         }
+      if (!claimedPlayback) {
+        ensurePlaybackActive(playbackToken)
+        return
+      }
       previousJob?.takeIf { it !== currentJob }?.cancel()
       stopTextToSpeechPlayback()
       ensurePlaybackActive(playbackToken)
