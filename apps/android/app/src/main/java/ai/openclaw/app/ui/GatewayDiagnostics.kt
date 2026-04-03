@@ -49,6 +49,7 @@ internal fun buildGatewayDiagnosticsReport(
     Please:
     - pick one route only: same machine, same LAN, Tailscale, or public URL
     - classify this as pairing/auth, TLS trust, wrong advertised route, wrong address/port, or gateway down
+    - remember: remote mobile nodes require wss:// or Tailscale Serve; ws:// is only for localhost or the Android emulator
     - quote the exact app status/error below
     - tell me whether `openclaw devices list` should show a pending pairing request
     - if more signal is needed, ask for `openclaw qr --json`, `openclaw devices list`, and `openclaw nodes status`

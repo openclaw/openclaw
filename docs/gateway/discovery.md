@@ -95,6 +95,12 @@ If the gateway can detect it is running under Tailscale, it publishes `tailnetDn
 
 The macOS app now prefers MagicDNS names over raw Tailscale IPs for gateway discovery. This improves reliability when tailnet IPs change (for example after node restarts or CGNAT reassignment), because MagicDNS names resolve to the current IP automatically.
 
+For mobile node pairing, discovery hints do not relax transport security:
+
+- iOS/Android still require a secure first-time remote connect path (`wss://` or Tailscale Serve/Funnel).
+- A discovered raw tailnet IP is a routing hint, not permission to use plaintext remote `ws://`.
+- If you want the simplest Tailscale path for mobile nodes, use Tailscale Serve so discovery and the setup code both resolve to the same secure MagicDNS endpoint.
+
 ### 3) Manual / SSH target
 
 When there is no direct route (or direct is disabled), clients can always connect via SSH by forwarding the loopback gateway port.
@@ -108,6 +114,7 @@ Recommended client behavior:
 1. If a paired direct endpoint is configured and reachable, use it.
 2. Else, if Bonjour finds a gateway on LAN, offer a one-tap “Use this gateway” choice and save it as the direct endpoint.
 3. Else, if a tailnet DNS/IP is configured, try direct.
+   For mobile nodes, direct means a secure endpoint, not plaintext remote `ws://`.
 4. Else, fall back to SSH.
 
 ## Pairing + auth (direct transport)
