@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   inspectDiscordSetupAccount,
   listDiscordSetupAccountIds,
+  resolveDefaultDiscordSetupAccountId,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
 
@@ -39,6 +40,31 @@ describe("discord setup account state", () => {
     expect(resolved.accountId).toBe("work");
     expect(resolved.config.name).toBe("Work");
     expect(resolved.config.allowFrom).toEqual(["acct"]);
+  });
+
+  it("uses configured defaultAccount for omitted setup account resolution", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          allowFrom: ["top"],
+          accounts: {
+            alerts: { allowFrom: ["alerts-only"] },
+            work: { name: "Work", allowFrom: ["work-only"] },
+          },
+        },
+      },
+    };
+
+    expect(resolveDefaultDiscordSetupAccountId(cfg)).toBe("work");
+
+    const resolved = resolveDiscordSetupAccountConfig({
+      cfg,
+    });
+
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.config.name).toBe("Work");
+    expect(resolved.config.allowFrom).toEqual(["work-only"]);
   });
 
   it("treats explicit blank account tokens as missing without falling back", () => {
