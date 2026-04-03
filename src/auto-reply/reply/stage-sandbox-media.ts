@@ -182,7 +182,7 @@ function resolveAbsolutePath(value: string): string | null {
 async function isAllowedSourcePath(params: {
   source: string;
   mediaRemoteHost?: string;
-  remoteAttachmentRoots: string[];
+  remoteAttachmentRoots: readonly string[];
 }): Promise<boolean> {
   if (params.mediaRemoteHost) {
     if (

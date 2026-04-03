@@ -30,6 +30,7 @@ export type {
   ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,
   ChannelDoctorEmptyAllowlistAccountContext,
+  ChannelDoctorLegacyConfigRule,
   ChannelDoctorSequenceResult,
   ChannelGatewayContext,
   ChannelOutboundAdapter,
