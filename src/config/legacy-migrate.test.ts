@@ -400,6 +400,69 @@ describe("legacy migrate talk provider shape", () => {
   });
 });
 
+describe("legacy migrate sandbox scope aliases", () => {
+  it("moves agents.defaults.sandbox.perSession into scope", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            perSession: true,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved agents.defaults.sandbox.perSession → agents.defaults.sandbox.scope (session).",
+    );
+    expect(res.config?.agents?.defaults?.sandbox).toEqual({
+      scope: "session",
+    });
+  });
+
+  it("moves agents.list[].sandbox.perSession into scope", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        list: [
+          {
+            id: "pi",
+            sandbox: {
+              perSession: false,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved agents.list.0.sandbox.perSession → agents.list.0.sandbox.scope (shared).",
+    );
+    expect(res.config?.agents?.list?.[0]?.sandbox).toEqual({
+      scope: "shared",
+    });
+  });
+
+  it("drops legacy sandbox perSession when scope is already set", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          sandbox: {
+            scope: "agent",
+            perSession: true,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed agents.defaults.sandbox.perSession (agents.defaults.sandbox.scope already set).",
+    );
+    expect(res.config?.agents?.defaults?.sandbox).toEqual({
+      scope: "agent",
+    });
+  });
+});
+
 describe("legacy migrate x_search auth", () => {
   it("moves only legacy x_search auth into plugin-owned xai config", () => {
     const res = migrateLegacyConfig({
