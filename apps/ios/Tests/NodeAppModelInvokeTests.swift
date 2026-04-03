@@ -89,6 +89,14 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
     }
 
     func add(_: UNNotificationRequest) async throws {}
+
+    func removePendingNotificationRequests(withIdentifiers _: [String]) async {}
+
+    func removeDeliveredNotifications(withIdentifiers _: [String]) async {}
+
+    func deliveredNotifications() async -> [NotificationSnapshot] {
+        []
+    }
 }
 
 @Suite(.serialized) struct NodeAppModelInvokeTests {
@@ -117,6 +125,44 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         appModel.setSelectedAgentId("agent-123")
         #expect(appModel.chatSessionKey == SessionKey.makeAgentSessionKey(agentId: "agent-123", baseKey: "main"))
         #expect(appModel.mainSessionKey == "agent:agent-123:main")
+    }
+
+    @Test @MainActor func execApprovalPromptPresentationTracksLatestNotificationTap() throws {
+        let appModel = NodeAppModel()
+        appModel._test_presentExecApprovalPrompt(
+            try #require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: "approval-1",
+                    commandText: "echo first",
+                    allowedDecisions: ["allow-once", "deny"],
+                    host: "gateway",
+                    nodeId: nil,
+                    agentId: "main",
+                    expiresAtMs: 1)))
+
+        let firstPrompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        #expect(firstPrompt.id == "approval-1")
+        #expect(firstPrompt.commandText == "echo first")
+        #expect(firstPrompt.allowsAllowAlways == false)
+
+        appModel._test_presentExecApprovalPrompt(
+            try #require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: "approval-2",
+                    commandText: "echo second",
+                    allowedDecisions: ["allow-once", "allow-always", "deny"],
+                    host: "gateway",
+                    nodeId: "node-2",
+                    agentId: nil,
+                    expiresAtMs: 2)))
+
+        let secondPrompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        #expect(secondPrompt.id == "approval-2")
+        #expect(secondPrompt.commandText == "echo second")
+        #expect(secondPrompt.allowsAllowAlways)
+
+        appModel._test_dismissPendingExecApprovalPrompt()
+        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
     }
 
     @Test func operatorLoopWaitsForBootstrapHandoffBeforeUsingStoredToken() {
