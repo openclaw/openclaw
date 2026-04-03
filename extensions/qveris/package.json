@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/qveris",
-  "version": "2026.4.1",
+  "version": "2026.4.3",
   "private": true,
   "description": "QVeris web search plugin for QVerisBot",
   "type": "module",
