@@ -388,6 +388,26 @@ function resolveConversationIdForThreadBinding(params: {
   return undefined;
 }
 
+function resolveAcpSpawnChannelAccountId(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  accountId?: string;
+}): string | undefined {
+  const channel = params.channel?.trim().toLowerCase();
+  const explicitAccountId = params.accountId?.trim();
+  if (explicitAccountId) {
+    return explicitAccountId;
+  }
+  if (!channel) {
+    return undefined;
+  }
+  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
+  const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
+  return typeof configuredDefaultAccountId === "string" && configuredDefaultAccountId.trim()
+    ? configuredDefaultAccountId.trim()
+    : "default";
+}
+
 function prepareAcpThreadBinding(params: {
   cfg: OpenClawConfig;
   channel?: string;
@@ -404,7 +424,11 @@ function prepareAcpThreadBinding(params: {
     };
   }
 
-  const accountId = params.accountId?.trim() || "default";
+  const accountId = resolveAcpSpawnChannelAccountId({
+    cfg: params.cfg,
+    channel,
+    accountId: params.accountId,
+  });
   const policy = resolveThreadBindingSpawnPolicy({
     cfg: params.cfg,
     channel,
@@ -674,6 +698,7 @@ async function bindPreparedAcpThread(params: {
 }
 
 function resolveAcpSpawnBootstrapDeliveryPlan(params: {
+  cfg: OpenClawConfig;
   spawnMode: SpawnAcpMode;
   requestThreadBinding: boolean;
   effectiveStreamToParent: boolean;
@@ -693,10 +718,15 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     threadId: fallbackThreadId,
     to: params.requester.origin?.to,
   });
+  const requesterAccountId = resolveAcpSpawnChannelAccountId({
+    cfg: params.cfg,
+    channel: params.requester.origin?.channel,
+    accountId: params.requester.origin?.accountId,
+  });
   const bindingMatchesRequesterConversation = Boolean(
     params.requester.origin?.channel &&
     params.binding?.conversation.channel === params.requester.origin.channel &&
-    params.binding?.conversation.accountId === (params.requester.origin.accountId ?? "default") &&
+    params.binding?.conversation.accountId === requesterAccountId &&
     requesterConversationId &&
     params.binding?.conversation.conversationId === requesterConversationId,
   );
@@ -728,7 +758,7 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   return {
     useInlineDelivery,
     channel: useInlineDelivery ? params.requester.origin?.channel : undefined,
-    accountId: useInlineDelivery ? (params.requester.origin?.accountId ?? undefined) : undefined,
+    accountId: useInlineDelivery ? requesterAccountId : undefined,
     to: useInlineDelivery ? inferredDeliveryTo : undefined,
     threadId: useInlineDelivery ? resolvedDeliveryThreadId : undefined,
   };
@@ -885,6 +915,7 @@ export async function spawnAcpDirect(
   }
 
   const deliveryPlan = resolveAcpSpawnBootstrapDeliveryPlan({
+    cfg,
     spawnMode,
     requestThreadBinding,
     effectiveStreamToParent,
