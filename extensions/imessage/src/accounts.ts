@@ -32,7 +32,9 @@ export function resolveIMessageAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedIMessageAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultIMessageAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.imessage?.enabled !== false;
   const merged = mergeIMessageAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
