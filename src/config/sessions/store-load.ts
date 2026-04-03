@@ -129,5 +129,8 @@ export function loadSessionStore(
     });
   }
 
-  return structuredClone(store);
+  // Use JSON cloning instead of structuredClone to keep memory within V8's
+  // managed heap. structuredClone allocates native C++ serialization buffers
+  // that V8 GC cannot reclaim, causing ~1GB/min native memory leak (#45438).
+  return JSON.parse(JSON.stringify(store)) as Record<string, SessionEntry>;
 }

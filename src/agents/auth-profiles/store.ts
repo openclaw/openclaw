@@ -38,8 +38,10 @@ function resolveRuntimeStoreKey(agentDir?: string): string {
   return resolveAuthStorePath(agentDir);
 }
 
+// Use JSON cloning instead of structuredClone to keep memory within V8's
+// managed heap. See #45438 for details on the native memory leak.
 function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
-  return structuredClone(store);
+  return JSON.parse(JSON.stringify(store)) as AuthProfileStore;
 }
 
 function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | null {
