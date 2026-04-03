@@ -45,6 +45,7 @@ export function createScopedVitestConfig(
     exclude?: string[];
     pool?: "threads" | "forks";
     passWithNoTests?: boolean;
+    setupFiles?: string[];
   },
 ) {
   const base = baseConfig as unknown as Record<string, unknown>;
@@ -79,6 +80,7 @@ export function createScopedVitestConfig(
       ...(options?.passWithNoTests !== undefined
         ? { passWithNoTests: options.passWithNoTests }
         : {}),
+      ...(options?.setupFiles ? { setupFiles: options.setupFiles } : {}),
     },
   });
 }

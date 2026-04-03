@@ -1,20 +1,16 @@
 import path from "node:path";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
-  bundledPluginFile,
   bundledPluginRoot,
 } from "./scripts/lib/bundled-plugin-paths.mjs";
 
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 
-export const extensionRoutedChannelTestFiles = [
-  bundledPluginFile("telegram", "src/fetch.network-policy.test.ts"),
-];
+export const extensionRoutedChannelTestFiles = [];
 
 const extensionRoutedChannelTestFileSet = new Set(extensionRoutedChannelTestFiles);
 
 export const channelTestRoots = [
-  bundledPluginRoot("telegram"),
   bundledPluginRoot("discord"),
   bundledPluginRoot("whatsapp"),
   bundledPluginRoot("slack"),

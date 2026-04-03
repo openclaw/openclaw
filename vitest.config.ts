@@ -53,6 +53,8 @@ export default defineConfig({
       "package.json",
       "pnpm-lock.yaml",
       "test/setup.ts",
+      "test/setup.shared.ts",
+      "test/setup.extensions.ts",
       "scripts/test-parallel.mjs",
       "scripts/test-planner/catalog.mjs",
       "scripts/test-planner/executor.mjs",
