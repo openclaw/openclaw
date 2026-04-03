@@ -1,11 +1,39 @@
 import { vi } from "vitest";
-import { signalOutbound, telegramOutbound } from "../../test/channel-outbounds.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { callGateway } from "../gateway/call.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  loadBundledPluginPublicSurfaceSync,
+  loadBundledPluginTestApiSync,
+} from "../test-utils/bundled-plugin-public-surface.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+
+let signalOutboundCache: ChannelOutboundAdapter | undefined;
+let telegramOutboundCache: ChannelOutboundAdapter | undefined;
+
+function getSignalOutbound(): ChannelOutboundAdapter {
+  if (!signalOutboundCache) {
+    ({ signalOutbound: signalOutboundCache } = loadBundledPluginTestApiSync<{
+      signalOutbound: ChannelOutboundAdapter;
+    }>("signal"));
+  }
+  return signalOutboundCache;
+}
+
+function getTelegramOutbound(): ChannelOutboundAdapter {
+  if (!telegramOutboundCache) {
+    ({ telegramOutbound: telegramOutboundCache } = loadBundledPluginPublicSurfaceSync<{
+      telegramOutbound: ChannelOutboundAdapter;
+    }>({
+      pluginId: "telegram",
+      artifactBasename: "src/outbound-adapter.js",
+    }));
+  }
+  return telegramOutboundCache;
+}
 
 function parseTelegramTargetForTest(raw: string): {
   chatId: string;
@@ -60,7 +88,7 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
         pluginId: "telegram",
         plugin: createOutboundTestPlugin({
           id: "telegram",
-          outbound: telegramOutbound,
+          outbound: getTelegramOutbound(),
           messaging: {
             parseExplicitTarget: ({ raw }) => {
               const target = parseTelegramTargetForTest(raw);
@@ -76,7 +104,7 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
       },
       {
         pluginId: "signal",
-        plugin: createOutboundTestPlugin({ id: "signal", outbound: signalOutbound }),
+        plugin: createOutboundTestPlugin({ id: "signal", outbound: getSignalOutbound() }),
         source: "test",
       },
     ]),
