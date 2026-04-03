@@ -1,7 +1,9 @@
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildMediaLocalRoots,
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
   getDefaultMediaLocalRoots,
@@ -176,5 +178,20 @@ describe("local media roots", () => {
     expectPicturesRootAbsent(roots, picturesDir);
     expectPicturesRootAbsent(roots, moviesDir);
     expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/"));
+  });
+
+  it("includes the config media root when legacy state and config dirs diverge", () => {
+    const homeRoot = path.join(os.tmpdir(), "openclaw-legacy-home-test");
+    const roots = buildMediaLocalRoots(
+      path.join(homeRoot, ".clawdbot"),
+      path.join(homeRoot, ".openclaw"),
+    );
+
+    expectNormalizedRootsContain(roots, [
+      path.join(homeRoot, ".clawdbot", "media"),
+      path.join(homeRoot, ".clawdbot", "workspace"),
+      path.join(homeRoot, ".clawdbot", "sandboxes"),
+      path.join(homeRoot, ".openclaw", "media"),
+    ]);
   });
 });

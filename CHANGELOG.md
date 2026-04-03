@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/native commands: clean up metadata-driven progress placeholders when replies fall back, edits fail, or local exec approval prompts are suppressed. (#59300) Thanks @jalehman.
 - Matrix: allow secret-storage recreation during automatic repair bootstrap so clients that lose their recovery key can recover and persist new cross-signing keys. (#59846) Thanks @al3mart.
 - Matrix/crypto persistence: capture and write the IndexedDB snapshot while holding the snapshot file lock so concurrent gateway and CLI persists cannot overwrite newer crypto state. (#59851) Thanks @al3mart.
+- Telegram/media: keep inbound image attachments readable on upgraded installs where legacy state roots still differ from the managed config-dir media cache. (#59971) Thanks @neeravmakwana.
 
 ## 2026.4.2
 
