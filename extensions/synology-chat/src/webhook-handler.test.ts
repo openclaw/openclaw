@@ -4,8 +4,8 @@ import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { WebhookHandlerDeps } from "./webhook-handler.js";
 const clientModule = await import("./client.js");
 const sendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
-const resolveLegacyWebhookNameToChatUserId = vi
-  .spyOn(clientModule, "resolveLegacyWebhookNameToChatUserId")
+const resolveChatUserId = vi
+  .spyOn(clientModule, "resolveChatUserId")
   .mockResolvedValue(undefined);
 const { clearSynologyWebhookRateLimiterStateForTest, createWebhookHandler } =
   await import("./webhook-handler.js");
@@ -46,7 +46,7 @@ async function runDangerousNameMatchReply(
     accountIdSuffix: string;
   },
 ) {
-  vi.mocked(resolveLegacyWebhookNameToChatUserId).mockResolvedValueOnce(options.resolvedChatUserId);
+  vi.mocked(resolveChatUserId).mockResolvedValueOnce(options.resolvedChatUserId);
   const deliver = vi.fn().mockResolvedValue("Bot reply");
   const handler = createWebhookHandler({
     account: makeAccount({
@@ -62,12 +62,12 @@ async function runDangerousNameMatchReply(
   await handler(req, res);
 
   expect(res._status).toBe(204);
-  expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
-    incomingUrl: "https://nas.example.com/incoming",
-    mutableWebhookUsername: "testuser",
-    allowInsecureSsl: true,
+  expect(resolveChatUserId).toHaveBeenCalledWith(
+    "https://nas.example.com/incoming",
+    "testuser",
+    true,
     log,
-  });
+  );
 
   return { deliver };
 }
@@ -79,8 +79,8 @@ describe("createWebhookHandler", () => {
     clearSynologyWebhookRateLimiterStateForTest();
     sendMessage.mockClear();
     sendMessage.mockResolvedValue(true);
-    resolveLegacyWebhookNameToChatUserId.mockClear();
-    resolveLegacyWebhookNameToChatUserId.mockResolvedValue(undefined);
+    resolveChatUserId.mockClear();
+    resolveChatUserId.mockResolvedValue(undefined);
     log = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -523,7 +523,7 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(204);
-    expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
+    expect(resolveChatUserId).not.toHaveBeenCalled();
     expect(deliver).toHaveBeenCalledWith(
       expect.objectContaining({
         from: "123",

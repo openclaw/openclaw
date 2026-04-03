@@ -493,12 +493,12 @@ async function resolveSynologyReplyDeliveryUserId(params: {
     return params.payload.user_id;
   }
 
-  const resolvedChatApiUserId = await synologyClient.resolveLegacyWebhookNameToChatUserId({
-    incomingUrl: params.account.incomingUrl,
-    mutableWebhookUsername: params.payload.username,
-    allowInsecureSsl: params.account.allowInsecureSsl,
-    log: params.log,
-  });
+  const resolvedChatApiUserId = await synologyClient.resolveChatUserId(
+    params.account.incomingUrl,
+    params.payload.username,
+    params.account.allowInsecureSsl,
+    params.log,
+  );
   if (resolvedChatApiUserId !== undefined) {
     return String(resolvedChatApiUserId);
   }
