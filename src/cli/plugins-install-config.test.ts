@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledPluginRootAt, repoInstallSpec } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
-import { resolvePluginInstallRequestContext } from "./plugin-install-config-policy.js";
+import {
+  resolvePluginInstallRequestContext,
+  type PluginInstallRequestContext,
+} from "./plugin-install-config-policy.js";
 import { loadConfigForInstall } from "./plugins-install-command.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -48,13 +51,12 @@ function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSn
 }
 
 describe("loadConfigForInstall", () => {
-  const matrixNpmRequest = (() => {
-    const resolved = resolvePluginInstallRequestContext({ rawSpec: "@openclaw/matrix" });
-    if (!resolved.ok) {
-      throw new Error(resolved.error);
-    }
-    return resolved.request;
-  })();
+  const matrixNpmRequest = {
+    rawSpec: "@openclaw/matrix",
+    normalizedSpec: "@openclaw/matrix",
+    bundledPluginId: "matrix",
+    allowInvalidConfigRecovery: true,
+  } satisfies PluginInstallRequestContext;
 
   beforeEach(() => {
     loadConfigMock.mockReset();
