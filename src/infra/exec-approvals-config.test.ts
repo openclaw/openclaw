@@ -18,9 +18,12 @@ describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", () => {
     const dir = makeTempDir();
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
+    const prevOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 
     try {
       process.env.OPENCLAW_HOME = dir;
+      // Clear OPENCLAW_STATE_DIR so resolveStateDir() derives from OPENCLAW_HOME.
+      delete process.env.OPENCLAW_STATE_DIR;
       const approvalsPath = path.join(dir, ".openclaw", "exec-approvals.json");
       fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
       fs.writeFileSync(
@@ -48,6 +51,11 @@ describe("exec approvals wildcard agent", () => {
         delete process.env.OPENCLAW_HOME;
       } else {
         process.env.OPENCLAW_HOME = prevOpenClawHome;
+      }
+      if (prevOpenClawStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevOpenClawStateDir;
       }
     }
   });

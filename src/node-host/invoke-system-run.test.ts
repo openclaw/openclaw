@@ -34,11 +34,15 @@ describe("formatSystemRunAllowlistMissMessage", () => {
 describe("handleSystemRunInvoke mac app exec host routing", () => {
   let testOpenClawHome = "";
   let previousOpenClawHome: string | undefined;
+  let previousOpenClawStateDir: string | undefined;
 
   beforeEach(() => {
     previousOpenClawHome = process.env.OPENCLAW_HOME;
+    previousOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
     testOpenClawHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-host-home-"));
     process.env.OPENCLAW_HOME = testOpenClawHome;
+    // Clear OPENCLAW_STATE_DIR so resolveStateDir() derives from OPENCLAW_HOME.
+    delete process.env.OPENCLAW_STATE_DIR;
     clearRuntimeConfigSnapshot();
   });
 
@@ -48,6 +52,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       delete process.env.OPENCLAW_HOME;
     } else {
       process.env.OPENCLAW_HOME = previousOpenClawHome;
+    }
+    if (previousOpenClawStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousOpenClawStateDir;
     }
     if (testOpenClawHome) {
       fs.rmSync(testOpenClawHome, { recursive: true, force: true });

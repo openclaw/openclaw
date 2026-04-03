@@ -72,6 +72,8 @@ function createHomeDir(): string {
   const dir = makeTempDir();
   tempDirs.push(dir);
   process.env.OPENCLAW_HOME = dir;
+  // Clear OPENCLAW_STATE_DIR so resolveStateDir() derives from OPENCLAW_HOME.
+  delete process.env.OPENCLAW_STATE_DIR;
   return dir;
 }
 
