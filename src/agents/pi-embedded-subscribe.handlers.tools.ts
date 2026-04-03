@@ -25,6 +25,7 @@ import {
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
+import { resolvePathArg } from "./tool-display-common.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -361,14 +362,7 @@ export function handleToolExecutionStart(
     toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });
 
     if (toolName === "read") {
-      const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-      const filePathValue =
-        typeof record.path === "string"
-          ? record.path
-          : typeof record.file_path === "string"
-            ? record.file_path
-            : "";
-      const filePath = filePathValue.trim();
+      const filePath = resolvePathArg(args);
       if (!filePath) {
         const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
         ctx.log.warn(
