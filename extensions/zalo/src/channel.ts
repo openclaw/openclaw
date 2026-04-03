@@ -7,6 +7,7 @@ import {
   createScopedDmSecurityResolver,
   mapAllowFromEntries,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
@@ -20,6 +21,7 @@ import { buildTokenChannelStatusSummary } from "openclaw/plugin-sdk/channel-stat
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChatChannelPlugin, buildChannelConfigSchema } from "openclaw/plugin-sdk/core";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -28,8 +30,6 @@ import {
   sendPayloadWithChunkedTextAndMedia,
 } from "openclaw/plugin-sdk/reply-payload";
 import {
-  type ChannelAccountSnapshot,
-  type ChannelPlugin,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";

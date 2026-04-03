@@ -169,7 +169,7 @@ describe("openai transport stream", () => {
       } as never,
       {
         reasoningEffort: "high",
-        onPayload: async (payload) => {
+        onPayload: async (payload: unknown) => {
           capturedPayload = payload as Record<string, unknown>;
           resolveCaptured();
           return payload;
@@ -237,7 +237,7 @@ describe("openai transport stream", () => {
       } as never,
       {
         reasoningEffort: "high",
-        onPayload: async (payload) => {
+        onPayload: async (payload: unknown) => {
           capturedPayload = payload as Record<string, unknown>;
           resolveCaptured();
           return payload;
