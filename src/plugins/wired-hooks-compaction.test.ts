@@ -18,13 +18,6 @@ describe("compaction hook wiring", () => {
   let handleAutoCompactionEnd: typeof import("../agents/pi-embedded-subscribe.handlers.compaction.js").handleAutoCompactionEnd;
 
   beforeAll(async () => {
-    hookMocks.runner.hasHooks.mockClear();
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    hookMocks.runner.runBeforeCompaction.mockClear();
-    hookMocks.runner.runBeforeCompaction.mockResolvedValue(undefined);
-    hookMocks.runner.runAfterCompaction.mockClear();
-    hookMocks.runner.runAfterCompaction.mockResolvedValue(undefined);
-    hookMocks.emitAgentEvent.mockClear();
     vi.doMock("../plugins/hook-runner-global.js", () => ({
       getGlobalHookRunner: () => hookMocks.runner,
     }));
