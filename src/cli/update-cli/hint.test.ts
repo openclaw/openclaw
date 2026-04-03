@@ -119,6 +119,38 @@ describe("updateHintCommand", () => {
     expect(writeJsonSpy.mock.calls[0]?.[0]).toEqual({ updateAvailable: false });
   });
 
+  it("handles non-string version field gracefully", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, "update-check.json"),
+      JSON.stringify({ lastAvailableVersion: 12345 }),
+    );
+    await updateHintCommand({});
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("emits JSON false when version field is non-string and --json", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, "update-check.json"),
+      JSON.stringify({ lastAvailableVersion: { nested: true } }),
+    );
+    await updateHintCommand({ json: true });
+    expect(writeJsonSpy).toHaveBeenCalledOnce();
+    expect(writeJsonSpy.mock.calls[0]?.[0]).toEqual({ updateAvailable: false });
+  });
+
+  it("handles JSON null root gracefully", async () => {
+    await fs.writeFile(path.join(tmpDir, "update-check.json"), "null");
+    await updateHintCommand({});
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("emits JSON false when root is not an object and --json", async () => {
+    await fs.writeFile(path.join(tmpDir, "update-check.json"), "42");
+    await updateHintCommand({ json: true });
+    expect(writeJsonSpy).toHaveBeenCalledOnce();
+    expect(writeJsonSpy.mock.calls[0]?.[0]).toEqual({ updateAvailable: false });
+  });
+
   it("emits JSON false when already up to date and --json", async () => {
     await fs.writeFile(
       path.join(tmpDir, "update-check.json"),
