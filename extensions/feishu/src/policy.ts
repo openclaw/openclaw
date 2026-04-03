@@ -3,8 +3,8 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import type { AllowlistMatch, ChannelGroupContext, GroupToolPolicyConfig } from "../runtime-api.js";
-import { evaluateSenderGroupAccessForPolicy } from "../runtime-api.js";
 import { normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
 

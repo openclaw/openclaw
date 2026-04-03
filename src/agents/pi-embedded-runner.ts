@@ -7,7 +7,6 @@ export {
   resolvePreparedExtraParams,
 } from "./pi-embedded-runner/extra-params.js";
 
-export { applyGoogleTurnOrderingFix } from "./pi-embedded-runner/google.js";
 export {
   getDmHistoryLimitFromSessionKey,
   getHistoryLimitFromSessionKey,

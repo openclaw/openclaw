@@ -1,3 +1,4 @@
+export { feishuPlugin } from "./src/channel.js";
 export * from "./src/conversation-id.js";
 export * from "./src/setup-core.js";
 export * from "./src/setup-surface.js";

@@ -99,8 +99,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async () => {
   };
 });
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn: vi.fn(),
@@ -112,8 +112,10 @@ vi.mock("chokidar", () => ({
   watch: watchMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/file-lock", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/file-lock")>();
+vi.mock("openclaw/plugin-sdk/file-lock", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/file-lock")>(
+    "openclaw/plugin-sdk/file-lock",
+  );
   return {
     ...actual,
     withFileLock: withFileLockMock,

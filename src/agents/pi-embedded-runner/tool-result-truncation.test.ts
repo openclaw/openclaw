@@ -2,6 +2,10 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildSessionWriteLockModuleMock,
+  resetModulesWithSessionWriteLockDoMock,
+} from "../../test-utils/session-write-lock-module-mock.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 
 const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -9,9 +13,12 @@ const acquireSessionWriteLockMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => ({ release: acquireSessionWriteLockReleaseMock })),
 );
 
-vi.mock("../session-write-lock.js", () => ({
-  acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
-}));
+vi.mock("../session-write-lock.js", () =>
+  buildSessionWriteLockModuleMock(
+    () => vi.importActual<typeof import("../session-write-lock.js")>("../session-write-lock.js"),
+    (params) => acquireSessionWriteLockMock(params),
+  ),
+);
 
 let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
@@ -25,10 +32,9 @@ let HARD_MAX_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").HAR
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 
 async function loadFreshToolResultTruncationModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
-  }));
+  resetModulesWithSessionWriteLockDoMock("../session-write-lock.js", (params) =>
+    acquireSessionWriteLockMock(params),
+  );
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({
     truncateToolResultText,

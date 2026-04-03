@@ -35,7 +35,10 @@ export {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 export { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
-export { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
+export {
+  looksLikeSignalTargetId,
+  normalizeSignalMessagingTarget,
+} from "openclaw/plugin-sdk/channel-targets";
 export {
   listEnabledSignalAccounts,
   listSignalAccountIds,

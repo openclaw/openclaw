@@ -6,8 +6,8 @@ const listChannelPluginsMock = vi.hoisted(() => vi.fn());
 const isDeliverableMessageChannelMock = vi.hoisted(() => vi.fn());
 const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: (...args: unknown[]) => loadConfigMock(...args),
@@ -89,12 +89,14 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
+            meta: { label: "Telegram" },
             auth: {
               getActionAvailabilityState: () => ({ kind: "enabled" }),
             },
           }
         : channel === "discord"
           ? {
+              meta: { label: "Discord" },
               auth: {
                 getActionAvailabilityState: () => ({ kind: "disabled" }),
               },
@@ -131,6 +133,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
 
   it("reads approval availability from approvalCapability when auth is omitted", () => {
     getChannelPluginMock.mockReturnValue({
+      meta: { label: "Discord" },
       approvalCapability: {
         getActionAvailabilityState: () => ({ kind: "disabled" }),
       },
@@ -154,6 +157,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
+            meta: { label: "Telegram" },
             auth: {
               getActionAvailabilityState: () => ({ kind: "disabled" }),
             },

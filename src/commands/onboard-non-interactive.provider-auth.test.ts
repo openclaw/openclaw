@@ -631,8 +631,9 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
   };
 });
 
-vi.mock("./onboard-helpers.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./onboard-helpers.js")>();
+vi.mock("./onboard-helpers.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./onboard-helpers.js")>("./onboard-helpers.js");
   return {
     ...actual,
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
@@ -887,7 +888,6 @@ describe("onboard (non-interactive): provider auth", () => {
     resetFileLockStateForTest();
     clearPluginDiscoveryCache();
     clearPluginManifestRegistryCache();
-    ensureWorkspaceAndSessionsMock.mockClear();
   });
 
   it("stores MiniMax API key in the global auth profile", async () => {

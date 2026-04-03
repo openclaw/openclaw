@@ -818,6 +818,30 @@ Optional repository root shown in the system prompt's Runtime line. If unset, Op
 }
 ```
 
+### `agents.defaults.skills`
+
+Optional default skill allowlist for agents that do not set
+`agents.list[].skills`.
+
+```json5
+{
+  agents: {
+    defaults: { skills: ["github", "weather"] },
+    list: [
+      { id: "writer" }, // inherits github, weather
+      { id: "docs", skills: ["docs-search"] }, // replaces defaults
+      { id: "locked-down", skills: [] }, // no skills
+    ],
+  },
+}
+```
+
+- Omit `agents.defaults.skills` for unrestricted skills by default.
+- Omit `agents.list[].skills` to inherit the defaults.
+- Set `agents.list[].skills: []` for no skills.
+- A non-empty `agents.list[].skills` list is the final set for that agent; it
+  does not merge with defaults.
+
 ### `agents.defaults.skipBootstrap`
 
 Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`).
@@ -1425,6 +1449,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         reasoningDefault: "on", // per-agent reasoning visibility override
         fastModeDefault: false, // per-agent fast mode override
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
+        skills: ["docs-search"], // replaces agents.defaults.skills when set
         identity: {
           name: "Samantha",
           theme: "helpful sloth",
@@ -1459,6 +1484,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
+- `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
@@ -1748,7 +1774,10 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
-- `removeAckAfterReply`: removes ack after reply (Slack/Discord/Telegram/Google Chat only).
+- `removeAckAfterReply`: removes ack after reply on Slack, Discord, and Telegram.
+- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, and Telegram.
+  On Slack and Discord, unset keeps status reactions enabled when ack reactions are active.
+  On Telegram, set it explicitly to `true` to enable lifecycle status reactions.
 
 ### Inbound debounce
 
@@ -2118,6 +2147,7 @@ Notes:
   agents: {
     defaults: {
       subagents: {
+        allowAgents: ["research"],
         model: "minimax/MiniMax-M2.7",
         maxConcurrent: 8,
         runTimeoutSeconds: 900,
@@ -2129,6 +2159,7 @@ Notes:
 ```
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
+- `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any; default: same agent only).
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 
@@ -3032,6 +3063,8 @@ Notes:
       billingBackoffHours: 5,
       billingBackoffHoursByProvider: { anthropic: 3, openai: 8 },
       billingMaxHours: 24,
+      authPermanentBackoffMinutes: 10,
+      authPermanentMaxMinutes: 60,
       failureWindowHours: 24,
       overloadedProfileRotations: 1,
       overloadedBackoffMs: 0,
@@ -3044,6 +3077,8 @@ Notes:
 - `billingBackoffHours`: base backoff in hours when a profile fails due to billing/insufficient credits (default: `5`).
 - `billingBackoffHoursByProvider`: optional per-provider overrides for billing backoff hours.
 - `billingMaxHours`: cap in hours for billing backoff exponential growth (default: `24`).
+- `authPermanentBackoffMinutes`: base backoff in minutes for high-confidence `auth_permanent` failures (default: `10`).
+- `authPermanentMaxMinutes`: cap in minutes for `auth_permanent` backoff growth (default: `60`).
 - `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).
 - `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`).
 - `overloadedBackoffMs`: fixed delay before retrying an overloaded provider/profile rotation (default: `0`).

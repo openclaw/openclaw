@@ -5,6 +5,7 @@ import { resolveSkillRuntimeConfig } from "../skills/runtime-config.js";
 export function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
+  agentId?: string;
   skillsSnapshot?: SkillSnapshot;
 }): {
   shouldLoadSkillEntries: boolean;
@@ -15,7 +16,7 @@ export function resolveEmbeddedRunSkillEntries(params: {
   return {
     shouldLoadSkillEntries,
     skillEntries: shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(params.workspaceDir, { config })
+      ? loadWorkspaceSkillEntries(params.workspaceDir, { config, agentId: params.agentId })
       : [],
   };
 }

@@ -163,6 +163,7 @@ function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
 }
 
 function hasBoundConversationForSession(params: {
+  cfg: OpenClawConfig;
   sessionKey: string;
   channelRaw: string | undefined;
   accountIdRaw: string | undefined;
@@ -173,10 +174,14 @@ function hasBoundConversationForSession(params: {
   if (!channel) {
     return false;
   }
-  const accountId = String(params.accountIdRaw ?? "")
-    .trim()
-    .toLowerCase();
-  const normalizedAccountId = accountId || "default";
+  const accountId = String(params.accountIdRaw ?? "").trim().toLowerCase();
+  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
+  const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
+  const normalizedAccountId =
+    accountId ||
+    (typeof configuredDefaultAccountId === "string" && configuredDefaultAccountId.trim()
+      ? configuredDefaultAccountId.trim().toLowerCase()
+      : "default");
   const bindingService = getSessionBindingService();
   const bindings = bindingService.listBySession(params.sessionKey);
   return bindings.some((binding) => {
@@ -375,6 +380,7 @@ export async function tryDispatchAcpReply(params: {
     identityPendingBeforeTurn &&
     (Boolean(params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim()) ||
       hasBoundConversationForSession({
+        cfg: params.cfg,
         sessionKey: canonicalSessionKey,
         channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
         accountIdRaw: params.ctx.AccountId,
