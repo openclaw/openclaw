@@ -2,6 +2,30 @@ import { describe, expect, it } from "vitest";
 import { resolveSlackAccount } from "./accounts.js";
 
 describe("resolveSlackAccount allowFrom precedence", () => {
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                name: "Work",
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.name).toBe("Work");
+    expect(resolved.botToken).toBe("xoxb-work");
+    expect(resolved.appToken).toBe("xapp-work");
+  });
+
   it("prefers accounts.default.allowFrom over top-level for default account", () => {
     const resolved = resolveSlackAccount({
       cfg: {
