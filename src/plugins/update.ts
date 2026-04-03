@@ -258,6 +258,7 @@ export async function updateNpmInstalledPlugins(params: {
   pluginIds?: string[];
   skipIds?: Set<string>;
   dryRun?: boolean;
+  dangerouslyForceUnsafeInstall?: boolean;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateSummary> {
@@ -361,6 +362,7 @@ export async function updateNpmInstalledPlugins(params: {
                 dryRun: true,
                 expectedPluginId: pluginId,
                 expectedIntegrity,
+                dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
                   pluginId,
                   dryRun: true,
@@ -376,6 +378,7 @@ export async function updateNpmInstalledPlugins(params: {
                   mode: "update",
                   dryRun: true,
                   expectedPluginId: pluginId,
+                  dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   logger,
                 })
               : await installPluginFromMarketplace({
@@ -384,6 +387,7 @@ export async function updateNpmInstalledPlugins(params: {
                   mode: "update",
                   dryRun: true,
                   expectedPluginId: pluginId,
+                  dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   logger,
                 });
       } catch (err) {
@@ -458,6 +462,7 @@ export async function updateNpmInstalledPlugins(params: {
               mode: "update",
               expectedPluginId: pluginId,
               expectedIntegrity,
+              dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
               onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
                 pluginId,
                 dryRun: false,
@@ -472,6 +477,7 @@ export async function updateNpmInstalledPlugins(params: {
                 baseUrl: record.clawhubUrl,
                 mode: "update",
                 expectedPluginId: pluginId,
+                dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 logger,
               })
             : await installPluginFromMarketplace({
@@ -479,6 +485,7 @@ export async function updateNpmInstalledPlugins(params: {
                 plugin: record.marketplacePlugin!,
                 mode: "update",
                 expectedPluginId: pluginId,
+                dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 logger,
               });
     } catch (err) {
