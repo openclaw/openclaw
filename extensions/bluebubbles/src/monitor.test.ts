@@ -994,6 +994,79 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.Body).toContain("[[reply_to:msg-0]]");
     });
 
+    it("drops group reply context from non-allowlisted senders in allowlist mode", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551234567"],
+        }),
+        config: {
+          channels: {
+            bluebubbles: {
+              contextVisibility: "allowlist",
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "replying now",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-reply-visibility",
+        replyTo: {
+          guid: "msg-0",
+          text: "blocked context",
+          handle: { address: "+15550000000", displayName: "Alice" },
+        },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.ReplyToId).toBeUndefined();
+      expect(callArgs.ctx.ReplyToIdFull).toBeUndefined();
+      expect(callArgs.ctx.ReplyToBody).toBeUndefined();
+      expect(callArgs.ctx.ReplyToSender).toBeUndefined();
+      expect(callArgs.ctx.Body).not.toContain("[[reply_to:");
+    });
+
+    it("keeps group reply context in allowlist_quote mode", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551234567"],
+        }),
+        config: {
+          channels: {
+            bluebubbles: {
+              contextVisibility: "allowlist_quote",
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "replying now",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-reply-visibility",
+        replyTo: {
+          guid: "msg-0",
+          text: "quoted context",
+          handle: { address: "+15550000000", displayName: "Alice" },
+        },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.ReplyToId).toBe("msg-0");
+      expect(callArgs.ctx.ReplyToBody).toBe("quoted context");
+      expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
+      expect(callArgs.ctx.Body).toContain("[[reply_to:msg-0]]");
+    });
+
     it("preserves part index prefixes in reply tags when short IDs are unavailable", async () => {
       setupWebhookTarget();
 

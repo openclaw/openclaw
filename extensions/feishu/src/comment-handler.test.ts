@@ -8,7 +8,7 @@ const resolveDriveCommentEventTurnMock = vi.hoisted(() => vi.fn());
 const createFeishuCommentReplyDispatcherMock = vi.hoisted(() => vi.fn());
 const maybeCreateDynamicAgentMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn(() => ({ request: vi.fn() })));
-const replyCommentMock = vi.hoisted(() => vi.fn());
+const deliverCommentThreadTextMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./monitor.comment.js", () => ({
   resolveDriveCommentEventTurn: resolveDriveCommentEventTurnMock,
@@ -27,7 +27,7 @@ vi.mock("./client.js", () => ({
 }));
 
 vi.mock("./drive.js", () => ({
-  replyComment: replyCommentMock,
+  deliverCommentThreadText: deliverCommentThreadTextMock,
 }));
 
 function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
@@ -66,6 +66,7 @@ describe("handleFeishuCommentEvent", () => {
       noticeType: "add_comment",
       fileToken: "doc_token_1",
       fileType: "docx",
+      isWholeComment: false,
       senderId: "ou_sender",
       senderUserId: "on_sender_user",
       timestamp: "1774951528000",
@@ -76,7 +77,10 @@ describe("handleFeishuCommentEvent", () => {
       rootCommentText: "root comment",
       targetReplyText: "latest reply",
     });
-    replyCommentMock.mockResolvedValue({ reply_id: "r1" });
+    deliverCommentThreadTextMock.mockResolvedValue({
+      delivery_mode: "reply_comment",
+      reply_id: "r1",
+    });
 
     const runtime = createPluginRuntimeMock({
       channel: {
@@ -196,7 +200,7 @@ describe("handleFeishuCommentEvent", () => {
       typeof vi.fn
     >;
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    expect(replyCommentMock).not.toHaveBeenCalled();
+    expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
   });
 
   it("issues a pairing challenge in the comment thread when dmPolicy=pairing", async () => {
@@ -232,17 +236,60 @@ describe("handleFeishuCommentEvent", () => {
       } as never,
     });
 
-    expect(replyCommentMock).toHaveBeenCalledWith(
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         file_token: "doc_token_1",
         file_type: "docx",
         comment_id: "comment_1",
+        is_whole_comment: false,
       }),
     );
     const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
       typeof vi.fn
     >;
     expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("passes whole-comment metadata to the comment reply dispatcher", async () => {
+    resolveDriveCommentEventTurnMock.mockResolvedValueOnce({
+      eventId: "evt_whole",
+      messageId: "drive-comment:evt_whole",
+      commentId: "comment_whole",
+      replyId: "reply_whole",
+      noticeType: "add_reply",
+      fileToken: "doc_token_1",
+      fileType: "docx",
+      isWholeComment: true,
+      senderId: "ou_sender",
+      senderUserId: "on_sender_user",
+      timestamp: "1774951528000",
+      isMentioned: false,
+      documentTitle: "Project review",
+      prompt: "prompt body",
+      preview: "prompt body",
+      rootCommentText: "root comment",
+      targetReplyText: "reply text",
+    });
+
+    await handleFeishuCommentEvent({
+      cfg: buildConfig(),
+      accountId: "default",
+      event: { event_id: "evt_whole" },
+      botOpenId: "ou_bot",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+
+    expect(createFeishuCommentReplyDispatcherMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commentId: "comment_whole",
+        fileToken: "doc_token_1",
+        fileType: "docx",
+        isWholeComment: true,
+      }),
+    );
   });
 });
