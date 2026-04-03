@@ -175,21 +175,27 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
 }
 
 function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  // web_research is provided by the You.com plugin; check plugin enable state
+  // web_research/web_contents are provided by the You.com plugin; check plugin enable state first
   const normalizedPlugins = cfg.plugins?.entries;
   const youPlugin = normalizedPlugins?.you;
   if (!youPlugin || youPlugin.enabled === false) {
     return false;
   }
-  // web_research requires an API key to be internet-capable.
+  // web_research/web_contents require an API key to be internet-capable.
+  // The key can be a plain string or a SecretRef object.
   const pluginConfig = youPlugin.config as { webSearch?: { apiKey?: unknown } } | undefined;
   const configValue = pluginConfig?.webSearch?.apiKey;
-  if (typeof configValue === "object" && configValue !== null) {
-    // SecretRef — treat as configured
-    return true;
+  if (configValue !== undefined && configValue !== null) {
+    if (typeof configValue === "string") {
+      return configValue.trim().length > 0;
+    }
+    // SecretRef object -- treat as configured
+    if (typeof configValue === "object") {
+      return true;
+    }
   }
-  const raw = (typeof configValue === "string" ? configValue : "") || env.YDC_API_KEY;
-  return typeof raw === "string" && raw.trim().length > 0;
+  const envValue = env.YDC_API_KEY;
+  return typeof envValue === "string" && envValue.trim().length > 0;
 }
 
 export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {

@@ -4,6 +4,10 @@
   "providerAuthEnvVars": {
     "you": ["YDC_API_KEY"]
   },
+  "contracts": {
+    "webSearchProviders": ["you"],
+    "tools": ["web_research", "web_contents"]
+  },
   "uiHints": {
     "webSearch.apiKey": {
       "label": "You.com API Key",
