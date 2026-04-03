@@ -4,6 +4,8 @@ import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
 import {
   getBoundDeviceBootstrapProfile,
+  getDeviceBootstrapTokenProfile,
+  redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
   restoreDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
@@ -718,8 +720,12 @@ export function attachGatewayWsMessageHandler(params: {
           rejectUnauthorized(authResult);
           return;
         }
-        let bootstrapProfile: DeviceBootstrapProfile | null = null;
-        let shouldConsumeBootstrapTokenAfterHello = false;
+        const issuedBootstrapProfile =
+          authMethod === "bootstrap-token" && bootstrapTokenCandidate
+            ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
+            : null;
+        let boundBootstrapProfile: DeviceBootstrapProfile | null = null;
+        let handoffBootstrapProfile: DeviceBootstrapProfile | null = null;
 
         const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
           isControlUi,
@@ -826,7 +832,7 @@ export function attachGatewayWsMessageHandler(params: {
               });
             };
             if (
-              bootstrapProfile === null &&
+              boundBootstrapProfile === null &&
               authMethod === "bootstrap-token" &&
               reason === "not-paired" &&
               role === "node" &&
@@ -834,7 +840,7 @@ export function attachGatewayWsMessageHandler(params: {
               !existingPairedDevice &&
               bootstrapTokenCandidate
             ) {
-              bootstrapProfile = await getBoundDeviceBootstrapProfile({
+              boundBootstrapProfile = await getBoundDeviceBootstrapProfile({
                 token: bootstrapTokenCandidate,
                 deviceId: device.id,
                 publicKey: devicePublicKey,
@@ -847,17 +853,18 @@ export function attachGatewayWsMessageHandler(params: {
               isWebchat,
               reason,
             });
-            // QR bootstrap onboarding stays single-use, but only consume the bootstrap token
-            // after the hello-ok path succeeds so reconnects can recover from pre-hello failures.
+            // QR bootstrap onboarding stays single-use, but the first node bootstrap handshake
+            // should seed bounded device tokens and only consume the bootstrap token once the
+            // hello-ok path succeeds so reconnects can recover from pre-hello failures.
             const allowSilentBootstrapPairing =
               authMethod === "bootstrap-token" &&
               reason === "not-paired" &&
               role === "node" &&
               scopes.length === 0 &&
               !existingPairedDevice &&
-              bootstrapProfile !== null;
+              boundBootstrapProfile !== null;
             const bootstrapProfileForSilentApproval = allowSilentBootstrapPairing
-              ? bootstrapProfile
+              ? boundBootstrapProfile
               : null;
             const bootstrapPairingRoles = bootstrapProfileForSilentApproval
               ? Array.from(new Set([role, ...bootstrapProfileForSilentApproval.roles]))
@@ -900,8 +907,8 @@ export function attachGatewayWsMessageHandler(params: {
                     callerScopes: scopes,
                   });
               if (approved?.status === "approved") {
-                if (allowSilentBootstrapPairing) {
-                  shouldConsumeBootstrapTokenAfterHello = true;
+                if (bootstrapProfileForSilentApproval) {
+                  handoffBootstrapProfile = bootstrapProfileForSilentApproval;
                 }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
@@ -1072,8 +1079,8 @@ export function attachGatewayWsMessageHandler(params: {
             issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
           });
         }
-        if (device && bootstrapProfile !== null) {
-          const bootstrapProfileForHello = bootstrapProfile as DeviceBootstrapProfile;
+        const bootstrapProfileForHello = device ? handoffBootstrapProfile : null;
+        if (device && bootstrapProfileForHello !== null) {
           for (const bootstrapRole of bootstrapProfileForHello.roles) {
             if (bootstrapDeviceTokens.some((entry) => entry.role === bootstrapRole)) {
               continue;
@@ -1272,20 +1279,39 @@ export function attachGatewayWsMessageHandler(params: {
         let consumedBootstrapTokenRecord:
           | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
           | undefined;
-        if (shouldConsumeBootstrapTokenAfterHello && bootstrapTokenCandidate && device) {
+        if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
           try {
-            const revoked = await revokeDeviceBootstrapToken({
-              token: bootstrapTokenCandidate,
-            });
-            consumedBootstrapTokenRecord = revoked.record;
-            if (!revoked.removed) {
-              logGateway.warn(
-                `bootstrap token revoke skipped after bootstrap handoff device=${device.id}`,
-              );
+            if (handoffBootstrapProfile) {
+              const revoked = await revokeDeviceBootstrapToken({
+                token: bootstrapTokenCandidate,
+              });
+              consumedBootstrapTokenRecord = revoked.record;
+              if (!revoked.removed) {
+                logGateway.warn(
+                  `bootstrap token revoke skipped after device-token handoff device=${device.id}`,
+                );
+              }
+            } else if (issuedBootstrapProfile) {
+              const redemption = await redeemDeviceBootstrapTokenProfile({
+                token: bootstrapTokenCandidate,
+                role,
+                scopes,
+              });
+              if (redemption.fullyRedeemed) {
+                const revoked = await revokeDeviceBootstrapToken({
+                  token: bootstrapTokenCandidate,
+                });
+                consumedBootstrapTokenRecord = revoked.record;
+                if (!revoked.removed) {
+                  logGateway.warn(
+                    `bootstrap token revoke skipped after profile redemption device=${device.id}`,
+                  );
+                }
+              }
             }
           } catch (err) {
             logGateway.warn(
-              `bootstrap token consume failed after device-token handoff device=${device.id}: ${formatForLog(err)}`,
+              `bootstrap token post-connect bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
             );
           }
         }
