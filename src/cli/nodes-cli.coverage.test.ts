@@ -85,6 +85,17 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 describe("nodes-cli coverage", () => {
   let sharedProgram: Command = new Command();
 
+  const withSuppressedStderr = async <T>(run: () => Promise<T>) => {
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((() => true) as typeof process.stderr.write);
+    try {
+      return await run();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  };
+
   const getNodeInvokeCall = () => {
     const last = lastNodeInvokeCall;
     if (!last) {
@@ -116,10 +127,12 @@ describe("nodes-cli coverage", () => {
   });
 
   it("does not register the removed run wrapper", async () => {
-    await expect(
-      sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" }),
-    ).rejects.toMatchObject({
-      code: "commander.unknownCommand",
+    await withSuppressedStderr(async () => {
+      await expect(
+        sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" }),
+      ).rejects.toMatchObject({
+        code: "commander.unknownCommand",
+      });
     });
   });
 
