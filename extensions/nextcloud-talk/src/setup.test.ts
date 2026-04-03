@@ -107,6 +107,53 @@ describe("nextcloud talk setup", () => {
     });
   });
 
+  it("honors named-account DM policy state and config keys", () => {
+    const base: CoreConfig = {
+      channels: {
+        "nextcloud-talk": {
+          dmPolicy: "disabled",
+          accounts: {
+            work: {
+              baseUrl: "https://cloud.example.com",
+              botSecret: "work-secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    };
+
+    expect(nextcloudTalkDmPolicy.getCurrent(base, "work")).toBe("allowlist");
+    expect(nextcloudTalkDmPolicy.resolveConfigKeys?.(base, "work")).toEqual({
+      policyKey: "channels.nextcloud-talk.accounts.work.dmPolicy",
+      allowFromKey: "channels.nextcloud-talk.accounts.work.allowFrom",
+    });
+  });
+
+  it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
+    const next = nextcloudTalkDmPolicy.setPolicy(
+      {
+        channels: {
+          "nextcloud-talk": {
+            allowFrom: ["alice"],
+            accounts: {
+              work: {
+                baseUrl: "https://cloud.example.com",
+                botSecret: "work-secret",
+              },
+            },
+          },
+        },
+      },
+      "open",
+      "work",
+    );
+
+    expect(next.channels?.["nextcloud-talk"]?.dmPolicy).toBeUndefined();
+    expect(next.channels?.["nextcloud-talk"]?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.["nextcloud-talk"]?.accounts?.work?.allowFrom).toEqual(["alice", "*"]);
+  });
+
   it("validates env/default-account constraints and applies config patches", () => {
     const validateInput = nextcloudTalkSetupAdapter.validateInput;
     const applyAccountConfig = nextcloudTalkSetupAdapter.applyAccountConfig;
