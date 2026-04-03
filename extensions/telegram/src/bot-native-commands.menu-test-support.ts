@@ -1,4 +1,3 @@
-import type { SkillCommandSpec } from "openclaw/plugin-sdk/command-auth";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -23,9 +22,7 @@ type CreateCommandBotResult = {
 };
 
 const skillCommandMocks = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn<
-    (params: { cfg: OpenClawConfig; agentIds?: string[] }) => SkillCommandSpec[]
-  >(() => []),
+  listSkillCommandsForAgents: vi.fn<TelegramBotDeps["listSkillCommandsForAgents"]>(() => []),
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
@@ -38,14 +35,6 @@ export const listSkillCommandsForAgents = skillCommandMocks.listSkillCommandsFor
 export const deliverReplies = deliveryMocks.deliverReplies;
 export const editMessageTelegram = deliveryMocks.editMessageTelegram;
 export const emitTelegramMessageSentHooks = deliveryMocks.emitTelegramMessageSentHooks;
-
-vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
-  return {
-    ...actual,
-    listSkillCommandsForAgents,
-  };
-});
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
