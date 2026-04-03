@@ -1,14 +1,15 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { CronJob } from "../types.js";
 import {
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
   getModelRefStatus,
+  loadModelCatalog,
   normalizeModelSelection,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
-} from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { CronJob } from "../types.js";
+} from "./run.runtime.js";
 
 type CronSessionModelOverrides = {
   modelOverride?: string;
