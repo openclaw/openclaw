@@ -274,6 +274,34 @@ describe("signal setup parsing", () => {
     });
   });
 
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["+15555550123"],
+          accounts: {
+            work: {
+              account: "+15555550999",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    };
+
+    expect(signalDmPolicy.getCurrent(cfg)).toBe("allowlist");
+    expect(signalDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.signal.accounts.work.dmPolicy",
+      allowFromKey: "channels.signal.accounts.work.allowFrom",
+    });
+
+    const next = signalDmPolicy.setPolicy(cfg, "open");
+    expect(next.channels?.signal?.dmPolicy).toBe("disabled");
+    expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
+  });
+
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
     const next = signalDmPolicy.setPolicy(
       {
