@@ -563,4 +563,49 @@ describe("runDiscordGatewayLifecycle", () => {
       vi.useRealTimers();
     }
   });
+
+  it("force-stops via watchdog when reconnect cycles never reach a connected state", async () => {
+    vi.useFakeTimers();
+    try {
+      const { emitter, gateway } = createGatewayHarness();
+      gateway.isConnected = true;
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      waitForDiscordGatewayStopMock.mockImplementationOnce(
+        (params: WaitForDiscordGatewayStopParams) =>
+          new Promise<void>((_resolve, reject) => {
+            params.registerForceStop?.((err) => reject(err));
+            void (async () => {
+              gateway.isConnected = false;
+              emitter.emit("debug", "Gateway websocket closed: 1005");
+              for (let i = 0; i < 10; i += 1) {
+                emitter.emit("debug", "Gateway websocket opened");
+                await vi.advanceTimersByTimeAsync(29_000);
+                emitter.emit("debug", "Gateway websocket closed: 1006");
+              }
+              await vi.advanceTimersByTimeAsync(20_000);
+            })().catch(reject);
+          }),
+      );
+
+      const { lifecycleParams, runtimeError, statusSink } = createLifecycleHarness({ gateway });
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      lifecyclePromise.catch(() => {});
+
+      await expect(lifecyclePromise).rejects.toThrow("discord reconnect watchdog timeout");
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("reconnect watchdog timeout after 300000ms"),
+      );
+      expect(statusSink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connected: false,
+          lastDisconnect: expect.objectContaining({
+            error: expect.stringContaining("discord reconnect watchdog timeout"),
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });

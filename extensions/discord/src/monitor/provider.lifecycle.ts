@@ -1,4 +1,5 @@
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-lifecycle";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
@@ -12,6 +13,7 @@ import type { DiscordMonitorStatusSink } from "./status.js";
 const DISCORD_GATEWAY_READY_TIMEOUT_MS = 15_000;
 const DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_MS = 30_000;
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
+const DISCORD_GATEWAY_RECONNECT_STALL_TIMEOUT_MS = 5 * 60_000;
 const DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
 const DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
 
@@ -171,7 +173,38 @@ function createGatewayStatusObserver(params: {
     }
     queuedForceStopError = err;
   };
+  const reconnectStallWatchdog = createArmableStallWatchdog({
+    label: "discord:reconnect",
+    timeoutMs: DISCORD_GATEWAY_RECONNECT_STALL_TIMEOUT_MS,
+    abortSignal: params.abortSignal,
+    runtime: params.runtime,
+    onTimeout: () => {
+      if (shouldStop()) {
+        return;
+      }
+      const at = Date.now();
+      const error = new Error(
+        `discord reconnect watchdog timeout after ${DISCORD_GATEWAY_RECONNECT_STALL_TIMEOUT_MS}ms`,
+      );
+      params.pushStatus({
+        connected: false,
+        lastEventAt: at,
+        lastDisconnect: {
+          at,
+          error: error.message,
+        },
+        lastError: error.message,
+      });
+      params.runtime.error?.(
+        danger(
+          `discord: reconnect watchdog timeout after ${DISCORD_GATEWAY_RECONNECT_STALL_TIMEOUT_MS}ms; force-stopping monitor task`,
+        ),
+      );
+      triggerForceStop(error);
+    },
+  });
   const pushConnectedStatus = (at: number) => {
+    reconnectStallWatchdog.disarm();
     params.pushStatus({
       ...createConnectedChannelStatusPatch(at),
       lastDisconnect: null,
@@ -234,6 +267,11 @@ function createGatewayStatusObserver(params: {
     }
     if (message.includes("Gateway websocket closed")) {
       clearReadyWatch();
+      if (params.gateway?.isConnected) {
+        reconnectStallWatchdog.arm(at);
+      } else if (!reconnectStallWatchdog.isArmed()) {
+        reconnectStallWatchdog.arm(at);
+      }
       const code = parseGatewayCloseCode(message);
       params.pushStatus({
         connected: false,
@@ -247,6 +285,9 @@ function createGatewayStatusObserver(params: {
     }
     if (message.includes("Gateway reconnect scheduled in")) {
       clearReadyWatch();
+      if (!reconnectStallWatchdog.isArmed()) {
+        reconnectStallWatchdog.arm(at);
+      }
       params.pushStatus({
         connected: false,
         lastEventAt: at,
@@ -268,6 +309,7 @@ function createGatewayStatusObserver(params: {
     },
     dispose: () => {
       clearReadyWatch();
+      reconnectStallWatchdog.stop();
       forceStopHandler = undefined;
       queuedForceStopError = undefined;
     },
