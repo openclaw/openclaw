@@ -69,8 +69,12 @@ function describeSecureMobilePairingFix(source?: string): string {
     "Mobile pairing requires a secure remote gateway URL (wss://) or Tailscale Serve/Funnel." +
     sourceNote +
     " Fix: prefer gateway.tailscale.mode=serve, or set gateway.remote.url / " +
-    "plugins.entries.device-pair.config.publicUrl to a wss:// URL. ws:// is only valid for localhost."
+    "plugins.entries.device-pair.config.publicUrl to a wss:// URL. ws:// is only valid for localhost or the Android emulator."
   );
+}
+
+function isMobilePairingCleartextAllowedHost(host: string): boolean {
+  return isLoopbackHost(host) || host === "10.0.2.2";
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {
@@ -85,7 +89,7 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   }
   const protocol =
     parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
-  if (protocol !== "ws:" || isLoopbackHost(parsed.hostname)) {
+  if (protocol !== "ws:" || isMobilePairingCleartextAllowedHost(parsed.hostname)) {
     return null;
   }
   return describeSecureMobilePairingFix(source);

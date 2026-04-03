@@ -229,6 +229,19 @@ describe("registerQrCli", () => {
     expect(output).toContain("gateway.tailscale.mode=serve");
   });
 
+  it("allows android emulator cleartext override urls", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "loopback",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await runQr(["--setup-code-only", "--url", "ws://10.0.2.2:18789"]);
+
+    expectLoggedSetupCode("ws://10.0.2.2:18789");
+  });
+
   it("accepts --token override when config has no auth", async () => {
     loadConfig.mockReturnValue({
       gateway: {
