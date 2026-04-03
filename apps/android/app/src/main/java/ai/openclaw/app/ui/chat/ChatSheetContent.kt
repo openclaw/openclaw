@@ -111,7 +111,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       ChatErrorRail(errorText = errorText!!)
     }
 
-    var replyToMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var replyToMessage by remember(sessionKey) { mutableStateOf<ChatMessage?>(null) }
     ChatMessageListCard(
       messages = messages,
       pendingRunCount = pendingRunCount,
@@ -148,7 +148,29 @@ fun ChatSheetContent(viewModel: MainViewModel) {
                 base64 = att.base64,
               )
             }
-          viewModel.sendChat(message = text, thinking = thinkingLevel, attachments = outgoing)
+          val finalMessage = replyToMessage?.let { replyMessage ->
+            val textContent = replyMessage.content
+              .filter { it.type == "text" }
+              .joinToString("\n") { it.text ?: "" }
+              .trim()
+
+            val quotedText = textContent.ifBlank {
+              if (replyMessage.content.any { it.base64 != null }) "[Image Attachment]" else ""
+            }
+
+            if (quotedText.isNotBlank()) {
+              val truncated = if (quotedText.length > 200) {
+                "${quotedText.take(200)}..."
+              } else {
+                quotedText
+              }
+              "> $truncated\n\n$text"
+            } else {
+              text
+            }
+          } ?: text
+
+          viewModel.sendChat(message = finalMessage, thinking = thinkingLevel, attachments = outgoing)
           attachments.clear()
           replyToMessage = null
         },
