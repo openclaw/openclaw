@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/connect: omit admin-scoped config and auth metadata from lower-privilege `hello-ok` snapshots while preserving those fields for admin reconnects. (#58469) Thanks @eleqtrizit.
 - iOS/canvas: restrict A2UI bridge trust to the bundled scaffold and exact capability-backed remote canvas URLs, so generic `canvas.navigate` and `canvas.present` loads no longer gain action-dispatch authority. (#58471) Thanks @eleqtrizit.
 - Agents/tool policy: preserve restrictive plugin-only allowlists instead of silently widening access to core tools, and keep allowlist warnings aligned with the enforced policy. (#58476) Thanks @eleqtrizit.
+- Telegram/media: preserve `<media:...>` placeholders and `file_id` in captioned messages when Bot API downloads fail, so agents still receive media context. (#59948) Thanks @v1p0r.
 - Telegram/native commands: clean up metadata-driven progress placeholders when replies fall back, edits fail, or local exec approval prompts are suppressed. (#59300) Thanks @jalehman.
 - Matrix: allow secret-storage recreation during automatic repair bootstrap so clients that lose their recovery key can recover and persist new cross-signing keys. (#59846) Thanks @al3mart.
 - Matrix/crypto persistence: capture and write the IndexedDB snapshot while holding the snapshot file lock so concurrent gateway and CLI persists cannot overwrite newer crypto state. (#59851) Thanks @al3mart.
