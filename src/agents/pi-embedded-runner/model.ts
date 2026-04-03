@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -13,6 +15,7 @@ import {
   normalizeProviderResolvedModelWithPlugin,
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
+import { isRecord } from "../../utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
@@ -281,16 +284,59 @@ export { buildModelAliasLines };
 function resolveConfiguredProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
+  agentDir?: string,
 ): InlineProviderConfig | undefined {
   const configuredProviders = cfg?.models?.providers;
-  if (!configuredProviders) {
+  if (configuredProviders) {
+    const exactProviderConfig = configuredProviders[provider];
+    if (exactProviderConfig) {
+      return exactProviderConfig;
+    }
+    const normalized = findNormalizedProviderValue(configuredProviders, provider);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  // Fall back to the generated models.json which contains implicit provider
+  // discovery results (e.g. kilocode, deepseek, ollama). These providers are
+  // NON_PI_NATIVE and may not appear in the user config but are written to
+  // models.json by ensureOpenClawModelsJson via implicit provider resolution.
+  return resolveModelsJsonProviderConfig(provider, agentDir);
+}
+
+/**
+ * Read provider config from the generated models.json file.
+ * This covers providers that were discovered via implicit provider resolution
+ * (e.g. env-var-backed providers like kilocode) but are not present in the
+ * user's openclaw.json config.
+ */
+function resolveModelsJsonProviderConfig(
+  provider: string,
+  agentDir?: string,
+): InlineProviderConfig | undefined {
+  const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
+  const modelsJsonPath = path.join(resolvedAgentDir, "models.json");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(modelsJsonPath, "utf8")) as unknown;
+  } catch {
     return undefined;
   }
-  const exactProviderConfig = configuredProviders[provider];
-  if (exactProviderConfig) {
-    return exactProviderConfig;
+  if (!isRecord(parsed) || !isRecord(parsed.providers)) {
+    return undefined;
   }
-  return findNormalizedProviderValue(configuredProviders, provider);
+  const providers = parsed.providers;
+  const exact = providers[provider];
+  if (isRecord(exact)) {
+    return exact as unknown as InlineProviderConfig;
+  }
+  // Try normalized lookup.
+  for (const [key, value] of Object.entries(providers)) {
+    if (normalizeProviderId(key) === normalizeProviderId(provider) && isRecord(value)) {
+      return value as unknown as InlineProviderConfig;
+    }
+  }
+  return undefined;
 }
 
 function applyConfiguredProviderOverrides(params: {
@@ -436,7 +482,7 @@ function resolveExplicitModelWithRegistry(params: {
   if (shouldSuppressBuiltInModel({ provider, id: modelId })) {
     return { kind: "suppressed" };
   }
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider, agentDir);
   const inlineMatch = findInlineModelMatch({
     providers: cfg?.models?.providers ?? {},
     provider,
@@ -508,7 +554,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
 }): Model<Api> | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir } = params;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider, agentDir);
   const pluginDynamicModel = runtimeHooks.runProviderDynamicModel({
     provider,
     config: cfg,
@@ -549,7 +595,7 @@ function resolveConfiguredFallbackModel(params: {
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> | undefined {
   const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider, agentDir);
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
@@ -723,7 +769,7 @@ export async function resolveModelAsync(
       modelRegistry,
     };
   }
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider, resolvedAgentDir);
   const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
     if (attemptOptions?.clearHookCache) {
       runtimeHooks.clearProviderRuntimeHookCache();
