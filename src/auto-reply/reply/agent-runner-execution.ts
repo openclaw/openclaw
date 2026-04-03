@@ -47,6 +47,7 @@ import {
   SILENT_REPLY_TOKEN,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -86,6 +87,142 @@ export type AgentRunLoopResult =
       directlySentBlockKeys?: Set<string>;
     }
   | { kind: "final"; payload: ReplyPayload };
+
+type FallbackSelectionState = Pick<
+  SessionEntry,
+  | "providerOverride"
+  | "modelOverride"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+>;
+
+const FALLBACK_SELECTION_STATE_KEYS = [
+  "providerOverride",
+  "modelOverride",
+  "authProfileOverride",
+  "authProfileOverrideSource",
+  "authProfileOverrideCompactionCount",
+] as const satisfies ReadonlyArray<keyof FallbackSelectionState>;
+
+function setFallbackSelectionStateField(
+  entry: SessionEntry,
+  key: keyof FallbackSelectionState,
+  value: FallbackSelectionState[keyof FallbackSelectionState],
+): boolean {
+  switch (key) {
+    case "providerOverride":
+      if (entry.providerOverride !== value) {
+        entry.providerOverride = value as SessionEntry["providerOverride"];
+        return true;
+      }
+      return false;
+    case "modelOverride":
+      if (entry.modelOverride !== value) {
+        entry.modelOverride = value as SessionEntry["modelOverride"];
+        return true;
+      }
+      return false;
+    case "authProfileOverride":
+      if (entry.authProfileOverride !== value) {
+        entry.authProfileOverride = value as SessionEntry["authProfileOverride"];
+        return true;
+      }
+      return false;
+    case "authProfileOverrideSource":
+      if (entry.authProfileOverrideSource !== value) {
+        entry.authProfileOverrideSource = value as SessionEntry["authProfileOverrideSource"];
+        return true;
+      }
+      return false;
+    case "authProfileOverrideCompactionCount":
+      if (entry.authProfileOverrideCompactionCount !== value) {
+        entry.authProfileOverrideCompactionCount =
+          value as SessionEntry["authProfileOverrideCompactionCount"];
+        return true;
+      }
+      return false;
+  }
+}
+
+function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionState {
+  return {
+    providerOverride: entry.providerOverride,
+    modelOverride: entry.modelOverride,
+    authProfileOverride: entry.authProfileOverride,
+    authProfileOverrideSource: entry.authProfileOverrideSource,
+    authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
+  };
+}
+
+function buildFallbackSelectionState(params: {
+  provider: string;
+  model: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+}): FallbackSelectionState {
+  return {
+    providerOverride: params.provider,
+    modelOverride: params.model,
+    authProfileOverride: params.authProfileId,
+    authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
+    authProfileOverrideCompactionCount: undefined,
+  };
+}
+
+function applyFallbackSelectionState(
+  entry: SessionEntry,
+  nextState: FallbackSelectionState,
+  now = Date.now(),
+): boolean {
+  let updated = false;
+  for (const key of FALLBACK_SELECTION_STATE_KEYS) {
+    const nextValue = nextState[key];
+    if (nextValue === undefined) {
+      if (Object.hasOwn(entry, key)) {
+        delete entry[key];
+        updated = true;
+      }
+      continue;
+    }
+    if (entry[key] !== nextValue) {
+      updated = setFallbackSelectionStateField(entry, key, nextValue) || updated;
+    }
+  }
+  if (updated) {
+    entry.updatedAt = now;
+  }
+  return updated;
+}
+
+function rollbackFallbackSelectionStateIfUnchanged(
+  entry: SessionEntry,
+  expectedState: FallbackSelectionState,
+  previousState: FallbackSelectionState,
+  now = Date.now(),
+): boolean {
+  let updated = false;
+  for (const key of FALLBACK_SELECTION_STATE_KEYS) {
+    if (entry[key] !== expectedState[key]) {
+      continue;
+    }
+    const previousValue = previousState[key];
+    if (previousValue === undefined) {
+      if (Object.hasOwn(entry, key)) {
+        delete entry[key];
+        updated = true;
+      }
+      continue;
+    }
+    if (entry[key] !== previousValue) {
+      updated = setFallbackSelectionStateField(entry, key, previousValue) || updated;
+    }
+  }
+  if (updated) {
+    entry.updatedAt = now;
+  }
+  return updated;
+}
 
 /**
  * Build a human-friendly rate-limit message from a FallbackSummaryError.
@@ -207,6 +344,74 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
+  const persistFallbackCandidateSelection = async (provider: string, model: string) => {
+    if (
+      !params.sessionKey ||
+      !params.activeSessionStore ||
+      (provider === params.followupRun.run.provider && model === params.followupRun.run.model)
+    ) {
+      return;
+    }
+
+    const activeSessionEntry =
+      params.getActiveSessionEntry() ?? params.activeSessionStore[params.sessionKey];
+    if (!activeSessionEntry) {
+      return;
+    }
+
+    const previousState = snapshotFallbackSelectionState(activeSessionEntry);
+    const scopedAuthProfile = resolveRunAuthProfile(params.followupRun.run, provider);
+    const nextState = buildFallbackSelectionState({
+      provider,
+      model,
+      authProfileId: scopedAuthProfile.authProfileId,
+      authProfileIdSource: scopedAuthProfile.authProfileIdSource,
+    });
+    if (!applyFallbackSelectionState(activeSessionEntry, nextState)) {
+      return;
+    }
+    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
+
+    try {
+      if (params.storePath) {
+        await updateSessionStore(params.storePath, (store) => {
+          const persistedEntry = store[params.sessionKey!];
+          if (!persistedEntry) {
+            return;
+          }
+          applyFallbackSelectionState(persistedEntry, nextState);
+          store[params.sessionKey!] = persistedEntry;
+        });
+      }
+    } catch (error) {
+      rollbackFallbackSelectionStateIfUnchanged(activeSessionEntry, nextState, previousState);
+      params.activeSessionStore[params.sessionKey] = activeSessionEntry;
+      throw error;
+    }
+
+    return async () => {
+      const rolledBackInMemory = rollbackFallbackSelectionStateIfUnchanged(
+        activeSessionEntry,
+        nextState,
+        previousState,
+      );
+      if (rolledBackInMemory) {
+        params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
+      }
+      if (!params.storePath) {
+        return;
+      }
+      await updateSessionStore(params.storePath, (store) => {
+        const persistedEntry = store[params.sessionKey!];
+        if (!persistedEntry) {
+          return;
+        }
+        if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
+          store[params.sessionKey!] = persistedEntry;
+        }
+      });
+    };
+  };
 
   while (true) {
     try {
@@ -286,7 +491,7 @@ export async function runAgentTurnWithFallback(params: {
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
-        run: (provider, model, runOptions) => {
+        run: async (provider, model, runOptions) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -294,6 +499,17 @@ export async function runAgentTurnWithFallback(params: {
             model,
             thinkLevel: params.followupRun.run.thinkLevel,
           });
+          let rollbackFallbackCandidateSelection: (() => Promise<void>) | undefined;
+          try {
+            rollbackFallbackCandidateSelection = await persistFallbackCandidateSelection(
+              provider,
+              model,
+            );
+          } catch (error) {
+            logVerbose(
+              `failed to persist fallback candidate selection (non-fatal): ${String(error)}`,
+            );
+          }
 
           if (isCliProvider(provider, params.followupRun.run.config)) {
             const startedAt = Date.now();
@@ -372,6 +588,15 @@ export async function runAgentTurnWithFallback(params: {
 
                 return result;
               } catch (err) {
+                if (rollbackFallbackCandidateSelection) {
+                  try {
+                    await rollbackFallbackCandidateSelection();
+                  } catch (rollbackError) {
+                    logVerbose(
+                      `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
+                    );
+                  }
+                }
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
@@ -592,6 +817,17 @@ export async function runAgentTurnWithFallback(params: {
               );
               attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
               return result;
+            } catch (err) {
+              if (rollbackFallbackCandidateSelection) {
+                try {
+                  await rollbackFallbackCandidateSelection();
+                } catch (rollbackError) {
+                  logVerbose(
+                    `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
+                  );
+                }
+              }
+              throw err;
             } finally {
               autoCompactionCount += attemptCompactionCount;
             }

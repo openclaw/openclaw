@@ -100,6 +100,7 @@ Docs: https://docs.openclaw.ai
 - Hooks/tool policy: block tool calls when a `before_tool_call` hook crashes so hook failures fail closed instead of silently allowing execution. (#59822) Thanks @pgondhi987.
 - Matrix/media: surface a dedicated `[matrix <kind> attachment too large]` marker for oversized inbound media instead of the generic unavailable marker, and classify size-limit failures with a typed Matrix error. (#60289) Thanks @efe-arv.
 - WhatsApp/watchdog: reset watchdog timeout after reconnect so quiet channels no longer enter a tight reconnect loop from stale message timestamps carried across connection runs. (#60007) Thanks @MonkeyLeeT.
+- Agents/fallback: persist selected fallback overrides before retry attempts start, prefer persisted overrides during live-session reconciliation, and keep provider-scoped auth-profile failover from snapping retries back to stale primary selections.
 
 ## 2026.4.2
 
