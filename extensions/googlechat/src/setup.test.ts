@@ -218,6 +218,37 @@ describe("googlechat setup", () => {
     });
   });
 
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          defaultAccount: "alerts",
+          dm: {
+            policy: "disabled",
+          },
+          accounts: {
+            alerts: {
+              serviceAccount: { client_email: "bot@example.com" },
+              dm: {
+                policy: "allowlist",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(googlechatPlugin.setupWizard?.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(googlechatPlugin.setupWizard?.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.googlechat.accounts.alerts.dm.policy",
+      allowFromKey: "channels.googlechat.accounts.alerts.dm.allowFrom",
+    });
+
+    const next = googlechatPlugin.setupWizard?.dmPolicy?.setPolicy(cfg, "open");
+    expect(next?.channels?.googlechat?.dm?.policy).toBe("disabled");
+    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.policy).toBe("open");
+  });
+
   it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
     const next = googlechatPlugin.setupWizard?.dmPolicy?.setPolicy(
       {

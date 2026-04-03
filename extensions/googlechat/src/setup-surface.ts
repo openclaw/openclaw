@@ -42,11 +42,11 @@ const googlechatDmPolicy: ChannelSetupDmPolicy = {
   channel,
   policyKey: "channels.googlechat.dm.policy",
   allowFromKey: "channels.googlechat.dm.allowFrom",
-  resolveConfigKeys: (_cfg, accountId) =>
-    accountId && accountId !== DEFAULT_ACCOUNT_ID
+  resolveConfigKeys: (cfg, accountId) =>
+    (accountId ?? resolveDefaultGoogleChatAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.googlechat.accounts.${accountId}.dm.policy`,
-          allowFromKey: `channels.googlechat.accounts.${accountId}.dm.allowFrom`,
+          policyKey: `channels.googlechat.accounts.${accountId ?? resolveDefaultGoogleChatAccountId(cfg)}.dm.policy`,
+          allowFromKey: `channels.googlechat.accounts.${accountId ?? resolveDefaultGoogleChatAccountId(cfg)}.dm.allowFrom`,
         }
       : {
           policyKey: "channels.googlechat.dm.policy",
@@ -55,10 +55,10 @@ const googlechatDmPolicy: ChannelSetupDmPolicy = {
   getCurrent: (cfg, accountId) =>
     resolveGoogleChatAccount({
       cfg,
-      accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+      accountId: accountId ?? resolveDefaultGoogleChatAccountId(cfg),
     }).config.dm?.policy ?? "pairing",
   setPolicy: (cfg, policy, accountId) => {
-    const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+    const resolvedAccountId = accountId ?? resolveDefaultGoogleChatAccountId(cfg);
     const currentDm = resolveGoogleChatAccount({
       cfg,
       accountId: resolvedAccountId,
