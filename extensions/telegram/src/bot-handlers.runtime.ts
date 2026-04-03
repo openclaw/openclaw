@@ -1,6 +1,4 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
-import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -44,6 +42,11 @@ import {
   type NormalizedAllowFrom,
 } from "./bot-access.js";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
+import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+  resolveDefaultModelForAgent,
+} from "./bot-handlers.agent.runtime.js";
 import {
   hasInboundMedia,
   hasReplyTargetMedia,

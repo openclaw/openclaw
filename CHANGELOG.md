@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/native commands: clean up metadata-driven progress placeholders when replies fall back, edits fail, or local exec approval prompts are suppressed. (#59300) Thanks @jalehman.
 - Media/request overrides: resolve shared and capability-filtered media request SecretRefs correctly and expose media transport override fields to schema-driven config consumers. (#59848) Thanks @vincentkoc.
 - Providers/request overrides: stop advertising unsupported proxy and TLS transport settings on `models.providers.*.request`, and fail closed if unvalidated config tries to route LLM model-provider traffic through dead transport fields. (#59682) Thanks @vincentkoc.
+- Discord/mentions: treat `@everyone` and `@here` as valid mention-gate triggers in guild preflight so mention-required bots still respond to those broadcasts. (#60343) Thanks @geekhuashan.
 - Matrix: allow secret-storage recreation during automatic repair bootstrap so clients that lose their recovery key can recover and persist new cross-signing keys. (#59846) Thanks @al3mart.
 - Matrix/crypto persistence: capture and write the IndexedDB snapshot while holding the snapshot file lock so concurrent gateway and CLI persists cannot overwrite newer crypto state. (#59851) Thanks @al3mart.
 - Ollama/auth: prefer real cloud auth over local marker during model auth resolution so cloud-backed Ollama auth does not get shadowed by stale local-only markers.
@@ -77,6 +78,9 @@ Docs: https://docs.openclaw.ai
 - Discord/ack reactions: keep automatic ACK reaction auth on the active hydrated Discord account so SecretRef-backed and non-default-account reactions stop falling back to stale default config resolution. (#60081) Thanks @FunJim.
 - Telegram/model switching: render non-default `/model` callback confirmations with HTML formatting so Telegram shows the selected model in bold instead of raw `**...**` markers. (#60042) Thanks @GitZhangChi.
 - Plugins/update: allow `openclaw plugins update` to use `--dangerously-force-unsafe-install` for built-in dangerous-code false positives during plugin updates. (#60066) Thanks @huntharo.
+- Gateway/auth: disconnect shared-auth websocket sessions only for effective auth rotations on restart-capable config writes, and keep `config.set` auth edits from dropping still-valid live sessions. (#60387) Thanks @mappel-nv.
+- Control UI/chat: keep the Stop button visible during tool-only execution so abortable runs do not fall back to Send while tools are still running. (#54528) thanks @chziyue.
+- Discord/voice: make READY auto-join fire-and-forget while keeping the shorter initial voice-connect timeout separate from the longer playback-start wait. (#60345) Thanks @geekhuashan.
 
 ## 2026.4.2
 

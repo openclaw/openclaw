@@ -19,6 +19,7 @@ import type {
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "./openai-completions-compat.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import {
   buildProviderRequestDispatcherPolicy,
@@ -1341,33 +1342,10 @@ function detectCompat(model: OpenAIModeModel) {
   });
   const endpointClass = capabilities.endpointClass;
   const isDefaultRoute = endpointClass === "default";
-  const usesConfiguredNonOpenAIEndpoint =
-    endpointClass !== "default" && endpointClass !== "openai-public";
-  const isMistral =
-    capabilities.knownProviderFamily === "mistral" || endpointClass === "mistral-public";
-  const isMoonshotLike =
-    capabilities.knownProviderFamily === "moonshot" ||
-    capabilities.knownProviderFamily === "modelstudio" ||
-    endpointClass === "moonshot-native" ||
-    endpointClass === "modelstudio-native";
-  const isZai = endpointClass === "zai-native" || (isDefaultRoute && provider === "zai");
-  const isNonStandard =
-    endpointClass === "cerebras-native" ||
-    endpointClass === "chutes-native" ||
-    endpointClass === "deepseek-native" ||
-    isMistral ||
-    endpointClass === "opencode-native" ||
-    endpointClass === "xai-native" ||
-    isZai ||
-    (isDefaultRoute &&
-      (provider === "cerebras" ||
-        provider === "chutes" ||
-        provider === "deepseek" ||
-        provider === "opencode" ||
-        provider === "xai"));
-  const useMaxTokens =
-    endpointClass === "chutes-native" || (isDefaultRoute && provider === "chutes") || isMistral;
-  const isGrok = endpointClass === "xai-native" || (isDefaultRoute && provider === "xai");
+  const compatDefaults = resolveOpenAICompletionsCompatDefaultsFromCapabilities({
+    provider,
+    ...capabilities,
+  });
   const isGroq = endpointClass === "groq-native" || (isDefaultRoute && provider === "groq");
   const reasoningEffortMap: Record<string, string> =
     isGroq && model.id === "qwen/qwen3-32b"
@@ -1380,25 +1358,19 @@ function detectCompat(model: OpenAIModeModel) {
         }
       : {};
   return {
-    supportsStore: !isNonStandard,
-    supportsDeveloperRole: !isNonStandard && !isMoonshotLike && !usesConfiguredNonOpenAIEndpoint,
-    supportsReasoningEffort: !isGrok && !isMistral && !isZai,
+    supportsStore: compatDefaults.supportsStore,
+    supportsDeveloperRole: compatDefaults.supportsDeveloperRole,
+    supportsReasoningEffort: compatDefaults.supportsReasoningEffort,
     reasoningEffortMap,
-    supportsUsageInStreaming: !isNonStandard && !usesConfiguredNonOpenAIEndpoint,
-    maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
+    supportsUsageInStreaming: compatDefaults.supportsUsageInStreaming,
+    maxTokensField: compatDefaults.maxTokensField,
     requiresToolResultName: false,
     requiresAssistantAfterToolResult: false,
     requiresThinkingAsText: false,
-    thinkingFormat: isZai
-      ? "zai"
-      : provider === "openrouter" ||
-          capabilities.endpointClass === "openrouter" ||
-          capabilities.attributionProvider === "openrouter"
-        ? "openrouter"
-        : "openai",
+    thinkingFormat: compatDefaults.thinkingFormat,
     openRouterRouting: {},
     vercelGatewayRouting: {},
-    supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
+    supportsStrictMode: compatDefaults.supportsStrictMode,
   };
 }
 

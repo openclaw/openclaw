@@ -508,6 +508,7 @@ describe("provider attribution", () => {
     ).toMatchObject({
       endpointClass: "openai-public",
       allowsOpenAIServiceTier: true,
+      supportsOpenAIReasoningCompatPayload: true,
       allowsResponsesStore: true,
       supportsResponsesStoreField: true,
       shouldStripResponsesPromptCache: false,
@@ -536,6 +537,7 @@ describe("provider attribution", () => {
     ).toMatchObject({
       endpointClass: "custom",
       allowsOpenAIServiceTier: false,
+      supportsOpenAIReasoningCompatPayload: false,
       allowsResponsesStore: false,
       supportsResponsesStoreField: true,
       shouldStripResponsesPromptCache: true,

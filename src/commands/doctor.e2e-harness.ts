@@ -207,8 +207,8 @@ vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     CONFIG_PATH: "/tmp/openclaw.json",
@@ -249,8 +249,8 @@ vi.mock("./doctor-gateway-auth-token.js", () => ({
   resolveGatewayAuthTokenForService,
 }));
 
-vi.mock("../gateway/call.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/call.js")>();
+vi.mock("../gateway/call.js", async () => {
+  const actual = await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
   return {
     ...actual,
     callGateway,
@@ -270,8 +270,10 @@ vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate,
 }));
 
-vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
+vi.mock("../agents/auth-profiles.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
+    "../agents/auth-profiles.js",
+  );
   return {
     ...actual,
     ensureAuthProfileStore,
@@ -312,8 +314,8 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
-vi.mock("../utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../utils.js")>();
+vi.mock("../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
   return {
     ...actual,
     resolveUserPath: (value: string) => value,

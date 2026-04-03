@@ -196,11 +196,16 @@ describe("matrixMessageActions", () => {
       },
     } as CoreConfig;
 
-    const assistantDiscovery = matrixMessageActions.describeMessageTool!({
+    const describeMessageTool = matrixMessageActions.describeMessageTool;
+    if (!describeMessageTool) {
+      throw new Error("matrix message action discovery is unavailable");
+    }
+
+    const assistantDiscovery = describeMessageTool({
       cfg,
       accountId: "assistant",
     } as never);
-    const opsDiscovery = matrixMessageActions.describeMessageTool!({
+    const opsDiscovery = describeMessageTool({
       cfg,
       accountId: "ops",
     } as never);

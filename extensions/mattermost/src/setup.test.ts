@@ -12,32 +12,39 @@ const resolveMattermostAccount = vi.hoisted(() => vi.fn());
 const normalizeMattermostBaseUrl = vi.hoisted(() => vi.fn((value: string | undefined) => value));
 const hasConfiguredSecretInput = vi.hoisted(() => vi.fn((value: unknown) => Boolean(value)));
 
-vi.mock("./mattermost/accounts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./mattermost/accounts.js")>();
-  return {
-    ...actual,
-    resolveMattermostAccount: (...args: Parameters<typeof actual.resolveMattermostAccount>) => {
-      const mocked = resolveMattermostAccount(...args);
-      return mocked === undefined ? actual.resolveMattermostAccount(...args) : mocked;
-    },
-  };
-});
+vi.mock("./setup.accounts.runtime.js", () => ({
+  listMattermostAccountIds: vi.fn((cfg: OpenClawConfig) => {
+    const accounts = cfg.channels?.mattermost?.accounts;
+    const ids = accounts ? Object.keys(accounts) : [];
+    return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
+  }),
+  resolveMattermostAccount: (params: Parameters<typeof resolveMattermostAccount>[0]) => {
+    const mocked = resolveMattermostAccount(params);
+    return (
+      mocked ?? {
+        accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
+        enabled: params.cfg.channels?.mattermost?.enabled !== false,
+        botToken:
+          typeof params.cfg.channels?.mattermost?.botToken === "string"
+            ? params.cfg.channels.mattermost.botToken
+            : undefined,
+        baseUrl: normalizeMattermostBaseUrl(params.cfg.channels?.mattermost?.baseUrl),
+        botTokenSource:
+          typeof params.cfg.channels?.mattermost?.botToken === "string" ? "config" : "none",
+        baseUrlSource: params.cfg.channels?.mattermost?.baseUrl ? "config" : "none",
+        config: params.cfg.channels?.mattermost ?? {},
+      }
+    );
+  },
+}));
 
-vi.mock("./mattermost/client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./mattermost/client.js")>();
-  return {
-    ...actual,
-    normalizeMattermostBaseUrl,
-  };
-});
+vi.mock("./setup.client.runtime.js", () => ({
+  normalizeMattermostBaseUrl,
+}));
 
-vi.mock("./secret-input.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./secret-input.js")>();
-  return {
-    ...actual,
-    hasConfiguredSecretInput,
-  };
-});
+vi.mock("./setup.secret-input.runtime.js", () => ({
+  hasConfiguredSecretInput,
+}));
 
 function createApi(
   registrationMode: OpenClawPluginApi["registrationMode"],

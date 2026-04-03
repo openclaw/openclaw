@@ -14,12 +14,6 @@ type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type OpenAITextVerbosity = "low" | "medium" | "high";
 
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
-const OPENAI_REASONING_COMPAT_PROVIDERS = new Set([
-  "openai",
-  "openai-codex",
-  "azure-openai",
-  "azure-openai-responses",
-]);
 
 function resolveOpenAIRequestCapabilities(model: {
   api?: unknown;
@@ -128,19 +122,12 @@ function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unkno
 function shouldApplyOpenAIReasoningCompatibility(model: {
   api?: unknown;
   provider?: unknown;
+  baseUrl?: unknown;
 }): boolean {
   if (typeof model.api !== "string" || typeof model.provider !== "string") {
     return false;
   }
-  if (
-    model.api !== "openai-completions" &&
-    model.api !== "openai-responses" &&
-    model.api !== "openai-codex-responses" &&
-    model.api !== "azure-openai-responses"
-  ) {
-    return false;
-  }
-  return OPENAI_REASONING_COMPAT_PROVIDERS.has(model.provider);
+  return resolveOpenAIRequestCapabilities(model).supportsOpenAIReasoningCompatPayload;
 }
 
 function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>): void {

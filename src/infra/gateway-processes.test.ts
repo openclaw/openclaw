@@ -7,15 +7,25 @@ const parseProcCmdlineMock = vi.hoisted(() => vi.fn());
 const isGatewayArgvMock = vi.hoisted(() => vi.fn());
 const findGatewayPidsOnPortSyncMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
+  };
+});
 
-vi.mock("node:fs", () => ({
-  default: {
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
+    },
     readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
-  },
-}));
+  };
+});
 
 vi.mock("../daemon/cmd-argv.js", () => ({
   parseCmdScriptCommandLine: (...args: unknown[]) => parseCmdScriptCommandLineMock(...args),
@@ -28,6 +38,26 @@ vi.mock("./gateway-process-argv.js", () => ({
 
 vi.mock("./restart-stale-pids.js", () => ({
   findGatewayPidsOnPortSync: (...args: unknown[]) => findGatewayPidsOnPortSyncMock(...args),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => ({
+    warn: vi.fn(),
+    info: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+    isEnabled: vi.fn(() => false),
+    subsystem: "test",
+  })),
+}));
+
+vi.mock("../channels/chat-meta.js", () => ({
+  listChatChannels: vi.fn(() => []),
+  getChatChannelMeta: vi.fn(() => null),
 }));
 
 const {

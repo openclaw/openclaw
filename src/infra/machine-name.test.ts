@@ -4,9 +4,13 @@ import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  execFile: (...args: unknown[]) => execFileMock(...args),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: (...args: unknown[]) => execFileMock(...args),
+  };
+});
 
 const originalVitest = process.env.VITEST;
 const originalNodeEnv = process.env.NODE_ENV;
