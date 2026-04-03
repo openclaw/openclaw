@@ -7,6 +7,7 @@ import {
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
   getDeviceBootstrapTokenProfile,
   issueDeviceBootstrapToken,
+  redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "./device-bootstrap.js";
@@ -105,6 +106,42 @@ describe("device bootstrap tokens", () => {
       },
     );
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
+  });
+
+  it("persists bootstrap redemption state across verification reloads", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    await expect(
+      redeemDeviceBootstrapTokenProfile({
+        baseDir,
+        token: issued.token,
+        role: "node",
+        scopes: [],
+      }),
+    ).resolves.toEqual({
+      recorded: true,
+      fullyRedeemed: false,
+    });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      redeemDeviceBootstrapTokenProfile({
+        baseDir,
+        token: issued.token,
+        role: "operator",
+        scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
+      }),
+    ).resolves.toEqual({
+      recorded: true,
+      fullyRedeemed: true,
+    });
   });
 
   it("clears outstanding bootstrap tokens on demand", async () => {

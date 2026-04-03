@@ -4,6 +4,7 @@ import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
 import {
   getDeviceBootstrapTokenProfile,
+  redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
@@ -32,7 +33,6 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
-import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserOperatorUiClient,
@@ -144,44 +144,6 @@ function resolvePinnedClientMetadata(params: {
     pinnedPlatform: hasPinnedPlatform ? params.pairedPlatform : undefined,
     pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
   };
-}
-
-function resolveBootstrapProfileScopes(role: string, scopes: readonly string[]): string[] {
-  if (role === "operator") {
-    return scopes.filter((scope) => scope.startsWith("operator."));
-  }
-  return scopes.filter((scope) => !scope.startsWith("operator."));
-}
-
-function pairedDeviceSatisfiesBootstrapProfile(
-  pairedDevice: Awaited<ReturnType<typeof getPairedDevice>>,
-  bootstrapProfile: DeviceBootstrapProfile,
-): boolean {
-  if (!pairedDevice) {
-    return false;
-  }
-  const approvedScopes = Array.isArray(pairedDevice.approvedScopes)
-    ? pairedDevice.approvedScopes
-    : Array.isArray(pairedDevice.scopes)
-      ? pairedDevice.scopes
-      : [];
-  for (const bootstrapRole of bootstrapProfile.roles) {
-    if (!hasEffectivePairedDeviceRole(pairedDevice, bootstrapRole)) {
-      return false;
-    }
-    const requestedScopes = resolveBootstrapProfileScopes(bootstrapRole, bootstrapProfile.scopes);
-    if (
-      requestedScopes.length > 0 &&
-      !roleScopesAllow({
-        role: bootstrapRole,
-        requestedScopes,
-        allowedScopes: approvedScopes,
-      })
-    ) {
-      return false;
-    }
-  }
-  return true;
 }
 
 export function attachGatewayWsMessageHandler(params: {
@@ -1029,16 +991,22 @@ export function attachGatewayWsMessageHandler(params: {
           authMethod === "bootstrap-token" &&
           bootstrapProfile &&
           bootstrapTokenCandidate &&
-          device &&
-          pairedDeviceSatisfiesBootstrapProfile(await getPairedDevice(device.id), bootstrapProfile)
+          device
         ) {
-          const revoked = await revokeDeviceBootstrapToken({
+          const redemption = await redeemDeviceBootstrapTokenProfile({
             token: bootstrapTokenCandidate,
+            role,
+            scopes,
           });
-          if (!revoked.removed) {
-            logGateway.warn(
-              `bootstrap token revoke skipped after profile redemption device=${device.id}`,
-            );
+          if (redemption.fullyRedeemed) {
+            const revoked = await revokeDeviceBootstrapToken({
+              token: bootstrapTokenCandidate,
+            });
+            if (!revoked.removed) {
+              logGateway.warn(
+                `bootstrap token revoke skipped after profile redemption device=${device.id}`,
+              );
+            }
           }
         }
 
