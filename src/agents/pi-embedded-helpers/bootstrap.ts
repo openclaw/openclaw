@@ -123,6 +123,16 @@ export function resolveBootstrapPromptTruncationWarningMode(
   return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
 }
 
+export const DEFAULT_BOOTSTRAP_TRUNCATION_WARN_PCT = 10;
+
+export function resolveBootstrapTruncationWarnPct(cfg?: OpenClawConfig): number {
+  const raw = cfg?.agents?.defaults?.bootstrapTruncationWarnPct;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_BOOTSTRAP_TRUNCATION_WARN_PCT;
+}
+
 function trimBootstrapContent(
   content: string,
   fileName: string,

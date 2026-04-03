@@ -3,10 +3,12 @@ export {
   DEFAULT_BOOTSTRAP_MAX_CHARS,
   DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE,
   DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  DEFAULT_BOOTSTRAP_TRUNCATION_WARN_PCT,
   ensureSessionHeader,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
+  resolveBootstrapTruncationWarnPct,
   stripThoughtSignatures,
 } from "./pi-embedded-helpers/bootstrap.js";
 export {

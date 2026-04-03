@@ -988,6 +988,21 @@ Default: `"once"`.
 }
 ```
 
+### `agents.defaults.bootstrapTruncationWarnPct`
+
+Minimum truncation percentage (0–100) for a bootstrap file to trigger a
+user-visible channel warning. Default: `10`.
+
+Set to `0` to warn on any truncation, or above `100` to disable user-visible
+warnings entirely. The warning is delivered as a system event prefixed to the
+next prompt (e.g. "⚠️ Bootstrap truncation: MEMORY.md truncated 12% ...").
+
+```json5
+{
+  agents: { defaults: { bootstrapTruncationWarnPct: 10 } },
+}
+```
+
 ### `agents.defaults.imageMaxDimensionPx`
 
 Max pixel size for the longest image side in transcript/tool image blocks before provider calls.

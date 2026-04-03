@@ -15,6 +15,7 @@ import {
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
+import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import {
   isOllamaCompatProvider,
@@ -44,6 +45,7 @@ import {
   buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
   buildBootstrapInjectionStats,
+  buildBootstrapTruncationUserWarnings,
   prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
 import {
@@ -82,6 +84,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
+  resolveBootstrapTruncationWarnPct,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
@@ -466,6 +469,16 @@ export async function runEmbeddedAttempt(
       seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
       previousSignature: params.bootstrapPromptWarningSignature,
     });
+    // Emit user-visible channel warnings for files truncated beyond the threshold.
+    if (params.sessionKey) {
+      const truncationWarnPct = resolveBootstrapTruncationWarnPct(params.config);
+      for (const msg of buildBootstrapTruncationUserWarnings({
+        analysis: bootstrapAnalysis,
+        warnPct: truncationWarnPct,
+      })) {
+        enqueueSystemEvent(msg, { sessionKey: params.sessionKey });
+      }
+    }
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )

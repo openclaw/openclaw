@@ -357,6 +357,56 @@ export function appendBootstrapPromptWarning(
 // Backward-compatible alias while older callers still import the prepend name.
 export const prependBootstrapPromptWarning = appendBootstrapPromptWarning;
 
+/**
+ * Builds concise user-visible warning strings for bootstrap files that were
+ * truncated by more than `warnPct` percent. Returns an empty array when there
+ * is nothing worth surfacing.
+ */
+export function buildBootstrapTruncationUserWarnings(params: {
+  analysis: BootstrapBudgetAnalysis;
+  /** Minimum truncation percentage (0–100) to trigger a warning. Default: 10. */
+  warnPct?: number;
+}): string[] {
+  if (!params.analysis.hasTruncation) {
+    return [];
+  }
+  const threshold =
+    typeof params.warnPct === "number" && Number.isFinite(params.warnPct)
+      ? Math.max(0, Math.floor(params.warnPct))
+      : 10;
+  const warnings: string[] = [];
+  const MAX_WARNINGS = 3;
+  for (const file of params.analysis.truncatedFiles) {
+    if (warnings.length >= MAX_WARNINGS) {
+      const remaining = params.analysis.truncatedFiles.length - MAX_WARNINGS;
+      warnings.push(
+        `…and ${remaining} more truncated file${remaining === 1 ? "" : "s"}. Run \`openclaw doctor\` for full details.`,
+      );
+      break;
+    }
+    const pct =
+      file.rawChars > 0
+        ? Math.round(((file.rawChars - file.injectedChars) / file.rawChars) * 100)
+        : 0;
+    if (pct < threshold) {
+      continue;
+    }
+    const removed = file.rawChars - file.injectedChars;
+    const hasTotalCause = file.causes.includes("total-limit");
+    const hasPerFileCause = file.causes.includes("per-file-limit");
+    const advice =
+      hasTotalCause && hasPerFileCause
+        ? "Consider raising `bootstrapMaxChars` and/or `bootstrapTotalMaxChars`."
+        : hasTotalCause
+          ? "Consider raising `bootstrapTotalMaxChars`."
+          : "Consider raising `bootstrapMaxChars`.";
+    warnings.push(
+      `⚠️ Bootstrap truncation: ${file.name} truncated ${pct}% (${removed}/${file.rawChars} chars removed). ${advice}`,
+    );
+  }
+  return warnings;
+}
+
 export function buildBootstrapTruncationReportMeta(params: {
   analysis: BootstrapBudgetAnalysis;
   warningMode: BootstrapPromptWarningMode;
