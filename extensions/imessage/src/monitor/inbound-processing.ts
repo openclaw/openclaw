@@ -206,10 +206,20 @@ export function resolveIMessageInboundDecision(params: {
   // user's own handle). When is_from_me=true in self-chat, the message could be
   // either: (a) a real user message typed by the user, or (b) an agent reply
   // echo reflected back by iMessage. We must distinguish them.
-  const isSelfChat =
+  const senderMatchesChatId =
     !isGroup &&
     chatIdentifier != null &&
     normalizeIMessageHandle(sender) === normalizeIMessageHandle(chatIdentifier);
+  // When destination_caller_id is present and differs from sender, this is an
+  // outbound message in a normal DM — not a self-chat. On outbound messages,
+  // iMessage sets both sender and chat_identifier to the *recipient's* handle,
+  // which falsely matches the self-chat heuristic. Checking destination_caller_id
+  // (the bot's own handle) disambiguates. See #60014.
+  const destCallerId = params.message.destination_caller_id;
+  const destMismatch =
+    destCallerId &&
+    normalizeIMessageHandle(sender) !== normalizeIMessageHandle(destCallerId);
+  const isSelfChat = senderMatchesChatId && !destMismatch;
   // Track whether we already processed the is_from_me=true self-chat path.
   // When true, the selfChatCache.has() check below must be skipped — we just
   // called remember() and would immediately match our own entry.
