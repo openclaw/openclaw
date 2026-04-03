@@ -214,12 +214,13 @@ describe("provider usage loading", () => {
             end_time: 1736235600,
             remains_time: 600,
             current_interval_total_count: 120,
+            // API field is remaining quota, not consumed (MiniMax-M2#99).
             current_interval_usage_count: 30,
             model_name: "MiniMax-M2.5",
           },
         ],
       },
-      expected: { usedPercent: 25 },
+      expected: { usedPercent: 75 },
     },
     {
       name: "keeps payload-level MiniMax plan metadata when the usage candidate is nested",
