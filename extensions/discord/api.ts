@@ -12,7 +12,7 @@ export * from "./src/probe.js";
 export * from "./src/session-key-normalization.js";
 export * from "./src/status-issues.js";
 export * from "./src/targets.js";
-export { resolveDiscordRuntimeGroupPolicy } from "./src/monitor/provider.js";
+export { resolveDiscordRuntimeGroupPolicy } from "./src/runtime-group-policy.js";
 export {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,

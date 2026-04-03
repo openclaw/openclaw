@@ -42,8 +42,8 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";
-import { resolveDiscordProxyFetchForAccount } from "../client.js";
 import { fetchDiscordApplicationId } from "../probe.js";
+import { resolveDiscordProxyFetchForAccount } from "../proxy-fetch.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
 import {
