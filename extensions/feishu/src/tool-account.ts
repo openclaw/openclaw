@@ -35,25 +35,23 @@ function resolveImplicitToolAccountId(params: {
     return explicitAccountId;
   }
 
+  const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
+  if (contextualAccountId && listFeishuAccountIds(params.api.config).includes(contextualAccountId)) {
+    const contextualAccount = resolveFeishuAccount({
+      cfg: params.api.config,
+      accountId: contextualAccountId,
+    });
+    if (contextualAccount.enabled) {
+      return contextualAccountId;
+    }
+  }
+
   const configuredDefaultAccountId = readConfiguredDefaultAccountId(params.api.config);
   if (configuredDefaultAccountId) {
     return configuredDefaultAccountId;
   }
 
-  const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
-  if (!contextualAccountId) {
-    return undefined;
-  }
-
-  if (!listFeishuAccountIds(params.api.config).includes(contextualAccountId)) {
-    return undefined;
-  }
-
-  const contextualAccount = resolveFeishuAccount({
-    cfg: params.api.config,
-    accountId: contextualAccountId,
-  });
-  return contextualAccount.enabled ? contextualAccountId : undefined;
+  return undefined;
 }
 
 export function resolveFeishuToolAccount(params: {
