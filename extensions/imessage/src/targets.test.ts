@@ -292,6 +292,27 @@ describe("imessage setup status", () => {
     expect(result.configured).toBe(false);
     expect(result.statusLines).toContain("iMessage: needs setup");
   });
+
+  it("uses configured defaultAccount for omitted setup status cliPath", async () => {
+    const status = await getIMessageSetupStatus({
+      cfg: {
+        channels: {
+          imessage: {
+            cliPath: "/tmp/root-imsg",
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                cliPath: "/tmp/work-imsg",
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.statusLines).toContain("imsg: missing (/tmp/work-imsg)");
+  });
 });
 
 describe("probeIMessage", () => {
