@@ -1,3 +1,4 @@
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { loadModelCatalog, type ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -11,11 +12,16 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import {
+  resolveModelAuthProfile,
+  validateModelAuthProfileCompatibility,
+} from "./directive-handling.auth-profile.js";
 import { resolveModelDirectiveSelection, type ModelDirectiveSelection } from "./model-selection.js";
 
 type ResetModelResult = {
   selection?: ModelDirectiveSelection;
   cleanedBody?: string;
+  errorText?: string;
 };
 
 function splitBody(body: string) {
@@ -59,18 +65,30 @@ function buildSelectionFromExplicit(params: {
 
 function applySelectionToSession(params: {
   selection: ModelDirectiveSelection;
+  profileOverride?: string;
+  profileOverrideSource?: "auto" | "user";
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
 }) {
-  const { selection, sessionEntry, sessionStore, sessionKey, storePath } = params;
+  const {
+    selection,
+    profileOverride,
+    profileOverrideSource,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+  } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return;
   }
   const { updated } = applyModelOverrideToSessionEntry({
     entry: sessionEntry,
     selection,
+    profileOverride,
+    profileOverrideSource,
   });
   if (!updated) {
     return;
@@ -146,20 +164,26 @@ export async function applyResetModelOverride(params: {
     });
 
   let selection: ModelDirectiveSelection | undefined;
+  let profileOverride: string | undefined;
+  let profileOverrideSource: "auto" | "user" | undefined;
   let consumed = 0;
+  let rawProfile: string | undefined;
 
   if (providers.has(normalizeProviderId(first)) && second) {
-    const composite = `${normalizeProviderId(first)}/${second}`;
+    const [modelPart, profilePart] = second.split("@", 2);
+    const composite = `${normalizeProviderId(first)}/${modelPart}`;
     const resolved = resolveSelection(composite);
     if (resolved.selection) {
       selection = resolved.selection;
       consumed = 2;
+      rawProfile = profilePart?.trim() || undefined;
     }
   }
 
   if (!selection) {
+    const [modelPart, profilePart] = first.split("@", 2);
     selection = buildSelectionFromExplicit({
-      raw: first,
+      raw: modelPart,
       defaultProvider: params.defaultProvider,
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
@@ -167,16 +191,20 @@ export async function applyResetModelOverride(params: {
     });
     if (selection) {
       consumed = 1;
+      rawProfile = profilePart?.trim() || undefined;
     }
   }
 
   if (!selection) {
-    const resolved = resolveSelection(first);
-    const allowFuzzy = providers.has(normalizeProviderId(first)) || first.trim().length >= 6;
+    const [modelPart, profilePart] = first.split("@", 2);
+    const resolved = resolveSelection(modelPart);
+    const allowFuzzy =
+      providers.has(normalizeProviderId(modelPart)) || modelPart.trim().length >= 6;
     if (allowFuzzy) {
       selection = resolved.selection;
       if (selection) {
         consumed = 1;
+        rawProfile = profilePart?.trim() || undefined;
       }
     }
   }
@@ -186,11 +214,58 @@ export async function applyResetModelOverride(params: {
   }
 
   const cleanedBody = tokens.slice(consumed).join(" ").trim();
+  const agentDir = params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined;
+  const resolvedProfile = resolveModelAuthProfile({
+    rawProfile,
+    provider: selection.provider,
+    cfg: params.cfg,
+    agentDir,
+    sessionEntry: params.sessionEntry,
+  });
+  if (resolvedProfile.error) {
+    const warningText = [`System: ${resolvedProfile.error}`, cleanedBody]
+      .filter(Boolean)
+      .join("\n\n");
+    params.sessionCtx.Body = warningText;
+    params.sessionCtx.BodyForAgent = warningText;
+    params.sessionCtx.BodyStripped = warningText;
+    params.sessionCtx.BodyForCommands = warningText;
+    params.sessionCtx.CommandBody = warningText;
+    params.sessionCtx.RawBody = warningText;
+    return { cleanedBody, errorText: resolvedProfile.error };
+  }
+  profileOverride = resolvedProfile.profileId;
+  profileOverrideSource = resolvedProfile.profileOverrideSource;
+  const compatibility = validateModelAuthProfileCompatibility({
+    provider: selection.provider,
+    model: selection.model,
+    profileId: profileOverride,
+    agentDir,
+  });
+  if (compatibility.error) {
+    const warningText = [`System: ${compatibility.error}`, cleanedBody]
+      .filter(Boolean)
+      .join("\n\n");
+    params.sessionCtx.Body = warningText;
+    params.sessionCtx.BodyForAgent = warningText;
+    params.sessionCtx.BodyStripped = warningText;
+    params.sessionCtx.BodyForCommands = warningText;
+    params.sessionCtx.CommandBody = warningText;
+    params.sessionCtx.RawBody = warningText;
+    return { cleanedBody, errorText: compatibility.error };
+  }
+
+  params.sessionCtx.Body = cleanedBody;
+  params.sessionCtx.BodyForAgent = cleanedBody;
   params.sessionCtx.BodyStripped = cleanedBody;
   params.sessionCtx.BodyForCommands = cleanedBody;
+  params.sessionCtx.CommandBody = cleanedBody;
+  params.sessionCtx.RawBody = cleanedBody;
 
   applySelectionToSession({
     selection,
+    profileOverride,
+    profileOverrideSource,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,

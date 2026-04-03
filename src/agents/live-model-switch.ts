@@ -48,16 +48,14 @@ export function resolveLiveSessionModelSelection(params: {
     agentId,
   });
   const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-  const persisted = resolvePersistedModelRef({
+  const override = resolvePersistedModelRef({
     defaultProvider: defaultModelRef.provider,
-    runtimeProvider: entry?.modelProvider,
-    runtimeModel: entry?.model,
     overrideProvider: entry?.providerOverride,
     overrideModel: entry?.modelOverride,
   });
   const provider =
-    persisted?.provider ?? entry?.providerOverride?.trim() ?? defaultModelRef.provider;
-  const model = persisted?.model ?? defaultModelRef.model;
+    override?.provider ?? entry?.providerOverride?.trim() ?? defaultModelRef.provider;
+  const model = override?.model ?? defaultModelRef.model;
   const authProfileId = entry?.authProfileOverride?.trim() || undefined;
   return {
     provider,

@@ -169,12 +169,14 @@ export async function persistInlineDirectives(params: {
         allowedModelKeys,
         allowedModelCatalog: [],
         provider,
+        sessionEntry,
       });
       if (modelResolution.modelSelection) {
         const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
           entry: sessionEntry,
           selection: modelResolution.modelSelection,
           profileOverride: modelResolution.profileOverride,
+          profileOverrideSource: modelResolution.profileOverrideSource,
         });
         provider = modelResolution.modelSelection.provider;
         model = modelResolution.modelSelection.model;

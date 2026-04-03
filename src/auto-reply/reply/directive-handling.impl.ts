@@ -153,12 +153,14 @@ export async function handleDirectiveOnly(
     allowedModelKeys,
     allowedModelCatalog,
     provider,
+    sessionEntry,
   });
   if (modelResolution.errorText) {
     return { text: modelResolution.errorText };
   }
   const modelSelection = modelResolution.modelSelection;
   const profileOverride = modelResolution.profileOverride;
+  const profileOverrideSource = modelResolution.profileOverrideSource;
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
@@ -413,6 +415,7 @@ export async function handleDirectiveOnly(
         entry: sessionEntry,
         selection: modelSelection,
         profileOverride,
+        profileOverrideSource,
       });
       modelSelectionUpdated = applied.updated;
     }
@@ -451,7 +454,7 @@ export async function handleDirectiveOnly(
         nextProvider: modelSelection.provider,
         nextModel: modelSelection.model,
         nextAuthProfileId: profileOverride,
-        nextAuthProfileIdSource: profileOverride ? "user" : undefined,
+        nextAuthProfileIdSource: profileOverride ? profileOverrideSource : undefined,
       });
     }
   }

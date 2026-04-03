@@ -6,7 +6,11 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveProfileOverride } from "./directive-handling.auth-profile.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import {
+  resolveModelAuthProfile,
+  validateModelAuthProfileCompatibility,
+} from "./directive-handling.auth-profile.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
 
@@ -53,9 +57,11 @@ export function resolveModelSelectionFromDirective(params: {
   allowedModelKeys: Set<string>;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   provider: string;
+  sessionEntry?: Pick<SessionEntry, "authProfileOverride" | "authProfileOverrideSource">;
 }): {
   modelSelection?: ModelDirectiveSelection;
   profileOverride?: string;
+  profileOverrideSource?: "auto" | "user";
   errorText?: string;
 } {
   if (!params.directives.hasModelDirective || !params.directives.rawModelDirective) {
@@ -139,21 +145,33 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   let profileOverride: string | undefined;
+  let profileOverrideSource: "auto" | "user" | undefined;
   const rawProfile =
     params.directives.rawModelProfile ??
     (useStoredNumericProfile ? storedNumericProfile?.profileId : undefined);
-  if (modelSelection && rawProfile) {
-    const profileResolved = resolveProfileOverride({
+  if (modelSelection) {
+    const profileResolved = resolveModelAuthProfile({
       rawProfile,
       provider: modelSelection.provider,
       cfg: params.cfg,
       agentDir: params.agentDir,
+      sessionEntry: params.sessionEntry,
     });
     if (profileResolved.error) {
       return { errorText: profileResolved.error };
     }
+    const compatibility = validateModelAuthProfileCompatibility({
+      provider: modelSelection.provider,
+      model: modelSelection.model,
+      profileId: profileResolved.profileId,
+      agentDir: params.agentDir,
+    });
+    if (compatibility.error) {
+      return { errorText: compatibility.error };
+    }
     profileOverride = profileResolved.profileId;
+    profileOverrideSource = profileResolved.profileOverrideSource;
   }
 
-  return { modelSelection, profileOverride };
+  return { modelSelection, profileOverride, profileOverrideSource };
 }
