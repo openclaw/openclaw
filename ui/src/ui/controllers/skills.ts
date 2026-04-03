@@ -212,6 +212,9 @@ export async function searchClawHub(state: SkillsState, query: string) {
     state.clawhubSearchLoading = false;
     return;
   }
+  // Clear stale entries as soon as a new search begins so the UI cannot act on
+  // results that no longer match the current query while the next request is in flight.
+  state.clawhubSearchResults = null;
   state.clawhubSearchLoading = true;
   state.clawhubSearchError = null;
   try {
