@@ -18,7 +18,7 @@ export function resolveZaloToken(
   accountId?: string | null,
   options?: { allowUnresolvedSecretRef?: boolean },
 ): ZaloTokenResolution {
-  const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId = normalizeAccountId(accountId ?? config?.defaultAccount);
   const isDefaultAccount = resolvedAccountId === DEFAULT_ACCOUNT_ID;
   const baseConfig = config;
   const accountConfig = resolveAccountEntry(
