@@ -215,10 +215,13 @@ export function resolveIMessageInboundDecision(params: {
   // iMessage sets both sender and chat_identifier to the *recipient's* handle,
   // which falsely matches the self-chat heuristic. Checking destination_caller_id
   // (the bot's own handle) disambiguates. See #60014.
-  const destCallerId = params.message.destination_caller_id;
+  const rawDestCallerId = params.message.destination_caller_id;
+  const destCallerId =
+    typeof rawDestCallerId === "string" && rawDestCallerId.trim().length > 0
+      ? rawDestCallerId
+      : undefined;
   const destMismatch =
-    typeof destCallerId === "string" &&
-    destCallerId.length > 0 &&
+    destCallerId != null &&
     normalizeIMessageHandle(sender) !== normalizeIMessageHandle(destCallerId);
   const isSelfChat = senderMatchesChatId && !destMismatch;
   // Track whether we already processed the is_from_me=true self-chat path.
