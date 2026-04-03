@@ -28,13 +28,13 @@ describe("image-generation runtime helpers", () => {
     ({ generateImage, listRuntimeImageGenerationProviders } = await import("./runtime.js"));
   });
 
-  afterEach(() => {
+  beforeEach(() => {
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
     resetPluginRuntimeStateForTest();
   });
 
-  beforeEach(() => {
+  afterEach(() => {
     resetPluginRuntimeStateForTest();
   });
 

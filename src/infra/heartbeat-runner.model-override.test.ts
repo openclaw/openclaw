@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
@@ -37,8 +37,6 @@ async function withHeartbeatFixture(
     { prefix: "openclaw-hb-model-" },
   );
 }
-
-beforeEach(() => {});
 
 afterEach(() => {
   vi.restoreAllMocks();

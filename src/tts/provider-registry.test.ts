@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
@@ -44,9 +44,6 @@ describe("speech provider registry", () => {
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
   });
-
-  afterEach(() => {});
-
   it("uses active plugin speech providers without reloading plugins", () => {
     resolveRuntimePluginRegistryMock.mockReturnValue({
       ...createEmptyPluginRegistry(),

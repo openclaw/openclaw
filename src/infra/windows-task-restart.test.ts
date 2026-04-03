@@ -31,9 +31,6 @@ function decodeCmdPathArg(value: string): string {
 
 afterEach(() => {
   envSnapshot.restore();
-  spawnMock.mockReset();
-  resolvePreferredOpenClawTmpDirMock.mockReset();
-  resolvePreferredOpenClawTmpDirMock.mockReturnValue(os.tmpdir());
   for (const scriptPath of createdScriptPaths) {
     try {
       fs.unlinkSync(scriptPath);
