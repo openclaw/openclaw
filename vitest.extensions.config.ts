@@ -17,8 +17,8 @@ export function createExtensionsVitestConfig(
     env,
     passWithNoTests: true,
     setupFiles: ["test/setup.extensions.ts"],
-    // Most channel implementations stay on the channel surface, but a few
-    // transport-only suites live better in the general extensions lane.
+    // Some bundled plugins still run on the channel surface; keep those roots
+    // out of the shared extensions lane.
     exclude: extensionExcludedChannelTestGlobs,
   });
 }
