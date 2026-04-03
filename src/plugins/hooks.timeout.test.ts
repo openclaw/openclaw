@@ -512,4 +512,52 @@ describe("hook handler timeout", () => {
     expect(errors.some((e) => e.includes("hung-capture-plugin"))).toBe(true);
     expect(errors.some((e) => e.includes("timed out"))).toBe(true);
   });
+
+  // -----------------------------------------------------------------------
+  // Quarantine — timed-out handlers are skipped on subsequent calls
+  // -----------------------------------------------------------------------
+
+  it("quarantines a timed-out handler and skips it on subsequent invocations", async () => {
+    const logs: string[] = [];
+    let handlerCallCount = 0;
+
+    addTestHook({
+      registry,
+      pluginId: "stuck-plugin",
+      hookName: "before_prompt_build",
+      handler: (() => {
+        handlerCallCount++;
+        return new Promise(() => {}); // never resolves
+      }) as PluginHookRegistration["handler"],
+    });
+
+    const runner = createHookRunner(registry, {
+      hookTimeoutMs: 100,
+      catchErrors: true,
+      logger: {
+        debug: () => {},
+        warn: (msg) => logs.push(msg),
+        error: (msg) => logs.push(msg),
+      },
+    });
+
+    // First call: handler executes but times out
+    const p1 = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
+    await vi.advanceTimersByTimeAsync(150);
+    await p1;
+
+    expect(handlerCallCount).toBe(1);
+    expect(logs.some((l) => l.includes("quarantined"))).toBe(true);
+
+    // Second call: handler should be skipped entirely (quarantined)
+    logs.length = 0;
+    const p2 = runner.runBeforePromptBuild({ prompt: "hello again" }, stubCtx);
+    await vi.advanceTimersByTimeAsync(0);
+    await p2;
+
+    // Handler must NOT have been called again
+    expect(handlerCallCount).toBe(1);
+    // The error log should mention quarantine
+    expect(logs.some((l) => l.includes("quarantined"))).toBe(true);
+  });
 });

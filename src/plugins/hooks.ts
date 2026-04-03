@@ -264,6 +264,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         ? undefined // explicitly disabled
         : DEFAULT_HOOK_TIMEOUT_MS;
 
+  // Tracks handlers (pluginId:hookName) that have timed out. Once quarantined,
+  // subsequent invocations are skipped to prevent unbounded promise accumulation
+  // from a handler that never settles.
+  const quarantinedHandlers = new Set<string>();
+
   /**
    * Execute a single async handler with the configured timeout.
    * Throws on timeout; callers catch via handleHookError.
@@ -279,13 +284,32 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     hookName: PluginHookName,
     pluginId: string,
   ): Promise<T> {
+    const quarantineKey = `${pluginId}:${hookName}`;
+    if (quarantinedHandlers.has(quarantineKey)) {
+      throw new Error(`${hookName} handler from ${pluginId} quarantined after previous timeout`);
+    }
+
     if (!hookTimeoutMs || TIMEOUT_EXEMPT_HOOKS.has(hookName)) {
       return fn();
     }
     const effectiveTimeout = MEMORY_HOOK_NAMES.has(hookName)
       ? Math.max(MEMORY_HOOK_TIMEOUT_MS, hookTimeoutMs)
       : hookTimeoutMs;
-    return withTimeout(() => fn(), effectiveTimeout, `${hookName} handler from ${pluginId}`);
+    try {
+      return await withTimeout(
+        () => fn(),
+        effectiveTimeout,
+        `${hookName} handler from ${pluginId}`,
+      );
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("timed out")) {
+        quarantinedHandlers.add(quarantineKey);
+        logger?.warn?.(
+          `[hooks] quarantined ${hookName} handler from ${pluginId} after timeout — future invocations will be skipped`,
+        );
+      }
+      throw err;
+    }
   }
 
   const firstDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => prev ?? next;
