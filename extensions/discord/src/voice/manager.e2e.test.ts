@@ -292,6 +292,16 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("keeps the shorter timeout for initial voice connection readiness", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 15_000);
+  });
+
   it("stores guild metadata on joined voice sessions", async () => {
     const manager = createManager();
 
