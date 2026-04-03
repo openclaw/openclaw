@@ -55,3 +55,12 @@ export { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js
 export { installCommonResolveTargetErrorCases } from "../test-helpers/resolve-target-error-cases.js";
 export { sanitizeTerminalText } from "../terminal/safe-text.js";
 export { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
+export {
+  loadBundledPluginPublicSurfaceSync,
+  loadBundledPluginTestApiSync,
+  resolveRelativeBundledPluginPublicModuleId,
+} from "../test-utils/bundled-plugin-public-surface.js";
+export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";
+export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js";
+export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";

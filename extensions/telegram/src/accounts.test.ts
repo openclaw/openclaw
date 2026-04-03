@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
+import { withEnv } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../../../test/helpers/plugins/env.js";
 import {
   listTelegramAccountIds,
   resolveTelegramMediaRuntimeOptions,

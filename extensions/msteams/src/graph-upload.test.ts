@@ -1,5 +1,5 @@
+import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../../test/helpers/plugins/fetch-mock.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import { resolveGraphChatId, uploadToOneDrive, uploadToSharePoint } from "./graph-upload.js";
 

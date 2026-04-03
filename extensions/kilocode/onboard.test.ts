@@ -14,8 +14,8 @@ import {
   resolveEnvApiKey,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
+import { captureEnv } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { captureEnv } from "../../test/helpers/plugins/env.js";
 import {
   applyKilocodeProviderConfig,
   applyKilocodeConfig,
