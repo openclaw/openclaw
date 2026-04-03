@@ -607,6 +607,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const semanticBotLoopTermination =
           (roomConfig?.semanticBotLoopTermination ?? accountSemanticBotLoopTermination) === true;
         const isConfiguredBotSender = configuredBotUserIds.has(senderId);
+        const shouldTrackConfiguredBotChain =
+          isRoom && isConfiguredBotSender && semanticBotLoopTermination;
+        const shouldMarkBotChainRouteReopened = isRoom && !isConfiguredBotSender;
         const roomMatchMeta = roomConfigInfo
           ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
               roomConfigInfo.matchSource ?? "none"
@@ -842,7 +845,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const botChainRouteKey = `${roomId}|${_route.sessionKey}`;
         const botChainKey = `${botChainRouteKey}|${senderId}`;
         let activeBotChainState: MatrixBotChainState | undefined;
-        if (isRoom && isConfiguredBotSender && semanticBotLoopTermination) {
+        if (shouldTrackConfiguredBotChain) {
           releaseBotChainLock = await acquireBotChainLock(botChainKey);
           activeBotChainState = upsertBotChainState(botChainKey);
           maybeReopenBotChainState(activeBotChainState, botChainRouteKey);
@@ -1011,7 +1014,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return;
         }
         let pendingBotChainTurns: MatrixSemanticLoopTurn[] | undefined;
-        if (isRoom && isConfiguredBotSender && activeBotChainState) {
+        if (activeBotChainState) {
           const nextTurns = [
             ...activeBotChainState.turns,
             {
@@ -1089,6 +1092,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           shouldBypassMention,
           canDetectMention,
           isConfiguredBotSender,
+          shouldMarkBotChainRouteReopened,
           activeBotChainState,
           pendingBotChainTurns,
           botChainRouteKey,
@@ -1145,6 +1149,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         shouldBypassMention,
         canDetectMention,
         isConfiguredBotSender,
+        shouldMarkBotChainRouteReopened,
         activeBotChainState,
         pendingBotChainTurns,
         botChainRouteKey,
@@ -1741,7 +1746,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         roomHistoryTracker.consumeHistory(_route.agentId, roomId, triggerSnapshot, _messageId);
       }
       if (!queuedFinal) {
-        if (isRoom && !isConfiguredBotSender) {
+        if (shouldMarkBotChainRouteReopened) {
           markBotChainRouteReopened(botChainRouteKey, eventOrder);
         }
         await commitInboundEventIfClaimed();
@@ -1751,13 +1756,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       logVerboseMessage(
         `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
-      if (
-        isRoom &&
-        isConfiguredBotSender &&
-        activeBotChainState &&
-        pendingBotChainTurns &&
-        !activeBotChainState.terminated
-      ) {
+      if (activeBotChainState && pendingBotChainTurns && !activeBotChainState.terminated) {
         commitBotChainTurns({
           state: activeBotChainState,
           routeKey: botChainRouteKey,
@@ -1767,7 +1766,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           semanticFinalText,
         });
       }
-      if (isRoom && !isConfiguredBotSender) {
+      if (shouldMarkBotChainRouteReopened) {
         markBotChainRouteReopened(botChainRouteKey, eventOrder);
       }
       await commitInboundEventIfClaimed();
