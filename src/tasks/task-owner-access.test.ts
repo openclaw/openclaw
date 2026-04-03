@@ -13,6 +13,7 @@ const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 afterEach(() => {
   resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests();
   if (ORIGINAL_STATE_DIR == null) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
