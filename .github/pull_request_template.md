@@ -35,19 +35,17 @@ If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta
 - Related #
 - [ ] This PR fixes a bug or regression
 
-## Root Cause / Regression History (if applicable)
+## Root Cause (if applicable)
 
 For bug fixes or regressions, explain why this happened, not just what changed. Otherwise write `N/A`. If the cause is unclear, write `Unknown`.
 
 - Root cause:
 - Missing detection / guardrail:
-- Prior context (`git blame`, prior PR, issue, or refactor if known):
-- Why this regressed now:
-- If unknown, what was ruled out:
+- Contributing context (if known):
 
 ## Regression Test Plan (if applicable)
 
-For bug fixes or regressions, name the smallest reliable test coverage that should have caught this. Otherwise write `N/A`.
+For bug fixes or regressions, name the smallest reliable test coverage that should catch this. Otherwise write `N/A`.
 
 - Coverage level that should have caught this:
   - [ ] Unit test
