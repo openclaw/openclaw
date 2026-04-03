@@ -30,7 +30,7 @@ import {
 } from "./accounts.js";
 import { getDiscordApprovalCapability } from "./approval-native.js";
 import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
-import { discordMessageActions } from "./channel-actions.js";
+import { discordMessageActions as discordMessageActionsImpl } from "./channel-actions.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -60,7 +60,7 @@ import {
   resolveConfiguredFromCredentialStatuses,
   type OpenClawConfig,
 } from "./runtime-api.js";
-import { getDiscordRuntime } from "./runtime.js";
+import { getDiscordRuntime, getOptionalDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord, sendMessageDiscord, sendPollDiscord } from "./send.js";
 import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.js";
 import { discordSetupAdapter } from "./setup-core.js";
@@ -89,6 +89,34 @@ async function loadDiscordProbeRuntime() {
 const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
+
+const discordMessageActions = {
+  describeMessageTool: (
+    ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.describeMessageTool>>[0],
+  ) =>
+    getOptionalDiscordRuntime()?.channel?.discord?.messageActions?.describeMessageTool?.(ctx) ??
+    discordMessageActionsImpl.describeMessageTool?.(ctx) ??
+    null,
+  extractToolSend: (
+    ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.extractToolSend>>[0],
+  ) =>
+    getOptionalDiscordRuntime()?.channel?.discord?.messageActions?.extractToolSend?.(ctx) ??
+    discordMessageActionsImpl.extractToolSend?.(ctx) ??
+    null,
+  handleAction: async (
+    ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.handleAction>>[0],
+  ) => {
+    const runtimeHandleAction =
+      getOptionalDiscordRuntime()?.channel?.discord?.messageActions?.handleAction;
+    if (runtimeHandleAction) {
+      return await runtimeHandleAction(ctx);
+    }
+    if (!discordMessageActionsImpl.handleAction) {
+      throw new Error("Discord message actions not available");
+    }
+    return await discordMessageActionsImpl.handleAction(ctx);
+  },
+};
 
 function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): number {
   const startupAccountIds = listDiscordAccountIds(cfg).filter((candidateId) => {
