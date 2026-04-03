@@ -32,12 +32,6 @@ let fallbackRequesterResolution: {
   requesterSessionKey: string;
   requesterOrigin?: { channel?: string; to?: string; accountId?: string };
 } | null = null;
-let subagentDeliveryHookOrigin: {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string;
-} | null = null;
 let chatHistoryMessages: Array<Record<string, unknown>> = [];
 
 function createGatewayCallModuleMock() {
@@ -58,46 +52,6 @@ function createSubagentDepthModuleMock() {
   };
 }
 
-async function createPiEmbeddedModuleMock(
-  importOriginal: () => Promise<typeof import("./pi-embedded.js")>,
-) {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    isEmbeddedPiRunActive: () => false,
-    queueEmbeddedPiMessage: () => false,
-    waitForEmbeddedPiRunEnd: async () => true,
-  };
-}
-
-async function createSubagentRegistryModuleMock(
-  importOriginal: () => Promise<typeof import("./subagent-registry.js")>,
-) {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    countActiveDescendantRuns: () => 0,
-    countPendingDescendantRuns: () => pendingDescendantRuns,
-    listSubagentRunsForRequester: () => [],
-    isSubagentSessionRunActive: () => subagentSessionRunActive,
-    shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-    resolveRequesterForChildSession: () => fallbackRequesterResolution,
-  };
-}
-
-function createHookRunnerGlobalMock() {
-  return {
-    getGlobalHookRunner: () =>
-      subagentDeliveryHookOrigin
-        ? {
-            hasHooks: (hookName: string) => hookName === "subagent_delivery_target",
-            runSubagentDeliveryTarget: async () => ({
-              origin: subagentDeliveryHookOrigin,
-            }),
-          }
-        : null,
-  };
-}
 function createTimeoutHistoryWithNoReply() {
   return [
     { role: "user", content: "do something" },
@@ -245,7 +199,6 @@ describe("subagent announce timeout config", () => {
     isEmbeddedPiRunActiveMock.mockReset().mockReturnValue(false);
     waitForEmbeddedPiRunEndMock.mockReset().mockResolvedValue(true);
     fallbackRequesterResolution = null;
-    subagentDeliveryHookOrigin = null;
   });
 
   it("uses 90s timeout by default for direct announce agent call", async () => {
@@ -515,51 +468,15 @@ describe("subagent announce timeout config", () => {
     );
   });
 
-  it("binds announce agent runs to originating message id for user-triggered tasks", async () => {
-    await runAnnounceFlowForTest("run-reply-bind", {
-      requesterMessageId: "msg-4242",
-    });
-
-    const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
-    expect(directAgentCall?.params?.currentMessageId).toBe("msg-4242");
-  });
-
-  it("does not cross-bind completion replies when delivery is rerouted to another conversation", async () => {
-    subagentDeliveryHookOrigin = {
-      channel: "telegram",
-      to: "chat-rerouted",
-      accountId: "acct-2",
-      threadId: "thread-rerouted",
-    };
-
-    await runAnnounceFlowForTest("run-rerouted-no-bind", {
-      requesterOrigin: {
-        channel: "telegram",
-        to: "chat-original",
-        accountId: "acct-1",
-        threadId: "thread-original",
-      },
-      requesterMessageId: "msg-4242",
-      expectsCompletionMessage: true,
-    });
-
-    const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
-    expect(directAgentCall?.params?.currentMessageId).toBeUndefined();
-  });
-
-  it("does not cross-bind cron announcements to a requester message id", async () => {
+  it("keeps cron announcements detached from direct delivery targets", async () => {
     await runAnnounceFlowForTest("run-cron-no-bind", {
-      requesterMessageId: "msg-777",
       announceType: "cron job",
     });
 
     const directAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,
     );
-    expect(directAgentCall?.params?.currentMessageId).toBeUndefined();
+    expect(directAgentCall?.params?.channel).toBeUndefined();
+    expect(directAgentCall?.params?.to).toBeUndefined();
   });
 });

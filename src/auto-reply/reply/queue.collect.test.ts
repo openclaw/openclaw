@@ -16,6 +16,8 @@ function createDeferred<T>() {
 
 function createRun(params: {
   prompt: string;
+  displayText?: string;
+  summaryLine?: string;
   messageId?: string;
   originatingChannel?: FollowupRun["originatingChannel"];
   originatingTo?: string;
@@ -23,7 +25,15 @@ function createRun(params: {
   originatingThreadId?: string | number;
 }): FollowupRun {
   return {
-    prompt: params.prompt,
+    execution: { visibility: "internal", agentPrompt: params.prompt },
+    display:
+      params.displayText || params.summaryLine
+        ? {
+            visibility: "user-visible",
+            text: params.displayText,
+            summaryLine: params.summaryLine,
+          }
+        : undefined,
     messageId: params.messageId,
     enqueuedAt: Date.now(),
     originatingChannel: params.originatingChannel,
@@ -96,8 +106,8 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toBe("one");
-    expect(calls[1]?.prompt).toBe("two");
+    expect(calls[0]?.execution.agentPrompt).toBe("one");
+    expect(calls[1]?.execution.agentPrompt).toBe("two");
   });
 
   it("collects when channel+destination match", async () => {
@@ -136,7 +146,7 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.execution.agentPrompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
   });
@@ -179,7 +189,7 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.execution.agentPrompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
   });
 
@@ -224,8 +234,8 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toBe("one");
-    expect(calls[1]?.prompt).toBe("two");
+    expect(calls[0]?.execution.agentPrompt).toBe("one");
+    expect(calls[1]?.execution.agentPrompt).toBe("two");
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
     expect(calls[1]?.originatingThreadId).toBe("1706000000.000002");
   });
@@ -255,8 +265,8 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("Queued #1\none");
-    expect(calls[0]?.prompt).toContain("Queued #2\ntwo");
+    expect(calls[0]?.execution.agentPrompt).toContain("Queued #1\none");
+    expect(calls[0]?.execution.agentPrompt).toContain("Queued #2\ntwo");
   });
 
   it("retries overflow summary delivery without losing dropped previews", async () => {
@@ -284,8 +294,10 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
-    expect(calls[0]?.prompt).toContain("- first");
+    expect(calls[0]?.execution.agentPrompt).toContain(
+      "[Queue overflow] Dropped 1 message due to cap.",
+    );
+    expect(calls[0]?.execution.agentPrompt).toContain("- first");
   });
 
   it("preserves routing metadata on overflow summary followups", async () => {
@@ -333,6 +345,8 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:C1");
     expect(calls[0]?.originatingAccountId).toBe("work");
     expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
-    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.execution.agentPrompt).toContain(
+      "[Queue overflow] Dropped 1 message due to cap.",
+    );
   });
 });

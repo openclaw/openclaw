@@ -1,5 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../channels/plugins/contracts/suites.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { defaultRuntime } from "../../runtime.js";
+import type { MsgContext } from "../templating.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { finalizeInboundContext } from "./inbound-context.js";
+import { normalizeInboundTextNewlines } from "./inbound-text.js";
+import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  resetRecentQueuedMessageIdDedupe,
+  scheduleFollowupDrain,
+} from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
 import { parseSlackDirectives, hasSlackDirectives } from "./slack-directives.js";

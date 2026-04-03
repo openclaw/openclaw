@@ -6,6 +6,8 @@ import {
   resolveAnnounceCollectEmptySummaryTarget,
 } from "./subagent-announce-queue.js";
 
+type CollectEmptySummaryQueue = Parameters<typeof maybeSendAnnounceCollectEmptySummary>[0]["queue"];
+
 type SentItem = {
   execution: { agentPrompt: string };
   display: { text?: string; summaryLine?: string };
@@ -21,17 +23,16 @@ function createRetryingSend() {
   });
 
   const send = vi.fn(async (item: SentItem) => {
-      attempts += 1;
-      prompts.push(item.display.text ?? item.display.summaryLine ?? item.execution.agentPrompt);
-      if (attempts >= 2 && !resolved) {
-        resolved = true;
-        resolveSecondAttempt();
-      }
-      if (attempts === 1) {
-        throw new Error("gateway timeout after 60000ms");
-      }
-    },
-  );
+    attempts += 1;
+    prompts.push(item.display.text ?? item.display.summaryLine ?? item.execution.agentPrompt);
+    if (attempts >= 2 && !resolved) {
+      resolved = true;
+      resolveSecondAttempt();
+    }
+    if (attempts === 1) {
+      throw new Error("gateway timeout after 60000ms");
+    }
+  });
 
   return { send, prompts, waitForSecondAttempt };
 }
@@ -61,16 +62,16 @@ describe("subagent-announce-queue", () => {
       originKey: "telegram:telegram:1",
     } as const;
 
-    expect(
-      resolveAnnounceCollectEmptySummaryTarget({ items: [], lastSummaryTarget }),
-    ).toEqual(lastSummaryTarget);
+    expect(resolveAnnounceCollectEmptySummaryTarget({ items: [], lastSummaryTarget })).toEqual(
+      lastSummaryTarget,
+    );
   });
 
   it("sends collect-empty overflow summaries using the last safe summary target", async () => {
     const send = vi.fn(async () => {});
-    const queue = {
+    const queue: CollectEmptySummaryQueue = {
       items: [],
-      dropPolicy: "summarize" as const,
+      dropPolicy: "summarize",
       droppedCount: 1,
       summaryLines: ["first safe summary"],
       lastSummaryTarget: {
