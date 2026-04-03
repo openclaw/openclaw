@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { loadJsonFile, saveJsonFile } from "./json-file.js";
 
@@ -72,6 +72,22 @@ describe("json-file helpers", () => {
     await withJsonPath(({ pathname }) => {
       setup(pathname);
       saveJsonFile(pathname, { enabled: true, count: 2 });
+      expect(loadJsonFile(pathname)).toEqual({ enabled: true, count: 2 });
+    });
+  });
+
+  it("writes through a sibling temp file before replacing the destination", async () => {
+    await withJsonPath(({ pathname }) => {
+      fs.writeFileSync(pathname, '{"enabled":false}\n', "utf8");
+      const renameSpy = vi.spyOn(fs, "renameSync");
+
+      saveJsonFile(pathname, { enabled: true, count: 2 });
+
+      const renameCall = renameSpy.mock.calls.find(([, target]) => target === pathname);
+      expect(renameCall?.[0]).toMatch(
+        new RegExp(`^${pathname.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\..+\\.tmp$`),
+      );
+      expect(renameSpy).toHaveBeenCalledWith(renameCall?.[0], pathname);
       expect(loadJsonFile(pathname)).toEqual({ enabled: true, count: 2 });
     });
   });
