@@ -3,10 +3,6 @@
   "generatedAt": "2026-03-23T05:11:36.071Z",
   "defaultDurationMs": 250,
   "files": {
-    "src/media/fetch.telegram-network.test.ts": {
-      "durationMs": 6483.10009765625,
-      "testCount": 5
-    },
     "src/cron/service.issue-regressions.test.ts": {
       "durationMs": 4524.16552734375,
       "testCount": 39

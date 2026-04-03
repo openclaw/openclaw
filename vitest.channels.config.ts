@@ -1,4 +1,4 @@
-import { channelTestInclude } from "./vitest.channel-paths.mjs";
+import { channelTestInclude, extensionRoutedChannelTestFiles } from "./vitest.channel-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
@@ -11,7 +11,7 @@ export function loadIncludePatternsFromEnv(
 export function createChannelsVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(loadIncludePatternsFromEnv(env) ?? channelTestInclude, {
     env,
-    exclude: ["src/gateway/**"],
+    exclude: ["src/gateway/**", ...extensionRoutedChannelTestFiles],
     passWithNoTests: true,
   });
 }

@@ -97,6 +97,21 @@ describe("scoped vitest configs", () => {
     expect(defaultExtensionsConfig.test?.include).toEqual(["**/*.test.ts"]);
   });
 
+  it("keeps telegram fetch network policy in extensions while excluding other telegram channel suites", () => {
+    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
+    expect(
+      extensionExcludes.some((pattern) => path.matchesGlob("telegram/src/fetch.test.ts", pattern)),
+    ).toBe(true);
+    expect(
+      extensionExcludes.some((pattern) =>
+        path.matchesGlob("telegram/src/fetch.network-policy.test.ts", pattern),
+      ),
+    ).toBe(false);
+    expect(defaultChannelsConfig.test?.exclude).toContain(
+      bundledPluginFile("telegram", "src/fetch.network-policy.test.ts"),
+    );
+  });
+
   it("normalizes gateway include patterns relative to the scoped dir", () => {
     expect(defaultGatewayConfig.test?.dir).toBe("src/gateway");
     expect(defaultGatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
