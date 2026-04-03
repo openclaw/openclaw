@@ -1,7 +1,11 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import json
 import sys
+
+from sense_runtime_manager_signal_classifier import classify_manager_signal
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,6 +45,14 @@ def build_policy_output(
     }
 
 
+def build_classifier_matched_on(classification: dict) -> dict:
+    return {
+        'classified_issue': classification.get('classified_issue'),
+        'classifier_reason': classification.get('classifier_reason'),
+        'classifier_version': classification.get('classifier_version'),
+    }
+
+
 def main() -> int:
     args = build_parser().parse_args()
     payload = load_payload(args)
@@ -49,118 +61,20 @@ def main() -> int:
     retry = payload.get('retry') if isinstance(payload.get('retry'), dict) else {}
     retry_decision = retry.get('retry_decision')
     repeated_decision_detected = retry.get('repeated_decision_detected') is True
-
     policy_input = payload.get('policy_input', {})
-    selected_model_diff_reason = str(
-        policy_input.get('selected_model_diff_reason')
-        or payload.get('selected_model_diff_reason')
-        or ''
-    )
-    selected_model_runtime_recognized = (
-        policy_input.get('selected_model_runtime_recognized')
-        if 'selected_model_runtime_recognized' in policy_input
-        else payload.get('selected_model_runtime_recognized')
-    )
-    provider_runtime_recognized = (
-        policy_input.get('provider_runtime_recognized')
-        if 'provider_runtime_recognized' in policy_input
-        else payload.get('provider_runtime_recognized')
-    )
-    selected_model_expected = (
-        policy_input.get('selected_model_expected')
-        if 'selected_model_expected' in policy_input
-        else payload.get('selected_model_expected')
-    )
-    selected_model_runtime = (
-        policy_input.get('selected_model_runtime')
-        if 'selected_model_runtime' in policy_input
-        else payload.get('selected_model_runtime')
-    )
-    provider_name = (
-        policy_input.get('provider')
-        if 'provider' in policy_input
-        else payload.get('provider')
-    )
-    provider_status = (
-        policy_input.get('provider_status')
-        if isinstance(policy_input.get('provider_status'), dict)
-        else payload.get('provider_status')
-    )
-    if not isinstance(provider_status, dict):
-        provider_status = {}
-    gpu_status = (
-        policy_input.get('gpu_status')
-        if isinstance(policy_input.get('gpu_status'), dict)
-        else payload.get('gpu_status')
-    )
-    if not isinstance(gpu_status, dict):
-        gpu_status = {}
-    nim_status_info = (
-        policy_input.get('nim_status_info')
-        if isinstance(policy_input.get('nim_status_info'), dict)
-        else payload.get('nim_status_info')
-    )
-    if not isinstance(nim_status_info, dict):
-        nim_status_info = {}
-    provider_missing_requirements = provider_status.get('missing_requirements')
-    if not isinstance(provider_missing_requirements, list):
-        provider_missing_requirements = []
-    provider_missing_api_keys = provider_status.get('missing_api_keys')
-    if not isinstance(provider_missing_api_keys, list):
-        provider_missing_api_keys = []
-    provider_api_required = provider_status.get('api_key_required')
-    provider_api_present = provider_status.get('api_key_present')
-    provider_config_present = provider_status.get('provider_config_present')
-    provider_runtime_recognized_nested = provider_status.get('provider_runtime_recognized')
-    gpu_ready = gpu_status.get('gpu_ready')
-    nim_ready = nim_status_info.get('nim_ready')
-    has_provider_api_signal = (
-        provider_api_required is True and provider_api_present is False
-    ) or bool(provider_missing_api_keys) or any(
-        isinstance(item, str) and (
-            item.startswith('API key missing:')
-            or item == 'API key missing'
-            or item == 'API key may be required'
-        )
-        for item in provider_missing_requirements
-    )
-    has_provider_recognition_signal = (
-        provider_config_present is True and provider_runtime_recognized_nested is False
-    ) or any(
-        isinstance(item, str) and (
-            item == 'provider runtime not recognizing configured provider'
-            or item == 'provider configuration missing'
-            or item == 'provider source unknown'
-        )
-        for item in provider_missing_requirements
-    )
-    has_runtime_capability_signal = (
-        gpu_ready is False
-        or nim_ready is False
-        or any(
-            isinstance(item, str) and item in {
-                'nim is not running',
-                'gpu runtime not enabled',
-                'nvidia policy missing',
-                'runtime not connected',
-                'sandbox not ready',
-            }
-            for item in provider_missing_requirements
-        )
-    )
+    classification = classify_manager_signal(payload)
+    classified_issue = classification.get('classified_issue')
 
-    if final_state == 'provider_api_key_missing':
+    if classified_issue == 'provider_api_key_issue':
         output = build_policy_output(
             manager_action='configure_provider',
             manager_reason='provider-specific API key is missing and provider remediation should be run before retrying runtime work',
-            next_step='configure_provider',
+            next_step='check_api_key_config' if final_state == 'provider_not_ready' else 'configure_provider',
             retry_decision=retry_decision,
             policy_input=policy_input,
             policy_trace={
-                'rule_id': 'provider_api_key_missing_configure_provider',
-                'matched_on': {
-                    'final_state': final_state,
-                },
+                'rule_id': 'provider_not_ready_check_api_key_config' if final_state == 'provider_not_ready' else 'provider_api_key_missing_configure_provider',
+                'matched_on': build_classifier_matched_on(classification),
                 'selected_action': 'configure_provider',
             },
         )
@@ -176,9 +90,7 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'provider_config_missing_configure_provider',
-                'matched_on': {
-                    'final_state': final_state,
-                },
+                'matched_on': {'final_state': final_state},
                 'selected_action': 'configure_provider',
             },
         )
@@ -194,91 +106,62 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'provider_model_missing_configure_provider',
-                'matched_on': {
-                    'final_state': final_state,
-                },
+                'matched_on': {'final_state': final_state},
                 'selected_action': 'configure_provider',
             },
         )
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
+    if classified_issue == 'provider_recognition_issue':
+        output = build_policy_output(
+            manager_action='configure_provider',
+            manager_reason='provider is configured but runtime is not yet recognizing it, so provider recognition remediation should continue',
+            next_step='check_provider_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'provider_not_ready_check_provider_config',
+                'matched_on': build_classifier_matched_on(classification),
+                'selected_action': 'configure_provider',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if classified_issue == 'runtime_capability_issue_nim':
+        output = build_policy_output(
+            manager_action='start_nim_runtime',
+            manager_reason='provider readiness is blocked by NIM runtime availability, so NIM remediation should continue first',
+            next_step='start_nim_runtime',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'provider_not_ready_runtime_capability_remediation',
+                'matched_on': build_classifier_matched_on(classification),
+                'selected_action': 'start_nim_runtime',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if classified_issue == 'runtime_capability_issue_gpu':
+        output = build_policy_output(
+            manager_action='configure_gpu_runtime',
+            manager_reason='provider readiness is blocked by runtime capability issues, so GPU/runtime remediation should continue first',
+            next_step='configure_gpu_runtime',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'provider_not_ready_runtime_capability_remediation',
+                'matched_on': build_classifier_matched_on(classification),
+                'selected_action': 'configure_gpu_runtime',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
     if final_state == 'provider_not_ready':
-        if has_provider_api_signal:
-            output = build_policy_output(
-                manager_action='configure_provider',
-                manager_reason='provider readiness is blocked by missing API key requirements, so provider credential remediation should continue first',
-                next_step='check_api_key_config',
-                retry_decision=retry_decision,
-                policy_input=policy_input,
-                policy_trace={
-                    'rule_id': 'provider_not_ready_check_api_key_config',
-                    'matched_on': {
-                        'final_state': final_state,
-                        'api_key_required': provider_api_required,
-                        'api_key_present': provider_api_present,
-                        'missing_api_keys': provider_missing_api_keys,
-                        'missing_requirements': provider_missing_requirements,
-                    },
-                    'selected_action': 'configure_provider',
-                },
-            )
-            print(json.dumps(output, ensure_ascii=False, indent=2))
-            return 0
-
-        if has_provider_recognition_signal:
-            output = build_policy_output(
-                manager_action='configure_provider',
-                manager_reason='provider is configured but runtime is not yet recognizing it, so provider recognition remediation should continue',
-                next_step='check_provider_config',
-                retry_decision=retry_decision,
-                policy_input=policy_input,
-                policy_trace={
-                    'rule_id': 'provider_not_ready_check_provider_config',
-                    'matched_on': {
-                        'final_state': final_state,
-                        'provider_config_present': provider_config_present,
-                        'provider_runtime_recognized': provider_runtime_recognized_nested,
-                        'missing_requirements': provider_missing_requirements,
-                    },
-                    'selected_action': 'configure_provider',
-                },
-            )
-            print(json.dumps(output, ensure_ascii=False, indent=2))
-            return 0
-
-        if has_runtime_capability_signal:
-            selected_action = 'configure_gpu_runtime'
-            selected_next_step = 'configure_gpu_runtime'
-            selected_reason = 'provider readiness is blocked by runtime capability issues, so GPU/runtime remediation should continue first'
-            selected_rule_id = 'provider_not_ready_runtime_capability_remediation'
-            if nim_ready is False or any(
-                isinstance(item, str) and item == 'nim is not running'
-                for item in provider_missing_requirements
-            ):
-                selected_action = 'start_nim_runtime'
-                selected_next_step = 'start_nim_runtime'
-                selected_reason = 'provider readiness is blocked by NIM runtime availability, so NIM remediation should continue first'
-            output = build_policy_output(
-                manager_action=selected_action,
-                manager_reason=selected_reason,
-                next_step=selected_next_step,
-                retry_decision=retry_decision,
-                policy_input=policy_input,
-                policy_trace={
-                    'rule_id': selected_rule_id,
-                    'matched_on': {
-                        'final_state': final_state,
-                        'gpu_ready': gpu_ready,
-                        'nim_ready': nim_ready,
-                        'missing_requirements': provider_missing_requirements,
-                    },
-                    'selected_action': selected_action,
-                },
-            )
-            print(json.dumps(output, ensure_ascii=False, indent=2))
-            return 0
-
         output = build_policy_output(
             manager_action='configure_provider',
             manager_reason='provider is configured but runtime is not yet recognizing it, so provider remediation should continue',
@@ -287,33 +170,23 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'provider_not_ready_configure_provider',
-                'matched_on': {
-                    'final_state': final_state,
-                },
+                'matched_on': build_classifier_matched_on(classification),
                 'selected_action': 'configure_provider',
             },
         )
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
-    if (
-        final_state == 'selected_model_not_ready'
-        and retry_decision == 'recheck_runtime_status_once'
-        and retry.get('retry_allowed') is True
-    ):
+    if classified_issue == 'selected_model_retry_issue':
         output = build_policy_output(
             manager_action='retry_once',
-            manager_reason='selected model was only observed in start-result and runtime status should be rechecked once before any restart',
+            manager_reason=str(classification.get('classifier_reason') or 'selected model should be confirmed once before configuration changes'),
             next_step='check_selected_model_config',
             retry_decision=retry_decision,
             policy_input=policy_input,
             policy_trace={
-                'rule_id': 'selected_model_not_ready_retry_once',
-                'matched_on': {
-                    'final_state': final_state,
-                    'retry_decision': retry_decision,
-                    'retry_allowed': True,
-                },
+                'rule_id': 'selected_model_mismatch_retry_runtime_confirmation' if final_state == 'selected_model_mismatch' else 'selected_model_not_ready_retry_once',
+                'matched_on': build_classifier_matched_on(classification),
                 'selected_action': 'retry_once',
             },
         )
@@ -377,9 +250,7 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'capability_limited_review_runtime_capabilities',
-                'matched_on': {
-                    'final_state': final_state,
-                },
+                'matched_on': {'final_state': final_state},
                 'selected_action': 'review_runtime_capabilities',
             },
         )
@@ -395,9 +266,7 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'default_model_missing_configure_model',
-                'matched_on': {
-                    'final_state': final_state,
-                },
+                'matched_on': {'final_state': final_state},
                 'selected_action': 'configure_model',
             },
         )
@@ -413,9 +282,7 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'selected_model_missing_configure_model',
-                'matched_on': {
-                    'final_state': final_state,
-                },
+                'matched_on': {'final_state': final_state},
                 'selected_action': 'configure_model',
             },
         )
@@ -431,9 +298,7 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'gpu_not_ready_configure_gpu_runtime',
-                'matched_on': {
-                    'final_state': final_state,
-                },
+                'matched_on': {'final_state': final_state},
                 'selected_action': 'configure_gpu_runtime',
             },
         )
@@ -449,62 +314,30 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'nim_not_ready_start_nim_runtime',
-                'matched_on': {
-                    'final_state': final_state,
-                },
+                'matched_on': {'final_state': final_state},
                 'selected_action': 'start_nim_runtime',
             },
         )
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
-    if final_state == 'selected_model_mismatch':
-        if selected_model_runtime_recognized is False:
-            output = build_policy_output(
-                manager_action='retry_once',
-                manager_reason='selected model mismatch is still not runtime-confirmed, so manager should retry runtime confirmation once before changing configuration',
-                next_step='check_selected_model_config',
-                retry_decision=retry_decision,
-                policy_input=policy_input,
-                policy_trace={
-                    'rule_id': 'selected_model_mismatch_retry_runtime_confirmation',
-                    'matched_on': {
-                        'final_state': final_state,
-                        'selected_model_runtime_recognized': False,
-                        'selected_model_expected': selected_model_expected,
-                        'selected_model_runtime': selected_model_runtime,
-                    },
-                    'selected_action': 'retry_once',
-                },
-            )
-            print(json.dumps(output, ensure_ascii=False, indent=2))
-            return 0
+    if classified_issue == 'selected_model_provider_issue':
+        output = build_policy_output(
+            manager_action='configure_provider',
+            manager_reason='selected model mismatch appears to come from provider resolution, so provider remediation should continue before runtime work',
+            next_step='check_provider_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'selected_model_mismatch_configure_provider',
+                'matched_on': build_classifier_matched_on(classification),
+                'selected_action': 'configure_provider',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
 
-        if (
-            provider_runtime_recognized is False
-            or 'provider runtime not recognizing configured provider' in selected_model_diff_reason.lower()
-            or 'provider' in selected_model_diff_reason.lower()
-        ):
-            output = build_policy_output(
-                manager_action='configure_provider',
-                manager_reason='selected model mismatch appears to come from provider resolution, so provider remediation should continue before runtime work',
-                next_step='check_provider_config',
-                retry_decision=retry_decision,
-                policy_input=policy_input,
-                policy_trace={
-                    'rule_id': 'selected_model_mismatch_configure_provider',
-                    'matched_on': {
-                        'final_state': final_state,
-                        'provider_runtime_recognized': provider_runtime_recognized,
-                        'selected_model_diff_reason': selected_model_diff_reason,
-                        'provider': provider_name,
-                    },
-                    'selected_action': 'configure_provider',
-                },
-            )
-            print(json.dumps(output, ensure_ascii=False, indent=2))
-            return 0
-
+    if classified_issue == 'selected_model_mismatch_issue':
         output = build_policy_output(
             manager_action='configure_model',
             manager_reason='selected model differs from configured selected model and model remediation should continue before runtime work',
@@ -513,12 +346,7 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'selected_model_mismatch_configure_model',
-                'matched_on': {
-                    'final_state': final_state,
-                    'selected_model_diff_reason': selected_model_diff_reason,
-                    'selected_model_expected': selected_model_expected,
-                    'selected_model_runtime': selected_model_runtime,
-                },
+                'matched_on': build_classifier_matched_on(classification),
                 'selected_action': 'configure_model',
             },
         )
@@ -534,9 +362,7 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'model_not_ready_configure_model',
-                'matched_on': {
-                    'final_state': final_state,
-                },
+                'matched_on': {'final_state': final_state},
                 'selected_action': 'configure_model',
             },
         )
@@ -552,9 +378,7 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'ready_for_runtime_task_run_runtime_task',
-                'matched_on': {
-                    'final_state': final_state,
-                },
+                'matched_on': {'final_state': final_state},
                 'selected_action': 'run_runtime_task',
             },
         )
@@ -570,9 +394,7 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'runtime_model_confirmed_run_next_step',
-                'matched_on': {
-                    'retry_decision': retry_decision,
-                },
+                'matched_on': {'retry_decision': retry_decision},
                 'selected_action': 'run_next_step',
             },
         )
@@ -588,18 +410,14 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'manager_action_required_run_next_step',
-                'matched_on': {
-                    'final_state': final_state,
-                    'next_step': next_step,
-                },
+                'matched_on': {'final_state': final_state, 'next_step': next_step},
                 'selected_action': 'run_next_step',
             },
         )
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
-    if final_state in {
-    }:
+    if final_state in set():
         output = build_policy_output(
             manager_action='manual_review',
             manager_reason='routing evaluation found a concrete remediation state that should be handled explicitly by manager policy or an operator',
@@ -608,10 +426,7 @@ def main() -> int:
             policy_input=policy_input,
             policy_trace={
                 'rule_id': 'explicit_runtime_state_manual_review',
-                'matched_on': {
-                    'final_state': final_state,
-                    'next_step': next_step,
-                },
+                'matched_on': {'final_state': final_state, 'next_step': next_step},
                 'selected_action': 'manual_review',
             },
         )

@@ -392,6 +392,7 @@ Manager policy table:
 
 - `scripts/runtime/sense_runtime_manager_policy.py`
 - `scripts/runtime/sense-runtime-manager-policy.sh`
+- `scripts/runtime/sense_runtime_manager_signal_classifier.py`
 
 The manager policy table consumes:
 
@@ -529,6 +530,26 @@ Priority order is intentionally:
 - runtime capability remediation
 
 If none of those signals are present, the manager still falls back to the existing `provider_not_ready -> configure_provider` behavior, and unknown states continue to use `manual_review`.
+
+Manager policy now uses a small signal classifier first and then applies the action matrix:
+
+- `provider_api_key_issue`
+- `provider_recognition_issue`
+- `runtime_capability_issue_nim`
+- `runtime_capability_issue_gpu`
+- `selected_model_retry_issue`
+- `selected_model_mismatch_issue`
+- `selected_model_provider_issue`
+
+The classifier reads manager-visible structured fields from `policy_input` only, including:
+
+- `provider_status.*`
+- `gpu_status.*`
+- `nim_status_info.*`
+- `retry.*`
+- selected-model diff signals
+
+This keeps routing evaluation unchanged while making the manager policy table thinner and easier to extend. The policy table now prefers `classified_issue` when choosing deterministic actions and only falls back to direct `final_state` handling for simpler states.
 
 Routing loop can now stop more specifically as:
 
