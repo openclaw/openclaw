@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.2-beta.1",
+  "version": "2026.4.3",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -1197,6 +1197,7 @@
     "test:perf:profile:main": "node scripts/run-vitest-profile.mjs main",
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
     "test:perf:update-memory-hotspots": "node scripts/test-update-memory-hotspots.mjs",
+    "test:perf:update-memory-hotspots:extensions": "node scripts/test-update-memory-hotspots.mjs --config vitest.extensions.config.ts --out test/fixtures/test-memory-hotspots.extensions.json --lane extensions --lane-prefix extensions-batch- --min-delta-kb 1048576",
     "test:perf:update-timings": "node scripts/test-update-timings.mjs",
     "test:perf:update-timings:extensions": "node scripts/test-update-timings.mjs --config vitest.extensions.config.ts",
     "test:sectriage": "pnpm exec vitest run --config vitest.gateway.config.ts && vitest run --config vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
@@ -1221,6 +1222,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.17.1",
     "@anthropic-ai/vertex-sdk": "^0.14.4",
+    "@aws-sdk/client-bedrock": "3.1020.0",
     "@clack/prompts": "^1.1.0",
     "@homebridge/ciao": "^1.3.6",
     "@line/bot-sdk": "^10.6.0",
@@ -1310,6 +1312,7 @@
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
     "overrides": {
+      "@anthropic-ai/sdk": "0.81.0",
       "hono": "4.12.9",
       "@hono/node-server": "1.19.10",
       "axios": "1.13.6",

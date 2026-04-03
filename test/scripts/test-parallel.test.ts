@@ -253,6 +253,34 @@ describe("scripts/test-parallel memory trace parsing", () => {
       ],
     });
   });
+
+  it("parses memory trace summaries from gh run job logs", () => {
+    const summaries = parseMemoryTraceSummaryLines(
+      [
+        "checks-fast-extensions-6\tRun extensions (node)\t2026-04-03T04:07:10.5924943Z [test-parallel][mem] summary extensions-batch-22-shard-6 files=15 peak=2.66GiB totalDelta=+470.5MiB peakAt=poll top=extensions/microsoft-foundry/index.test.ts:+1.35GiB, extensions/acpx/src/service.test.ts:+212.1MiB",
+      ].join("\n"),
+    );
+
+    expect(summaries).toEqual([
+      {
+        lane: "extensions-batch-22-shard-6",
+        files: 15,
+        peakRssKb: parseMemoryValueKb("2.66GiB"),
+        totalDeltaKb: parseMemoryValueKb("+470.5MiB"),
+        peakAt: "poll",
+        top: [
+          {
+            file: "extensions/microsoft-foundry/index.test.ts",
+            deltaKb: parseMemoryValueKb("+1.35GiB"),
+          },
+          {
+            file: "extensions/acpx/src/service.test.ts",
+            deltaKb: parseMemoryValueKb("+212.1MiB"),
+          },
+        ],
+      },
+    ]);
+  });
 });
 
 describe("scripts/test-parallel lane planning", () => {

@@ -301,9 +301,10 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     - `latest` = stable
     - `beta` = early build for testing
 
-    We ship builds to **beta**, test them, and once a build is solid we **promote
-    that same version to `latest`**. That's why beta and stable can point at the
-    **same version**.
+    Usually, a stable release lands on **beta** first, then an explicit
+    promotion step moves that same version to `latest`. Maintainers can also
+    publish straight to `latest` when needed. That's why beta and stable can
+    point at the **same version** after promotion.
 
     See what changed:
     [https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
@@ -313,7 +314,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="How do I install the beta version and what is the difference between beta and dev?">
-    **Beta** is the npm dist-tag `beta` (may match `latest`).
+    **Beta** is the npm dist-tag `beta` (may match `latest` after promotion).
     **Dev** is the moving head of `main` (git); when published, it uses the npm dist-tag `dev`.
 
     One-liners (macOS/Linux):
@@ -1015,7 +1016,7 @@ for usage/billing and raise limits as needed.
     openclaw cron runs --id <jobId> --limit 50
     ```
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat).
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation).
 
   </Accordion>
 
@@ -1040,7 +1041,7 @@ for usage/billing and raise limits as needed.
     - **Heartbeat** for "main session" periodic checks.
     - **Isolated jobs** for autonomous agents that post summaries or deliver to chats.
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Cron vs Heartbeat](/automation/cron-vs-heartbeat),
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation),
     [Heartbeat](/gateway/heartbeat).
 
   </Accordion>

@@ -336,6 +336,7 @@ export const TypingModeSchema = z.union([
 export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
+export const ContextVisibilityModeSchema = z.enum(["all", "allowlist", "allowlist_quote"]);
 
 export const BlockStreamingCoalesceSchema = z
   .object({
@@ -348,6 +349,7 @@ export const BlockStreamingCoalesceSchema = z
 export const ReplyRuntimeConfigSchemaShape = {
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
@@ -637,6 +639,70 @@ const ProviderOptionsSchema = z
   .record(z.string(), z.record(z.string(), ProviderOptionValueSchema))
   .optional();
 
+const ConfiguredProviderRequestTlsSchema = z
+  .object({
+    ca: SecretInputSchema.optional().register(sensitive),
+    cert: SecretInputSchema.optional().register(sensitive),
+    key: SecretInputSchema.optional().register(sensitive),
+    passphrase: SecretInputSchema.optional().register(sensitive),
+    serverName: z.string().optional(),
+    insecureSkipVerify: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const ConfiguredProviderRequestAuthSchema = z
+  .union([
+    z
+      .object({
+        mode: z.literal("provider-default"),
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("authorization-bearer"),
+        token: SecretInputSchema.register(sensitive),
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("header"),
+        headerName: z.string().min(1),
+        value: SecretInputSchema.register(sensitive),
+        prefix: z.string().optional(),
+      })
+      .strict(),
+  ])
+  .optional();
+
+const ConfiguredProviderRequestProxySchema = z
+  .union([
+    z
+      .object({
+        mode: z.literal("env-proxy"),
+        tls: ConfiguredProviderRequestTlsSchema,
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("explicit-proxy"),
+        url: z.string().min(1),
+        tls: ConfiguredProviderRequestTlsSchema,
+      })
+      .strict(),
+  ])
+  .optional();
+
+const ConfiguredProviderRequestSchema = z
+  .object({
+    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+    auth: ConfiguredProviderRequestAuthSchema,
+    proxy: ConfiguredProviderRequestProxySchema,
+    tls: ConfiguredProviderRequestTlsSchema,
+  })
+  .strict()
+  .optional();
+
 const MediaUnderstandingRuntimeFields = {
   prompt: z.string().optional(),
   timeoutSeconds: z.number().int().positive().optional(),
@@ -645,6 +711,7 @@ const MediaUnderstandingRuntimeFields = {
   deepgram: DeepgramAudioSchema,
   baseUrl: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
+  request: ConfiguredProviderRequestSchema,
 };
 
 export const MediaUnderstandingModelSchema = z
