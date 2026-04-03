@@ -937,12 +937,12 @@ describe("memory index", () => {
       });
 
       expect(activateFallbackProvider).toHaveBeenCalledWith("embedding backend failed");
-      expect(runSafeReindex).toHaveBeenCalledWith({
+      expect(runUnsafeReindex).toHaveBeenCalledWith({
         reason: "post-compaction",
         force: true,
         progress: undefined,
       });
-      expect(runUnsafeReindex).not.toHaveBeenCalled();
+      expect(runSafeReindex).not.toHaveBeenCalled();
 
       internal.syncSessionFiles = originalSyncSessionFiles;
       internal.shouldFallbackOnError = originalShouldFallbackOnError;

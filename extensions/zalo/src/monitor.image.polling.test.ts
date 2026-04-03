@@ -71,7 +71,11 @@ describe("Zalo polling image handling", () => {
     getUpdatesMock
       .mockResolvedValueOnce({
         ok: true,
-        result: createImageUpdate(),
+        result: createImageUpdate({
+          messageId: "msg-unauthorized-1",
+          userId: "user-unauthorized-1",
+          chatId: "chat-unauthorized-1",
+        }),
       })
       .mockImplementation(() => new Promise(() => {}));
 
