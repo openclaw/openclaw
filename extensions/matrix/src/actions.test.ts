@@ -166,4 +166,50 @@ describe("matrixMessageActions", () => {
 
     expect(actions).toEqual([]);
   });
+
+  it("honors the selected Matrix account during discovery", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          defaultAccount: "assistant",
+          accounts: {
+            assistant: {
+              homeserver: "https://matrix.example.org",
+              userId: "@assistant:example.org",
+              accessToken: "assistant-token",
+              actions: {
+                messages: true,
+                reactions: false,
+              },
+            },
+            ops: {
+              homeserver: "https://matrix.example.org",
+              userId: "@ops:example.org",
+              accessToken: "ops-token",
+              actions: {
+                messages: true,
+                reactions: true,
+              },
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const assistantActions =
+      matrixMessageActions.describeMessageTool!({
+        cfg,
+        accountId: "assistant",
+      } as never).actions;
+    const opsActions =
+      matrixMessageActions.describeMessageTool!({
+        cfg,
+        accountId: "ops",
+      } as never).actions;
+
+    expect(assistantActions).not.toContain("react");
+    expect(assistantActions).not.toContain("reactions");
+    expect(opsActions).toContain("react");
+    expect(opsActions).toContain("reactions");
+  });
 });

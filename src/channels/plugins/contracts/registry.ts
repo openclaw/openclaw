@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 import {
   listLineAccountIds,
   resolveDefaultLineAccountId,

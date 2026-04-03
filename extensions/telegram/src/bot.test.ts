@@ -965,6 +965,79 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("formats non-default model selection confirmations with Telegram HTML parse mode", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-model-html-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      const config = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(callbackHandler).toBeDefined();
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-html-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 17,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+      expect(editMessageTextSpy).toHaveBeenCalledWith(
+        1234,
+        17,
+        `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nThis model will be used for your next message.`,
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+
+      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      expect(entry?.providerOverride).toBe("openai");
+      expect(entry?.modelOverride).toBe("gpt-5.4");
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
+  });
+
   it("rejects ambiguous compact model callbacks and returns provider list", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

@@ -15,6 +15,19 @@ import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
+function createCliBackendTestConfig() {
+  return {
+    agents: {
+      defaults: {
+        cliBackends: {
+          "claude-cli": {},
+          "google-gemini-cli": {},
+        },
+      },
+    },
+  };
+}
+
 const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
@@ -150,7 +163,7 @@ describe("runReplyAgent onAgentRunStart", () => {
         config:
           provider === "claude-cli"
             ? { agents: { defaults: { cliBackends: { "claude-cli": {} } } } }
-            : {},
+            : createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider,
         model,
@@ -263,7 +276,7 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude-opus",
@@ -1166,7 +1179,7 @@ describe("runReplyAgent messaging tool suppression", () => {
         messageProvider,
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1389,7 +1402,7 @@ describe("runReplyAgent reminder commitment guard", () => {
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1610,7 +1623,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
         messageProvider: "whatsapp",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1658,9 +1671,9 @@ describe("runReplyAgent fallback reasoning tags", () => {
     });
     runWithModelFallbackMock.mockImplementationOnce(
       async ({ run }: RunWithModelFallbackParams) => ({
-        result: await run("google-gemini-cli", "gemini-3"),
-        provider: "google-gemini-cli",
-        model: "gemini-3",
+        result: await run("google", "gemini-2.5-pro"),
+        provider: "google",
+        model: "gemini-2.5-pro",
       }),
     );
 
@@ -1739,7 +1752,7 @@ describe("runReplyAgent response usage footer", () => {
         messageProvider: "whatsapp",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1848,7 +1861,7 @@ describe("runReplyAgent transient HTTP retry", () => {
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1924,7 +1937,7 @@ describe("runReplyAgent billing error classification", () => {
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1985,7 +1998,7 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",

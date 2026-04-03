@@ -7,9 +7,10 @@ import {
   resolveStorePath,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/config-runtime";
+import { resolveWhatsAppAccount } from "./accounts.js";
 
 type HeartbeatRecipientsResult = { recipients: string[]; source: string };
-type HeartbeatRecipientsOpts = { to?: string; all?: boolean };
+type HeartbeatRecipientsOpts = { to?: string; all?: boolean; accountId?: string };
 
 function getSessionRecipients(cfg: OpenClawConfig) {
   const sessionCfg = cfg.session;
@@ -55,14 +56,15 @@ export function resolveWhatsAppHeartbeatRecipients(
   }
 
   const sessionRecipients = getSessionRecipients(cfg);
+  const resolvedAccountId = opts.accountId?.trim() || DEFAULT_ACCOUNT_ID;
   const configuredAllowFrom =
-    Array.isArray(cfg.channels?.whatsapp?.allowFrom) && cfg.channels.whatsapp.allowFrom.length > 0
-      ? cfg.channels.whatsapp.allowFrom.filter((value) => value !== "*").map(normalizeE164)
-      : [];
+    (resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? [])
+      .filter((value) => value !== "*")
+      .map(normalizeE164);
   const storeAllowFrom = readChannelAllowFromStoreSync(
     "whatsapp",
     process.env,
-    DEFAULT_ACCOUNT_ID,
+    resolvedAccountId,
   ).map(normalizeE164);
 
   const unique = (list: string[]) => [...new Set(list.filter(Boolean))];

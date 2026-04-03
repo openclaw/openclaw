@@ -12,46 +12,93 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
+import {
+  listWhatsAppAccountIds,
+  resolveWhatsAppAccount,
+  resolveWhatsAppAuthDir,
+} from "./accounts.js";
 import { loginWeb } from "./login.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 
 const channel = "whatsapp" as const;
+type WhatsAppConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>;
+type WhatsAppAccountConfig = NonNullable<NonNullable<WhatsAppConfig["accounts"]>[string]>;
 
 function mergeWhatsAppConfig(
   cfg: OpenClawConfig,
-  patch: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>>,
+  accountId: string,
+  patch: Partial<WhatsAppAccountConfig>,
   options?: { unsetOnUndefined?: string[] },
 ): OpenClawConfig {
-  const base = { ...(cfg.channels?.whatsapp ?? {}) } as Record<string, unknown>;
+  const channelConfig: WhatsAppConfig = { ...(cfg.channels?.whatsapp ?? {}) };
+  const mutableChannelConfig = channelConfig as Record<string, unknown>;
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) {
+        if (options?.unsetOnUndefined?.includes(key)) {
+          delete mutableChannelConfig[key];
+        }
+        continue;
+      }
+      mutableChannelConfig[key] = value;
+    }
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        whatsapp: channelConfig,
+      },
+    };
+  }
+  const accounts = {
+    ...((channelConfig.accounts as Record<string, WhatsAppAccountConfig> | undefined) ?? {}),
+  };
+  const nextAccount: WhatsAppAccountConfig = { ...(accounts[accountId] ?? {}) };
+  const mutableNextAccount = nextAccount as Record<string, unknown>;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) {
       if (options?.unsetOnUndefined?.includes(key)) {
-        delete base[key];
+        delete mutableNextAccount[key];
       }
       continue;
     }
-    base[key] = value;
+    mutableNextAccount[key] = value;
   }
+  accounts[accountId] = nextAccount as WhatsAppAccountConfig;
   return {
     ...cfg,
     channels: {
       ...cfg.channels,
-      whatsapp: base,
+      whatsapp: {
+        ...channelConfig,
+        accounts,
+      },
     },
   };
 }
 
-function setWhatsAppDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
-  return mergeWhatsAppConfig(cfg, { dmPolicy });
+function setWhatsAppDmPolicy(
+  cfg: OpenClawConfig,
+  accountId: string,
+  dmPolicy: DmPolicy,
+): OpenClawConfig {
+  return mergeWhatsAppConfig(cfg, accountId, { dmPolicy });
 }
 
-function setWhatsAppAllowFrom(cfg: OpenClawConfig, allowFrom?: string[]): OpenClawConfig {
-  return mergeWhatsAppConfig(cfg, { allowFrom }, { unsetOnUndefined: ["allowFrom"] });
+function setWhatsAppAllowFrom(
+  cfg: OpenClawConfig,
+  accountId: string,
+  allowFrom?: string[],
+): OpenClawConfig {
+  return mergeWhatsAppConfig(cfg, accountId, { allowFrom }, { unsetOnUndefined: ["allowFrom"] });
 }
 
-function setWhatsAppSelfChatMode(cfg: OpenClawConfig, selfChatMode: boolean): OpenClawConfig {
-  return mergeWhatsAppConfig(cfg, { selfChatMode });
+function setWhatsAppSelfChatMode(
+  cfg: OpenClawConfig,
+  accountId: string,
+  selfChatMode: boolean,
+): OpenClawConfig {
+  return mergeWhatsAppConfig(cfg, accountId, { selfChatMode });
 }
 
 async function detectWhatsAppLinked(cfg: OpenClawConfig, accountId: string): Promise<boolean> {
@@ -100,6 +147,7 @@ async function promptWhatsAppOwnerAllowFrom(params: {
 
 async function applyWhatsAppOwnerAllowlist(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   existingAllowFrom: string[];
   messageLines: string[];
   prompter: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
@@ -109,9 +157,9 @@ async function applyWhatsAppOwnerAllowlist(params: {
     prompter: params.prompter,
     existingAllowFrom: params.existingAllowFrom,
   });
-  let next = setWhatsAppSelfChatMode(params.cfg, true);
-  next = setWhatsAppDmPolicy(next, "allowlist");
-  next = setWhatsAppAllowFrom(next, allowFrom);
+  let next = setWhatsAppSelfChatMode(params.cfg, params.accountId, true);
+  next = setWhatsAppDmPolicy(next, params.accountId, "allowlist");
+  next = setWhatsAppAllowFrom(next, params.accountId, allowFrom);
   await params.prompter.note(
     [...params.messageLines, `- allowFrom includes ${normalized}`].join("\n"),
     params.title,
@@ -141,16 +189,28 @@ function parseWhatsAppAllowFromEntries(raw: string): { entries: string[]; invali
 
 async function promptWhatsAppDmAccess(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   forceAllowFrom: boolean;
   prompter: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
 }): Promise<OpenClawConfig> {
-  const existingPolicy = params.cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
-  const existingAllowFrom = params.cfg.channels?.whatsapp?.allowFrom ?? [];
+  const accountId = normalizeAccountId(params.accountId);
+  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId });
+  const existingPolicy = account.dmPolicy ?? "pairing";
+  const existingAllowFrom = account.allowFrom ?? [];
   const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
+  const policyKey =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? "channels.whatsapp.dmPolicy"
+      : `channels.whatsapp.accounts.${accountId}.dmPolicy`;
+  const allowFromKey =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? "channels.whatsapp.allowFrom"
+      : `channels.whatsapp.accounts.${accountId}.allowFrom`;
 
   if (params.forceAllowFrom) {
     return await applyWhatsAppOwnerAllowlist({
       cfg: params.cfg,
+      accountId,
       prompter: params.prompter,
       existingAllowFrom,
       title: "WhatsApp allowlist",
@@ -160,7 +220,7 @@ async function promptWhatsAppDmAccess(params: {
 
   await params.prompter.note(
     [
-      "WhatsApp direct chats are gated by `channels.whatsapp.dmPolicy` + `channels.whatsapp.allowFrom`.",
+      `WhatsApp direct chats are gated by \`${policyKey}\` + \`${allowFromKey}\`.`,
       "- pairing (default): unknown senders get a pairing code; owner approves",
       "- allowlist: unknown senders are blocked",
       '- open: public inbound DMs (requires allowFrom to include "*")',
@@ -183,6 +243,7 @@ async function promptWhatsAppDmAccess(params: {
   if (phoneMode === "personal") {
     return await applyWhatsAppOwnerAllowlist({
       cfg: params.cfg,
+      accountId,
       prompter: params.prompter,
       existingAllowFrom,
       title: "WhatsApp personal phone",
@@ -203,11 +264,11 @@ async function promptWhatsAppDmAccess(params: {
     ],
   })) as DmPolicy;
 
-  let next = setWhatsAppSelfChatMode(params.cfg, false);
-  next = setWhatsAppDmPolicy(next, policy);
+  let next = setWhatsAppSelfChatMode(params.cfg, accountId, false);
+  next = setWhatsAppDmPolicy(next, accountId, policy);
   if (policy === "open") {
     const allowFrom = normalizeAllowFromEntries(["*", ...existingAllowFrom], normalizeE164);
-    next = setWhatsAppAllowFrom(next, allowFrom.length > 0 ? allowFrom : ["*"]);
+    next = setWhatsAppAllowFrom(next, accountId, allowFrom.length > 0 ? allowFrom : ["*"]);
     return next;
   }
   if (policy === "disabled") {
@@ -241,7 +302,7 @@ async function promptWhatsAppDmAccess(params: {
     return next;
   }
   if (mode === "unset") {
-    return setWhatsAppAllowFrom(next, undefined);
+    return setWhatsAppAllowFrom(next, accountId, undefined);
   }
 
   const allowRaw = await params.prompter.text({
@@ -264,7 +325,7 @@ async function promptWhatsAppDmAccess(params: {
   });
 
   const parsed = parseWhatsAppAllowFromEntries(String(allowRaw));
-  return setWhatsAppAllowFrom(next, parsed.entries);
+  return setWhatsAppAllowFrom(next, accountId, parsed.entries);
 }
 
 export const whatsappSetupWizard: ChannelSetupWizard = {
@@ -349,6 +410,7 @@ export const whatsappSetupWizard: ChannelSetupWizard = {
 
     next = await promptWhatsAppDmAccess({
       cfg: next,
+      accountId,
       forceAllowFrom,
       prompter,
     });
