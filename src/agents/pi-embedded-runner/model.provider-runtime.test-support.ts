@@ -205,7 +205,7 @@ function buildDynamicModel(
             api: "openai-codex-responses",
             baseUrl: OPENAI_CODEX_BASE_URL,
             cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-            contextWindow: 272_000,
+            contextWindow: 1_050_000,
             maxTokens: 128_000,
           },
           fallback,
@@ -254,7 +254,7 @@ function buildDynamicModel(
               reasoning: true,
               input: ["text", "image"],
               cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-              contextWindow: 272_000,
+              contextWindow: 1_050_000,
               maxTokens: 128_000,
             }
           : lower === "gpt-5.4-pro"

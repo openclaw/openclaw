@@ -206,7 +206,7 @@ describe("loadModelCatalog", () => {
         provider: "openai-codex",
         name: "GPT-5.3 Codex",
         reasoning: true,
-        contextWindow: 272000,
+        contextWindow: 1050000,
         input: ["text", "image"],
       },
     ]);
