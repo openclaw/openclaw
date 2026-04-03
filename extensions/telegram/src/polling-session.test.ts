@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runMock = vi.hoisted(() => vi.fn());
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
@@ -144,15 +144,17 @@ function createPollingSessionWithTransportRestart(params: {
 }
 
 describe("TelegramPollingSession", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ TelegramPollingSession } = await import("./polling-session.js"));
+  });
+
+  beforeEach(() => {
     runMock.mockReset();
     createTelegramBotMock.mockReset();
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
-    ({ TelegramPollingSession } = await import("./polling-session.js"));
   });
 
   afterEach(() => {

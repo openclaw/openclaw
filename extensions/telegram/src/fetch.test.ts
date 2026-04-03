@@ -82,7 +82,6 @@ let resolveTelegramApiBase: typeof import("./fetch.js").resolveTelegramApiBase;
 let resolveTelegramHeartbeatApiBase: typeof import("./fetch.js").resolveTelegramHeartbeatApiBase;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
   ({
     resolveTelegramFetch,

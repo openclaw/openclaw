@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
@@ -242,15 +242,18 @@ function buildAuthStoreForTarget(entry: SecretRegistryEntry, envId: string): Aut
 }
 
 describe("secrets runtime target coverage", () => {
+  beforeAll(async () => {
+    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
+  });
+
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
     resolveBundledPluginWebSearchProvidersMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
   });
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
+  beforeEach(() => {
+    clearSecretsRuntimeSnapshot();
   });
 
   it("handles every openclaw.json registry target when configured as active", async () => {

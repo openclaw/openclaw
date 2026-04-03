@@ -1,8 +1,15 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: requestHeartbeatNowMock,
+}));
+
+vi.mock("../infra/system-events.js", () => ({
+  enqueueSystemEvent: enqueueSystemEventMock,
+}));
 
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
@@ -10,11 +17,17 @@ let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecS
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 
-describe("detectCursorKeyMode", () => {
-  beforeAll(async () => {
-    ({ detectCursorKeyMode } = await import("./bash-tools.exec-runtime.js"));
-  });
+beforeAll(async () => {
+  ({
+    buildExecExitOutcome,
+    detectCursorKeyMode,
+    emitExecSystemEvent,
+    formatExecFailureReason,
+    resolveExecTarget,
+  } = await import("./bash-tools.exec-runtime.js"));
+});
 
+describe("detectCursorKeyMode", () => {
   it("returns null when no toggle found", () => {
     expect(detectCursorKeyMode("hello world")).toBe(null);
     expect(detectCursorKeyMode("")).toBe(null);
@@ -43,10 +56,6 @@ describe("detectCursorKeyMode", () => {
 });
 
 describe("resolveExecTarget", () => {
-  beforeAll(async () => {
-    ({ resolveExecTarget } = await import("./bash-tools.exec-runtime.js"));
-  });
-
   it("keeps implicit auto on sandbox when a sandbox runtime is available", () => {
     expect(
       resolveExecTarget({
@@ -160,25 +169,9 @@ describe("resolveExecTarget", () => {
 });
 
 describe("emitExecSystemEvent", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     requestHeartbeatNowMock.mockClear();
     enqueueSystemEventMock.mockClear();
-    vi.doMock("../infra/heartbeat-wake.js", async () => {
-      return await mergeMockedModule(
-        await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-          "../infra/heartbeat-wake.js",
-        ),
-        () => ({
-          requestHeartbeatNow: requestHeartbeatNowMock,
-        }),
-      );
-    });
-    vi.doMock("../infra/system-events.js", () => ({
-      enqueueSystemEvent: enqueueSystemEventMock,
-    }));
-    ({ buildExecExitOutcome, emitExecSystemEvent, formatExecFailureReason } =
-      await import("./bash-tools.exec-runtime.js"));
   });
 
   it("scopes heartbeat wake to the event session key", () => {
