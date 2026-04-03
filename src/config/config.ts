@@ -19,9 +19,12 @@ export {
   resolveConfigSnapshotHash,
   setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
+  warnIfConfigFromFuture,
   writeConfigFile,
 } from "./io.js";
 export type { ConfigWriteNotification } from "./io.js";
+export type { VersionSkewResult } from "./version.js";
+export { checkVersionSkew } from "./version.js";
 export { migrateLegacyConfig } from "./legacy-migrate.js";
 export { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
 export * from "./paths.js";
