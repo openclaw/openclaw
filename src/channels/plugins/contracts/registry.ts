@@ -12,11 +12,6 @@ function buildBundledPluginModuleId(pluginId: string, artifactBasename: string):
   return ["..", "..", "..", "..", "extensions", pluginId, artifactBasename].join("/");
 }
 
-type PluginContractEntry = {
-  id: string;
-  plugin: Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config">;
-};
-
 type SurfaceContractEntry = {
   id: string;
   plugin: Pick<
@@ -74,18 +69,9 @@ vi.mock(buildBundledPluginModuleId("matrix", "runtime-api.js"), async () => {
   };
 });
 
-let pluginContractRegistryCache: PluginContractEntry[] | undefined;
 let surfaceContractRegistryCache: SurfaceContractEntry[] | undefined;
 let threadingContractRegistryCache: ThreadingContractEntry[] | undefined;
 let directoryContractRegistryCache: DirectoryContractEntry[] | undefined;
-
-export function getPluginContractRegistry(): PluginContractEntry[] {
-  pluginContractRegistryCache ??= listBundledChannelPlugins().map((plugin) => ({
-    id: plugin.id,
-    plugin,
-  }));
-  return pluginContractRegistryCache;
-}
 
 export function getSurfaceContractRegistry(): SurfaceContractEntry[] {
   surfaceContractRegistryCache ??= listBundledChannelPlugins().map((plugin) => ({
