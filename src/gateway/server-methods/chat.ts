@@ -933,10 +933,11 @@ function appendUserTranscriptMessage(params: {
       // Pi defers file flushes until an assistant turn exists. Force a rewrite for
       // first-turn gateway sends so session watchers and history readers can see
       // the accepted user message immediately.
-      (sessionManager as unknown as { _rewriteFile: () => void })._rewriteFile();
+      (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
     }
     emitSessionTranscriptUpdate({
       sessionFile: transcriptPath,
+      sessionKey: params.sessionKey,
       message: messageBody,
       messageId,
     });
@@ -952,6 +953,7 @@ function appendAssistantTranscriptMessage(params: {
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
+  sessionKey: string;
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
@@ -1762,6 +1764,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             sessionId: resolvedSessionId,
             storePath: latestStorePath,
             sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+            sessionKey,
             agentId,
             createIfMissing: true,
             idempotencyKey: clientRunId,

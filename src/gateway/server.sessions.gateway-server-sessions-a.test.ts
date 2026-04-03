@@ -17,6 +17,7 @@ import {
   connectOk,
   embeddedRunMock,
   installGatewayTestHooks,
+  onceMessage,
   piSdkMock,
   rpcReq,
   testState,
@@ -559,6 +560,16 @@ describe("gateway server sessions", () => {
   test("sessions.create persists an initial message containing a URL", async () => {
     const { storePath } = await createSessionStoreDir();
     const { ws } = await openClient();
+    const sessionMessagePromise = onceMessage(
+      ws,
+      (message) =>
+        message.type === "event" &&
+        message.event === "session.message" &&
+        (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+          "agent:ops:url-case",
+    );
+    const sessionsSubscribe = await rpcReq(ws, "sessions.subscribe");
+    expect(sessionsSubscribe.ok).toBe(true);
 
     const created = await rpcReq<{
       key?: string;
@@ -578,6 +589,13 @@ describe("gateway server sessions", () => {
     expect(created.payload?.runId).toBeTruthy();
     expect(created.payload?.messageSeq).toBe(1);
     expect(created.payload?.sessionId).toBeTruthy();
+
+    const sessionMessage = await sessionMessagePromise;
+    expect(sessionMessage.payload).toMatchObject({
+      sessionKey: "agent:ops:url-case",
+      messageId: expect.any(String),
+      messageSeq: 1,
+    });
 
     const messages = await waitForTranscriptMessage(
       created.payload?.sessionId ?? "",
