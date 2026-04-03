@@ -17,8 +17,16 @@ describe("isUnitConfigTestFile", () => {
       ),
     ).toBe(false);
     expect(isUnitConfigTestFile("src/infra/matrix-plugin-helper.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("src/infra/boundary-path.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("src/infra/git-root.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("src/infra/home-dir.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("src/infra/openclaw-exec-env.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("src/infra/openclaw-root.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("src/infra/package-json.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("src/infra/path-env.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/plugin-sdk/facade-runtime.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/plugins/loader.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("src/infra/stable-node-path.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("test/extension-test-boundary.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/agents/pi-embedded-runner.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/commands/onboard.test.ts")).toBe(false);

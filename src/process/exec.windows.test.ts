@@ -4,14 +4,21 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
-const execFileMock = vi.hoisted(() => vi.fn());
+const execFileMock = vi.hoisted(() =>
+  Object.assign(vi.fn(), {
+    __promisify__: vi.fn(),
+  }),
+);
 
-vi.mock("node:child_process", async (importOriginal) => {
+vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
-  return mockNodeBuiltinModule(importOriginal, {
-    spawn: spawnMock,
-    execFile: execFileMock,
-  });
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawn: spawnMock,
+      execFile: execFileMock as unknown as typeof import("node:child_process").execFile,
+    },
+  );
 });
 
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;

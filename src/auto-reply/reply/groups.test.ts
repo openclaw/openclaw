@@ -10,9 +10,9 @@ describe("group runtime loading", () => {
 
   it("keeps prompt helpers off the heavy group runtime", async () => {
     const groupsRuntimeLoads = vi.fn();
-    vi.doMock("./groups.runtime.js", async (importOriginal) => {
+    vi.doMock("./groups.runtime.js", async () => {
       groupsRuntimeLoads();
-      return await importOriginal<typeof import("./groups.runtime.js")>();
+      return await vi.importActual<typeof import("./groups.runtime.js")>("./groups.runtime.js");
     });
     const groups = await import("./groups.js");
 
@@ -40,9 +40,9 @@ describe("group runtime loading", () => {
 
   it("loads the group runtime only when requireMention resolution needs it", async () => {
     const groupsRuntimeLoads = vi.fn();
-    vi.doMock("./groups.runtime.js", async (importOriginal) => {
+    vi.doMock("./groups.runtime.js", async () => {
       groupsRuntimeLoads();
-      return await importOriginal<typeof import("./groups.runtime.js")>();
+      return await vi.importActual<typeof import("./groups.runtime.js")>("./groups.runtime.js");
     });
     const groups = await import("./groups.js");
 

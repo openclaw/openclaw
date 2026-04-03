@@ -21,6 +21,7 @@ describe("openai transport stream", () => {
     expect(isTransportAwareApiSupported("openai-completions")).toBe(true);
     expect(isTransportAwareApiSupported("azure-openai-responses")).toBe(true);
     expect(isTransportAwareApiSupported("anthropic-messages")).toBe(true);
+    expect(isTransportAwareApiSupported("google-generative-ai")).toBe(true);
   });
 
   it("prepares a custom simple-completion api alias when transport overrides are attached", () => {
@@ -85,6 +86,103 @@ describe("openai transport stream", () => {
       api: "openclaw-anthropic-messages-transport",
       provider: "anthropic",
       id: "claude-sonnet-4-6",
+    });
+    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
+  });
+
+  it("prepares a Google simple-completion api alias when transport overrides are attached", () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        api: "google-generative-ai",
+        provider: "google",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"google-generative-ai">,
+      {
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+        },
+      },
+    );
+
+    const prepared = prepareTransportAwareSimpleModel(model);
+
+    expect(resolveTransportAwareSimpleApi(model.api)).toBe(
+      "openclaw-google-generative-ai-transport",
+    );
+    expect(prepared).toMatchObject({
+      api: "openclaw-google-generative-ai-transport",
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+    });
+    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
+  });
+
+  it("keeps github-copilot OpenAI-family models on the shared transport seam", () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "github-copilot",
+        baseUrl: "https://api.githubcopilot.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+        },
+      },
+    );
+
+    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
+    expect(prepareTransportAwareSimpleModel(model)).toMatchObject({
+      api: "openclaw-openai-responses-transport",
+      provider: "github-copilot",
+      id: "gpt-5.4",
+    });
+    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
+  });
+
+  it("keeps github-copilot Claude models on the shared Anthropic transport seam", () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4.6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "github-copilot",
+        baseUrl: "https://api.githubcopilot.com/anthropic",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+        },
+      },
+    );
+
+    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-anthropic-messages-transport");
+    expect(prepareTransportAwareSimpleModel(model)).toMatchObject({
+      api: "openclaw-anthropic-messages-transport",
+      provider: "github-copilot",
+      id: "claude-sonnet-4.6",
     });
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
   });
@@ -339,6 +437,82 @@ describe("openai transport stream", () => {
     ) as { input?: Array<{ role?: string }> };
 
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
+  });
+
+  it("gates responses service_tier to native OpenAI endpoints", () => {
+    const nativeParams = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        serviceTier: "priority",
+      },
+    ) as { service_tier?: unknown };
+    const proxyParams = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        serviceTier: "priority",
+      },
+    ) as { service_tier?: unknown };
+
+    expect(nativeParams.service_tier).toBe("priority");
+    expect(proxyParams).not.toHaveProperty("service_tier");
+  });
+
+  it("strips store when responses compat disables it", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "custom-provider",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: { supportsStore: false },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { store?: unknown };
+
+    expect(params).not.toHaveProperty("store");
   });
 
   it("uses system role for xAI default-route responses providers without relying on baseUrl host sniffing", () => {

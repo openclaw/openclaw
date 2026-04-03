@@ -11,8 +11,10 @@ import {
   runMatrixDoctorSequence,
 } from "./doctor.js";
 
-vi.mock("./matrix-migration.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./matrix-migration.runtime.js")>();
+vi.mock("./matrix-migration.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./matrix-migration.runtime.js")>(
+    "./matrix-migration.runtime.js",
+  );
   return {
     ...actual,
     hasActionableMatrixMigration: vi.fn(() => false),

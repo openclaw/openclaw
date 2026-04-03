@@ -437,7 +437,10 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
   threading: {
     scopedAccountReplyToMode: {
       resolveAccount: (cfg, accountId) =>
-        resolveMattermostAccount({ cfg, accountId: accountId ?? "default" }),
+        resolveMattermostAccount({
+          cfg,
+          accountId: accountId ?? resolveDefaultMattermostAccountId(cfg),
+        }),
       resolveReplyToMode: (account, chatType) =>
         resolveMattermostReplyToMode(
           account,

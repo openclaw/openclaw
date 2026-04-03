@@ -114,6 +114,13 @@ describe("config doc baseline integration", () => {
     expect(tokenEntry?.tags).toContain("security");
   });
 
+  it("omits legacy hooks.internal.handlers from the generated baseline", async () => {
+    const byPath = await getSharedByPath();
+
+    expect(byPath.get("hooks.internal.handlers")).toBeUndefined();
+    expect(byPath.get("hooks.internal.handlers.*.module")).toBeUndefined();
+  });
+
   it("uses human-readable channel metadata for top-level channel sections", async () => {
     const byPath = await getSharedByPath();
 

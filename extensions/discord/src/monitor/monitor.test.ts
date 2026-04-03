@@ -52,6 +52,11 @@ type CreateDiscordComponentModal =
   typeof import("./agent-components.js").createDiscordComponentModal;
 type CreateDiscordComponentStringSelect =
   typeof import("./agent-components.js").createDiscordComponentStringSelect;
+type DispatchReplyWithBufferedBlockDispatcherFn =
+  typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
+  ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
+>;
 
 let createDiscordComponentButton: CreateDiscordComponentButton;
 let createDiscordComponentStringSelect: CreateDiscordComponentStringSelect;
@@ -81,12 +86,7 @@ describe("discord component interactions", () => {
       ...overrides,
     }) as DiscordAccountConfig;
 
-  type DispatchParams = {
-    ctx: Record<string, unknown>;
-    dispatcherOptions: {
-      deliver: (payload: { text?: string }) => Promise<void> | void;
-    };
-  };
+  type DispatchParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
 
   type ComponentContext = Parameters<CreateDiscordComponentButton>[0];
 
@@ -285,10 +285,22 @@ describe("discord component interactions", () => {
     resetDiscordComponentRuntimeMocks();
     lastDispatchCtx = undefined;
     enqueueSystemEventMock.mockClear();
-    dispatchReplyMock.mockClear().mockImplementation(async (params: DispatchParams) => {
-      lastDispatchCtx = params.ctx;
-      await params.dispatcherOptions.deliver({ text: "ok" });
-    });
+    dispatchReplyMock
+      .mockClear()
+      .mockImplementation(
+        async (params: DispatchParams): Promise<DispatchReplyWithBufferedBlockDispatcherResult> => {
+          lastDispatchCtx = params.ctx;
+          await params.dispatcherOptions.deliver({ text: "ok" }, { kind: "final" });
+          return {
+            queuedFinal: false,
+            counts: {
+              block: 0,
+              final: 1,
+              tool: 0,
+            },
+          };
+        },
+      );
     recordInboundSessionMock.mockClear().mockResolvedValue(undefined);
     readSessionUpdatedAtMock.mockClear().mockReturnValue(undefined);
     resolveStorePathMock.mockClear().mockReturnValue("/tmp/openclaw-sessions-test.json");

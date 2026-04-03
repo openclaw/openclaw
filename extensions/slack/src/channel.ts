@@ -36,7 +36,7 @@ import {
   resolveSlackReplyToMode,
   type ResolvedSlackAccount,
 } from "./accounts.js";
-import { handleSlackAction, type SlackActionContext } from "./action-runtime.js";
+import type { SlackActionContext } from "./action-runtime.js";
 import { resolveSlackAutoThreadId } from "./action-threading.js";
 import { slackApprovalCapability } from "./approval-native.js";
 import { createSlackActions } from "./channel-actions.js";
@@ -69,7 +69,6 @@ import {
 import { getOptionalSlackRuntime, getSlackRuntime } from "./runtime.js";
 import { fetchSlackScopes } from "./scopes.js";
 import { collectSlackSecurityAuditFindings } from "./security-audit.js";
-import { sendMessageSlack } from "./send.js";
 import { slackSetupAdapter } from "./setup-core.js";
 import { slackSetupWizard } from "./setup-surface.js";
 import {
@@ -97,8 +96,11 @@ function resolveSlackProbe() {
   return probeSlack;
 }
 
-function resolveSlackHandleAction() {
-  return getOptionalSlackRuntime()?.channel?.slack?.handleSlackAction ?? handleSlackAction;
+async function resolveSlackHandleAction() {
+  return (
+    getOptionalSlackRuntime()?.channel?.slack?.handleSlackAction ??
+    (await loadSlackActionRuntime()).handleSlackAction
+  );
 }
 
 // Select the appropriate Slack token for read/write operations.
@@ -118,16 +120,31 @@ function getTokenForOperation(
   return botToken ?? userToken;
 }
 
-type SlackSendFn = typeof sendMessageSlack;
+type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
 
-function resolveSlackSendContext(params: {
+let slackActionRuntimePromise: Promise<typeof import("./action-runtime.runtime.js")> | undefined;
+let slackSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | undefined;
+
+async function loadSlackActionRuntime() {
+  slackActionRuntimePromise ??= import("./action-runtime.runtime.js");
+  return await slackActionRuntimePromise;
+}
+
+async function loadSlackSendRuntime() {
+  slackSendRuntimePromise ??= import("./send.runtime.js");
+  return await slackSendRuntimePromise;
+}
+
+async function resolveSlackSendContext(params: {
   cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
   accountId?: string;
   deps?: { [channelId: string]: unknown };
   replyToId?: string | number | null;
   threadId?: string | number | null;
 }) {
-  const send = resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ?? sendMessageSlack;
+  const send =
+    resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
+    (await loadSlackSendRuntime()).sendMessageSlack;
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const token = getTokenForOperation(account, "write");
   const botToken = account.botToken?.trim();
@@ -369,11 +386,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     },
     actions: createSlackActions(SLACK_CHANNEL, {
       invoke: async (action, cfg, toolContext) =>
-        await resolveSlackHandleAction()(
-          action,
-          cfg as OpenClawConfig,
-          toolContext as SlackActionContext | undefined,
-        ),
+        await (
+          await resolveSlackHandleAction()
+        )(action, cfg as OpenClawConfig, toolContext as SlackActionContext | undefined),
     }),
     status: createComputedAccountStatusAdapter<ResolvedSlackAccount, SlackProbe>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
@@ -476,6 +491,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           cfg,
           accountId: DEFAULT_ACCOUNT_ID,
         });
+        const { sendMessageSlack } = await loadSlackSendRuntime();
         const token = getTokenForOperation(account, "write");
         const botToken = account.botToken?.trim();
         const tokenOverride = token && token !== botToken ? token : undefined;
@@ -525,7 +541,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           payload,
         }),
       sendPayload: async (ctx) => {
-        const { send, tokenOverride } = resolveSlackSendContext({
+        const { send, tokenOverride } = await resolveSlackSendContext({
           cfg: ctx.cfg,
           accountId: ctx.accountId ?? undefined,
           deps: ctx.deps,
@@ -552,7 +568,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     attachedResults: {
       channel: "slack",
       sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
-        const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
+        const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
           cfg,
           accountId: accountId ?? undefined,
           deps,
@@ -577,7 +593,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         threadId,
         cfg,
       }) => {
-        const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
+        const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
           cfg,
           accountId: accountId ?? undefined,
           deps,

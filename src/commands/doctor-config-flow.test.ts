@@ -1430,6 +1430,40 @@ describe("doctor config flow", () => {
     }
   });
 
+  it("warns clearly about legacy hooks.internal.handlers and requires manual migration", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          hooks: {
+            internal: {
+              handlers: [{ event: "command:new", module: "hooks/legacy-handler.js" }],
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            String(message).includes("hooks.internal.handlers:") &&
+            String(message).includes("HOOK.md + handler.js"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
+            String(message).includes("does not rewrite this shape automatically"),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("warns clearly about legacy thread binding ttlHours config and points to doctor --fix", async () => {
     const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     try {

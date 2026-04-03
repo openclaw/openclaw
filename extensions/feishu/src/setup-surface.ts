@@ -4,7 +4,6 @@ import {
   formatDocsLink,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
-  patchChannelConfigForAccount,
   patchTopLevelChannelConfigSection,
   promptSingleChannelSecretInput,
   splitSetupEntries,
@@ -33,15 +32,14 @@ function normalizeString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function getScopedFeishuConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): FeishuConfig | FeishuAccountConfig {
-  const feishuCfg = ((cfg.channels?.feishu as FeishuConfig | undefined) ?? {}) as FeishuConfig;
+type ScopedFeishuConfig = Partial<FeishuConfig> & Partial<FeishuAccountConfig>;
+
+function getScopedFeishuConfig(cfg: OpenClawConfig, accountId: string): ScopedFeishuConfig {
+  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    return feishuCfg;
+    return feishuCfg ?? {};
   }
-  return (feishuCfg.accounts?.[accountId] as FeishuAccountConfig | undefined) ?? {};
+  return (feishuCfg?.accounts?.[accountId] as FeishuAccountConfig | undefined) ?? {};
 }
 
 function patchFeishuConfig(
@@ -49,11 +47,30 @@ function patchFeishuConfig(
   accountId: string,
   patch: Record<string, unknown>,
 ): OpenClawConfig {
-  return patchChannelConfigForAccount({
+  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return patchTopLevelChannelConfigSection({
+      cfg,
+      channel,
+      enabled: true,
+      patch,
+    });
+  }
+  const nextAccountPatch = {
+    ...((feishuCfg?.accounts?.[accountId] as Record<string, unknown> | undefined) ?? {}),
+    enabled: true,
+    ...patch,
+  };
+  return patchTopLevelChannelConfigSection({
     cfg,
     channel,
-    accountId,
-    patch,
+    enabled: true,
+    patch: {
+      accounts: {
+        ...(feishuCfg?.accounts ?? {}),
+        [accountId]: nextAccountPatch,
+      },
+    },
   });
 }
 

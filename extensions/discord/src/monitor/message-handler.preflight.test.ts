@@ -2,9 +2,17 @@ import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
+const resolveDiscordDmCommandAccessMock = vi.hoisted(() => vi.fn());
+const handleDiscordDmCommandDecisionMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("./preflight-audio.runtime.js", () => ({
-  transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
+  transcribeFirstAudio: transcribeFirstAudioMock,
+}));
+vi.mock("./dm-command-auth.js", () => ({
+  resolveDiscordDmCommandAccess: resolveDiscordDmCommandAccessMock,
+}));
+vi.mock("./dm-command-decision.js", () => ({
+  handleDiscordDmCommandDecision: handleDiscordDmCommandDecisionMock,
 }));
 import {
   __testing as sessionBindingTesting,
@@ -261,6 +269,14 @@ describe("preflightDiscordMessage", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     transcribeFirstAudioMock.mockReset();
+    resolveDiscordDmCommandAccessMock.mockReset();
+    resolveDiscordDmCommandAccessMock.mockResolvedValue({
+      commandAuthorized: true,
+      decision: "allow",
+      allowMatch: { allowed: true, matchedBy: "allowFrom", value: "123" },
+    });
+    handleDiscordDmCommandDecisionMock.mockReset();
+    handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);
   });
 
   it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
@@ -347,6 +363,56 @@ describe("preflightDiscordMessage", () => {
         pluginId: "openclaw-codex-app-server",
       },
     });
+  });
+
+  it("uses configured defaultAccount for omitted-account dm authorization", async () => {
+    const message = createDiscordMessage({
+      id: "m-dm-default-account",
+      channelId: "dm-channel-default-account",
+      content: "who are you",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "alice",
+      },
+    });
+
+    await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          channels: {
+            discord: {
+              defaultAccount: "work",
+              accounts: {
+                default: {
+                  token: "token-default",
+                },
+                work: {
+                  token: "token-work",
+                },
+              },
+            },
+          },
+        },
+        discordConfig: {
+          defaultAccount: "work",
+          dmPolicy: "allowlist",
+        } as DiscordConfig,
+        data: {
+          channel_id: "dm-channel-default-account",
+          author: message.author,
+          message,
+        } as DiscordMessageEvent,
+        client: createDmClient("dm-channel-default-account"),
+      }),
+    });
+
+    expect(resolveDiscordDmCommandAccessMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "work",
+      }),
+    );
   });
 
   it("keeps bound-thread regular bot messages flowing when allowBots=true", async () => {

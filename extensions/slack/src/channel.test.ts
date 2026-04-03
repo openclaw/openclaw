@@ -11,8 +11,8 @@ const { handleSlackActionMock } = vi.hoisted(() => ({
   handleSlackActionMock: vi.fn(),
 }));
 
-vi.mock("./action-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./action-runtime.js")>();
+vi.mock("./action-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./action-runtime.js")>("./action-runtime.js");
   return {
     ...actual,
     handleSlackAction: handleSlackActionMock,
@@ -159,10 +159,12 @@ describe("slackPlugin actions", () => {
       },
     };
 
-    expect(slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "default" })).toMatchObject({
-      actions: ["send"],
-      capabilities: ["blocks"],
-    });
+    expect(slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "default" })).toMatchObject(
+      {
+        actions: ["send"],
+        capabilities: ["blocks"],
+      },
+    );
     expect(slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "work" })).toMatchObject({
       actions: [
         "send",
