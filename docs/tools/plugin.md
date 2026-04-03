@@ -209,6 +209,7 @@ openclaw plugins doctor                  # diagnostics
 
 openclaw plugins install <package>        # install (ClawHub first, then npm)
 openclaw plugins install clawhub:<pkg>   # install from ClawHub only
+openclaw plugins install <spec> --force  # overwrite existing install
 openclaw plugins install <path>          # install from local path
 openclaw plugins install -l <path>       # link (no copy) for dev
 openclaw plugins install <spec> --dangerously-force-unsafe-install
@@ -219,6 +220,8 @@ openclaw plugins update --all            # update all
 openclaw plugins enable <id>
 openclaw plugins disable <id>
 ```
+
+`--force` overwrites an existing installed plugin or hook pack in place.
 
 `--dangerously-force-unsafe-install` is a break-glass override for false
 positives from the built-in dangerous-code scanner. It allows plugin installs
