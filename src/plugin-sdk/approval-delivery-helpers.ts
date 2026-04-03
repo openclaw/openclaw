@@ -18,6 +18,7 @@ type ApprovalAdapterParams = {
 
 type DeliverySuppressionParams = {
   cfg: OpenClawConfig;
+  approvalKind: ApprovalKind;
   target: { channel: string; accountId?: string | null };
   request: { request: { turnSourceChannel?: string | null; turnSourceAccountId?: string | null } };
 };
@@ -92,7 +93,7 @@ function buildApproverRestrictedNativeApprovalCapability(
       accountId?: string | null;
       action: "approve";
     }) =>
-      params.hasApprovers({ cfg, accountId }) && params.isNativeDeliveryEnabled({ cfg, accountId })
+      params.hasApprovers({ cfg, accountId })
         ? ({ kind: "enabled" } as const)
         : ({ kind: "disabled" } as const),
     approvals: {

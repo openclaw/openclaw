@@ -214,7 +214,6 @@ async function startInflightReplayDuplicate(params: {
 
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
   });
 

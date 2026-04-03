@@ -8,7 +8,6 @@ import {
   compareReleaseVersions as compareReleaseVersionsBase,
   resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
   parseReleaseVersion as parseReleaseVersionBase,
-  resolveNpmPublishPlan as resolveNpmPublishPlanBase,
 } from "./lib/npm-publish-plan.mjs";
 
 type PackageJson = {
@@ -82,9 +81,32 @@ export function compareReleaseVersions(left: string, right: string): number | nu
 
 export function resolveNpmPublishPlan(
   version: string,
-  currentBetaVersion?: string | null,
+  _currentBetaVersion?: string | null,
+  requestedPublishTag?: "latest" | "beta" | null,
 ): NpmPublishPlan {
-  return resolveNpmPublishPlanBase(version, currentBetaVersion) as NpmPublishPlan;
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    throw new Error(`Unsupported release version "${version}".`);
+  }
+
+  const publishTag = requestedPublishTag?.trim() === "latest" ? "latest" : "beta";
+
+  if (parsedVersion.channel === "beta") {
+    if (publishTag !== "beta") {
+      throw new Error("Beta prereleases must publish to the beta dist-tag.");
+    }
+    return {
+      channel: "beta",
+      publishTag: "beta",
+      mirrorDistTags: [],
+    };
+  }
+
+  return {
+    channel: "stable",
+    publishTag,
+    mirrorDistTags: [],
+  };
 }
 
 export function resolveNpmDistTagMirrorAuth(params?: {

@@ -36,6 +36,28 @@ requireMention? yes -> mentioned? no -> store for context only
 otherwise -> reply
 ```
 
+## Context visibility and allowlists
+
+Two different controls are involved in group safety:
+
+- **Trigger authorization**: who can trigger the agent (`groupPolicy`, `groups`, `groupAllowFrom`, channel-specific allowlists).
+- **Context visibility**: what supplemental context is injected into the model (reply text, quotes, thread history, forwarded metadata).
+
+By default, OpenClaw prioritizes normal chat behavior and keeps context mostly as received. This means allowlists primarily decide who can trigger actions, not a universal redaction boundary for every quoted or historical snippet.
+
+Current behavior is channel-specific:
+
+- Some channels already apply sender-based filtering for supplemental context in specific paths (for example Slack thread seeding, Matrix reply/thread lookups).
+- Other channels still pass quote/reply/forward context through as received.
+
+Hardening direction (planned):
+
+- `contextVisibility: "all"` (default) keeps current as-received behavior.
+- `contextVisibility: "allowlist"` filters supplemental context to allowlisted senders.
+- `contextVisibility: "allowlist_quote"` is `allowlist` plus one explicit quote/reply exception.
+
+Until this hardening model is implemented consistently across channels, expect differences by surface.
+
 ![Group message flow](/images/groups-flow.svg)
 
 If you want...

@@ -306,10 +306,11 @@ describe("resolvePluginWebSearchProviders", () => {
     applyPluginAutoEnableSpy = vi
       .spyOn(pluginAutoEnableModule, "applyPluginAutoEnable")
       .mockImplementation(
-        (params: { config: unknown }) =>
+        (params) =>
           ({
-            config: params.config,
+            config: params.config ?? {},
             changes: [],
+            autoEnabledReasons: {},
           }) as ReturnType<PluginAutoEnableModule["applyPluginAutoEnable"]>,
       );
     loadPluginManifestRegistryMock = vi
@@ -351,7 +352,11 @@ describe("resolvePluginWebSearchProviders", () => {
         allow: ["brave", "perplexity"],
       },
     };
-    applyPluginAutoEnableSpy.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnableSpy.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
 
     resolvePluginWebSearchProviders(createSnapshotParams({ config: rawConfig }));
 
@@ -373,6 +378,51 @@ describe("resolvePluginWebSearchProviders", () => {
       env: createWebSearchEnv(),
       expectedLoaderCalls: 1,
     });
+  });
+
+  it("reuses a compatible active registry for snapshot resolution when config is provided", () => {
+    const env = createWebSearchEnv();
+    const rawConfig = createBraveAllowConfig();
+    const { config, activationSourceConfig, autoEnabledReasons } =
+      webSearchProvidersSharedModule.resolveBundledWebSearchResolutionConfig({
+        config: rawConfig,
+        bundledAllowlistCompat: true,
+        env,
+      });
+    const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
+      config,
+      activationSourceConfig,
+      autoEnabledReasons,
+      workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
+      env,
+      onlyPluginIds: ["brave"],
+      cache: false,
+      activate: false,
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push(
+      createRuntimeWebSearchProvider({
+        pluginId: "brave",
+        pluginName: "Brave",
+        id: "brave",
+        label: "Brave Search",
+        hint: "Brave runtime provider",
+        envVar: "BRAVE_API_KEY",
+        signupUrl: "https://example.com/brave",
+        credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+      }),
+    );
+    setActivePluginRegistry(registry, cacheKey);
+
+    const providers = resolvePluginWebSearchProviders({
+      config: rawConfig,
+      bundledAllowlistCompat: true,
+      workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
+      env,
+    });
+
+    expectRuntimeProviderResolution(providers, ["brave:brave"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -503,13 +553,17 @@ describe("resolvePluginWebSearchProviders", () => {
       name: "reuses a compatible active registry for runtime resolution when config is provided",
       setupRegistry: () => {
         const env = createWebSearchEnv();
-        const { config } = webSearchProvidersSharedModule.resolveBundledWebSearchResolutionConfig({
-          config: createBraveAllowConfig(),
-          bundledAllowlistCompat: true,
-          env,
-        });
+        const rawConfig = createBraveAllowConfig();
+        const { config, activationSourceConfig, autoEnabledReasons } =
+          webSearchProvidersSharedModule.resolveBundledWebSearchResolutionConfig({
+            config: rawConfig,
+            bundledAllowlistCompat: true,
+            env,
+          });
         const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
           config,
+          activationSourceConfig,
+          autoEnabledReasons,
           workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
           env,
           onlyPluginIds: ["brave"],
@@ -531,7 +585,7 @@ describe("resolvePluginWebSearchProviders", () => {
         );
         setActivePluginRegistry(registry, cacheKey);
         return {
-          config: createBraveAllowConfig(),
+          config: rawConfig,
           bundledAllowlistCompat: true,
           workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
           env,
