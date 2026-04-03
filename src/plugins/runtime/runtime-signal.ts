@@ -3,7 +3,7 @@ import {
   probeSignal,
   signalMessageActions,
   sendMessageSignal,
-} from "../../../extensions/signal/runtime-api.js";
+} from "../../plugin-sdk/signal-runtime-surface.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 export function createRuntimeSignal(): PluginRuntimeChannel["signal"] {
