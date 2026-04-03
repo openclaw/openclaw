@@ -4,6 +4,7 @@ import {
   isGatewayNonLoopbackBindMode,
   resolveGatewayPortWithDefault,
 } from "./gateway-control-ui-origins.js";
+import { migrateLegacyXSearchConfig } from "./legacy-x-search.js";
 import {
   defineLegacyConfigMigration,
   ensureRecord,
@@ -14,6 +15,7 @@ import {
 } from "./legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
+import { LEGACY_TALK_PROVIDER_ID } from "./talk.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
   "every",
@@ -35,6 +37,17 @@ const AGENT_HEARTBEAT_KEYS = new Set([
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 const LEGACY_TTS_PLUGIN_IDS = new Set(["voice-call"]);
+const LEGACY_TALK_FIELD_KEYS = [
+  "voiceId",
+  "voiceAliases",
+  "modelId",
+  "outputFormat",
+  "apiKey",
+] as const;
+
+function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
+  return perSession ? "session" : "shared";
+}
 
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   if (typeof value !== "string") {
@@ -132,6 +145,90 @@ function hasLegacyTtsProviderKeys(value: unknown): boolean {
     return false;
   }
   return LEGACY_TTS_PROVIDER_KEYS.some((key) => Object.prototype.hasOwnProperty.call(tts, key));
+}
+
+function hasLegacyTalkFields(value: unknown): boolean {
+  const talk = getRecord(value);
+  if (!talk) {
+    return false;
+  }
+  return LEGACY_TALK_FIELD_KEYS.some((key) => Object.prototype.hasOwnProperty.call(talk, key));
+}
+
+function hasLegacySandboxPerSession(value: unknown): boolean {
+  const sandbox = getRecord(value);
+  return Boolean(sandbox && Object.prototype.hasOwnProperty.call(sandbox, "perSession"));
+}
+
+function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => hasLegacySandboxPerSession(getRecord(agent)?.sandbox));
+}
+
+function resolveTalkMigrationTargetProviderId(talk: Record<string, unknown>): string | null {
+  const explicitProvider =
+    typeof talk.provider === "string" && talk.provider.trim() ? talk.provider.trim() : null;
+  const providers = getRecord(talk.providers);
+  if (explicitProvider) {
+    if (isBlockedObjectKey(explicitProvider)) {
+      return null;
+    }
+    return explicitProvider;
+  }
+  if (!providers) {
+    return LEGACY_TALK_PROVIDER_ID;
+  }
+  const providerIds = Object.keys(providers).filter((key) => !isBlockedObjectKey(key));
+  if (providerIds.length === 0) {
+    return LEGACY_TALK_PROVIDER_ID;
+  }
+  if (providerIds.length === 1) {
+    return providerIds[0] ?? null;
+  }
+  return null;
+}
+
+function migrateLegacyTalkFields(raw: Record<string, unknown>, changes: string[]): void {
+  const talk = getRecord(raw.talk);
+  if (!talk || !hasLegacyTalkFields(talk)) {
+    return;
+  }
+
+  const providerId = resolveTalkMigrationTargetProviderId(talk);
+  if (!providerId) {
+    changes.push(
+      "Skipped talk legacy field migration because talk.providers defines multiple providers and talk.provider is unset; move talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey under the intended provider manually.",
+    );
+    return;
+  }
+
+  const providers = ensureRecord(talk, "providers");
+  const existingProvider = getRecord(providers[providerId]) ?? {};
+  const migratedProvider = structuredClone(existingProvider);
+  const legacyFields: Record<string, unknown> = {};
+  const movedKeys: string[] = [];
+  for (const key of LEGACY_TALK_FIELD_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(talk, key)) {
+      continue;
+    }
+    legacyFields[key] = talk[key];
+    delete talk[key];
+    movedKeys.push(key);
+  }
+  if (movedKeys.length === 0) {
+    return;
+  }
+
+  mergeMissing(migratedProvider, legacyFields);
+  providers[providerId] = migratedProvider;
+  talk.providers = providers;
+  raw.talk = talk;
+
+  changes.push(
+    `Moved talk legacy fields (${movedKeys.join(", ")}) → talk.providers.${providerId} (filled missing provider fields only).`,
+  );
 }
 
 function hasLegacyDiscordAccountTtsProviderKeys(value: unknown): boolean {
@@ -259,6 +356,12 @@ const HEARTBEAT_RULE: LegacyConfigRule = {
     "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
 };
 
+const X_SEARCH_RULE: LegacyConfigRule = {
+  path: ["tools", "web", "x_search", "apiKey"],
+  message:
+    "tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead (auto-migrated on load).",
+};
+
 const LEGACY_TTS_RULES: LegacyConfigRule[] = [
   {
     path: ["messages", "tts"],
@@ -286,7 +389,104 @@ const LEGACY_TTS_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const TALK_RULE: LegacyConfigRule = {
+  path: ["talk"],
+  message:
+    "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey are legacy; use talk.providers.<provider> instead (auto-migrated on load).",
+  match: (value) => hasLegacyTalkFields(value),
+};
+
+const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "sandbox"],
+    message:
+      "agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope instead (auto-migrated on load).",
+    match: (value) => hasLegacySandboxPerSession(value),
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      "agents.list[].sandbox.perSession is legacy; use agents.list[].sandbox.scope instead (auto-migrated on load).",
+    match: (value) => hasLegacyAgentListSandboxPerSession(value),
+  },
+];
+
+function migrateLegacySandboxPerSession(
+  sandbox: Record<string, unknown>,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!Object.prototype.hasOwnProperty.call(sandbox, "perSession")) {
+    return;
+  }
+  const rawPerSession = sandbox.perSession;
+  if (typeof rawPerSession === "boolean") {
+    if (sandbox.scope === undefined) {
+      sandbox.scope = sandboxScopeFromPerSession(rawPerSession);
+      changes.push(
+        `Moved ${pathLabel}.perSession → ${pathLabel}.scope (${String(sandbox.scope)}).`,
+      );
+    } else {
+      changes.push(`Removed ${pathLabel}.perSession (${pathLabel}.scope already set).`);
+    }
+    delete sandbox.perSession;
+  } else {
+    // Preserve invalid values so normal schema validation still surfaces the
+    // type error instead of silently falling back to the default sandbox scope.
+    return;
+  }
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "agents.sandbox.perSession->scope",
+    describe: "Move legacy agent sandbox perSession aliases to sandbox.scope",
+    legacyRules: LEGACY_SANDBOX_SCOPE_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      const defaultSandbox = getRecord(defaults?.sandbox);
+      if (defaultSandbox) {
+        migrateLegacySandboxPerSession(defaultSandbox, "agents.defaults.sandbox", changes);
+      }
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        const agentRecord = getRecord(agent);
+        const sandbox = getRecord(agentRecord?.sandbox);
+        if (!sandbox) {
+          continue;
+        }
+        migrateLegacySandboxPerSession(sandbox, `agents.list.${index}.sandbox`, changes);
+      }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "talk.legacy-fields->talk.providers",
+    describe: "Move legacy Talk flat fields into talk.providers.<provider>",
+    legacyRules: [TALK_RULE],
+    apply: (raw, changes) => {
+      migrateLegacyTalkFields(raw, changes);
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "tools.web.x_search.apiKey->plugins.entries.xai.config.webSearch.apiKey",
+    describe: "Move legacy x_search auth into the xAI plugin webSearch config",
+    legacyRules: [X_SEARCH_RULE],
+    apply: (raw, changes) => {
+      const migrated = migrateLegacyXSearchConfig(raw);
+      if (!migrated.changes.length) {
+        return;
+      }
+      for (const key of Object.keys(raw)) {
+        delete raw[key];
+      }
+      Object.assign(raw, migrated.config);
+      changes.push(...migrated.changes);
+    },
+  }),
   defineLegacyConfigMigration({
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
     // host-header fallback flag) for any non-loopback bind. The setup wizard was updated

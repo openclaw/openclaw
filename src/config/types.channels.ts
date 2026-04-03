@@ -1,4 +1,4 @@
-import type { GroupPolicy } from "./types.base.js";
+import type { ContextVisibilityMode, GroupPolicy } from "./types.base.js";
 
 export type ChannelHeartbeatVisibilityConfig = {
   /** Show HEARTBEAT_OK acknowledgments in chat (default: false). */
@@ -19,6 +19,7 @@ export type ChannelHealthMonitorConfig = {
 
 export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
+  contextVisibility?: ContextVisibilityMode;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
@@ -38,6 +39,7 @@ export type ExtensionChannelConfig = {
   defaultAccount?: string;
   dmPolicy?: string;
   groupPolicy?: GroupPolicy;
+  contextVisibility?: ContextVisibilityMode;
   healthMonitor?: ChannelHealthMonitorConfig;
   accounts?: Record<string, unknown>;
   [key: string]: unknown;

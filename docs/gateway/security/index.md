@@ -90,6 +90,7 @@ Treat Gateway and node as one operator trust domain, with different roles:
 - A caller authenticated to the Gateway is trusted at Gateway scope. After pairing, node actions are trusted operator actions on that node.
 - `sessionKey` is routing/context selection, not per-user auth.
 - Exec approvals (allowlist + ask) are guardrails for operator intent, not hostile multi-tenant isolation.
+- OpenClaw's product default for trusted single-operator setups is that host exec on `gateway`/`node` is allowed without approval prompts (`security="full"`, `ask="off"` unless you tighten it). That default is intentional UX, not a vulnerability by itself.
 - Exec approvals bind exact request context and best-effort direct local file operands; they do not semantically model every runtime/interpreter loader path. Use sandboxing and host isolation for strong boundaries.
 
 If you need hostile-user isolation, split trust boundaries by OS user/host and run separate gateways.
@@ -168,11 +169,32 @@ If more than one person can DM your bot:
 - Never combine shared DMs with broad tool access.
 - This hardens cooperative/shared inboxes, but is not designed as hostile co-tenant isolation when users share host/config write access.
 
+## Context visibility model
+
+OpenClaw separates two concepts:
+
+- **Trigger authorization**: who can trigger the agent (`dmPolicy`, `groupPolicy`, allowlists, mention gates).
+- **Context visibility**: what supplemental context is injected into model input (reply body, quoted text, thread history, forwarded metadata).
+
+Allowlists gate triggers and command authorization. The `contextVisibility` setting controls how supplemental context (quoted replies, thread roots, fetched history) is filtered:
+
+- `contextVisibility: "all"` (default) keeps supplemental context as received.
+- `contextVisibility: "allowlist"` filters supplemental context to senders allowed by the active allowlist checks.
+- `contextVisibility: "allowlist_quote"` behaves like `allowlist`, but still keeps one explicit quoted reply.
+
+Set `contextVisibility` per channel or per room/conversation. See [Group Chats](/channels/groups#context-visibility) for setup details.
+
+Advisory triage guidance:
+
+- Claims that only show "model can see quoted or historical text from non-allowlisted senders" are hardening findings addressable with `contextVisibility`, not auth or sandbox boundary bypasses by themselves.
+- To be security-impacting, reports still need a demonstrated trust-boundary bypass (auth, policy, sandbox, approval, or another documented boundary).
+
 ## What the audit checks (high level)
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
 - **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
 - **Exec approval drift** (`security=full`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`): are host-exec guardrails still doing what you think they are?
+  - `security="full"` is a broad posture warning, not proof of a bug. It is the chosen default for trusted personal-assistant setups; tighten it only when your threat model needs approval or allowlist guardrails.
 - **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens).
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
@@ -375,6 +397,7 @@ If a macOS node is paired, the Gateway can invoke `system.run` on that node. Thi
 - The Gateway applies a coarse global node command policy via `gateway.nodes.allowCommands` / `denyCommands`.
 - Controlled on the Mac via **Settings → Exec approvals** (security + ask + allowlist).
 - The per-node `system.run` policy is the node's own exec approvals file (`exec.approvals.node.*`), which can be stricter or looser than the gateway's global command-ID policy.
+- A node running with `security="full"` and `ask="off"` is following the default trusted-operator model. Treat that as expected behavior unless your deployment explicitly requires a tighter approval or allowlist stance.
 - Approval mode binds exact request context and, when possible, one concrete local script/file operand. If OpenClaw cannot identify exactly one direct local file for an interpreter/runtime command, approval-backed execution is denied rather than promising full semantic coverage.
 - If you don’t want remote execution, set security to **deny** and remove node pairing for that Mac.
 
@@ -454,12 +477,12 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - Prefer explicit `plugins.allow` allowlists.
 - Review plugin config before enabling.
 - Restart the Gateway after plugin changes.
-- If you install plugins (`openclaw plugins install <package>`), treat it like running untrusted code:
+- If you install or update plugins (`openclaw plugins install <package>`, `openclaw plugins update <id>`), treat it like running untrusted code:
   - The install path is the per-plugin directory under the active plugin install root.
-  - OpenClaw runs a built-in dangerous-code scan before install. `critical` findings block by default.
+  - OpenClaw runs a built-in dangerous-code scan before install/update. `critical` findings block by default.
   - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
-  - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.
+  - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives on plugin install/update flows. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.
   - Gateway-backed skill dependency installs follow the same dangerous/suspicious split: built-in `critical` findings block unless the caller explicitly sets `dangerouslyForceUnsafeInstall`, while suspicious findings still warn only. `openclaw skills install` remains the separate ClawHub skill download/install flow.
 
 Details: [Plugins](/tools/plugin)
@@ -992,7 +1015,7 @@ Important: `tools.elevated` is the global baseline escape hatch that runs exec o
 If you allow session tools, treat delegated sub-agent runs as another boundary decision:
 
 - Deny `sessions_spawn` unless the agent truly needs delegation.
-- Keep `agents.list[].subagents.allowAgents` restricted to known-safe target agents.
+- Keep `agents.defaults.subagents.allowAgents` and any per-agent `agents.list[].subagents.allowAgents` overrides restricted to known-safe target agents.
 - For any workflow that must remain sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `inherit`).
 - `sandbox: "require"` fails fast when the target child runtime is not sandboxed.
 

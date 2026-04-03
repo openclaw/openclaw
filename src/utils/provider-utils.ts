@@ -2,6 +2,18 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveProviderReasoningOutputModeWithPlugin } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 
+const BUILTIN_REASONING_OUTPUT_MODES = {
+  anthropic: "native",
+  google: "tagged",
+  "google-gemini-cli": "tagged",
+  "google-generative-ai": "tagged",
+  minimax: "native",
+  "minimax-cn": "native",
+  ollama: "native",
+  openai: "native",
+  openrouter: "native",
+} as const;
+
 /**
  * Utility functions for provider-specific logic and capabilities.
  */
@@ -18,6 +30,13 @@ export function resolveReasoningOutputMode(params: {
   const provider = params.provider?.trim();
   if (!provider) {
     return "native";
+  }
+
+  const normalized = provider.toLowerCase();
+  const builtInMode =
+    BUILTIN_REASONING_OUTPUT_MODES[normalized as keyof typeof BUILTIN_REASONING_OUTPUT_MODES];
+  if (builtInMode) {
+    return builtInMode;
   }
 
   const pluginMode = resolveProviderReasoningOutputModeWithPlugin({
@@ -39,26 +58,14 @@ export function resolveReasoningOutputMode(params: {
     return pluginMode;
   }
 
-  const normalized = provider.toLowerCase();
-
   // Check for exact matches or known prefixes/substrings for reasoning providers.
   // Note: Ollama is intentionally excluded - its OpenAI-compatible endpoint
   // handles reasoning natively via the `reasoning` field in streaming chunks,
   // so tag-based enforcement is unnecessary and causes all output to be
   // discarded as "(no output)" (#2279).
-  if (
-    normalized === "google" ||
-    normalized === "google-gemini-cli" ||
-    normalized === "google-generative-ai"
-  ) {
-    return "tagged";
-  }
-
-  // Handle Minimax (M2.5 is chatty/reasoning-like)
-  if (normalized.includes("minimax")) {
-    return "tagged";
-  }
-
+  // Note: MiniMax is also intentionally excluded. In production it does not
+  // reliably wrap user-visible output in <final> tags, so forcing tag
+  // enforcement suppresses normal assistant replies.
   return "native";
 }
 

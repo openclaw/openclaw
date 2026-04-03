@@ -35,4 +35,10 @@ describe("DEFAULT_IMAGE_MODELS", () => {
   it("includes the MiniMax portal vision default", () => {
     expect(DEFAULT_IMAGE_MODELS["minimax-portal"]).toBe("MiniMax-VL-01");
   });
+
+  it("includes bundled image-provider defaults beyond the core provider set", () => {
+    expect(DEFAULT_IMAGE_MODELS["openai-codex"]).toBe("gpt-5.4");
+    expect(DEFAULT_IMAGE_MODELS.moonshot).toBe("kimi-k2.5");
+    expect(DEFAULT_IMAGE_MODELS.openrouter).toBe("auto");
+  });
 });

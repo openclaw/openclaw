@@ -1,9 +1,7 @@
-import { sendMessageDiscord as sendMessageDiscordImpl } from "../../plugin-sdk/discord.js";
+import { createPluginBoundaryRuntimeSend } from "./plugin-boundary-send.js";
 
-type RuntimeSend = {
-  sendMessage: typeof import("../../plugin-sdk/discord.js").sendMessageDiscord;
-};
-
-export const runtimeSend = {
-  sendMessage: sendMessageDiscordImpl,
-} satisfies RuntimeSend;
+export const runtimeSend = createPluginBoundaryRuntimeSend({
+  pluginId: "discord",
+  exportName: "sendMessageDiscord",
+  missingLabel: "Discord plugin runtime",
+});

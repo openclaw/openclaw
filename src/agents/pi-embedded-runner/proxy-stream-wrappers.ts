@@ -1,7 +1,8 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
+import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
+import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
@@ -10,10 +11,6 @@ const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
 function resolveKilocodeAppHeaders(): Record<string, string> {
   const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
   return { [KILOCODE_FEATURE_HEADER]: feature };
-}
-
-function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
-  return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
 }
 
 function mapThinkingLevelToOpenRouterReasoningEffort(
@@ -62,7 +59,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
     if (
       typeof model.provider !== "string" ||
       typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModel(model.provider, model.id)
+      !isOpenRouterAnthropicModelRef(model.provider, model.id)
     ) {
       return underlying(model, context, options);
     }
@@ -111,17 +108,22 @@ export function createOpenRouterWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const attributionHeaders = resolveProviderAttributionHeaders("openrouter");
+    const headers = resolveProviderRequestPolicyConfig({
+      provider: typeof model.provider === "string" ? model.provider : "openrouter",
+      api: typeof model.api === "string" ? model.api : undefined,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: options?.headers,
+      precedence: "caller-wins",
+    }).headers;
     return streamWithPayloadPatch(
       underlying,
       model,
       context,
       {
         ...options,
-        headers: {
-          ...attributionHeaders,
-          ...options?.headers,
-        },
+        headers,
       },
       (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
@@ -140,16 +142,23 @@ export function createKilocodeWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    const headers = resolveProviderRequestPolicyConfig({
+      provider: typeof model.provider === "string" ? model.provider : "kilocode",
+      api: typeof model.api === "string" ? model.api : undefined,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: options?.headers,
+      providerHeaders: resolveKilocodeAppHeaders(),
+      precedence: "defaults-win",
+    }).headers;
     return streamWithPayloadPatch(
       underlying,
       model,
       context,
       {
         ...options,
-        headers: {
-          ...options?.headers,
-          ...resolveKilocodeAppHeaders(),
-        },
+        headers,
       },
       (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);

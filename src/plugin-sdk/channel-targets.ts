@@ -38,6 +38,12 @@ export {
   type ServicePrefix,
 } from "../channels/plugins/chat-target-prefixes.js";
 export {
+  looksLikeSignalTargetId,
+  normalizeSignalMessagingTarget,
+} from "../channels/plugins/normalize/signal.js";
+export type { ChannelId } from "../channels/plugins/types.js";
+export { normalizeChannelId } from "../channels/plugins/registry.js";
+export {
   buildUnresolvedTargetResults,
   resolveTargetsWithOptionalToken,
 } from "../channels/plugins/target-resolvers.js";

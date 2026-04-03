@@ -1,7 +1,7 @@
 import {
-  isTelegramExecApprovalAuthorizedSender,
-  isTelegramExecApprovalClientEnabled,
-} from "../../../extensions/telegram/api.js";
+  getChannelPlugin,
+  resolveChannelApprovalCapability,
+} from "../../channels/plugins/index.js";
 import { callGateway } from "../../gateway/call.js";
 import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
@@ -30,6 +30,9 @@ type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
   | { ok: false; error: string };
 
+const APPROVE_USAGE_TEXT =
+  "Usage: /approve <id> <decision> (see the pending approval message for available decisions)";
+
 function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
   if (FOREIGN_COMMAND_MENTION_REGEX.test(trimmed)) {
@@ -41,11 +44,11 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   }
   const rest = trimmed.slice(commandMatch[0].length).trim();
   if (!rest) {
-    return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+    return { ok: false, error: APPROVE_USAGE_TEXT };
   }
   const tokens = rest.split(/\s+/).filter(Boolean);
   if (tokens.length < 2) {
-    return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+    return { ok: false, error: APPROVE_USAGE_TEXT };
   }
 
   const first = tokens[0].toLowerCase();
@@ -65,24 +68,13 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
       id: tokens[0],
     };
   }
-  return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+  return { ok: false, error: APPROVE_USAGE_TEXT };
 }
 
 function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   const channel = params.command.channel;
   const sender = params.command.senderId ?? "unknown";
   return `${channel}:${sender}`;
-}
-
-function isAuthorizedTelegramExecSender(params: Parameters<CommandHandler>[0]): boolean {
-  if (params.command.channel !== "telegram") {
-    return false;
-  }
-  return isTelegramExecApprovalAuthorizedSender({
-    cfg: params.cfg,
-    accountId: params.ctx.AccountId,
-    senderId: params.command.senderId,
-  });
 }
 
 function readErrorCode(value: unknown): string | null {
@@ -175,7 +167,21 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   const isPluginId = parsed.id.startsWith("plugin:");
-  const telegramExecAuthorizedSender = isAuthorizedTelegramExecSender(params);
+  const approvalCapability = resolveChannelApprovalCapability(
+    getChannelPlugin(params.command.channel),
+  );
+  const approveCommandBehavior = approvalCapability?.resolveApproveCommandBehavior?.({
+    cfg: params.cfg,
+    accountId: params.ctx.AccountId,
+    senderId: params.command.senderId,
+    approvalKind: isPluginId ? "plugin" : "exec",
+  });
+  if (approveCommandBehavior?.kind === "ignore") {
+    return { shouldContinue: false };
+  }
+  if (approveCommandBehavior?.kind === "reply") {
+    return { shouldContinue: false, reply: { text: approveCommandBehavior.text } };
+  }
   const execApprovalAuthorization = resolveApprovalCommandAuthorization({
     cfg: params.cfg,
     channel: params.command.channel,
@@ -198,18 +204,6 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
-  }
-
-  if (
-    params.command.channel === "telegram" &&
-    !isPluginId &&
-    !telegramExecAuthorizedSender &&
-    !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
-  ) {
-    return {
-      shouldContinue: false,
-      reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
-    };
   }
 
   const missingScope = requireGatewayClientScopeForInternalChannel(params, {

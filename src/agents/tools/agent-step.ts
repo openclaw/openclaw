@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
-import { extractAssistantText, stripToolMessages } from "./sessions-helpers.js";
+import { extractAssistantText, stripToolMessages } from "./chat-history-text.js";
 
 type GatewayCaller = typeof callGateway;
 

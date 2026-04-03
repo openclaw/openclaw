@@ -296,7 +296,6 @@ beforeEach(() => {
 });
 
 beforeAll(async () => {
-  vi.resetModules();
   ({
     buildExecApprovalCustomId,
     extractDiscordChannelId,
@@ -1089,6 +1088,31 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
         }),
       }),
     );
+  });
+
+  it("omits allow-always when exec approvals disallow it", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      target: "dm",
+    });
+
+    mockSuccessfulDmDelivery({ throwOnUnexpectedRoute: true });
+
+    await handler.handleApprovalRequested(
+      createRequest({
+        ask: "always",
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+
+    const dmCall = mockRestPost.mock.calls.find(
+      ([route]) => route === Routes.channelMessages("dm-1"),
+    );
+    const payload = JSON.stringify(dmCall?.[1]?.body);
+    expect(payload).toContain("Allow Once");
+    expect(payload).toContain("Deny");
+    expect(payload).not.toContain("Allow Always");
   });
 });
 

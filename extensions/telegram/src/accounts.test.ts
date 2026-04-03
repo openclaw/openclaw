@@ -1,9 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
+import { withEnv } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../../../test/helpers/plugins/env.js";
 import {
   listTelegramAccountIds,
+  resolveTelegramMediaRuntimeOptions,
   resetMissingDefaultWarnFlag,
   resolveTelegramPollActionGateState,
   resolveDefaultTelegramAccountId,
@@ -414,5 +415,69 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
     });
 
     expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+  });
+});
+
+describe("resolveTelegramMediaRuntimeOptions", () => {
+  it("uses per-account network overrides for Telegram media downloads", () => {
+    const resolved = resolveTelegramMediaRuntimeOptions({
+      cfg: {
+        channels: {
+          telegram: {
+            apiRoot: "https://api.telegram.org",
+            network: {
+              dangerouslyAllowPrivateNetwork: false,
+            },
+            accounts: {
+              work: {
+                botToken: "123:work",
+                apiRoot: "http://tg-proxy.internal:8081",
+                network: {
+                  dangerouslyAllowPrivateNetwork: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      token: "123:work",
+    });
+
+    expect(resolved).toEqual({
+      token: "123:work",
+      apiRoot: "http://tg-proxy.internal:8081",
+      dangerouslyAllowPrivateNetwork: true,
+      transport: undefined,
+    });
+  });
+
+  it("falls back to top-level Telegram media settings when account override is absent", () => {
+    const resolved = resolveTelegramMediaRuntimeOptions({
+      cfg: {
+        channels: {
+          telegram: {
+            apiRoot: "http://tg-proxy.internal:8081",
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
+            accounts: {
+              work: {
+                botToken: "123:work",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      token: "123:work",
+    });
+
+    expect(resolved).toEqual({
+      token: "123:work",
+      apiRoot: "http://tg-proxy.internal:8081",
+      dangerouslyAllowPrivateNetwork: true,
+      transport: undefined,
+    });
   });
 });

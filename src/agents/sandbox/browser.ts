@@ -1,14 +1,16 @@
 import crypto from "node:crypto";
 import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
 import {
+  startBrowserBridgeServer,
+  stopBrowserBridgeServer,
+} from "../../plugin-sdk/browser-bridge.js";
+import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
   resolveProfile,
-  startBrowserBridgeServer,
-  stopBrowserBridgeServer,
   type ResolvedBrowserConfig,
-} from "../../plugin-sdk/browser-runtime.js";
+} from "../../plugin-sdk/browser-config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";

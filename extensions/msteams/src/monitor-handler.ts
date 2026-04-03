@@ -1,5 +1,6 @@
 import { type OpenClawConfig, type RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
+import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
@@ -168,7 +169,7 @@ async function handleFileConsentInvoke(
           uniqueId: consentResponse.uploadInfo.uniqueId,
         });
       } catch (err) {
-        log.error("file upload failed", { uploadId, error: String(err) });
+        log.error("file upload failed", { uploadId, error: formatUnknownError(err) });
         await context.sendActivity("File upload failed. Please try again.");
       } finally {
         removePendingUpload(uploadId);
@@ -342,7 +343,7 @@ async function handleFeedbackInvoke(
       userComment,
       log: deps.log,
     }).catch((err) => {
-      deps.log.error("feedback reflection failed", { error: String(err) });
+      deps.log.error("feedback reflection failed", { error: formatUnknownError(err) });
     });
   }
 
@@ -376,7 +377,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
             },
           });
         } catch (err) {
-          deps.log.debug?.("file consent handler error", { error: String(err) });
+          deps.log.debug?.("file consent handler error", { error: formatUnknownError(err) });
         }
         return;
       }
@@ -400,7 +401,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleTeamsMessage(context as MSTeamsTurnContext);
     } catch (err) {
-      deps.runtime.error?.(`msteams handler failed: ${String(err)}`);
+      deps.runtime.error?.(`msteams handler failed: ${formatUnknownError(err)}`);
     }
     await next();
   });
@@ -436,7 +437,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
             });
             deps.log.info("sent welcome card");
           } catch (err) {
-            deps.log.debug?.("failed to send welcome card", { error: String(err) });
+            deps.log.debug?.("failed to send welcome card", { error: formatUnknownError(err) });
           }
         } else if (!isPersonal && msteamsCfg?.groupWelcomeCard === true) {
           const botName = ctx.activity?.recipient?.name ?? undefined;
@@ -444,7 +445,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
             await ctx.sendActivity(buildGroupWelcomeText(botName));
             deps.log.info("sent group welcome message");
           } catch (err) {
-            deps.log.debug?.("failed to send group welcome", { error: String(err) });
+            deps.log.debug?.("failed to send group welcome", { error: formatUnknownError(err) });
           }
         } else {
           deps.log.debug?.("skipping welcome (disabled by config or conversation type)");

@@ -10,7 +10,11 @@ import {
 } from "./identity.js";
 import { probeSignal } from "./probe.js";
 import { clearSignalRuntime } from "./runtime.js";
-import { normalizeSignalAccountInput, parseSignalAllowFromEntries } from "./setup-core.js";
+import {
+  normalizeSignalAccountInput,
+  parseSignalAllowFromEntries,
+  signalDmPolicy,
+} from "./setup-core.js";
 
 describe("looksLikeUuid", () => {
   it("accepts hyphenated UUIDs", () => {
@@ -217,5 +221,57 @@ describe("signal setup parsing", () => {
       entries: [],
       error: "Invalid entry: invalid",
     });
+  });
+
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      signalDmPolicy.getCurrent(
+        {
+          channels: {
+            signal: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  account: "+15555550123",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(signalDmPolicy.resolveConfigKeys?.({ channels: { signal: {} } }, "work")).toEqual({
+      policyKey: "channels.signal.accounts.work.dmPolicy",
+      allowFromKey: "channels.signal.accounts.work.allowFrom",
+    });
+  });
+
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
+    const next = signalDmPolicy.setPolicy(
+      {
+        channels: {
+          signal: {
+            allowFrom: ["+15555550123"],
+            accounts: {
+              work: {
+                account: "+15555550999",
+              },
+            },
+          },
+        },
+      },
+      "open",
+      "work",
+    );
+
+    expect(next.channels?.signal?.dmPolicy).toBeUndefined();
+    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
+    expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 });

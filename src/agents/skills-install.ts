@@ -507,13 +507,14 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     argv[0] = brewExe;
   }
 
-  let env: NodeJS.ProcessEnv | undefined;
+  const envOverrides: NodeJS.ProcessEnv = {};
   if (spec.kind === "go" && brewExe) {
     const brewBin = await resolveBrewBinDir(timeoutMs, brewExe);
     if (brewBin) {
-      env = { GOBIN: brewBin };
+      envOverrides.GOBIN = brewBin;
     }
   }
+  const env = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
 
   return withWarnings(await executeInstallCommand({ argv, timeoutMs, env }), warnings);
 }

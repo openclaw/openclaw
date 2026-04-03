@@ -1,11 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-vi.hoisted(() => {
-  vi.resetModules();
-});
-
 import "./server-context.chrome-test-harness.js";
 import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,

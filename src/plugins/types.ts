@@ -11,7 +11,7 @@ import type {
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
+import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -35,7 +35,10 @@ import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
+import type {
+  RuntimeWebFetchMetadata,
+  RuntimeWebSearchMetadata,
+} from "../secrets/runtime-web-tools.types.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -442,6 +445,7 @@ export type ProviderPrepareRuntimeAuthContext = {
 export type ProviderPreparedRuntimeAuth = {
   apiKey: string;
   baseUrl?: string;
+  request?: ProviderRequestTransportOverrides;
   expiresAt?: number;
 };
 
@@ -542,6 +546,16 @@ export type ProviderReplayToolCallIdMode = "strict" | "strict9";
 export type ProviderReasoningOutputMode = "native" | "tagged";
 
 /**
+ * @deprecated Legacy static provider capability bag.
+ *
+ * Core replay/runtime ownership now lives on explicit provider hooks such as
+ * `buildReplayPolicy`, `normalizeToolSchemas`, and `wrapStreamFn`. OpenClaw no
+ * longer reads this bag at runtime, but the field remains typed so existing
+ * third-party plugins do not fail to compile immediately.
+ */
+export type ProviderCapabilities = Record<string, unknown>;
+
+/**
  * Provider-owned replay/compaction transcript policy.
  *
  * These values are consumed by shared history replay and compaction logic.
@@ -560,6 +574,8 @@ export type ProviderReplayPolicy = {
   dropThinkingBlocks?: boolean;
   repairToolUseResultPairing?: boolean;
   applyAssistantFirstOrderingFix?: boolean;
+  validateGeminiTurns?: boolean;
+  validateAnthropicTurns?: boolean;
   allowSyntheticToolResults?: boolean;
 };
 
@@ -580,6 +596,16 @@ export type ProviderReplayPolicyContext = {
   model?: ProviderRuntimeModel;
 };
 
+export type ProviderReplaySessionEntry = {
+  customType: string;
+  data?: unknown;
+};
+
+export type ProviderReplaySessionState = {
+  getCustomEntries(): ProviderReplaySessionEntry[];
+  appendCustomEntry(customType: string, data: unknown): void;
+};
+
 /**
  * Provider-owned replay-history sanitization input.
  *
@@ -590,6 +616,7 @@ export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext &
   sessionId: string;
   messages: AgentMessage[];
   allowedToolNames?: Iterable<string>;
+  sessionState?: ProviderReplaySessionState;
 };
 
 /**
@@ -601,6 +628,7 @@ export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext &
 export type ProviderValidateReplayTurnsContext = ProviderReplayPolicyContext & {
   sessionId?: string;
   messages: AgentMessage[];
+  sessionState?: ProviderReplaySessionState;
 };
 
 /**
@@ -611,6 +639,12 @@ export type ProviderValidateReplayTurnsContext = ProviderReplayPolicyContext & {
  */
 export type ProviderNormalizeToolSchemasContext = ProviderReplayPolicyContext & {
   tools: AnyAgentTool[];
+};
+
+export type ProviderToolSchemaDiagnostic = {
+  toolName: string;
+  toolIndex?: number;
+  violations: string[];
 };
 
 /**
@@ -696,6 +730,7 @@ export type ProviderCreateEmbeddingProviderContext = {
 export type ProviderCacheTtlEligibilityContext = {
   provider: string;
   modelId: string;
+  modelApi?: string;
 };
 
 /**
@@ -907,6 +942,13 @@ export type ProviderSyntheticAuthResult = {
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
 };
 
+export type ProviderDeferSyntheticProfileAuthContext = {
+  config?: OpenClawConfig;
+  provider: string;
+  providerConfig?: ModelProviderConfig;
+  resolvedApiKey?: string;
+};
+
 /** Text-inference provider capability registered by a plugin. */
 export type ProviderPlugin = {
   id: string;
@@ -1024,13 +1066,12 @@ export type ProviderPlugin = {
    */
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
   /**
-   * Static provider capability overrides consumed by shared transcript/tooling
-   * logic.
+   * @deprecated Legacy static capability bag kept only for compatibility.
    *
-   * Use this when the provider behaves like OpenAI/Anthropic, needs transcript
-   * sanitization quirks, or requires provider-family hints.
+   * New provider behavior should use explicit hooks instead. Core replay and
+   * stream/runtime logic no longer consumes this field.
    */
-  capabilities?: Partial<ProviderCapabilities>;
+  capabilities?: ProviderCapabilities;
   /**
    * Provider-owned replay/compaction policy override.
    *
@@ -1067,6 +1108,15 @@ export type ProviderPlugin = {
   normalizeToolSchemas?: (
     ctx: ProviderNormalizeToolSchemasContext,
   ) => AnyAgentTool[] | null | undefined;
+  /**
+   * Provider-owned tool-schema diagnostics after normalization.
+   *
+   * Use this when a provider wants to surface transport-specific schema
+   * warnings without teaching core about provider-specific keyword rules.
+   */
+  inspectToolSchemas?: (
+    ctx: ProviderNormalizeToolSchemasContext,
+  ) => ProviderToolSchemaDiagnostic[] | null | undefined;
   /**
    * Provider-owned reasoning output mode.
    *
@@ -1305,12 +1355,29 @@ export type ProviderPlugin = {
   resolveSyntheticAuth?: (
     ctx: ProviderResolveSyntheticAuthContext,
   ) => ProviderSyntheticAuthResult | null | undefined;
+  /**
+   * Provider-owned precedence rule for stored synthetic auth profiles.
+   *
+   * Return true when a stored profile API key is only a provider-owned
+   * synthetic placeholder and should yield to env/config-backed auth before
+   * OpenClaw falls back to that stored profile.
+   */
+  shouldDeferSyntheticProfileAuth?: (
+    ctx: ProviderDeferSyntheticProfileAuthContext,
+  ) => boolean | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
 export type WebSearchProviderId = string;
+export type WebFetchProviderId = string;
 
 export type WebSearchProviderToolDefinition = {
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+};
+
+export type WebFetchProviderToolDefinition = {
   description: string;
   parameters: Record<string, unknown>;
   execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -1320,6 +1387,12 @@ export type WebSearchProviderContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebSearchMetadata;
+};
+
+export type WebFetchProviderContext = {
+  config?: OpenClawConfig;
+  fetchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebFetchMetadata;
 };
 
 export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
@@ -1341,6 +1414,19 @@ export type WebSearchProviderSetupContext = {
   prompter: WizardPrompter;
   quickstartDefaults?: boolean;
   secretInputMode?: SecretInputMode;
+};
+
+export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebFetchRuntimeMetadataContext = {
+  config?: OpenClawConfig;
+  fetchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebFetchMetadata;
+  resolvedCredential?: {
+    value?: string;
+    source: WebFetchCredentialResolutionSource;
+    fallbackEnvVar?: string;
+  };
 };
 
 export type WebSearchProviderPlugin = {
@@ -1378,6 +1464,41 @@ export type WebSearchProviderPlugin = {
 };
 
 export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
+  pluginId: string;
+};
+
+export type WebFetchProviderPlugin = {
+  id: WebFetchProviderId;
+  label: string;
+  hint: string;
+  requiresCredential?: boolean;
+  credentialLabel?: string;
+  envVars: string[];
+  placeholder: string;
+  signupUrl: string;
+  docsUrl?: string;
+  autoDetectOrder?: number;
+  /** Canonical plugin-owned config path for this provider's primary fetch credential. */
+  credentialPath: string;
+  /**
+   * Legacy or inactive credential paths that should warn but not activate this provider.
+   * Include credentialPath here when overriding the list, because runtime classification
+   * treats inactiveSecretPaths as the full inactive surface for this provider.
+   */
+  inactiveSecretPaths?: string[];
+  getCredentialValue: (fetchConfig?: Record<string, unknown>) => unknown;
+  setCredentialValue: (fetchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  /** Apply the minimal config needed to select this provider without scattering plugin config writes in core. */
+  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  resolveRuntimeMetadata?: (
+    ctx: WebFetchRuntimeMetadataContext,
+  ) => Partial<RuntimeWebFetchMetadata> | Promise<Partial<RuntimeWebFetchMetadata>>;
+  createTool: (ctx: WebFetchProviderContext) => WebFetchProviderToolDefinition | null;
+};
+
+export type PluginWebFetchProviderEntry = WebFetchProviderPlugin & {
   pluginId: string;
 };
 
@@ -1539,6 +1660,13 @@ export type OpenClawPluginCommandDefinition = {
    * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
    */
   nativeNames?: Partial<Record<string, string>> & { default?: string };
+  /**
+   * Optional Telegram-native progress placeholder text.
+   * When set, Telegram native/plugin command delivery sends this text
+   * immediately, then edits that same message in place if the final reply
+   * is a simple text-only payload.
+   */
+  telegramNativeProgressMessage?: string;
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */
@@ -1873,6 +2001,8 @@ export type OpenClawPluginApi = {
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
+  /** Register a web fetch provider (web fetch capability). */
+  registerWebFetchProvider: (provider: WebFetchProviderPlugin) => void;
   /** Register a web search provider (web search capability). */
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
@@ -1955,7 +2085,8 @@ export type PluginHookName =
   | "subagent_ended"
   | "gateway_start"
   | "gateway_stop"
-  | "before_dispatch";
+  | "before_dispatch"
+  | "before_install";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -1985,6 +2116,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "before_dispatch",
+  "before_install",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -2405,11 +2537,25 @@ export type PluginHookSessionStartEvent = {
 };
 
 // session_end hook
+export type PluginHookSessionEndReason =
+  | "new"
+  | "reset"
+  | "idle"
+  | "daily"
+  | "compaction"
+  | "deleted"
+  | "unknown";
+
 export type PluginHookSessionEndEvent = {
   sessionId: string;
   sessionKey?: string;
   messageCount: number;
   durationMs?: number;
+  reason?: PluginHookSessionEndReason;
+  sessionFile?: string;
+  transcriptArchived?: boolean;
+  nextSessionId?: string;
+  nextSessionKey?: string;
 };
 
 // Subagent context
@@ -2505,12 +2651,116 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+export type PluginInstallTargetType = "skill" | "plugin";
 export type PluginInstallRequestKind =
   | "skill-install"
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
   | "plugin-npm";
+export type PluginInstallSourcePathKind = "file" | "directory";
+
+export type PluginInstallFinding = {
+  ruleId: string;
+  severity: "info" | "warn" | "critical";
+  file: string;
+  line: number;
+  message: string;
+};
+
+export type PluginHookBeforeInstallRequest = {
+  /** Original install entrypoint/provenance. */
+  kind: PluginInstallRequestKind;
+  /** Install mode requested by the caller. */
+  mode: "install" | "update";
+  /** Raw user-facing specifier or path when available. */
+  requestedSpecifier?: string;
+};
+
+export type PluginHookBeforeInstallBuiltinScan = {
+  /** Whether the built-in scan completed successfully. */
+  status: "ok" | "error";
+  /** Number of files the built-in scanner actually inspected. */
+  scannedFiles: number;
+  critical: number;
+  warn: number;
+  info: number;
+  findings: PluginInstallFinding[];
+  /** Scanner failure reason when status=`error`. */
+  error?: string;
+};
+
+export type PluginHookBeforeInstallSkillInstallSpec = {
+  id?: string;
+  kind: "brew" | "node" | "go" | "uv" | "download";
+  label?: string;
+  bins?: string[];
+  os?: string[];
+  formula?: string;
+  package?: string;
+  module?: string;
+  url?: string;
+  archive?: string;
+  extract?: boolean;
+  stripComponents?: number;
+  targetDir?: string;
+};
+
+export type PluginHookBeforeInstallSkill = {
+  installId: string;
+  installSpec?: PluginHookBeforeInstallSkillInstallSpec;
+};
+
+export type PluginHookBeforeInstallPlugin = {
+  /** Canonical plugin id OpenClaw will install under. */
+  pluginId: string;
+  /** Normalized installable content shape after source resolution. */
+  contentType: "bundle" | "package" | "file";
+  packageName?: string;
+  manifestId?: string;
+  version?: string;
+  extensions?: string[];
+};
+
+// before_install hook
+export type PluginHookBeforeInstallContext = {
+  /** Category of install target being checked. */
+  targetType: PluginInstallTargetType;
+  /** Original install entrypoint/provenance. */
+  requestKind: PluginInstallRequestKind;
+  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  origin?: string;
+};
+
+export type PluginHookBeforeInstallEvent = {
+  /** Category of install target being checked. */
+  targetType: PluginInstallTargetType;
+  /** Human-readable skill or plugin name. */
+  targetName: string;
+  /** Absolute path to the install target content being scanned. */
+  sourcePath: string;
+  /** Whether the install target content is a file or directory. */
+  sourcePathKind: PluginInstallSourcePathKind;
+  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  origin?: string;
+  /** Install request provenance and caller mode. */
+  request: PluginHookBeforeInstallRequest;
+  /** Structured result of the built-in scanner. */
+  builtinScan: PluginHookBeforeInstallBuiltinScan;
+  /** Present when targetType=`skill`. */
+  skill?: PluginHookBeforeInstallSkill;
+  /** Present when targetType=`plugin`. */
+  plugin?: PluginHookBeforeInstallPlugin;
+};
+
+export type PluginHookBeforeInstallResult = {
+  /** Additional findings to merge with built-in scanner results. */
+  findings?: PluginInstallFinding[];
+  /** If true, block the installation entirely. */
+  block?: boolean;
+  /** Human-readable reason for blocking. */
+  blockReason?: string;
+};
 
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
@@ -2622,6 +2872,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  before_install: (
+    event: PluginHookBeforeInstallEvent,
+    ctx: PluginHookBeforeInstallContext,
+  ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

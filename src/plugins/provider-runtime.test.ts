@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
@@ -52,12 +52,13 @@ let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolv
 let resolveProviderReasoningOutputModeWithPlugin: typeof import("./provider-runtime.js").resolveProviderReasoningOutputModeWithPlugin;
 let resolveProviderReplayPolicyWithPlugin: typeof import("./provider-runtime.js").resolveProviderReplayPolicyWithPlugin;
 let resolveProviderSyntheticAuthWithPlugin: typeof import("./provider-runtime.js").resolveProviderSyntheticAuthWithPlugin;
+let shouldDeferProviderSyntheticProfileAuthWithPlugin: typeof import("./provider-runtime.js").shouldDeferProviderSyntheticProfileAuthWithPlugin;
 let sanitizeProviderReplayHistoryWithPlugin: typeof import("./provider-runtime.js").sanitizeProviderReplayHistoryWithPlugin;
 let resolveProviderUsageSnapshotWithPlugin: typeof import("./provider-runtime.js").resolveProviderUsageSnapshotWithPlugin;
-let resolveProviderCapabilitiesWithPlugin: typeof import("./provider-runtime.js").resolveProviderCapabilitiesWithPlugin;
 let resolveProviderUsageAuthWithPlugin: typeof import("./provider-runtime.js").resolveProviderUsageAuthWithPlugin;
 let resolveProviderXHighThinking: typeof import("./provider-runtime.js").resolveProviderXHighThinking;
 let normalizeProviderToolSchemasWithPlugin: typeof import("./provider-runtime.js").normalizeProviderToolSchemasWithPlugin;
+let inspectProviderToolSchemasWithPlugin: typeof import("./provider-runtime.js").inspectProviderToolSchemasWithPlugin;
 let normalizeProviderResolvedModelWithPlugin: typeof import("./provider-runtime.js").normalizeProviderResolvedModelWithPlugin;
 let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareProviderDynamicModel;
 let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
@@ -234,7 +235,7 @@ async function expectResolvedAsyncValues(
 }
 
 describe("provider-runtime", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
@@ -269,12 +270,13 @@ describe("provider-runtime", () => {
       resolveProviderReasoningOutputModeWithPlugin,
       resolveProviderReplayPolicyWithPlugin,
       resolveProviderSyntheticAuthWithPlugin,
+      shouldDeferProviderSyntheticProfileAuthWithPlugin,
       sanitizeProviderReplayHistoryWithPlugin,
       resolveProviderUsageSnapshotWithPlugin,
-      resolveProviderCapabilitiesWithPlugin,
       resolveProviderUsageAuthWithPlugin,
       resolveProviderXHighThinking,
       normalizeProviderToolSchemasWithPlugin,
+      inspectProviderToolSchemasWithPlugin,
       normalizeProviderResolvedModelWithPlugin,
       prepareProviderDynamicModel,
       prepareProviderRuntimeAuth,
@@ -285,6 +287,9 @@ describe("provider-runtime", () => {
       validateProviderReplayTurnsWithPlugin,
       wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
+  });
+
+  beforeEach(() => {
     resetProviderRuntimeHookCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
@@ -375,6 +380,29 @@ describe("provider-runtime", () => {
     ).toMatchObject({
       baseUrl: "https://normalized.example.com/v1",
     });
+  });
+
+  it("resolves stream wrapper hooks through hook-only aliases without provider ownership", () => {
+    const wrappedStreamFn = vi.fn();
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "openai",
+        label: "OpenAI",
+        hookAliases: ["azure-openai-responses"],
+        auth: [],
+        wrapStreamFn: ({ streamFn }) => streamFn ?? wrappedStreamFn,
+      },
+    ]);
+
+    expect(
+      wrapProviderStreamFn({
+        provider: "azure-openai-responses",
+        context: createDemoResolvedModelContext({
+          provider: "azure-openai-responses",
+          streamFn: wrappedStreamFn,
+        }),
+      }),
+    ).toBe(wrappedStreamFn);
   });
 
   it("normalizes transport hooks without needing provider ownership", () => {
@@ -492,12 +520,16 @@ describe("provider-runtime", () => {
     const normalizeToolSchemas = vi.fn(
       ({ tools }: Pick<ProviderNormalizeToolSchemasContext, "tools">): AnyAgentTool[] => tools,
     );
+    const inspectToolSchemas = vi.fn(() => [] as { toolName: string; violations: string[] }[]);
     const resolveReasoningOutputMode = vi.fn(() => "tagged" as const);
     const resolveSyntheticAuth = vi.fn(() => ({
       apiKey: "demo-local",
       source: "models.providers.demo (synthetic local key)",
       mode: "api-key" as const,
     }));
+    const shouldDeferSyntheticProfileAuth = vi.fn(
+      ({ resolvedApiKey }: { resolvedApiKey?: string }) => resolvedApiKey === "demo-local",
+    );
     const buildUnknownModelHint = vi.fn(
       ({ modelId }: { modelId: string }) => `Use demo setup for ${modelId}`,
     );
@@ -540,13 +572,11 @@ describe("provider-runtime", () => {
             ...providerConfig,
             compat: { supportsUsageInStreaming: true },
           }),
-          capabilities: {
-            providerFamily: "openai",
-          },
           buildReplayPolicy,
           sanitizeReplayHistory,
           validateReplayTurns,
           normalizeToolSchemas,
+          inspectToolSchemas,
           resolveReasoningOutputMode,
           prepareExtraParams: ({ extraParams }) => ({
             ...extraParams,
@@ -559,6 +589,7 @@ describe("provider-runtime", () => {
           },
           createEmbeddingProvider,
           resolveSyntheticAuth,
+          shouldDeferSyntheticProfileAuth,
           normalizeResolvedModel: ({ model }) => ({
             ...model,
             api: "openai-codex-responses",
@@ -668,14 +699,6 @@ describe("provider-runtime", () => {
       context: createDemoRuntimeContext({
         modelRegistry: EMPTY_MODEL_REGISTRY,
       }),
-    });
-
-    expect(
-      resolveProviderCapabilitiesWithPlugin({
-        provider: DEMO_PROVIDER_ID,
-      }),
-    ).toMatchObject({
-      providerFamily: "openai",
     });
 
     expect(
@@ -852,6 +875,16 @@ describe("provider-runtime", () => {
     ).toEqual([DEMO_TOOL]);
 
     expect(
+      inspectProviderToolSchemasWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoResolvedModelContext({
+          modelApi: MODEL.api,
+          tools: [DEMO_TOOL],
+        }),
+      }),
+    ).toEqual([]);
+
+    expect(
       normalizeProviderResolvedModelWithPlugin({
         provider: DEMO_PROVIDER_ID,
         context: createDemoResolvedModelContext({}),
@@ -967,6 +1000,17 @@ describe("provider-runtime", () => {
       },
       {
         actual: () =>
+          shouldDeferProviderSyntheticProfileAuthWithPlugin({
+            provider: DEMO_PROVIDER_ID,
+            context: {
+              provider: DEMO_PROVIDER_ID,
+              resolvedApiKey: "demo-local",
+            },
+          }),
+        expected: true,
+      },
+      {
+        actual: () =>
           buildProviderUnknownModelHintWithPlugin({
             provider: "openai",
             env: process.env,
@@ -990,9 +1034,11 @@ describe("provider-runtime", () => {
       sanitizeReplayHistory,
       validateReplayTurns,
       normalizeToolSchemas,
+      inspectToolSchemas,
       resolveReasoningOutputMode,
       refreshOAuth,
       resolveSyntheticAuth,
+      shouldDeferSyntheticProfileAuth,
       buildUnknownModelHint,
       prepareRuntimeAuth,
       resolveUsageAuth,

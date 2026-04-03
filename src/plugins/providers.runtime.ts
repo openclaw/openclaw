@@ -1,10 +1,6 @@
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  withBundledPluginAllowlistCompat,
-  withBundledPluginEnablementCompat,
-} from "./bundled-compat.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
+import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import {
   resolveEnabledProviderPluginIds,
@@ -28,49 +24,36 @@ export function resolvePluginProviders(params: {
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
-  const autoEnabledConfig =
-    params.config !== undefined
-      ? applyPluginAutoEnable({
-          config: params.config,
-          env,
-        }).config
-      : undefined;
-  const bundledProviderCompatPluginIds =
-    params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
-      ? resolveBundledProviderCompatPluginIds({
-          config: autoEnabledConfig,
-          workspaceDir: params.workspaceDir,
-          env,
-          onlyPluginIds: params.onlyPluginIds,
-        })
-      : [];
-  const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
-    ? withBundledPluginAllowlistCompat({
-        config: autoEnabledConfig,
-        pluginIds: bundledProviderCompatPluginIds,
-      })
-    : autoEnabledConfig;
-  const allowlistCompatConfig = params.bundledProviderAllowlistCompat
-    ? withBundledPluginEnablementCompat({
-        config: maybeAllowlistCompat,
-        pluginIds: bundledProviderCompatPluginIds,
-      })
-    : maybeAllowlistCompat;
+  const activation = resolveBundledPluginCompatibleActivationInputs({
+    rawConfig: params.config,
+    env,
+    workspaceDir: params.workspaceDir,
+    onlyPluginIds: params.onlyPluginIds,
+    applyAutoEnable: true,
+    compatMode: {
+      allowlist: params.bundledProviderAllowlistCompat,
+      enablement: "allowlist",
+      vitest: params.bundledProviderVitestCompat,
+    },
+    resolveCompatPluginIds: resolveBundledProviderCompatPluginIds,
+  });
   const config = params.bundledProviderVitestCompat
     ? withBundledProviderVitestCompat({
-        config: allowlistCompatConfig,
-        pluginIds: bundledProviderCompatPluginIds,
+        config: activation.config,
+        pluginIds: activation.compatPluginIds,
         env,
       })
-    : allowlistCompatConfig;
+    : activation.config;
   const providerPluginIds = resolveEnabledProviderPluginIds({
     config,
     workspaceDir: params.workspaceDir,
     env,
     onlyPluginIds: params.onlyPluginIds,
   });
-  const registry = loadOpenClawPlugins({
+  const registry = resolveRuntimePluginRegistry({
     config,
+    activationSourceConfig: activation.activationSourceConfig,
+    autoEnabledReasons: activation.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     env,
     onlyPluginIds: providerPluginIds,
@@ -79,6 +62,9 @@ export function resolvePluginProviders(params: {
     activate: params.activate ?? false,
     logger: createPluginLoaderLogger(log),
   });
+  if (!registry) {
+    return [];
+  }
 
   return registry.providers.map((entry) => ({
     ...entry.provider,

@@ -41,148 +41,6 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     ],
   },
   {
-    subpath: "discord-account",
-    source: pluginSource("discord", "api.js"),
-    exports: ["resolveDiscordAccount", "ResolvedDiscordAccount"],
-    typeExports: ["ResolvedDiscordAccount"],
-  },
-  {
-    subpath: "discord-runtime-surface",
-    source: pluginSource("discord", "runtime-api.js"),
-    exports: [
-      "addRoleDiscord",
-      "auditDiscordChannelPermissions",
-      "banMemberDiscord",
-      "collectDiscordAuditChannelIds",
-      "createChannelDiscord",
-      "createScheduledEventDiscord",
-      "createThreadDiscord",
-      "deleteChannelDiscord",
-      "deleteMessageDiscord",
-      "discordMessageActions",
-      "editChannelDiscord",
-      "editDiscordComponentMessage",
-      "editMessageDiscord",
-      "fetchChannelInfoDiscord",
-      "fetchChannelPermissionsDiscord",
-      "fetchMemberInfoDiscord",
-      "fetchMessageDiscord",
-      "fetchReactionsDiscord",
-      "fetchRoleInfoDiscord",
-      "fetchVoiceStatusDiscord",
-      "getGateway",
-      "getPresence",
-      "hasAnyGuildPermissionDiscord",
-      "kickMemberDiscord",
-      "listDiscordDirectoryGroupsLive",
-      "listDiscordDirectoryPeersLive",
-      "listGuildChannelsDiscord",
-      "listGuildEmojisDiscord",
-      "listPinsDiscord",
-      "listScheduledEventsDiscord",
-      "listThreadsDiscord",
-      "monitorDiscordProvider",
-      "moveChannelDiscord",
-      "pinMessageDiscord",
-      "probeDiscord",
-      "reactMessageDiscord",
-      "readMessagesDiscord",
-      "registerBuiltDiscordComponentMessage",
-      "removeChannelPermissionDiscord",
-      "removeOwnReactionsDiscord",
-      "removeReactionDiscord",
-      "removeRoleDiscord",
-      "resolveDiscordChannelAllowlist",
-      "resolveDiscordOutboundSessionRoute",
-      "resolveDiscordUserAllowlist",
-      "searchMessagesDiscord",
-      "sendDiscordComponentMessage",
-      "sendMessageDiscord",
-      "sendPollDiscord",
-      "sendStickerDiscord",
-      "sendTypingDiscord",
-      "sendVoiceMessageDiscord",
-      "setChannelPermissionDiscord",
-      "timeoutMemberDiscord",
-      "unpinMessageDiscord",
-      "uploadEmojiDiscord",
-      "uploadStickerDiscord",
-    ],
-  },
-  {
-    subpath: "discord-session-key",
-    source: pluginSource("discord", "session-key-api.js"),
-    exports: ["normalizeExplicitDiscordSessionKey"],
-  },
-  {
-    subpath: "discord-surface",
-    source: pluginSource("discord", "api.js"),
-    exports: [
-      "buildDiscordComponentMessage",
-      "collectDiscordStatusIssues",
-      "createDiscordActionGate",
-      "DiscordComponentMessageSpec",
-      "DiscordSendComponents",
-      "DiscordSendEmbeds",
-      "DiscordSendResult",
-      "handleDiscordMessageAction",
-      "inspectDiscordAccount",
-      "isDiscordExecApprovalApprover",
-      "isDiscordExecApprovalClientEnabled",
-      "InspectedDiscordAccount",
-      "listDiscordAccountIds",
-      "listDiscordDirectoryGroupsFromConfig",
-      "listDiscordDirectoryPeersFromConfig",
-      "looksLikeDiscordTargetId",
-      "normalizeDiscordMessagingTarget",
-      "normalizeDiscordOutboundTarget",
-      "readDiscordComponentSpec",
-      "ResolvedDiscordAccount",
-      "resolveDefaultDiscordAccountId",
-      "resolveDiscordAccount",
-      "resolveDiscordChannelId",
-      "resolveDiscordRuntimeGroupPolicy",
-      "resolveDiscordGroupRequireMention",
-      "resolveDiscordGroupToolPolicy",
-    ],
-    typeExports: [
-      "DiscordComponentMessageSpec",
-      "DiscordProbe",
-      "DiscordSendComponents",
-      "DiscordSendEmbeds",
-      "DiscordSendResult",
-      "DiscordTokenResolution",
-      "InspectedDiscordAccount",
-      "ResolvedDiscordAccount",
-    ],
-  },
-  {
-    subpath: "discord-thread-bindings",
-    source: pluginSource("discord", "runtime-api.js"),
-    exports: [
-      "autoBindSpawnedDiscordSubagent",
-      "createThreadBindingManager",
-      "getThreadBindingManager",
-      "listThreadBindingsBySessionKey",
-      "resolveThreadBindingIdleTimeoutMs",
-      "resolveThreadBindingInactivityExpiresAt",
-      "resolveThreadBindingMaxAgeExpiresAt",
-      "resolveThreadBindingMaxAgeMs",
-      "setThreadBindingIdleTimeoutBySessionKey",
-      "setThreadBindingMaxAgeBySessionKey",
-      "ThreadBindingManager",
-      "ThreadBindingRecord",
-      "ThreadBindingTargetKind",
-      "unbindThreadBindingsBySessionKey",
-    ],
-    typeExports: ["ThreadBindingManager", "ThreadBindingRecord", "ThreadBindingTargetKind"],
-  },
-  {
-    subpath: "discord-timeouts",
-    source: pluginSource("discord", "timeouts.js"),
-    exports: ["DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS", "DISCORD_DEFAULT_LISTENER_TIMEOUT_MS"],
-  },
-  {
     subpath: "anthropic-cli",
     source: pluginSource("anthropic", "api.js"),
     exports: ["CLAUDE_CLI_BACKEND_ID", "isClaudeCliProvider"],
@@ -199,6 +57,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "browser",
     source: pluginSource("browser", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "browserHandlers",
       "createBrowserPluginService",
@@ -210,6 +69,23 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "browser-runtime",
     source: pluginSource("browser", "runtime-api.js"),
+    loadPolicy: "activated",
+    directExports: {
+      DEFAULT_AI_SNAPSHOT_MAX_CHARS: "./browser-config.js",
+      DEFAULT_BROWSER_EVALUATE_ENABLED: "./browser-config.js",
+      DEFAULT_OPENCLAW_BROWSER_COLOR: "./browser-config.js",
+      DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: "./browser-config.js",
+      DEFAULT_UPLOAD_DIR: "./browser-config.js",
+      closeTrackedBrowserTabsForSessions: "./browser-maintenance.js",
+      movePathToTrash: "./browser-maintenance.js",
+      parseBrowserMajorVersion: "./browser-host-inspection.js",
+      redactCdpUrl: "./browser-config.js",
+      readBrowserVersion: "./browser-host-inspection.js",
+      resolveBrowserConfig: "./browser-config.js",
+      resolveBrowserControlAuth: "./browser-config.js",
+      resolveGoogleChromeExecutableForPlatform: "./browser-host-inspection.js",
+      resolveProfile: "./browser-config.js",
+    },
     exports: [
       "BrowserBridge",
       "BrowserCreateProfileResult",
@@ -430,6 +306,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "image-generation-runtime",
     source: pluginSource("image-generation-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "generateImage",
       "listRuntimeImageGenerationProviders",
@@ -476,6 +353,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "media-understanding-runtime",
     source: pluginSource("media-understanding-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "describeImageFile",
       "describeImageFileWithModel",
@@ -490,6 +368,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "memory-core-engine-runtime",
     source: pluginSource("memory-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "BuiltinMemoryEmbeddingProviderDoctorMetadata",
       "getBuiltinMemoryEmbeddingProviderDoctorMetadata",
@@ -519,6 +398,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "line-runtime",
     source: pluginSource("line", "runtime-api.js"),
+    loadPolicy: "activated",
     runtimeApiPreExportsPath: runtimeApiSourcePath("line"),
     typeExports: [
       "Action",
@@ -547,6 +427,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "line-surface",
     source: pluginSource("line", "runtime-api.js"),
+    // This surface is also used by passive reply normalization helpers.
+    // Keep it loadable without requiring the LINE plugin to be activated.
     exports: [
       "CardAction",
       "createActionCard",
@@ -600,6 +482,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "matrix-runtime-surface",
     source: pluginSource("matrix", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: ["resolveMatrixAccountStringValues", "setMatrixRuntime"],
   },
   {
@@ -806,32 +689,6 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     exports: ["QIANFAN_BASE_URL", "QIANFAN_DEFAULT_MODEL_ID", "buildQianfanProvider"],
   },
   {
-    subpath: "signal-account",
-    source: pluginSource("signal", "api.js"),
-    exports: ["resolveSignalAccount", "ResolvedSignalAccount"],
-    typeExports: ["ResolvedSignalAccount"],
-  },
-  {
-    subpath: "signal-surface",
-    source: pluginSource("signal", "api.js"),
-    exports: [
-      "isSignalSenderAllowed",
-      "listEnabledSignalAccounts",
-      "listSignalAccountIds",
-      "monitorSignalProvider",
-      "probeSignal",
-      "removeReactionSignal",
-      "ResolvedSignalAccount",
-      "resolveDefaultSignalAccountId",
-      "resolveSignalReactionLevel",
-      "sendMessageSignal",
-      "sendReactionSignal",
-      "signalMessageActions",
-      "SignalSender",
-    ],
-    typeExports: ["ResolvedSignalAccount", "SignalProbe", "SignalSender"],
-  },
-  {
     subpath: "provider-reasoning",
     source: pluginSource("ollama", "api.js"),
     exports: ["isReasoningModelHeuristic"],
@@ -839,6 +696,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "speech-runtime",
     source: pluginSource("speech-core", "runtime-api.js"),
+    loadPolicy: "activated",
     exports: [
       "_test",
       "buildTtsSystemPromptHint",
@@ -907,83 +765,6 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     ],
   },
   {
-    subpath: "slack-target-parser",
-    source: pluginSource("slack", "api.js"),
-    exports: ["parseSlackTarget", "resolveSlackChannelId"],
-  },
-  {
-    subpath: "slack-account",
-    source: pluginSource("slack", "api.js"),
-    exports: ["resolveSlackAccount", "ResolvedSlackAccount"],
-    typeExports: ["ResolvedSlackAccount"],
-  },
-  {
-    subpath: "slack-runtime-surface",
-    source: pluginSource("slack", "runtime-api.js"),
-    exports: [
-      "handleSlackAction",
-      "listSlackDirectoryGroupsLive",
-      "listSlackDirectoryPeersLive",
-      "monitorSlackProvider",
-      "probeSlack",
-      "resolveSlackChannelAllowlist",
-      "resolveSlackUserAllowlist",
-      "sendMessageSlack",
-      "SlackActionContext",
-    ],
-    typeExports: ["SlackActionContext"],
-  },
-  {
-    subpath: "slack-surface",
-    source: pluginSource("slack", "api.js"),
-    functionExports: [
-      "listSlackAccountIds",
-      "listSlackDirectoryGroupsFromConfig",
-      "listSlackDirectoryPeersFromConfig",
-      "resolveDefaultSlackAccountId",
-      "resolveSlackRuntimeGroupPolicy",
-    ],
-    exports: [
-      "buildSlackThreadingToolContext",
-      "createSlackWebClient",
-      "deleteSlackMessage",
-      "downloadSlackFile",
-      "editSlackMessage",
-      "extractSlackToolSend",
-      "getSlackMemberInfo",
-      "handleSlackHttpRequest",
-      "inspectSlackAccount",
-      "InspectedSlackAccount",
-      "isSlackInteractiveRepliesEnabled",
-      "listEnabledSlackAccounts",
-      "listSlackAccountIds",
-      "listSlackDirectoryGroupsFromConfig",
-      "listSlackDirectoryPeersFromConfig",
-      "listSlackEmojis",
-      "listSlackMessageActions",
-      "listSlackPins",
-      "listSlackReactions",
-      "normalizeAllowListLower",
-      "parseSlackBlocksInput",
-      "recordSlackThreadParticipation",
-      "resolveDefaultSlackAccountId",
-      "resolveSlackAutoThreadId",
-      "resolveSlackGroupRequireMention",
-      "resolveSlackRuntimeGroupPolicy",
-      "resolveSlackGroupToolPolicy",
-      "resolveSlackReplyToMode",
-      "ResolvedSlackAccount",
-      "sendSlackMessage",
-      "pinSlackMessage",
-      "reactSlackMessage",
-      "readSlackMessages",
-      "removeOwnSlackReactions",
-      "removeSlackReaction",
-      "unpinSlackMessage",
-    ],
-    typeExports: ["InspectedSlackAccount", "ResolvedSlackAccount", "SlackProbe"],
-  },
-  {
     subpath: "together",
     source: pluginSource("together", "api.js"),
     exports: [
@@ -1005,71 +786,6 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "VENICE_BASE_URL",
       "VENICE_DEFAULT_MODEL_REF",
       "VENICE_MODEL_CATALOG",
-    ],
-  },
-  {
-    subpath: "telegram-account",
-    source: pluginSource("telegram", "api.js"),
-    exports: ["resolveTelegramAccount", "ResolvedTelegramAccount"],
-    typeExports: ["ResolvedTelegramAccount"],
-  },
-  {
-    subpath: "telegram-allow-from",
-    source: pluginSource("telegram", "api.js"),
-    exports: ["isNumericTelegramUserId", "normalizeTelegramAllowFromEntry"],
-  },
-  {
-    subpath: "telegram-surface",
-    source: pluginSource("telegram", "api.js"),
-    exports: [
-      "buildBrowseProvidersButton",
-      "buildModelsKeyboard",
-      "buildProviderKeyboard",
-      "buildTelegramGroupPeerId",
-      "calculateTotalPages",
-      "createTelegramActionGate",
-      "fetchTelegramChatId",
-      "getCacheStats",
-      "getModelsPageSize",
-      "inspectTelegramAccount",
-      "InspectedTelegramAccount",
-      "isTelegramExecApprovalApprover",
-      "isTelegramExecApprovalAuthorizedSender",
-      "isTelegramExecApprovalClientEnabled",
-      "isTelegramExecApprovalTargetRecipient",
-      "listTelegramAccountIds",
-      "listTelegramDirectoryGroupsFromConfig",
-      "listTelegramDirectoryPeersFromConfig",
-      "looksLikeTelegramTargetId",
-      "lookupTelegramChatId",
-      "normalizeTelegramMessagingTarget",
-      "parseTelegramReplyToMessageId",
-      "parseTelegramTarget",
-      "parseTelegramThreadId",
-      "ProviderInfo",
-      "ResolvedTelegramAccount",
-      "resolveTelegramAutoThreadId",
-      "resolveTelegramGroupRequireMention",
-      "resolveTelegramGroupToolPolicy",
-      "resolveTelegramInlineButtonsScope",
-      "resolveTelegramPollActionGateState",
-      "resolveTelegramReactionLevel",
-      "resolveTelegramTargetChatType",
-      "searchStickers",
-      "sendTelegramPayloadMessages",
-      "StickerMetadata",
-      "TelegramButtonStyle",
-      "TelegramInlineButtons",
-    ],
-    typeExports: [
-      "InspectedTelegramAccount",
-      "ProviderInfo",
-      "ResolvedTelegramAccount",
-      "StickerMetadata",
-      "TelegramButtonStyle",
-      "TelegramInlineButtons",
-      "TelegramProbe",
-      "TelegramTokenResolution",
     ],
   },
   {
@@ -1162,8 +878,13 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "whatsapp-targets",
-    source: pluginSource("whatsapp", "api.js"),
+    source: pluginSource("whatsapp", "targets.js"),
     exports: ["isWhatsAppGroupJid", "isWhatsAppUserTarget", "normalizeWhatsAppTarget"],
+    directExports: {
+      isWhatsAppGroupJid: "./whatsapp-targets-shared.js",
+      isWhatsAppUserTarget: "./whatsapp-targets-shared.js",
+      normalizeWhatsAppTarget: "./whatsapp-targets-shared.js",
+    },
   },
   {
     subpath: "whatsapp-surface",
@@ -1205,6 +926,16 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
 export const GENERATED_PLUGIN_SDK_FACADES_BY_SUBPATH = Object.fromEntries(
   GENERATED_PLUGIN_SDK_FACADES.map((entry) => [entry.subpath, entry]),
 );
+
+function resolveFacadeLoadPolicy(entry, sourcePath) {
+  // Keep loader policy next to the facade entry itself so additions stay local
+  // and mixed-source facades can opt into per-source behavior later if needed.
+  const sourcePolicy = entry.sourceLoadPolicy?.[sourcePath];
+  if (sourcePolicy) {
+    return sourcePolicy;
+  }
+  return entry.loadPolicy ?? "plain";
+}
 
 export const GENERATED_PLUGIN_SDK_FACADES_LABEL = "plugin-sdk-facades";
 export const GENERATED_PLUGIN_SDK_FACADES_SCRIPT = "scripts/generate-plugin-sdk-facades.mjs";
@@ -1427,6 +1158,7 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
     ? resolveFacadeSourceExportKinds(params.repoRoot, entry.source)
     : new Map();
   const explicitFunctionExports = new Set(entry.functionExports ?? []);
+  const directExportSources = entry.directExports ?? {};
   const exportNames = entry.exportAll
     ? Array.from(sourceExportKinds.keys()).toSorted((left, right) => left.localeCompare(right))
     : entry.runtimeApiPreExportsPath
@@ -1440,6 +1172,10 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
   let needsLazyObjectHelper = false;
   for (const exportName of exportNames ?? []) {
     if (explicitTypeExports.has(exportName)) {
+      continue;
+    }
+    if (directExportSources[exportName]) {
+      valueExports.push(exportName);
       continue;
     }
     const kind = sourceExportKinds.get(exportName);
@@ -1463,8 +1199,11 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
       typeExports.push(typeExport);
     }
   }
+  const nonDirectValueExports = valueExports.filter(
+    (exportName) => !directExportSources[exportName],
+  );
   const lines = [`// Generated by ${GENERATED_PLUGIN_SDK_FACADES_SCRIPT}. Do not edit manually.`];
-  if (valueExports.length || typeExports.length) {
+  if (nonDirectValueExports.length || typeExports.length) {
     lines.push(
       'import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";',
     );
@@ -1479,37 +1218,74 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
       );
     }
   }
-  if (valueExports.length) {
-    const runtimeImports = ["loadBundledPluginPublicSurfaceModuleSync"];
+  const directExportsBySource = new Map();
+  for (const exportName of valueExports) {
+    const sourcePath = directExportSources[exportName];
+    if (!sourcePath) {
+      continue;
+    }
+    const exportsForSource = directExportsBySource.get(sourcePath) ?? [];
+    exportsForSource.push(exportName);
+    directExportsBySource.set(sourcePath, exportsForSource);
+  }
+  if (directExportsBySource.size > 0) {
+    for (const [sourcePath, exportNamesForSource] of [...directExportsBySource.entries()].toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      lines.push(
+        `export { ${exportNamesForSource.toSorted((left, right) => left.localeCompare(right)).join(", ")} } from ${JSON.stringify(sourcePath)};`,
+      );
+    }
+  }
+  if (nonDirectValueExports.length) {
+    const runtimeImports = new Set();
     if (needsLazyArrayHelper) {
-      runtimeImports.unshift("createLazyFacadeArrayValue");
+      runtimeImports.add("createLazyFacadeArrayValue");
     }
     if (needsLazyObjectHelper) {
-      runtimeImports.unshift("createLazyFacadeObjectValue");
+      runtimeImports.add("createLazyFacadeObjectValue");
     }
-    lines.push(`import { ${runtimeImports.join(", ")} } from "./facade-runtime.js";`);
+    for (const sourcePath of listFacadeEntrySourcePaths(entry)) {
+      const loadPolicy = resolveFacadeLoadPolicy(entry, sourcePath);
+      runtimeImports.add(
+        loadPolicy === "activated"
+          ? "loadActivatedBundledPluginPublicSurfaceModuleSync"
+          : "loadBundledPluginPublicSurfaceModuleSync",
+      );
+    }
+    lines.push(
+      `import { ${[...runtimeImports].toSorted((left, right) => left.localeCompare(right)).join(", ")} } from "./facade-runtime.js";`,
+    );
     for (const [sourceIndex, sourcePath] of listFacadeEntrySourcePaths(entry).entries()) {
       if (!valueExportsBySource.has(sourcePath)) {
         continue;
       }
       const { dirName: sourceDirName, artifactBasename: sourceArtifactBasename } =
         normalizeFacadeSourceParts(sourcePath);
+      const loadPolicy = resolveFacadeLoadPolicy(entry, sourcePath);
+      const loaderName =
+        loadPolicy === "activated"
+          ? "loadActivatedBundledPluginPublicSurfaceModuleSync"
+          : "loadBundledPluginPublicSurfaceModuleSync";
       const loaderSuffix = sourceIndex === 0 ? "" : String(sourceIndex + 1);
       const moduleTypeName = sourceIndex === 0 ? "FacadeModule" : `FacadeModule${sourceIndex + 1}`;
       lines.push("");
       lines.push(`function loadFacadeModule${loaderSuffix}(): ${moduleTypeName} {`);
-      lines.push(`  return loadBundledPluginPublicSurfaceModuleSync<${moduleTypeName}>({`);
+      lines.push(`  return ${loaderName}<${moduleTypeName}>({`);
       lines.push(`    dirName: ${JSON.stringify(sourceDirName)},`);
       lines.push(`    artifactBasename: ${JSON.stringify(sourceArtifactBasename)},`);
       lines.push("  });");
       lines.push("}");
     }
   }
-  if (valueExports.length) {
+  if (nonDirectValueExports.length) {
     const sourceIndexByPath = new Map(
       listFacadeEntrySourcePaths(entry).map((sourcePath, index) => [sourcePath, index]),
     );
-    for (const exportName of valueExports) {
+    for (const exportName of nonDirectValueExports) {
+      if (directExportSources[exportName]) {
+        continue;
+      }
       const kind = sourceExportKinds.get(exportName);
       const isExplicitFunctionExport = explicitFunctionExports.has(exportName);
       const sourcePath = entry.exportSources?.[exportName] ?? entry.source;

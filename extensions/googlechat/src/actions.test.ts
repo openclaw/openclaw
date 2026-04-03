@@ -69,6 +69,27 @@ describe("googlechat message actions", () => {
     });
   });
 
+  it("honors account-scoped reaction gates during discovery", () => {
+    resolveGoogleChatAccount.mockImplementation(({ accountId }: { accountId?: string | null }) => ({
+      enabled: true,
+      credentialSource: "service-account",
+      config: {
+        actions: { reactions: accountId === "work" },
+      },
+    }));
+
+    expect(
+      googlechatMessageActions.describeMessageTool?.({ cfg: {} as never, accountId: "default" }),
+    ).toEqual({
+      actions: ["send", "upload-file"],
+    });
+    expect(
+      googlechatMessageActions.describeMessageTool?.({ cfg: {} as never, accountId: "work" }),
+    ).toEqual({
+      actions: ["send", "upload-file", "react", "reactions"],
+    });
+  });
+
   it("sends messages with uploaded media through the resolved space", async () => {
     resolveGoogleChatAccount.mockReturnValue({
       credentialSource: "service-account",

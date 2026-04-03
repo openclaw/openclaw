@@ -1,5 +1,6 @@
 import type {
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -49,11 +50,10 @@ export type SlackChannelConfig = {
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
-export type SlackLegacyStreamMode = "replace" | "status_final" | "append";
 export type SlackExecApprovalTarget = "dm" | "channel" | "both";
 export type SlackExecApprovalConfig = {
-  /** Enable Slack exec approvals for this account. Default: false. */
-  enabled?: boolean;
+  /** Enable mode for Slack exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
+  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
   /** Slack user IDs allowed to approve exec requests. Optional: falls back to commands.ownerAllowFrom when possible. */
   approvers?: Array<string | number>;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
@@ -142,6 +142,8 @@ export type SlackAccountConfig = {
    * - "allowlist": only allow channels present in channels.slack.channels
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Max channel messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
@@ -160,17 +162,15 @@ export type SlackAccountConfig = {
    * - "partial": replace preview text with the latest partial output (default)
    * - "block": append chunked preview updates
    * - "progress": show progress status, then send final text
-   *
-   * Legacy boolean values are still accepted and auto-migrated.
    */
-  streaming?: SlackStreamingMode | boolean;
+  streaming?: SlackStreamingMode;
+  /** @deprecated Legacy draft streaming mode; normalized into `streaming` on load. */
+  streamMode?: "replace" | "status_final" | "append";
   /**
    * Slack native text streaming toggle (`chat.startStream` / `chat.appendStream` / `chat.stopStream`).
    * Used when `streaming` is `partial`. Default: true.
    */
   nativeStreaming?: boolean;
-  /** @deprecated Legacy preview mode key; migrated automatically to `streaming`. */
-  streamMode?: SlackLegacyStreamMode;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;

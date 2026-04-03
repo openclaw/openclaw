@@ -27,16 +27,19 @@ vi.mock("../../../channels/plugins/registry.js", () => ({
   getChannelPlugin: getChannelPluginMock,
 }));
 
-import {
-  collectTelegramAllowFromUsernameWarnings,
-  collectTelegramEmptyAllowlistExtraWarnings,
-  collectTelegramGroupPolicyWarnings,
-  maybeRepairTelegramAllowFromUsernames,
-  scanTelegramAllowFromUsernameEntries,
-} from "./telegram.js";
+type TelegramDoctorModule = typeof import("./telegram.js");
+
+let telegramDoctorModule: Promise<TelegramDoctorModule> | undefined;
+
+async function loadTelegramDoctorModule(): Promise<TelegramDoctorModule> {
+  telegramDoctorModule ??= import("./telegram.js");
+  return await telegramDoctorModule;
+}
 
 describe("doctor telegram provider warnings", () => {
   beforeEach(() => {
+    vi.resetModules();
+    telegramDoctorModule = undefined;
     resolveCommandSecretRefsViaGatewayMock.mockReset().mockImplementation(async ({ config }) => ({
       resolvedConfig: config,
       diagnostics: [],
@@ -64,7 +67,8 @@ describe("doctor telegram provider warnings", () => {
     });
   });
 
-  it("shows first-run guidance when groups are not configured yet", () => {
+  it("shows first-run guidance when groups are not configured yet", async () => {
+    const { collectTelegramGroupPolicyWarnings } = await loadTelegramDoctorModule();
     const warnings = collectTelegramGroupPolicyWarnings({
       account: {
         botToken: "123:abc",
@@ -81,7 +85,8 @@ describe("doctor telegram provider warnings", () => {
     expect(warnings[0]).toContain("channels.telegram.groups");
   });
 
-  it("warns when configured groups still have no usable sender allowlist", () => {
+  it("warns when configured groups still have no usable sender allowlist", async () => {
+    const { collectTelegramGroupPolicyWarnings } = await loadTelegramDoctorModule();
     const warnings = collectTelegramGroupPolicyWarnings({
       account: {
         botToken: "123:abc",
@@ -100,7 +105,8 @@ describe("doctor telegram provider warnings", () => {
     ]);
   });
 
-  it("stays quiet when allowFrom can satisfy group allowlist mode", () => {
+  it("stays quiet when allowFrom can satisfy group allowlist mode", async () => {
+    const { collectTelegramGroupPolicyWarnings } = await loadTelegramDoctorModule();
     const warnings = collectTelegramGroupPolicyWarnings({
       account: {
         botToken: "123:abc",
@@ -116,7 +122,8 @@ describe("doctor telegram provider warnings", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("returns extra empty-allowlist warnings only for telegram allowlist groups", () => {
+  it("returns extra empty-allowlist warnings only for telegram allowlist groups", async () => {
+    const { collectTelegramEmptyAllowlistExtraWarnings } = await loadTelegramDoctorModule();
     const warnings = collectTelegramEmptyAllowlistExtraWarnings({
       account: {
         botToken: "123:abc",
@@ -143,7 +150,8 @@ describe("doctor telegram provider warnings", () => {
     ).toEqual([]);
   });
 
-  it("finds non-numeric telegram allowFrom username entries across account scopes", () => {
+  it("finds non-numeric telegram allowFrom username entries across account scopes", async () => {
+    const { scanTelegramAllowFromUsernameEntries } = await loadTelegramDoctorModule();
     const hits = scanTelegramAllowFromUsernameEntries({
       channels: {
         telegram: {
@@ -179,7 +187,8 @@ describe("doctor telegram provider warnings", () => {
     ]);
   });
 
-  it("formats allowFrom username warnings", () => {
+  it("formats allowFrom username warnings", async () => {
+    const { collectTelegramAllowFromUsernameWarnings } = await loadTelegramDoctorModule();
     const warnings = collectTelegramAllowFromUsernameWarnings({
       hits: [{ path: "channels.telegram.allowFrom", entry: "@top" }],
       doctorFixCommand: "openclaw doctor --fix",
@@ -192,6 +201,7 @@ describe("doctor telegram provider warnings", () => {
   });
 
   it("repairs Telegram @username allowFrom entries to numeric ids", async () => {
+    const { maybeRepairTelegramAllowFromUsernames } = await loadTelegramDoctorModule();
     telegramResolverMock.mockImplementation(async ({ inputs }: { inputs: string[] }) => {
       switch (inputs[0]?.toLowerCase()) {
         case "@testuser":
@@ -247,6 +257,7 @@ describe("doctor telegram provider warnings", () => {
   });
 
   it("sanitizes Telegram allowFrom repair change lines before logging", async () => {
+    const { maybeRepairTelegramAllowFromUsernames } = await loadTelegramDoctorModule();
     telegramResolverMock.mockImplementation(async ({ inputs }: { inputs: string[] }) => {
       if (inputs[0] === "@\u001b[31mtestuser") {
         return [{ input: inputs[0], resolved: true, id: "12345" }];
@@ -273,6 +284,7 @@ describe("doctor telegram provider warnings", () => {
   });
 
   it("keeps Telegram allowFrom entries unchanged when configured credentials are unavailable", async () => {
+    const { maybeRepairTelegramAllowFromUsernames } = await loadTelegramDoctorModule();
     inspectTelegramAccountMock.mockImplementation(() => ({
       enabled: true,
       token: "",
@@ -311,6 +323,7 @@ describe("doctor telegram provider warnings", () => {
   });
 
   it("uses network settings for Telegram allowFrom repair but ignores apiRoot and proxy", async () => {
+    const { maybeRepairTelegramAllowFromUsernames } = await loadTelegramDoctorModule();
     resolveCommandSecretRefsViaGatewayMock.mockResolvedValue({
       resolvedConfig: {
         channels: {

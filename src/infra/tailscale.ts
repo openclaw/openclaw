@@ -149,8 +149,21 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
  */
 let cachedTailscaleBinary: string | null = null;
 
+export function getTestTailscaleBinaryOverride(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
+  if (!forcedBinary) {
+    return null;
+  }
+  if (env.VITEST || env.NODE_ENV === "test") {
+    return forcedBinary;
+  }
+  return null;
+}
+
 export async function getTailscaleBinary(): Promise<string> {
-  const forcedBinary = process.env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
+  const forcedBinary = getTestTailscaleBinaryOverride();
   if (forcedBinary) {
     cachedTailscaleBinary = forcedBinary;
     return forcedBinary;

@@ -72,14 +72,6 @@ function createEmptyCliRegistry(params?: { diagnostics?: Array<{ message: string
   };
 }
 
-function expectPluginLoaderConfig(config: OpenClawConfig) {
-  expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-    expect.objectContaining({
-      config,
-    }),
-  );
-}
-
 function createAutoEnabledCliFixture() {
   const rawConfig = {
     plugins: {},
@@ -99,12 +91,19 @@ function createAutoEnabledCliFixture() {
 function expectAutoEnabledCliLoad(params: {
   rawConfig: OpenClawConfig;
   autoEnabledConfig: OpenClawConfig;
+  autoEnabledReasons?: Record<string, string[]>;
 }) {
   expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
     config: params.rawConfig,
     env: process.env,
   });
-  expectPluginLoaderConfig(params.autoEnabledConfig);
+  expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: params.autoEnabledConfig,
+      activationSourceConfig: params.rawConfig,
+      autoEnabledReasons: params.autoEnabledReasons ?? {},
+    }),
+  );
 }
 
 describe("registerPluginCliCommands", () => {
@@ -127,7 +126,11 @@ describe("registerPluginCliCommands", () => {
       diagnostics: [],
     });
     mocks.applyPluginAutoEnable.mockReset();
-    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({
+      config,
+      changes: [],
+      autoEnabledReasons: {},
+    }));
   });
 
   it("skips plugin CLI registrars when commands already exist", async () => {
@@ -153,11 +156,23 @@ describe("registerPluginCliCommands", () => {
 
   it("loads plugin CLI commands from the auto-enabled config snapshot", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
+    });
 
     await registerPluginCliCommands(createProgram(), rawConfig);
 
-    expectAutoEnabledCliLoad({ rawConfig, autoEnabledConfig });
+    expectAutoEnabledCliLoad({
+      rawConfig,
+      autoEnabledConfig,
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
+    });
     expect(mocks.memoryRegister).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
@@ -167,7 +182,13 @@ describe("registerPluginCliCommands", () => {
 
   it("loads root-help descriptors through the dedicated non-activating CLI collector", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
+    });
     mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({
       cliRegistrars: [
         {
@@ -209,13 +230,23 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
+        activationSourceConfig: rawConfig,
+        autoEnabledReasons: {
+          demo: ["demo configured"],
+        },
       }),
     );
   });
 
   it("keeps runtime CLI command registration on the full plugin loader for legacy channel plugins", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
+    });
     mocks.loadOpenClawPlugins.mockReturnValue(
       createCliRegistry({
         memoryCommands: ["legacy-channel"],
@@ -236,6 +267,10 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
+        activationSourceConfig: rawConfig,
+        autoEnabledReasons: {
+          demo: ["demo configured"],
+        },
       }),
     );
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
