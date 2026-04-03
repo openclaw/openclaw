@@ -6,13 +6,13 @@ const resolveDiscordDmCommandAccessMock = vi.hoisted(() => vi.fn());
 const handleDiscordDmCommandDecisionMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("./preflight-audio.runtime.js", () => ({
-  transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
+  transcribeFirstAudio: transcribeFirstAudioMock,
 }));
 vi.mock("./dm-command-auth.js", () => ({
-  resolveDiscordDmCommandAccess: (...args: unknown[]) => resolveDiscordDmCommandAccessMock(...args),
+  resolveDiscordDmCommandAccess: resolveDiscordDmCommandAccessMock,
 }));
 vi.mock("./dm-command-decision.js", () => ({
-  handleDiscordDmCommandDecision: (...args: unknown[]) => handleDiscordDmCommandDecisionMock(...args),
+  handleDiscordDmCommandDecision: handleDiscordDmCommandDecisionMock,
 }));
 import {
   __testing as sessionBindingTesting,
@@ -406,7 +406,6 @@ describe("preflightDiscordMessage", () => {
         } as DiscordMessageEvent,
         client: createDmClient("dm-channel-default-account"),
       }),
-      accountId: undefined,
     });
 
     expect(resolveDiscordDmCommandAccessMock).toHaveBeenCalledWith(
