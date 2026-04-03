@@ -35,10 +35,16 @@ export class ToolInputError extends Error {
 }
 
 export class ToolAuthorizationError extends ToolInputError {
-  override readonly status = 403;
+  declare readonly status: 403;
 
   constructor(message: string) {
     super(message);
+    Object.defineProperty(this, "status", {
+      value: 403,
+      writable: false,
+      enumerable: true,
+      configurable: true,
+    });
     this.name = "ToolAuthorizationError";
   }
 }
