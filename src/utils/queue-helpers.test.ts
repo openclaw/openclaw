@@ -4,6 +4,7 @@ import {
   buildQueueSummaryPrompt,
   clearQueueSummaryState,
   drainCollectItemIfNeeded,
+  drainCollectQueueStep,
   previewQueueSummaryPrompt,
 } from "./queue-helpers.js";
 
@@ -165,5 +166,47 @@ describe("drainCollectItemIfNeeded", () => {
 
     expect(result).toBe("empty");
     expect(forced).toBe(true);
+  });
+});
+
+describe("drainCollectQueueStep", () => {
+  it("persists forceIndividualCollect when mixed/cross-channel fallback begins", async () => {
+    const collectState = { forceIndividualCollect: false };
+    const seen: number[] = [];
+    const items = [1, 2];
+
+    const result = await drainCollectQueueStep({
+      collectState,
+      isCrossChannel: true,
+      items,
+      run: async (item) => {
+        seen.push(item);
+      },
+    });
+
+    expect(result).toBe("drained");
+    expect(collectState.forceIndividualCollect).toBe(true);
+    expect(seen).toEqual([1]);
+    expect(items).toEqual([2]);
+  });
+
+  it("keeps forceIndividualCollect true across follow-up retry steps", async () => {
+    const collectState = { forceIndividualCollect: true };
+    const seen: number[] = [];
+    const items = [2, 3];
+
+    const result = await drainCollectQueueStep({
+      collectState,
+      isCrossChannel: false,
+      items,
+      run: async (item) => {
+        seen.push(item);
+      },
+    });
+
+    expect(result).toBe("drained");
+    expect(collectState.forceIndividualCollect).toBe(true);
+    expect(seen).toEqual([2]);
+    expect(items).toEqual([3]);
   });
 });
