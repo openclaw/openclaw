@@ -191,6 +191,44 @@ describe("applyGroupGating", () => {
     expect(result.shouldProcess).toBe(true);
   });
 
+  it("honors per-account selfChatMode overrides before suppressing implicit mentions", () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          selfChatMode: true,
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+          accounts: {
+            work: {
+              selfChatMode: false,
+            },
+          },
+        },
+      },
+    });
+    const { result } = runGroupGating({
+      cfg,
+      msg: createGroupMessage({
+        id: "m-account-override",
+        to: "+15550000",
+        accountId: "work",
+        body: "following up on bot reply",
+        timestamp: Date.now(),
+        senderE164: "+15551234567",
+        senderJid: "15551234567@s.whatsapp.net",
+        selfJid: "15551234567@s.whatsapp.net",
+        selfE164: "+15551234567",
+        replyToId: "m0",
+        replyToBody: "bot earlier response",
+        replyToSender: "+15551234567",
+        replyToSenderJid: "15551234567@s.whatsapp.net",
+        replyToSenderE164: "+15551234567",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(true);
+  });
+
   it.each([
     { id: "g-new", command: "/new" },
     { id: "g-status", command: "/status" },
