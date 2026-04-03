@@ -1,4 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import {
+  matchesMediaEntryCapability,
+  resolveEffectiveMediaEntryCapabilities,
+} from "../media-understanding/entry-capabilities.js";
+import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
@@ -378,13 +384,10 @@ function collectMediaRequestAssignments(params: {
     return;
   }
 
+  const providerRegistry = buildMediaUnderstandingRegistry(undefined, params.config);
   const capabilityKeys = ["audio", "image", "video"] as const;
-  const isMediaCapability = (value: unknown): value is (typeof capabilityKeys)[number] =>
-    typeof value === "string" && (capabilityKeys as readonly string[]).includes(value);
   const isCapabilityEnabled = (capability: (typeof capabilityKeys)[number]) =>
     (isRecord(media[capability]) ? media[capability] : undefined)?.enabled !== false;
-  const sharedModelsActive = capabilityKeys.some((capability) => isCapabilityEnabled(capability));
-  const sharedModelsInactiveReason = "all media understanding capabilities are disabled.";
 
   const collectModelAssignments = (
     models: unknown,
@@ -414,14 +417,17 @@ function collectMediaRequestAssignments(params: {
   };
 
   collectModelAssignments(media.models, "tools.media.models", (rawModel) => {
-    const capabilities = Array.isArray(rawModel.capabilities)
-      ? rawModel.capabilities.filter(isMediaCapability)
-      : [];
-    if (capabilities.length === 0) {
-      // Shared entries can still become active later via provider capability inference.
+    const entry = rawModel as MediaUnderstandingModelConfig;
+    const capabilities = resolveEffectiveMediaEntryCapabilities({
+      entry,
+      source: "shared",
+      providerRegistry,
+    });
+    if (!capabilities || capabilities.length === 0) {
       return {
-        active: sharedModelsActive,
-        inactiveReason: sharedModelsInactiveReason,
+        active: false,
+        inactiveReason:
+          "shared media model does not declare capabilities and none could be inferred from its provider.",
       };
     }
     return {
@@ -444,9 +450,18 @@ function collectMediaRequestAssignments(params: {
         inactiveReason,
       });
     }
-    collectModelAssignments(section?.models, `tools.media.${capability}.models`, () => ({
-      active,
-      inactiveReason,
+    collectModelAssignments(section?.models, `tools.media.${capability}.models`, (rawModel) => ({
+      active:
+        active &&
+        matchesMediaEntryCapability({
+          entry: rawModel as MediaUnderstandingModelConfig,
+          source: "capability",
+          capability,
+          providerRegistry,
+        }),
+      inactiveReason: active
+        ? `${capability} media model is filtered out by its configured capabilities.`
+        : inactiveReason,
     }));
   }
 }

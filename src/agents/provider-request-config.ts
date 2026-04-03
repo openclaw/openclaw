@@ -162,6 +162,8 @@ type ResolveProviderRequestPolicyConfigParams = {
 
 function sanitizeConfiguredRequestString(value: unknown, path: string): string | undefined {
   if (typeof value !== "string") {
+    // Config transport overrides are sanitized after secrets runtime resolution.
+    // Fail closed if a raw SecretRef leaks into this path instead of silently dropping it.
     assertSecretInputResolved({ value, path });
     return undefined;
   }

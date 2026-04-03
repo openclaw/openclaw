@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
 type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
@@ -137,6 +139,7 @@ describe("secrets runtime snapshot", () => {
   });
 
   afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
     clearSecretsRuntimeSnapshot();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -1483,6 +1486,152 @@ describe("secrets runtime snapshot", () => {
     });
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "tools.media.models.0.request.auth.token",
+    );
+  });
+
+  it("resolves shared media model request refs from inferred provider capabilities", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "deepgram",
+      pluginName: "Deepgram Plugin",
+      source: "test",
+      provider: {
+        id: "deepgram",
+        capabilities: ["audio"],
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "deepgram",
+                request: {
+                  auth: {
+                    mode: "authorization-bearer",
+                    token: {
+                      source: "env",
+                      provider: "default",
+                      id: "MEDIA_INFERRED_AUDIO_TOKEN",
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      }),
+      env: {
+        MEDIA_INFERRED_AUDIO_TOKEN: "inferred-audio-token", // pragma: allowlist secret
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: "inferred-audio-token",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "tools.media.models.0.request.auth.token",
+    );
+  });
+
+  it("treats shared media model request refs as inactive when inferred capabilities are disabled", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "deepgram",
+      pluginName: "Deepgram Plugin",
+      source: "test",
+      provider: {
+        id: "deepgram",
+        capabilities: ["audio"],
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
+    const inferredTokenRef = {
+      source: "env" as const,
+      provider: "default" as const,
+      id: "MEDIA_INFERRED_DISABLED_AUDIO_TOKEN",
+    };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "deepgram",
+                request: {
+                  auth: {
+                    mode: "authorization-bearer",
+                    token: inferredTokenRef,
+                  },
+                },
+              },
+            ],
+            audio: {
+              enabled: false,
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: inferredTokenRef,
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "tools.media.models.0.request.auth.token",
+    );
+  });
+
+  it("treats section media model request refs as inactive when model capabilities exclude the section", async () => {
+    const sectionTokenRef = {
+      source: "env" as const,
+      provider: "default" as const,
+      id: "MEDIA_AUDIO_SECTION_FILTERED_TOKEN",
+    };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [
+                {
+                  provider: "openai",
+                  capabilities: ["video"],
+                  request: {
+                    auth: {
+                      mode: "authorization-bearer",
+                      token: sectionTokenRef,
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.media?.audio?.models?.[0]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: sectionTokenRef,
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "tools.media.audio.models.0.request.auth.token",
     );
   });
 
