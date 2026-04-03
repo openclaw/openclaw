@@ -162,6 +162,20 @@ describe("ollama plugin", () => {
     expect(
       provider.buildReplayPolicy?.({
         provider: "ollama",
+        modelApi: "openai-responses",
+        modelId: "qwen3:32b",
+      } as never),
+    ).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      applyAssistantFirstOrderingFix: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+    });
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "ollama",
         modelApi: "ollama",
         modelId: "qwen3.5:9b",
       } as never),
