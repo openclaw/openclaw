@@ -1,7 +1,16 @@
+import {
+  loadAuthProfileStoreForSecretsRuntime,
+  type AuthProfileStore,
+} from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
+import {
+  isDangerousHostEnvOverrideVarName,
+  isDangerousHostEnvVarName,
+  normalizeEnvVarKey,
+} from "../infra/host-env-security.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -18,6 +27,45 @@ export type GatewayInstallPlan = {
   environment: Record<string, string | undefined>;
 };
 
+function collectAuthProfileServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  authStore?: AuthProfileStore;
+  warn?: DaemonInstallWarnFn;
+}): Record<string, string> {
+  const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
+  const entries: Record<string, string> = {};
+
+  for (const credential of Object.values(authStore.profiles)) {
+    const ref =
+      credential.type === "api_key"
+        ? credential.keyRef
+        : credential.type === "token"
+          ? credential.tokenRef
+          : undefined;
+    if (!ref || ref.source !== "env") {
+      continue;
+    }
+    const key = normalizeEnvVarKey(ref.id, { portable: true });
+    if (!key) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      params.warn?.(
+        `Auth profile env ref "${key}" blocked by host-env security policy`,
+        "Auth profile",
+      );
+      continue;
+    }
+    const value = params.env[key]?.trim();
+    if (!value) {
+      continue;
+    }
+    entries[key] = value;
+  }
+
+  return entries;
+}
+
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -25,6 +73,7 @@ export async function buildGatewayInstallPlan(params: {
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
+  authStore?: AuthProfileStore;
 }): Promise<GatewayInstallPlan> {
   const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
@@ -57,14 +106,23 @@ export async function buildGatewayInstallPlan(params: {
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
-  // Only include the minimal service environment (HOME, PATH, OPENCLAW_*, port).
-  // Provider secrets (API keys, tokens) are intentionally excluded — the daemon
-  // resolves them at runtime from ~/.openclaw/.env and the credential store,
-  // so they never need to be persisted into service unit metadata.
+  // Merge env sources in ascending priority:
+  //   1. Auth-profile env refs  (shell-only credentials for --secret-input-mode ref flows)
+  //   2. Service environment    (HOME, PATH, OPENCLAW_* — highest priority, always wins)
+  //
+  // Config env vars (openclaw.json env.vars + inline keys) are intentionally excluded —
+  // those can contain provider secrets that must never be persisted into service unit metadata.
   return {
     programArguments,
     workingDirectory,
-    environment: serviceEnvironment,
+    environment: {
+      ...collectAuthProfileServiceEnvVars({
+        env: params.env,
+        authStore: params.authStore,
+        warn: params.warn,
+      }),
+      ...serviceEnvironment,
+    },
   };
 }
 

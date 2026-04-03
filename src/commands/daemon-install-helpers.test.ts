@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePreferredNodePath: vi.fn(),
@@ -6,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   resolveSystemNodeInfo: vi.fn(),
   renderSystemNodeWarning: vi.fn(),
   buildServiceEnvironment: vi.fn(),
+  loadAuthProfileStoreForSecretsRuntime: vi.fn(),
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
@@ -20,6 +22,10 @@ vi.mock("../daemon/program-args.js", () => ({
 
 vi.mock("../daemon/service-env.js", () => ({
   buildServiceEnvironment: mocks.buildServiceEnvironment,
+}));
+
+vi.mock("../agents/auth-profiles.js", () => ({
+  loadAuthProfileStoreForSecretsRuntime: mocks.loadAuthProfileStoreForSecretsRuntime,
 }));
 
 import {
@@ -70,6 +76,8 @@ function mockNodeGatewayPlanFixture(
   });
   mocks.renderSystemNodeWarning.mockReturnValue(warning);
   mocks.buildServiceEnvironment.mockReturnValue(serviceEnvironment);
+  // Default: no auth profiles configured → no additional env vars injected.
+  mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({ profiles: {} });
 }
 
 describe("buildGatewayInstallPlan", () => {
@@ -148,11 +156,11 @@ describe("buildGatewayInstallPlan", () => {
       runtime: "node",
     });
 
-    // Only service environment should be present — no config/auth/dotenv secrets.
+    // Only service environment should be present — no config/dotenv secrets.
     expect(plan.environment).toEqual({ OPENCLAW_PORT: "3000", HOME: "/Users/me" });
   });
 
-  it("returns only the minimal service environment", async () => {
+  it("returns only the minimal service environment when no auth profiles are configured", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
@@ -168,10 +176,72 @@ describe("buildGatewayInstallPlan", () => {
       runtime: "node",
     });
 
-    // Provider secrets must NOT leak into the service environment.
+    // Provider secrets must NOT leak into the service environment unless
+    // they are explicitly referenced by an auth profile.
     expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
     expect(plan.environment.ANTHROPIC_TOKEN).toBeUndefined();
     expect(plan.environment).toEqual({ OPENCLAW_PORT: "3000" });
+  });
+
+  it("includes shell-only auth-profile env refs for daemon installs", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const authStore: AuthProfileStore = {
+      profiles: {
+        openai: {
+          type: "api_key",
+          keyRef: { source: "env", id: "OPENAI_API_KEY" },
+        } as AuthProfileStore["profiles"][string],
+      },
+    };
+
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
+      },
+      port: 3000,
+      runtime: "node",
+      authStore,
+    });
+
+    // Auth-profile env refs must be included so the daemon can resolve
+    // credentials at runtime in --secret-input-mode ref flows.
+    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test"); // pragma: allowlist secret
+    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+  });
+
+  it("service environment takes priority over auth-profile env refs", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+        OPENAI_API_KEY: "service-override", // pragma: allowlist secret
+      },
+    });
+
+    const authStore: AuthProfileStore = {
+      profiles: {
+        openai: {
+          type: "api_key",
+          keyRef: { source: "env", id: "OPENAI_API_KEY" },
+        } as AuthProfileStore["profiles"][string],
+      },
+    };
+
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        OPENAI_API_KEY: "sk-from-shell", // pragma: allowlist secret
+      },
+      port: 3000,
+      runtime: "node",
+      authStore,
+    });
+
+    // Service environment always wins over auth-profile env refs.
+    expect(plan.environment.OPENAI_API_KEY).toBe("service-override"); // pragma: allowlist secret
   });
 });
 
