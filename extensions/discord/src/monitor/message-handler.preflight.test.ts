@@ -365,7 +365,7 @@ describe("preflightDiscordMessage", () => {
     });
   });
 
-  it("uses configured defaultAccount for omitted-account dm authorization", async () => {
+  it("falls back to the default discord account for omitted-account dm authorization", async () => {
     const message = createDiscordMessage({
       id: "m-dm-default-account",
       channelId: "dm-channel-default-account",
@@ -410,7 +410,7 @@ describe("preflightDiscordMessage", () => {
 
     expect(resolveDiscordDmCommandAccessMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        accountId: "work",
+        accountId: "default",
       }),
     );
   });
