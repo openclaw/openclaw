@@ -32,9 +32,11 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
+vi.mock("../infra/heartbeat-wake.js", async () => {
   return await mergeMockedModule(
-    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
+    await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+      "../infra/heartbeat-wake.js",
+    ),
     () => ({
       requestHeartbeatNow,
     }),
