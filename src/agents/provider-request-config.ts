@@ -1,6 +1,7 @@
 import type { Api } from "@mariozechner/pi-ai";
 import type { ModelDefinitionConfig } from "../config/types.js";
 import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
+import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type {
   ProviderRequestCapabilities,
@@ -159,8 +160,9 @@ type ResolveProviderRequestPolicyConfigParams = {
   request?: ProviderRequestTransportOverrides;
 };
 
-function sanitizeConfiguredRequestString(value: unknown): string | undefined {
+function sanitizeConfiguredRequestString(value: unknown, path: string): string | undefined {
   if (typeof value !== "string") {
+    assertSecretInputResolved({ value, path });
     return undefined;
   }
   const trimmed = value.trim();
@@ -178,7 +180,7 @@ export function sanitizeConfiguredProviderRequest(
   if (request.headers && typeof request.headers === "object" && !Array.isArray(request.headers)) {
     const nextHeaders: Record<string, string> = {};
     for (const [key, value] of Object.entries(request.headers)) {
-      const sanitized = sanitizeConfiguredRequestString(value);
+      const sanitized = sanitizeConfiguredRequestString(value, `request.headers.${key}`);
       if (sanitized) {
         nextHeaders[key] = sanitized;
       }
@@ -194,14 +196,17 @@ export function sanitizeConfiguredProviderRequest(
     if (rawAuth.mode === "provider-default") {
       auth = { mode: "provider-default" };
     } else if (rawAuth.mode === "authorization-bearer") {
-      const token = sanitizeConfiguredRequestString(rawAuth.token);
+      const token = sanitizeConfiguredRequestString(rawAuth.token, "request.auth.token");
       if (token) {
         auth = { mode: "authorization-bearer", token };
       }
     } else if (rawAuth.mode === "header") {
-      const headerName = sanitizeConfiguredRequestString(rawAuth.headerName);
-      const value = sanitizeConfiguredRequestString(rawAuth.value);
-      const prefix = sanitizeConfiguredRequestString(rawAuth.prefix);
+      const headerName = sanitizeConfiguredRequestString(
+        rawAuth.headerName,
+        "request.auth.headerName",
+      );
+      const value = sanitizeConfiguredRequestString(rawAuth.value, "request.auth.value");
+      const prefix = sanitizeConfiguredRequestString(rawAuth.prefix, "request.auth.prefix");
       if (headerName && value) {
         auth = {
           mode: "header",
@@ -213,17 +218,26 @@ export function sanitizeConfiguredProviderRequest(
     }
   }
 
-  const sanitizeTls = (tls: unknown): ProviderRequestTlsOverride | undefined => {
+  const sanitizeTls = (
+    tls: unknown,
+    pathPrefix: "request.tls" | "request.proxy.tls",
+  ): ProviderRequestTlsOverride | undefined => {
     if (!tls || typeof tls !== "object" || Array.isArray(tls)) {
       return undefined;
     }
     const rawTls = tls as Record<string, unknown>;
     const next: ProviderRequestTlsOverride = {};
-    const ca = sanitizeConfiguredRequestString(rawTls.ca);
-    const cert = sanitizeConfiguredRequestString(rawTls.cert);
-    const key = sanitizeConfiguredRequestString(rawTls.key);
-    const passphrase = sanitizeConfiguredRequestString(rawTls.passphrase);
-    const serverName = sanitizeConfiguredRequestString(rawTls.serverName);
+    const ca = sanitizeConfiguredRequestString(rawTls.ca, `${pathPrefix}.ca`);
+    const cert = sanitizeConfiguredRequestString(rawTls.cert, `${pathPrefix}.cert`);
+    const key = sanitizeConfiguredRequestString(rawTls.key, `${pathPrefix}.key`);
+    const passphrase = sanitizeConfiguredRequestString(
+      rawTls.passphrase,
+      `${pathPrefix}.passphrase`,
+    );
+    const serverName = sanitizeConfiguredRequestString(
+      rawTls.serverName,
+      `${pathPrefix}.serverName`,
+    );
     if (ca) {
       next.ca = ca;
     }
@@ -250,14 +264,14 @@ export function sanitizeConfiguredProviderRequest(
   let proxy: ProviderRequestProxyOverride | undefined;
   const rawProxy = request.proxy;
   if (rawProxy && typeof rawProxy === "object" && !Array.isArray(rawProxy)) {
-    const tls = sanitizeTls(rawProxy.tls);
+    const tls = sanitizeTls(rawProxy.tls, "request.proxy.tls");
     if (rawProxy.mode === "env-proxy") {
       proxy = {
         mode: "env-proxy",
         ...(tls ? { tls } : {}),
       };
     } else if (rawProxy.mode === "explicit-proxy") {
-      const url = sanitizeConfiguredRequestString(rawProxy.url);
+      const url = sanitizeConfiguredRequestString(rawProxy.url, "request.proxy.url");
       if (url) {
         proxy = {
           mode: "explicit-proxy",
@@ -268,7 +282,7 @@ export function sanitizeConfiguredProviderRequest(
     }
   }
 
-  const tls = sanitizeTls(request.tls);
+  const tls = sanitizeTls(request.tls, "request.tls");
 
   if (!headers && !auth && !proxy && !tls) {
     return undefined;

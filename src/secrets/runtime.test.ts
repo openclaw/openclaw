@@ -1293,6 +1293,31 @@ describe("secrets runtime snapshot", () => {
       config: asConfig({
         tools: {
           media: {
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4o-mini-transcribe",
+                capabilities: ["audio"],
+                request: {
+                  headers: {
+                    "X-Shared-Tenant": {
+                      source: "env",
+                      provider: "default",
+                      id: "MEDIA_SHARED_TENANT",
+                    },
+                  },
+                  auth: {
+                    mode: "header",
+                    headerName: "x-shared-key",
+                    value: {
+                      source: "env",
+                      provider: "default",
+                      id: "MEDIA_SHARED_MODEL_KEY",
+                    },
+                  },
+                },
+              },
+            ],
             audio: {
               enabled: true,
               request: {
@@ -1331,6 +1356,8 @@ describe("secrets runtime snapshot", () => {
         },
       }),
       env: {
+        MEDIA_SHARED_TENANT: "tenant-shared",
+        MEDIA_SHARED_MODEL_KEY: "shared-model-key", // pragma: allowlist secret
         MEDIA_AUDIO_TENANT: "tenant-acme",
         MEDIA_AUDIO_TOKEN: "audio-token", // pragma: allowlist secret
         MEDIA_AUDIO_CERT: "client-cert",
@@ -1348,6 +1375,16 @@ describe("secrets runtime snapshot", () => {
     });
     expect(snapshot.config.tools?.media?.audio?.request?.tls).toEqual({
       cert: "client-cert",
+    });
+    expect(snapshot.config.tools?.media?.models?.[0]?.request).toEqual({
+      headers: {
+        "X-Shared-Tenant": "tenant-shared",
+      },
+      auth: {
+        mode: "header",
+        headerName: "x-shared-key",
+        value: "shared-model-key",
+      },
     });
     expect(snapshot.config.tools?.media?.audio?.models?.[0]?.request).toEqual({
       auth: {

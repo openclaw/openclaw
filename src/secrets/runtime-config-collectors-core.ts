@@ -356,9 +356,15 @@ function collectProviderRequestAssignments(params: {
     }
   };
 
-  collectTlsAssignments(isRecord(params.request.tls) ? params.request.tls : undefined, `${params.pathPrefix}.tls`);
+  collectTlsAssignments(
+    isRecord(params.request.tls) ? params.request.tls : undefined,
+    `${params.pathPrefix}.tls`,
+  );
   const proxy = isRecord(params.request.proxy) ? params.request.proxy : undefined;
-  collectTlsAssignments(isRecord(proxy?.tls) ? proxy.tls : undefined, `${params.pathPrefix}.proxy.tls`);
+  collectTlsAssignments(
+    isRecord(proxy?.tls) ? proxy.tls : undefined,
+    `${params.pathPrefix}.proxy.tls`,
+  );
 }
 
 function collectMediaRequestAssignments(params: {
@@ -371,6 +377,13 @@ function collectMediaRequestAssignments(params: {
   if (!media) {
     return;
   }
+
+  const capabilityKeys = ["audio", "image", "video"] as const;
+  const capabilitySections = capabilityKeys
+    .map((capability) => (isRecord(media[capability]) ? media[capability] : undefined))
+    .filter((section): section is Record<string, unknown> => Boolean(section));
+  const sharedModelsActive = capabilitySections.some((section) => section.enabled !== false);
+  const sharedModelsInactiveReason = "all media understanding capabilities are disabled.";
 
   const collectModelAssignments = (
     models: unknown,
@@ -396,7 +409,14 @@ function collectMediaRequestAssignments(params: {
     });
   };
 
-  for (const capability of ["audio", "image", "video"] as const) {
+  collectModelAssignments(
+    media.models,
+    "tools.media.models",
+    sharedModelsActive,
+    sharedModelsInactiveReason,
+  );
+
+  for (const capability of capabilityKeys) {
     const section = isRecord(media[capability]) ? media[capability] : undefined;
     const active = section?.enabled !== false;
     const inactiveReason = `${capability} media understanding is disabled.`;
@@ -410,7 +430,12 @@ function collectMediaRequestAssignments(params: {
         inactiveReason,
       });
     }
-    collectModelAssignments(section?.models, `tools.media.${capability}.models`, active, inactiveReason);
+    collectModelAssignments(
+      section?.models,
+      `tools.media.${capability}.models`,
+      active,
+      inactiveReason,
+    );
   }
 }
 

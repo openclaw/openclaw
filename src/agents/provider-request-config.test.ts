@@ -292,6 +292,17 @@ describe("provider request config", () => {
     });
   });
 
+  it("fails fast when configured request overrides still contain unresolved SecretRefs", () => {
+    expect(() =>
+      sanitizeConfiguredProviderRequest({
+        auth: {
+          mode: "authorization-bearer",
+          token: { source: "env", provider: "default", id: "MEDIA_AUDIO_TOKEN" },
+        },
+      }),
+    ).toThrow(/request\.auth\.token: unresolved SecretRef/i);
+  });
+
   it("merges configured request overrides with later entries winning", () => {
     expect(
       mergeProviderRequestOverrides(
