@@ -133,11 +133,11 @@ export function normalizeToolParameterSchema(
       ? "oneOf"
       : null;
   if (!variantKey) {
-    // Handle truly empty schemas (no type, no properties, no unions) —
-    // OpenAI requires `type: "object"` with `properties` for tool schemas.
-    // MCP tools with parameter-free schemas may return `{}` or minimal objects.
-    if (!("type" in schemaRecord) && !("properties" in schemaRecord)) {
-      return applyProviderCleaning({ type: "object", properties: {}, ...schemaRecord });
+    // Handle the proven MCP no-parameter case: a truly empty schema object.
+    // Keep other non-empty shapes unchanged so we do not silently bless
+    // unsupported top-level conditionals like `allOf`.
+    if (Object.keys(schemaRecord).length === 0) {
+      return applyProviderCleaning({ type: "object", properties: {} });
     }
     return schema;
   }
