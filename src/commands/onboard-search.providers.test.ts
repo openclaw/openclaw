@@ -59,6 +59,7 @@ function createBundledFirecrawlEntry(): PluginWebSearchProviderEntry {
     pluginId: "firecrawl",
     label: "Firecrawl Search",
     hint: "Structured results",
+    onboardingScopes: ["text-inference"],
     envVars: ["FIRECRAWL_API_KEY"],
     placeholder: "fc-...",
     signupUrl: "https://example.com/firecrawl",
@@ -97,7 +98,6 @@ describe("onboard-search provider resolution", () => {
   let mod: typeof import("./onboard-search.js");
 
   beforeAll(async () => {
-    vi.resetModules();
     mod = await import("./onboard-search.js");
   });
 

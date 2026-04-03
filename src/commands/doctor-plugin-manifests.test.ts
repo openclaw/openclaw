@@ -138,4 +138,30 @@ describe("doctor plugin manifest legacy contract repair", () => {
       webSearchProviders: ["gemini"],
     });
   });
+
+  it("ignores non-object contracts payloads when collecting migrations", () => {
+    const pluginsRoot = makeTempDir();
+    const root = path.join(pluginsRoot, "openai");
+    fs.mkdirSync(root, { recursive: true });
+    writePackageJson(root);
+    writeManifest(root, {
+      id: "openai",
+      providers: ["openai"],
+      speechProviders: ["openai"],
+      contracts: "broken",
+      configSchema: { type: "object" },
+    });
+
+    const migrations = collectLegacyPluginManifestContractMigrations({
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: pluginsRoot,
+      },
+    });
+
+    expect(migrations).toHaveLength(1);
+    expect(migrations[0]?.nextRaw.contracts).toEqual({
+      speechProviders: ["openai"],
+    });
+  });
 });

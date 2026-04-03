@@ -12,37 +12,44 @@ OpenClaw uses **[AgentSkills](https://agentskills.io)-compatible** skill folders
 
 ## Locations and precedence
 
-Skills are loaded from **three** places:
+OpenClaw loads skills from these sources:
 
-1. **Bundled skills**: shipped with the install (npm package or OpenClaw.app)
-2. **Managed/local skills**: `~/.openclaw/skills`
-3. **Workspace skills**: `<workspace>/skills`
+1. **Extra skill folders**: configured with `skills.load.extraDirs`
+2. **Bundled skills**: shipped with the install (npm package or OpenClaw.app)
+3. **Managed/local skills**: `~/.openclaw/skills`
+4. **Personal agent skills**: `~/.agents/skills`
+5. **Project agent skills**: `<workspace>/.agents/skills`
+6. **Workspace skills**: `<workspace>/skills`
 
 If a skill name conflicts, precedence is:
 
-`<workspace>/skills` (highest) → `~/.openclaw/skills` → bundled skills (lowest)
-
-Additionally, you can configure extra skill folders (lowest precedence) via
-`skills.load.extraDirs` in `~/.openclaw/openclaw.json`.
+`<workspace>/skills` (highest) → `<workspace>/.agents/skills` → `~/.agents/skills` → `~/.openclaw/skills` → bundled skills → `skills.load.extraDirs` (lowest)
 
 ## Per-agent vs shared skills
 
 In **multi-agent** setups, each agent has its own workspace. That means:
 
 - **Per-agent skills** live in `<workspace>/skills` for that agent only.
+- **Project agent skills** live in `<workspace>/.agents/skills` and apply to
+  that workspace before the normal workspace `skills/` folder.
+- **Personal agent skills** live in `~/.agents/skills` and apply across
+  workspaces on that machine.
 - **Shared skills** live in `~/.openclaw/skills` (managed/local) and are visible
   to **all agents** on the same machine.
 - **Shared folders** can also be added via `skills.load.extraDirs` (lowest
   precedence) if you want a common skills pack used by multiple agents.
 
 If the same skill name exists in more than one place, the usual precedence
-applies: workspace wins, then managed/local, then bundled.
+applies: workspace wins, then project agent skills, then personal agent skills,
+then managed/local, then bundled, then extra dirs.
 
 ## Plugins + skills
 
 Plugins can ship their own skills by listing `skills` directories in
 `openclaw.plugin.json` (paths relative to the plugin root). Plugin skills load
-when the plugin is enabled and participate in the normal skill precedence rules.
+when the plugin is enabled. Today those directories are merged into the same
+low-precedence path as `skills.load.extraDirs`, so a same-named bundled,
+managed, agent, or workspace skill overrides them.
 You can gate them via `metadata.openclaw.requires.config` on the plugin’s config
 entry. See [Plugins](/tools/plugin) for discovery/config and [Tools](/tools) for the
 tool surface those skills teach.
@@ -74,6 +81,8 @@ OpenClaw picks that up as `<workspace>/skills` on the next session.
 - Treat third-party skills as **untrusted code**. Read them before enabling.
 - Prefer sandboxed runs for untrusted inputs and risky tools. See [Sandboxing](/gateway/sandboxing).
 - Workspace and extra-dir skill discovery only accepts skill roots and `SKILL.md` files whose resolved realpath stays inside the configured root.
+- Gateway-backed skill dependency installs (`skills.install`, onboarding, and the Skills settings UI) run the built-in dangerous-code scanner before executing installer metadata. `critical` findings block by default unless the caller explicitly sets the dangerous override; suspicious findings still warn only.
+- `openclaw skills install <slug>` is different: it downloads a ClawHub skill folder into the workspace and does not use the installer-metadata path above.
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process
   for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
 - For a broader threat model and checklists, see [Security](/gateway/security).
@@ -260,7 +269,7 @@ Skills can also refresh mid-session when the skills watcher is enabled or when a
 
 ## Remote macOS nodes (Linux gateway)
 
-If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), OpenClaw can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `nodes` tool (typically `nodes.run`).
+If the Gateway is running on Linux but a **macOS node** is connected **with `system.run` allowed** (Exec approvals security not set to `deny`), OpenClaw can treat macOS-only skills as eligible when the required binaries are present on that node. The agent should execute those skills via the `exec` tool with `host=node`.
 
 This relies on the node reporting its command support and on a bin probe via `system.run`. If the macOS node goes offline later, the skills remain visible; invocations may fail until the node reconnects.
 
@@ -313,3 +322,10 @@ See [Skills config](/tools/skills-config) for the full configuration schema.
 Browse [https://clawhub.com](https://clawhub.com).
 
 ---
+
+## Related
+
+- [Creating Skills](/tools/creating-skills) — building custom skills
+- [Skills Config](/tools/skills-config) — skill configuration reference
+- [Slash Commands](/tools/slash-commands) — all available slash commands
+- [Plugins](/tools/plugin) — plugin system overview

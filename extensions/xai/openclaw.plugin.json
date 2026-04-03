@@ -1,5 +1,6 @@
 {
   "id": "xai",
+  "enabledByDefault": true,
   "providers": ["xai"],
   "providerAuthEnvVars": {
     "xai": ["XAI_API_KEY"]
@@ -32,10 +33,51 @@
     "webSearch.inlineCitations": {
       "label": "Inline Citations",
       "help": "Include inline markdown citations in Grok responses."
+    },
+    "codeExecution.enabled": {
+      "label": "Enable Code Execution",
+      "help": "Enable the code_execution tool for remote xAI sandbox analysis."
+    },
+    "xSearch.enabled": {
+      "label": "Enable X Search",
+      "help": "Enable the x_search tool for searching X posts with xAI."
+    },
+    "xSearch.model": {
+      "label": "X Search Model",
+      "help": "xAI model override for x_search."
+    },
+    "xSearch.inlineCitations": {
+      "label": "X Search Inline Citations",
+      "help": "Keep inline markdown citations from xAI in x_search responses when available."
+    },
+    "xSearch.maxTurns": {
+      "label": "X Search Max Turns",
+      "help": "Optional max internal tool turns xAI may use per x_search request."
+    },
+    "xSearch.timeoutSeconds": {
+      "label": "X Search Timeout",
+      "help": "Timeout in seconds for x_search requests."
+    },
+    "xSearch.cacheTtlMinutes": {
+      "label": "X Search Cache TTL",
+      "help": "Cache TTL in minutes for x_search results."
+    },
+    "codeExecution.model": {
+      "label": "Code Execution Model",
+      "help": "xAI model override for code_execution."
+    },
+    "codeExecution.maxTurns": {
+      "label": "Code Execution Max Turns",
+      "help": "Optional max internal tool turns xAI may use for code_execution."
+    },
+    "codeExecution.timeoutSeconds": {
+      "label": "Code Execution Timeout",
+      "help": "Timeout in seconds for code_execution requests."
     }
   },
   "contracts": {
-    "webSearchProviders": ["grok"]
+    "webSearchProviders": ["grok"],
+    "tools": ["code_execution", "x_search"]
   },
   "configSchema": {
     "type": "object",
@@ -53,6 +95,48 @@
           },
           "inlineCitations": {
             "type": "boolean"
+          }
+        }
+      },
+      "xSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "inlineCitations": {
+            "type": "boolean"
+          },
+          "maxTurns": {
+            "type": "number"
+          },
+          "timeoutSeconds": {
+            "type": "number"
+          },
+          "cacheTtlMinutes": {
+            "type": "number"
+          }
+        }
+      },
+      "codeExecution": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "maxTurns": {
+            "type": "number"
+          },
+          "timeoutSeconds": {
+            "type": "number"
           }
         }
       }

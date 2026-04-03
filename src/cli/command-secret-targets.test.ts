@@ -10,7 +10,7 @@ describe("command secret target ids", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
-    expect(ids.has("tools.web.fetch.firecrawl.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
   });
 
   it("includes gateway auth and channel targets for security audit", () => {

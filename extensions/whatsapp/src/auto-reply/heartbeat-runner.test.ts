@@ -1,7 +1,7 @@
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
+import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
+import { HEARTBEAT_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { getReplyFromConfig } from "../../../../src/auto-reply/reply.js";
-import { HEARTBEAT_TOKEN } from "../../../../src/auto-reply/tokens.js";
-import { redactIdentifier } from "../../../../src/logging/redact-identifier.js";
 import type { sendMessageWhatsApp } from "../send.js";
 
 const state = vi.hoisted(() => ({
@@ -41,14 +41,6 @@ vi.mock("../../../../src/channels/plugins/whatsapp-heartbeat.js", () => ({
   resolveWhatsAppHeartbeatRecipients: () => [],
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig: () => ({ agents: { defaults: {} }, session: {} }),
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
   return {
@@ -57,8 +49,8 @@ vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
   return {
     ...actual,
     resolveHeartbeatVisibility: () => state.visibility,
@@ -91,18 +83,27 @@ vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../../src/auto-reply/reply.js", () => ({
-  getReplyFromConfig: vi.fn(async () => undefined),
-}));
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    getReplyFromConfig: vi.fn(async () => undefined),
+  };
+});
 
-vi.mock("../../../../src/config/sessions.js", () => ({
-  loadSessionStore: () => state.store,
-  resolveSessionKey: () => "k",
-  resolveStorePath: () => "/tmp/store.json",
-  updateSessionStore: async (_path: string, updater: (store: typeof state.store) => void) => {
-    updater(state.store);
-  },
-}));
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    loadConfig: () => ({ agents: { defaults: {} }, session: {} }),
+    loadSessionStore: () => state.store,
+    resolveSessionKey: () => "k",
+    resolveStorePath: () => "/tmp/store.json",
+    updateSessionStore: async (_path: string, updater: (store: typeof state.store) => void) => {
+      updater(state.store);
+    },
+  };
+});
 
 vi.mock("./session-snapshot.js", () => ({
   getSessionSnapshot: () => state.snapshot,

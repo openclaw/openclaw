@@ -25,6 +25,19 @@ const ERROR_PATTERNS = {
     /service[_ ]unavailable.*(?:overload|capacity|high[_ ]demand)|(?:overload|capacity|high[_ ]demand).*service[_ ]unavailable/i,
     "high demand",
   ],
+  serverError: [
+    "an error occurred while processing",
+    "internal server error",
+    "internal_error",
+    "server_error",
+    "service temporarily unavailable",
+    "service_unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "upstream error",
+    "upstream connect error",
+    "connection reset",
+  ],
   timeout: [
     "timeout",
     "timed out",
@@ -50,6 +63,11 @@ const ERROR_PATTERNS = {
     /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    // AbortError messages from fetch/stream aborts (Ollama NDJSON stream
+    // timeouts, signal aborts, etc.) — without these the flattened message
+    // falls through to reason=unknown (#58315).
+    /\boperation was aborted\b/i,
+    /\bstream (?:was )?(?:closed|aborted)\b/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
@@ -168,4 +186,8 @@ export function isAuthErrorMessage(raw: string): boolean {
 
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
+}
+
+export function isServerErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.serverError);
 }

@@ -77,6 +77,26 @@ const createStubChannelPlugin = (params: {
   },
 });
 
+const createConfiguredChannelPlugin = (params: {
+  id: ChannelPlugin["id"];
+  label: string;
+}): ChannelPlugin => ({
+  ...createChannelTestPluginBase({
+    id: params.id,
+    label: params.label,
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+      isConfigured: async () => true,
+    },
+  }),
+  outbound: {
+    deliveryMode: "direct",
+    sendText: async () => ({ channel: params.id, messageId: "msg-test" }),
+    sendMedia: async () => ({ channel: params.id, messageId: "msg-test" }),
+  },
+});
+
 const emptyRegistry = createRegistry([]);
 const defaultRegistry = createRegistry([
   {
@@ -279,12 +299,60 @@ describe("gateway server agent", () => {
       sessionKey: "main",
       channel: "last",
       deliver: true,
+      bestEffortDeliver: false,
       idempotencyKey: "idem-agent-webchat",
     });
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("INVALID_REQUEST");
     expect(res.error?.message).toMatch(/Channel is required|runtime not initialized/);
     expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
+  });
+
+  test("agent downgrades to session-only delivery when best-effort is enabled and last channel is webchat", async () => {
+    testState.allowFrom = ["+1555"];
+    await writeMainSessionEntry({
+      sessionId: "sess-main-webchat-best-effort",
+      lastChannel: "webchat",
+      lastTo: "+1555",
+    });
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      channel: "last",
+      deliver: true,
+      bestEffortDeliver: true,
+      idempotencyKey: "idem-agent-webchat-best-effort",
+    });
+    expect(res.ok).toBe(true);
+    expectAgentRoutingCall({ channel: "webchat", deliver: false });
+  });
+
+  test("agent downgrades to session-only when multiple channels are configured but no external target resolves", async () => {
+    const registry = createRegistry([
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: createConfiguredChannelPlugin({ id: "discord", label: "Discord" }),
+      },
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: createConfiguredChannelPlugin({ id: "telegram", label: "Telegram" }),
+      },
+    ]);
+    setRegistry(registry);
+    await writeMainSessionEntry({
+      sessionId: "sess-main-multi-configured-best-effort",
+    });
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      deliver: true,
+      bestEffortDeliver: true,
+      idempotencyKey: "idem-agent-multi-configured-best-effort",
+    });
+    expect(res.ok).toBe(true);
+    expectAgentRoutingCall({ channel: "webchat", deliver: false });
   });
 
   test("agent uses webchat for internal runs when last provider is webchat", async () => {

@@ -65,9 +65,9 @@ Release behavior:
 - Beta release also switches the app to `OpenClawPushTransport=relay`, `OpenClawPushDistribution=official`, and `OpenClawPushAPNsEnvironment=production`.
 - The beta flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
 - Root `package.json.version` is the only version source for iOS.
-- A root version like `2026.3.26-beta.1` becomes:
-  - `CFBundleShortVersionString = 2026.3.26`
-  - `CFBundleVersion = next TestFlight build number for 2026.3.26`
+- A root version like `2026.4.1-beta.1` becomes:
+  - `CFBundleShortVersionString = 2026.4.1`
+  - `CFBundleVersion = next TestFlight build number for 2026.4.1`
 
 Required env for beta builds:
 

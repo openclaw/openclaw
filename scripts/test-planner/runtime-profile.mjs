@@ -87,6 +87,14 @@ const scaleConcurrencyForLoad = (value, loadBand) => {
   return Math.max(1, Math.floor(value * scale));
 };
 
+const scaleBatchTargetForLoad = (value, loadBand) => {
+  if (value === null || value === undefined || value <= 0) {
+    return value;
+  }
+  const scale = loadBand === "busy" ? 0.75 : loadBand === "saturated" ? 0.5 : 1;
+  return Math.max(5_000, Math.floor(value * scale));
+};
+
 const LOCAL_MEMORY_BUDGETS = {
   constrained: {
     vitestCap: 2,
@@ -104,6 +112,7 @@ const LOCAL_MEMORY_BUDGETS = {
     memoryHeavyFileLimit: 8,
     unitFastBatchTargetMs: 10_000,
     channelsBatchTargetMs: 0,
+    extensionsBatchTargetMs: 60_000,
   },
   moderate: {
     vitestCap: 3,
@@ -121,6 +130,7 @@ const LOCAL_MEMORY_BUDGETS = {
     memoryHeavyFileLimit: 12,
     unitFastBatchTargetMs: 15_000,
     channelsBatchTargetMs: 0,
+    extensionsBatchTargetMs: 120_000,
   },
   mid: {
     vitestCap: 4,
@@ -138,6 +148,7 @@ const LOCAL_MEMORY_BUDGETS = {
     memoryHeavyFileLimit: 16,
     unitFastBatchTargetMs: 0,
     channelsBatchTargetMs: 0,
+    extensionsBatchTargetMs: 180_000,
   },
   high: {
     vitestCap: 6,
@@ -155,6 +166,7 @@ const LOCAL_MEMORY_BUDGETS = {
     memoryHeavyFileLimit: 16,
     unitFastBatchTargetMs: 45_000,
     channelsBatchTargetMs: 30_000,
+    extensionsBatchTargetMs: 300_000,
   },
 };
 
@@ -313,7 +325,7 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     unitFastLaneCount: 1,
     unitFastBatchTargetMs: bandBudget.unitFastBatchTargetMs,
     channelsBatchTargetMs: bandBudget.channelsBatchTargetMs ?? 0,
-    extensionsBatchTargetMs: 300_000,
+    extensionsBatchTargetMs: bandBudget.extensionsBatchTargetMs ?? 300_000,
   };
 
   const loadAdjustedBudget = {
@@ -321,6 +333,7 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     vitestMaxWorkers: scaleForLoad(baseBudget.vitestMaxWorkers, runtime.loadBand),
     unitSharedWorkers: scaleForLoad(baseBudget.unitSharedWorkers, runtime.loadBand),
     channelSharedWorkers: scaleForLoad(baseBudget.channelSharedWorkers, runtime.loadBand),
+    unitIsolatedWorkers: scaleForLoad(baseBudget.unitIsolatedWorkers, runtime.loadBand),
     unitHeavyWorkers: scaleForLoad(baseBudget.unitHeavyWorkers, runtime.loadBand),
     extensionWorkers: scaleForLoad(baseBudget.extensionWorkers, runtime.loadBand),
     gatewayWorkers: scaleForLoad(baseBudget.gatewayWorkers, runtime.loadBand),
@@ -334,6 +347,10 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     ),
     topLevelParallelLimitIsolated: scaleConcurrencyForLoad(
       baseBudget.topLevelParallelLimitIsolated,
+      runtime.loadBand,
+    ),
+    unitFastBatchTargetMs: scaleBatchTargetForLoad(
+      baseBudget.unitFastBatchTargetMs,
       runtime.loadBand,
     ),
     deferredRunConcurrency:

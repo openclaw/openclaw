@@ -65,7 +65,7 @@ async function applySubagentModelPatch(cfg: OpenClawConfig) {
 }
 
 function makeKimiSubagentCfg(params: {
-  agentPrimaryModel: string;
+  agentPrimaryModel?: string;
   agentSubagentModel?: string;
   defaultsSubagentModel?: string;
 }): OpenClawConfig {
@@ -83,7 +83,7 @@ function makeKimiSubagentCfg(params: {
       list: [
         {
           id: "kimi",
-          model: { primary: params.agentPrimaryModel },
+          model: params.agentPrimaryModel ? { primary: params.agentPrimaryModel } : undefined,
           subagents: params.agentSubagentModel ? { model: params.agentSubagentModel } : undefined,
         },
       ],
@@ -338,7 +338,7 @@ describe("gateway sessions patch", () => {
       await runPatch({
         patch: {
           key: MAIN_SESSION_KEY,
-          execHost: " NODE ",
+          execHost: " AUTO ",
           execSecurity: " ALLOWLIST ",
           execAsk: " ON-MISS ",
           execNode: " worker-1 ",
@@ -347,7 +347,7 @@ describe("gateway sessions patch", () => {
         },
       }),
     );
-    expect(entry.execHost).toBe("node");
+    expect(entry.execHost).toBe("auto");
     expect(entry.execSecurity).toBe("allowlist");
     expect(entry.execAsk).toBe("on-miss");
     expect(entry.execNode).toBe("worker-1");
@@ -400,7 +400,6 @@ describe("gateway sessions patch", () => {
 
   test("allows global defaults.subagents.model for subagent session even when missing from global allowlist", async () => {
     const cfg = makeKimiSubagentCfg({
-      agentPrimaryModel: "anthropic/claude-sonnet-4-6",
       defaultsSubagentModel: SUBAGENT_MODEL,
     });
 

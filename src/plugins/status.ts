@@ -1,15 +1,23 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import {
+  withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat,
+} from "./bundled-compat.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
+import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
+import { listImportedRuntimePluginIds } from "./runtime.js";
 import type { PluginDiagnostic, PluginHookName } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -117,6 +125,16 @@ function buildCompatibilityNoticesForInspect(
 
 const log = createSubsystemLogger("plugins");
 
+function resolveStatusConfig(
+  config: ReturnType<typeof loadConfig>,
+  env: NodeJS.ProcessEnv | undefined,
+) {
+  return applyPluginAutoEnable({
+    config,
+    env: env ?? process.env,
+  });
+}
+
 function resolveReportedPluginVersion(
   plugin: PluginRegistry["plugins"][number],
   env: NodeJS.ProcessEnv | undefined,
@@ -131,33 +149,83 @@ function resolveReportedPluginVersion(
   );
 }
 
-export function buildPluginStatusReport(params?: {
+type PluginReportParams = {
   config?: ReturnType<typeof loadConfig>;
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
-}): PluginStatusReport {
-  const config = params?.config ?? loadConfig();
+};
+
+function buildPluginReport(
+  params: PluginReportParams | undefined,
+  loadModules: boolean,
+): PluginStatusReport {
+  const rawConfig = params?.config ?? loadConfig();
+  const autoEnabled = resolveStatusConfig(rawConfig, params?.env);
+  const config = autoEnabled.config;
   const workspaceDir = params?.workspaceDir
     ? params.workspaceDir
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
       resolveDefaultAgentWorkspaceDir());
 
-  const registry = loadOpenClawPlugins({
+  // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
+  // report the same loaded/disabled status the gateway uses at runtime.  Without
+  // this, bundled provider plugins are incorrectly shown as "disabled" when
+  // `plugins.allow` is set because the allowlist check runs before the
+  // bundled-default-enable check.  Scoped to bundled providers only (not all
+  // bundled plugins) to match the runtime compat surface in providers.runtime.ts.
+  const bundledProviderIds = resolveBundledProviderCompatPluginIds({
     config,
     workspaceDir,
     env: params?.env,
-    logger: createPluginLoaderLogger(log),
   });
+  const effectiveConfig = withBundledPluginAllowlistCompat({
+    config,
+    pluginIds: bundledProviderIds,
+  });
+  const runtimeCompatConfig = withBundledPluginEnablementCompat({
+    config: effectiveConfig,
+    pluginIds: bundledProviderIds,
+  });
+
+  const registry = loadOpenClawPlugins({
+    config: runtimeCompatConfig,
+    activationSourceConfig: rawConfig,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    workspaceDir,
+    env: params?.env,
+    logger: createPluginLoaderLogger(log),
+    activate: false,
+    cache: false,
+    loadModules,
+  });
+  const importedPluginIds = new Set([
+    ...(loadModules
+      ? registry.plugins
+          .filter((plugin) => plugin.status === "loaded" && plugin.format !== "bundle")
+          .map((plugin) => plugin.id)
+      : []),
+    ...listImportedRuntimePluginIds(),
+    ...listImportedBundledPluginFacadeIds(),
+  ]);
 
   return {
     workspaceDir,
     ...registry,
     plugins: registry.plugins.map((plugin) => ({
       ...plugin,
+      imported: plugin.format !== "bundle" && importedPluginIds.has(plugin.id),
       version: resolveReportedPluginVersion(plugin, params?.env),
     })),
   };
+}
+
+export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {
+  return buildPluginReport(params, false);
+}
+
+export function buildPluginDiagnosticsReport(params?: PluginReportParams): PluginStatusReport {
+  return buildPluginReport(params, true);
 }
 
 function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
@@ -210,11 +278,13 @@ export function buildPluginInspectReport(params: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
-  const config = params.config ?? loadConfig();
+  const rawConfig = params.config ?? loadConfig();
+  const resolvedConfig = resolveStatusConfig(rawConfig, params.env);
+  const config = resolvedConfig.config;
   const report =
     params.report ??
-    buildPluginStatusReport({
-      config,
+    buildPluginDiagnosticsReport({
+      config: rawConfig,
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
@@ -343,11 +413,11 @@ export function buildAllPluginInspectReports(params?: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
-  const config = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? loadConfig();
   const report =
     params?.report ??
-    buildPluginStatusReport({
-      config,
+    buildPluginDiagnosticsReport({
+      config: rawConfig,
       workspaceDir: params?.workspaceDir,
       env: params?.env,
     });
@@ -356,7 +426,7 @@ export function buildAllPluginInspectReports(params?: {
     .map((plugin) =>
       buildPluginInspectReport({
         id: plugin.id,
-        config,
+        config: rawConfig,
         report,
       }),
     )

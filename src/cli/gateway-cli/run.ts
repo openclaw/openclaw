@@ -163,6 +163,23 @@ function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): Gate
   return resolved;
 }
 
+function isGatewayLockError(err: unknown): err is GatewayLockError {
+  return (
+    err instanceof GatewayLockError ||
+    (!!err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
+  );
+}
+
+function isHealthyGatewayLockError(err: unknown): boolean {
+  if (!isGatewayLockError(err) || typeof err.message !== "string") {
+    return false;
+  }
+  return (
+    err.message.includes("gateway already running") ||
+    err.message.includes("another gateway instance is already listening")
+  );
+}
+
 async function runGatewayCommand(opts: GatewayRunOpts) {
   normalizeStateDirEnv(process.env);
   const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";

@@ -63,6 +63,7 @@ export function createSlackActions(
             : handleSlackAction(action, cfg, {
                 ...(toolContext as SlackActionContext | undefined),
                 mediaLocalRoots: ctx.mediaLocalRoots,
+                mediaReadFile: ctx.mediaReadFile,
               })),
       });
     },

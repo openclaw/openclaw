@@ -44,8 +44,9 @@ Restart the Gateway afterwards.
 ### Option B: install from a local folder (dev, no copying)
 
 ```bash
-openclaw plugins install ./extensions/voice-call
-cd ./extensions/voice-call && pnpm install
+PLUGIN_SRC=./path/to/local/voice-call-plugin
+openclaw plugins install "$PLUGIN_SRC"
+cd "$PLUGIN_SRC" && pnpm install
 ```
 
 Restart the Gateway afterwards.
@@ -218,9 +219,11 @@ streaming speech on calls. You can override it under the plugin config with the
 {
   tts: {
     provider: "elevenlabs",
-    elevenlabs: {
-      voiceId: "pMsXgVXv3BLzUgSXRplE",
-      modelId: "eleven_multilingual_v2",
+    providers: {
+      elevenlabs: {
+        voiceId: "pMsXgVXv3BLzUgSXRplE",
+        modelId: "eleven_multilingual_v2",
+      },
     },
   },
 }
@@ -228,9 +231,11 @@ streaming speech on calls. You can override it under the plugin config with the
 
 Notes:
 
+- Legacy `tts.<provider>` keys inside plugin config (`openai`, `elevenlabs`, `microsoft`, `edge`) are auto-migrated to `tts.providers.<provider>` on load. Prefer the `providers` shape in committed config.
 - **Microsoft speech is ignored for voice calls** (telephony audio needs PCM; the current Microsoft transport does not expose telephony PCM output).
 - Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
 - If a Twilio media stream is already active, Voice Call does not fall back to TwiML `<Say>`. If telephony TTS is unavailable in that state, the playback request fails instead of mixing two playback paths.
+- When telephony TTS falls back to a secondary provider, Voice Call logs a warning with the provider chain (`from`, `to`, `attempts`) for debugging.
 
 ### More examples
 
@@ -241,7 +246,9 @@ Use core TTS only (no override):
   messages: {
     tts: {
       provider: "openai",
-      openai: { voice: "alloy" },
+      providers: {
+        openai: { voice: "alloy" },
+      },
     },
   },
 }
@@ -257,10 +264,12 @@ Override to ElevenLabs just for calls (keep core default elsewhere):
         config: {
           tts: {
             provider: "elevenlabs",
-            elevenlabs: {
-              apiKey: "elevenlabs_key",
-              voiceId: "pMsXgVXv3BLzUgSXRplE",
-              modelId: "eleven_multilingual_v2",
+            providers: {
+              elevenlabs: {
+                apiKey: "elevenlabs_key",
+                voiceId: "pMsXgVXv3BLzUgSXRplE",
+                modelId: "eleven_multilingual_v2",
+              },
             },
           },
         },
@@ -279,9 +288,11 @@ Override only the OpenAI model for calls (deep‑merge example):
       "voice-call": {
         config: {
           tts: {
-            openai: {
-              model: "gpt-4o-mini-tts",
-              voice: "marin",
+            providers: {
+              openai: {
+                model: "gpt-4o-mini-tts",
+                voice: "marin",
+              },
             },
           },
         },

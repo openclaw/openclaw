@@ -28,6 +28,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
@@ -155,6 +156,11 @@ function emitSessionsChanged(
             chatType: sessionRow.chatType,
             origin: sessionRow.origin,
             spawnedBy: sessionRow.spawnedBy,
+            spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+            forkedFromParent: sessionRow.forkedFromParent,
+            spawnDepth: sessionRow.spawnDepth,
+            subagentRole: sessionRow.subagentRole,
+            subagentControlScope: sessionRow.subagentControlScope,
             label: sessionRow.label,
             displayName: sessionRow.displayName,
             deliveryContext: sessionRow.deliveryContext,
@@ -173,6 +179,7 @@ function emitSessionsChanged(
             lastChannel: sessionRow.lastChannel,
             lastTo: sessionRow.lastTo,
             lastAccountId: sessionRow.lastAccountId,
+            lastThreadId: sessionRow.lastThreadId,
             totalTokens: sessionRow.totalTokens,
             totalTokensFresh: sessionRow.totalTokensFresh,
             contextTokens: sessionRow.contextTokens,
@@ -689,7 +696,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
       canonicalParentSessionKey = parent.canonicalKey;
     }
-    const key = requestedKey ?? buildDashboardSessionKey(agentId);
+    const loweredRequestedKey = requestedKey?.toLowerCase();
+    const key = requestedKey
+      ? loweredRequestedKey === "global" || loweredRequestedKey === "unknown"
+        ? loweredRequestedKey
+        : toAgentStoreSessionKey({
+            agentId,
+            requestKey: requestedKey,
+            mainKey: cfg.session?.mainKey,
+          })
+      : buildDashboardSessionKey(agentId);
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const targetAgentId = resolveAgentIdFromSessionKey(target.canonicalKey);
     const created = await updateSessionStore(target.storePath, async (store) => {

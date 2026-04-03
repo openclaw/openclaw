@@ -1,6 +1,9 @@
 {
   "id": "minimax",
+  "enabledByDefault": true,
+  "legacyPluginIds": ["minimax-portal-auth"],
   "providers": ["minimax", "minimax-portal"],
+  "autoEnableWhenConfiguredProviders": ["minimax", "minimax-portal"],
   "providerAuthEnvVars": {
     "minimax": ["MINIMAX_API_KEY"],
     "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"]
@@ -20,6 +23,7 @@
       "provider": "minimax",
       "method": "api-global",
       "choiceId": "minimax-global-api",
+      "deprecatedChoiceIds": ["minimax", "minimax-api", "minimax-cloud", "minimax-api-lightning"],
       "choiceLabel": "MiniMax API key (Global)",
       "choiceHint": "Global endpoint - api.minimax.io",
       "groupId": "minimax",
@@ -44,6 +48,7 @@
       "provider": "minimax",
       "method": "api-cn",
       "choiceId": "minimax-cn-api",
+      "deprecatedChoiceIds": ["minimax-api-key-cn"],
       "choiceLabel": "MiniMax API key (CN)",
       "choiceHint": "CN endpoint - api.minimaxi.com",
       "groupId": "minimax",

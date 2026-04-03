@@ -18,8 +18,11 @@ OpenClaw ships three update channels:
   The `main` branch is for experimentation and active development. It may contain
   incomplete features or breaking changes. Do not use it for production gateways.
 
-We ship builds to **beta**, test them, then **promote a vetted build to `latest`**
-without changing the version number -- dist-tags are the source of truth for npm installs.
+We usually ship stable builds to **beta** first, test them there, then run an
+explicit promotion step that moves the vetted build to `latest` without
+changing the version number. Maintainers can also publish a stable release
+directly to `latest` when needed. Dist-tags are the source of truth for npm
+installs.
 
 ## Switching channels
 
@@ -48,7 +51,7 @@ update **without** changing your persisted channel:
 
 ```bash
 # Install a specific version
-openclaw update --tag 2026.3.26
+openclaw update --tag 2026.4.1-beta.1
 
 # Install from the beta dist-tag (one-off, does not persist)
 openclaw update --tag beta
@@ -57,7 +60,7 @@ openclaw update --tag beta
 openclaw update --tag main
 
 # Install a specific npm package spec
-openclaw update --tag openclaw@2026.3.26
+openclaw update --tag openclaw@2026.4.1-beta.1
 ```
 
 Notes:
@@ -75,7 +78,7 @@ Preview what `openclaw update` would do without making changes:
 ```bash
 openclaw update --dry-run
 openclaw update --channel beta --dry-run
-openclaw update --tag 2026.3.26 --dry-run
+openclaw update --tag 2026.4.1-beta.1 --dry-run
 openclaw update --dry-run --json
 ```
 
@@ -109,7 +112,7 @@ source (config, git tag, git branch, or default).
 - Keep tags immutable: never move or reuse a tag.
 - npm dist-tags remain the source of truth for npm installs:
   - `latest` -> stable
-  - `beta` -> candidate build
+  - `beta` -> candidate build or beta-first stable build
   - `dev` -> main snapshot (optional)
 
 ## macOS app availability

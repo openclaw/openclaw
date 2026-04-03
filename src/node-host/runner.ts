@@ -11,15 +11,15 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { resolveBrowserConfig } from "../plugin-sdk/browser-runtime.js";
+import { resolveBrowserConfig } from "../plugin-sdk/browser-config.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import {
   coerceNodeInvokePayload,
-  handleInvoke,
   type SkillBinsProvider,
   buildNodeInvokeResultParams,
+  handleInvoke,
 } from "./invoke.js";
 
 export { buildNodeInvokeResultParams };
@@ -34,6 +34,10 @@ type NodeHostRunOptions = {
 };
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
 
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
@@ -208,12 +212,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway connect failed: ${err.message}`);
+      writeStderrLine(`node host gateway connect failed: ${err.message}`);
     },
     onClose: (code, reason) => {
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway closed (${code}): ${reason}`);
+      writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
   });
 

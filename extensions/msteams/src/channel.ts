@@ -23,11 +23,14 @@ import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-h
 import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
 import {
   buildProbeChannelStatusSummary,
+  chunkTextForOutbound,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
 } from "../runtime-api.js";
+import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
+import { formatUnknownError } from "./errors.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
@@ -327,6 +330,7 @@ function describeMSTeamsMessageTool({
           "react",
           "reactions",
           "search",
+          "member-info",
         ] satisfies ChannelMessageActionName[])
       : [],
     capabilities: enabled ? ["cards"] : [],
@@ -355,6 +359,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         threads: true,
         media: true,
       },
+      streaming: {
+        blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+      },
       agentPrompt: {
         messageToolHints: () => [
           "- Adaptive Cards supported. Use `action=send` with `card={type,version,body}` to send rich cards.",
@@ -375,6 +382,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             configured: account.configured,
           }),
       },
+      auth: msTeamsApprovalAuth,
       setup: msteamsSetupAdapter,
       messaging: {
         normalizeTarget: normalizeMSTeamsMessagingTarget,
@@ -481,7 +489,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 applyResolvedEntry(target, entry);
               });
             } catch (err) {
-              runtime.error?.(`msteams resolve failed: ${String(err)}`);
+              runtime.error?.(`msteams resolve failed: ${formatUnknownError(err)}`);
               markPendingLookupFailed(pending);
             }
           };
@@ -618,6 +626,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                     readOptionalTrimmedString(ctx.params, "filename") ??
                     readOptionalTrimmedString(ctx.params, "title"),
                   mediaLocalRoots: ctx.mediaLocalRoots,
+                  mediaReadFile: ctx.mediaReadFile,
                 });
                 return jsonActionResultWithDetails(
                   {
@@ -836,6 +845,16 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             });
           }
 
+          if (ctx.action === "member-info") {
+            const userId = typeof ctx.params.userId === "string" ? ctx.params.userId.trim() : "";
+            if (!userId) {
+              return actionError("member-info requires a userId.");
+            }
+            const { getMemberInfoMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await getMemberInfoMSTeams({ cfg: ctx.cfg, userId });
+            return jsonMSTeamsOkActionResult("member-info", result);
+          }
+
           // Return null to fall through to default handler
           return null as never;
         },
@@ -934,7 +953,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getMSTeamsRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       pollMaxOptions: 12,

@@ -24,6 +24,8 @@ export OPENCLAW_ENTRY
 
 home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
 export HOME="$home_dir"
+BUNDLED_PLUGIN_ROOT_DIR="extensions"
+OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 
 gateway_pid=""
 
@@ -252,9 +254,11 @@ fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
 NODE
 }
 
-mkdir -p "$HOME/.openclaw/extensions/demo-plugin"
+demo_plugin_id="demo-plugin"
+demo_plugin_root="$OPENCLAW_PLUGIN_HOME/$demo_plugin_id"
+mkdir -p "$demo_plugin_root"
 
-cat > "$HOME/.openclaw/extensions/demo-plugin/index.js" <<'JS'
+cat > "$demo_plugin_root/index.js" <<'JS'
 module.exports = {
   id: "demo-plugin",
   name: "Demo Plugin",
@@ -267,7 +271,7 @@ module.exports = {
   },
 };
 JS
-cat > "$HOME/.openclaw/extensions/demo-plugin/openclaw.plugin.json" <<'JSON'
+cat > "$demo_plugin_root/openclaw.plugin.json" <<'JSON'
 {
   "id": "demo-plugin",
   "configSchema": {
@@ -278,11 +282,13 @@ cat > "$HOME/.openclaw/extensions/demo-plugin/openclaw.plugin.json" <<'JSON'
 JSON
 
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin --json > /tmp/plugins-inspect.json
 
 node - <<'NODE'
 const fs = require("node:fs");
 
 const data = JSON.parse(fs.readFileSync("/tmp/plugins.json", "utf8"));
+const inspect = JSON.parse(fs.readFileSync("/tmp/plugins-inspect.json", "utf8"));
 const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin");
 if (!plugin) throw new Error("plugin not found");
 if (plugin.status !== "loaded") {
@@ -295,10 +301,13 @@ const assertIncludes = (list, value, label) => {
   }
 };
 
-assertIncludes(plugin.toolNames, "demo_tool", "tool");
-assertIncludes(plugin.gatewayMethods, "demo.ping", "gateway method");
-assertIncludes(plugin.cliCommands, "demo", "cli command");
-assertIncludes(plugin.services, "demo-service", "service");
+const inspectToolNames = Array.isArray(inspect.tools)
+  ? inspect.tools.flatMap((entry) => (Array.isArray(entry?.names) ? entry.names : []))
+  : [];
+assertIncludes(inspectToolNames, "demo_tool", "tool");
+assertIncludes(inspect.gatewayMethods, "demo.ping", "gateway method");
+assertIncludes(inspect.cliCommands, "demo", "cli command");
+assertIncludes(inspect.services, "demo-service", "service");
 
 const diagErrors = (data.diagnostics || []).filter((diag) => diag.level === "error");
 if (diagErrors.length > 0) {
@@ -340,17 +349,19 @@ tar -czf /tmp/demo-plugin-tgz.tgz -C "$pack_dir" package
 
 node "$OPENCLAW_ENTRY" plugins install /tmp/demo-plugin-tgz.tgz
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins2.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-tgz --json > /tmp/plugins2-inspect.json
 
 node - <<'NODE'
 const fs = require("node:fs");
 
 const data = JSON.parse(fs.readFileSync("/tmp/plugins2.json", "utf8"));
+const inspect = JSON.parse(fs.readFileSync("/tmp/plugins2-inspect.json", "utf8"));
 const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin-tgz");
 if (!plugin) throw new Error("tgz plugin not found");
 if (plugin.status !== "loaded") {
   throw new Error(`unexpected status: ${plugin.status}`);
 }
-if (!Array.isArray(plugin.gatewayMethods) || !plugin.gatewayMethods.includes("demo.tgz")) {
+if (!Array.isArray(inspect.gatewayMethods) || !inspect.gatewayMethods.includes("demo.tgz")) {
   throw new Error("expected gateway method demo.tgz");
 }
 console.log("ok");
@@ -386,17 +397,19 @@ JSON
 
 node "$OPENCLAW_ENTRY" plugins install "$dir_plugin"
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins3.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir --json > /tmp/plugins3-inspect.json
 
 node - <<'NODE'
 const fs = require("node:fs");
 
 const data = JSON.parse(fs.readFileSync("/tmp/plugins3.json", "utf8"));
+const inspect = JSON.parse(fs.readFileSync("/tmp/plugins3-inspect.json", "utf8"));
 const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin-dir");
 if (!plugin) throw new Error("dir plugin not found");
 if (plugin.status !== "loaded") {
   throw new Error(`unexpected status: ${plugin.status}`);
 }
-if (!Array.isArray(plugin.gatewayMethods) || !plugin.gatewayMethods.includes("demo.dir")) {
+if (!Array.isArray(inspect.gatewayMethods) || !inspect.gatewayMethods.includes("demo.dir")) {
   throw new Error("expected gateway method demo.dir");
 }
 console.log("ok");
@@ -433,24 +446,27 @@ JSON
 
 node "$OPENCLAW_ENTRY" plugins install "file:$file_pack_dir/package"
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins4.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-file --json > /tmp/plugins4-inspect.json
 
 node - <<'NODE'
 const fs = require("node:fs");
 
 const data = JSON.parse(fs.readFileSync("/tmp/plugins4.json", "utf8"));
+const inspect = JSON.parse(fs.readFileSync("/tmp/plugins4-inspect.json", "utf8"));
 const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin-file");
 if (!plugin) throw new Error("file plugin not found");
 if (plugin.status !== "loaded") {
   throw new Error(`unexpected status: ${plugin.status}`);
 }
-if (!Array.isArray(plugin.gatewayMethods) || !plugin.gatewayMethods.includes("demo.file")) {
+if (!Array.isArray(inspect.gatewayMethods) || !inspect.gatewayMethods.includes("demo.file")) {
   throw new Error("expected gateway method demo.file");
 }
 console.log("ok");
 NODE
 
 echo "Testing /plugin alias with Claude bundle restart semantics..."
-bundle_root="$HOME/.openclaw/extensions/claude-bundle-e2e"
+bundle_plugin_id="claude-bundle-e2e"
+bundle_root="$OPENCLAW_PLUGIN_HOME/$bundle_plugin_id"
 mkdir -p "$bundle_root/.claude-plugin" "$bundle_root/commands"
 cat > "$bundle_root/.claude-plugin/plugin.json" <<'JSON'
 {
@@ -699,11 +715,19 @@ NODE
 node "$OPENCLAW_ENTRY" plugins install marketplace-shortcut@claude-fixtures
 node "$OPENCLAW_ENTRY" plugins install marketplace-direct --marketplace claude-fixtures
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins-marketplace.json
+node "$OPENCLAW_ENTRY" plugins inspect marketplace-shortcut --json > /tmp/plugins-marketplace-shortcut-inspect.json
+node "$OPENCLAW_ENTRY" plugins inspect marketplace-direct --json > /tmp/plugins-marketplace-direct-inspect.json
 
 node - <<'NODE'
 const fs = require("node:fs");
 
 const data = JSON.parse(fs.readFileSync("/tmp/plugins-marketplace.json", "utf8"));
+const shortcutInspect = JSON.parse(
+  fs.readFileSync("/tmp/plugins-marketplace-shortcut-inspect.json", "utf8"),
+);
+const directInspect = JSON.parse(
+  fs.readFileSync("/tmp/plugins-marketplace-direct-inspect.json", "utf8"),
+);
 const getPlugin = (id) => {
   const plugin = (data.plugins || []).find((entry) => entry.id === id);
   if (!plugin) throw new Error(`plugin not found: ${id}`);
@@ -721,10 +745,10 @@ if (shortcut.version !== "0.0.1") {
 if (direct.version !== "0.0.1") {
   throw new Error(`unexpected direct version: ${direct.version}`);
 }
-if (!shortcut.gatewayMethods.includes("demo.marketplace.shortcut.v1")) {
+if (!shortcutInspect.gatewayMethods.includes("demo.marketplace.shortcut.v1")) {
   throw new Error("expected marketplace shortcut gateway method");
 }
-if (!direct.gatewayMethods.includes("demo.marketplace.direct.v1")) {
+if (!directInspect.gatewayMethods.includes("demo.marketplace.direct.v1")) {
   throw new Error("expected marketplace direct gateway method");
 }
 console.log("ok");
@@ -761,18 +785,20 @@ write_fixture_plugin \
 node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut --dry-run
 node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins-marketplace-updated.json
+node "$OPENCLAW_ENTRY" plugins inspect marketplace-shortcut --json > /tmp/plugins-marketplace-updated-inspect.json
 
 node - <<'NODE'
 const fs = require("node:fs");
 
 const data = JSON.parse(fs.readFileSync("/tmp/plugins-marketplace-updated.json", "utf8"));
+const inspect = JSON.parse(fs.readFileSync("/tmp/plugins-marketplace-updated-inspect.json", "utf8"));
 const plugin = (data.plugins || []).find((entry) => entry.id === "marketplace-shortcut");
 if (!plugin) throw new Error("updated marketplace plugin not found");
 if (plugin.version !== "0.0.2") {
   throw new Error(`unexpected updated version: ${plugin.version}`);
 }
-if (!plugin.gatewayMethods.includes("demo.marketplace.shortcut.v2")) {
-  throw new Error(`expected updated gateway method, got ${plugin.gatewayMethods.join(", ")}`);
+if (!inspect.gatewayMethods.includes("demo.marketplace.shortcut.v2")) {
+  throw new Error(`expected updated gateway method, got ${inspect.gatewayMethods.join(", ")}`);
 }
 console.log("ok");
 NODE

@@ -4,7 +4,7 @@ import {
   type ProviderAuthResult,
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";

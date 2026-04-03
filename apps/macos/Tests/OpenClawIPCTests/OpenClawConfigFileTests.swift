@@ -133,6 +133,10 @@ struct OpenClawConfigFileTests {
             #expect(auditRoot?["event"] as? String == "config.write")
             #expect(auditRoot?["result"] as? String == "success")
             #expect(auditRoot?["configPath"] as? String == configPath.path)
+            #expect(auditRoot?["previousMode"] is NSNull)
+            #expect(auditRoot?["nextMode"] is NSNumber)
+            #expect(auditRoot?["previousIno"] is NSNull)
+            #expect(auditRoot?["nextIno"] as? String != nil)
         }
     }
 
@@ -188,6 +192,10 @@ struct OpenClawConfigFileTests {
             let auditRoot = try JSONSerialization.jsonObject(with: Data(observeLine.utf8)) as? [String: Any]
             #expect(auditRoot?["source"] as? String == "macos-openclaw-config-file")
             #expect(auditRoot?["configPath"] as? String == configPath.path)
+            #expect(auditRoot?["mode"] is NSNumber)
+            #expect(auditRoot?["ino"] as? String != nil)
+            #expect(auditRoot?["lastKnownGoodMode"] is NSNumber)
+            #expect(auditRoot?["backupMode"] is NSNull)
             let suspicious = auditRoot?["suspicious"] as? [String] ?? []
             #expect(suspicious.contains("gateway-mode-missing-vs-last-good"))
             #expect(suspicious.contains("update-channel-only-root"))

@@ -1,19 +1,16 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { createWhatsAppPollFixture, expectWhatsAppPollSent } from "openclaw/plugin-sdk/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
-import {
-  createWhatsAppPollFixture,
-  expectWhatsAppPollSent,
-} from "../../../src/test-helpers/whatsapp-outbound.js";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/extensions/directory.ts";
+} from "../../../test/helpers/plugins/directory.ts";
 import {
   createPluginSetupWizardConfigure,
   createQueuedWizardPrompter,
   runSetupWizardConfigure,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { whatsappPlugin } from "./channel.js";
 import {
   resolveWhatsAppGroupRequireMention,
@@ -23,9 +20,14 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 const hoisted = vi.hoisted(() => ({
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "wa-poll-1", toJid: "1555@s.whatsapp.net" })),
+  sendReactionWhatsApp: vi.fn(async () => undefined),
+  handleWhatsAppAction: vi.fn(async () => ({ content: [{ type: "text", text: '{"ok":true}' }] })),
   loginWeb: vi.fn(async () => {}),
   pathExists: vi.fn(async () => false),
-  listWhatsAppAccountIds: vi.fn(() => [] as string[]),
+  listWhatsAppAccountIds: vi.fn((cfg: OpenClawConfig) => {
+    const accountIds = Object.keys(cfg.channels?.whatsapp?.accounts ?? {});
+    return accountIds.length > 0 ? accountIds : [DEFAULT_ACCOUNT_ID];
+  }),
   resolveDefaultWhatsAppAccountId: vi.fn(() => DEFAULT_ACCOUNT_ID),
   resolveWhatsAppAuthDir: vi.fn(() => ({
     authDir: "/tmp/openclaw-whatsapp-test",
@@ -40,9 +42,23 @@ vi.mock("./runtime.js", () => ({
     channel: {
       whatsapp: {
         sendPollWhatsApp: hoisted.sendPollWhatsApp,
+        handleWhatsAppAction: hoisted.handleWhatsAppAction,
       },
     },
   }),
+}));
+
+vi.mock("./send.js", async () => {
+  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+  return {
+    ...actual,
+    sendPollWhatsApp: hoisted.sendPollWhatsApp,
+    sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
+  };
+});
+
+vi.mock("./action-runtime.js", () => ({
+  handleWhatsAppAction: hoisted.handleWhatsAppAction,
 }));
 
 vi.mock("./login.js", () => ({
@@ -119,6 +135,15 @@ async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues
 }
 
 describe("whatsappPlugin outbound sendMedia", () => {
+  it("chunks outbound text without requiring WhatsApp runtime initialization", () => {
+    const chunker = whatsappPlugin.outbound?.chunker;
+    if (!chunker) {
+      throw new Error("whatsapp outbound chunker is unavailable");
+    }
+
+    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  });
+
   it("forwards mediaLocalRoots to sendMessageWhatsApp", async () => {
     const sendWhatsApp = vi.fn(async () => ({
       messageId: "msg-1",
@@ -160,6 +185,7 @@ describe("whatsappPlugin outbound sendMedia", () => {
 describe("whatsappPlugin outbound sendPoll", () => {
   beforeEach(async () => {
     vi.resetModules();
+    hoisted.sendPollWhatsApp.mockClear();
   });
 
   it("threads cfg into runtime sendPollWhatsApp call", async () => {
@@ -417,5 +443,355 @@ describe("whatsapp group policy", () => {
     expect(resolveWhatsAppGroupToolPolicy({ cfg, groupId: "other@g.us" })).toEqual({
       allow: ["message.send"],
     });
+  });
+});
+
+describe("whatsapp agent prompt", () => {
+  it("defaults to minimal reaction guidance when reactions are available", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      whatsappPlugin.agentPrompt?.reactionGuidance?.({
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+      }),
+    ).toEqual({
+      level: "minimal",
+      channelLabel: "WhatsApp",
+    });
+  });
+
+  it("omits reaction guidance when WhatsApp is not configured", () => {
+    expect(
+      whatsappPlugin.agentPrompt?.reactionGuidance?.({
+        cfg: {} as OpenClawConfig,
+        accountId: DEFAULT_ACCOUNT_ID,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns minimal reaction guidance when configured", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          reactionLevel: "minimal",
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      whatsappPlugin.agentPrompt?.reactionGuidance?.({
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+      }),
+    ).toEqual({
+      level: "minimal",
+      channelLabel: "WhatsApp",
+    });
+  });
+
+  it("omits reaction guidance when WhatsApp reactions are disabled", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          actions: { reactions: false },
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      whatsappPlugin.agentPrompt?.reactionGuidance?.({
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("omits reaction guidance when reactionLevel disables agent reactions", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      whatsappPlugin.agentPrompt?.reactionGuidance?.({
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("whatsapp action discovery", () => {
+  it("advertises react when agent reactions are enabled", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      whatsappPlugin.actions?.describeMessageTool?.({
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+      })?.actions,
+    ).toEqual(["react", "poll"]);
+  });
+
+  it("returns null when WhatsApp is not configured", () => {
+    expect(
+      whatsappPlugin.actions?.describeMessageTool?.({
+        cfg: {} as OpenClawConfig,
+        accountId: DEFAULT_ACCOUNT_ID,
+      }),
+    ).toBeNull();
+  });
+
+  it("omits react when reactionLevel disables agent reactions", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      whatsappPlugin.actions?.describeMessageTool?.({
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+      })?.actions,
+    ).toEqual(["poll"]);
+  });
+
+  it("uses the active account reactionLevel for discovery", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+          allowFrom: ["*"],
+          accounts: {
+            work: {
+              reactionLevel: "minimal",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      whatsappPlugin.actions?.describeMessageTool?.({
+        cfg,
+        accountId: "work",
+      })?.actions,
+    ).toEqual(["react", "poll"]);
+  });
+
+  it("keeps react in global discovery when any account enables agent reactions", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+          allowFrom: ["*"],
+          accounts: {
+            work: {
+              reactionLevel: "minimal",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    hoisted.listWhatsAppAccountIds.mockReturnValue(["default", "work"]);
+
+    expect(
+      whatsappPlugin.actions?.describeMessageTool?.({
+        cfg,
+      })?.actions,
+    ).toEqual(["react", "poll"]);
+  });
+
+  it("omits react in global discovery when only disabled accounts enable agent reactions", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+          allowFrom: ["*"],
+          accounts: {
+            work: {
+              enabled: false,
+              reactionLevel: "minimal",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    hoisted.listWhatsAppAccountIds.mockReturnValue(["default", "work"]);
+
+    expect(
+      whatsappPlugin.actions?.describeMessageTool?.({
+        cfg,
+      })?.actions,
+    ).toEqual(["poll"]);
+  });
+});
+
+describe("whatsappPlugin actions.handleAction react messageId resolution", () => {
+  const baseCfg = {
+    channels: { whatsapp: { actions: { reactions: true }, allowFrom: ["*"] } },
+  } as OpenClawConfig;
+
+  beforeEach(() => {
+    hoisted.handleWhatsAppAction.mockClear();
+    hoisted.sendReactionWhatsApp.mockClear();
+  });
+
+  it("uses explicit messageId when provided", async () => {
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { messageId: "explicit-id", emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "explicit-id" }),
+      baseCfg,
+    );
+  });
+
+  it("falls back to toolContext.currentMessageId when messageId omitted", async () => {
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "❤️", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "ctx-msg-42" }),
+      baseCfg,
+    );
+  });
+
+  it("converts numeric toolContext messageId to string", async () => {
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "🎉", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: 12345,
+      },
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "12345" }),
+      baseCfg,
+    );
+  });
+
+  it("throws ToolInputError when messageId missing and no toolContext", async () => {
+    const err = await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
+  });
+
+  it("skips context fallback when targeting a different chat", async () => {
+    const err = await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "👍", to: "+9999" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    }).catch((e: unknown) => e);
+    // Different target chat → context fallback suppressed → ToolInputError
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
+  });
+
+  it("uses context fallback when target matches current chat (prefixed)", async () => {
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "ctx-msg-42" }),
+      baseCfg,
+    );
+  });
+
+  it("skips context fallback when source is another provider", async () => {
+    const err = await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelId: "telegram:-1003841603622",
+        currentChannelProvider: "telegram",
+        currentMessageId: "tg-msg-99",
+      },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
+  });
+
+  it("skips context fallback when currentChannelId is missing with explicit target", async () => {
+    const err = await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    }).catch((e: unknown) => e);
+    // WhatsApp source but no currentChannelId to compare → fallback suppressed
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
   });
 });

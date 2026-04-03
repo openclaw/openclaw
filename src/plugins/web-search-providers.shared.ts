@@ -1,3 +1,4 @@
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
@@ -54,18 +55,28 @@ export function resolveBundledWebSearchResolutionConfig(params: {
 }): {
   config: PluginLoadOptions["config"];
   normalized: NormalizedPluginsConfig;
+  activationSourceConfig?: PluginLoadOptions["config"];
+  autoEnabledReasons: Record<string, string[]>;
 } {
+  const autoEnabled =
+    params.config !== undefined
+      ? applyPluginAutoEnable({
+          config: params.config,
+          env: params.env ?? process.env,
+        })
+      : undefined;
+  const autoEnabledConfig = autoEnabled?.config;
   const bundledCompatPluginIds = resolveBundledWebSearchCompatPluginIds({
-    config: params.config,
+    config: autoEnabledConfig,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
   const allowlistCompat = params.bundledAllowlistCompat
     ? withBundledPluginAllowlistCompat({
-        config: params.config,
+        config: autoEnabledConfig,
         pluginIds: bundledCompatPluginIds,
       })
-    : params.config;
+    : autoEnabledConfig;
   const enablementCompat = withBundledPluginEnablementCompat({
     config: allowlistCompat,
     pluginIds: bundledCompatPluginIds,
@@ -79,5 +90,7 @@ export function resolveBundledWebSearchResolutionConfig(params: {
   return {
     config,
     normalized: normalizePluginsConfig(config?.plugins),
+    activationSourceConfig: params.config,
+    autoEnabledReasons: autoEnabled?.autoEnabledReasons ?? {},
   };
 }

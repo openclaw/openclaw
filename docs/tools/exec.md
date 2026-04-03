@@ -21,7 +21,7 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - `background` (bool): background immediately
 - `timeout` (seconds, default 1800): kill on expiry
 - `pty` (bool): run in a pseudo-terminal when available (TTY-only CLIs, coding agents, terminal UIs)
-- `host` (`sandbox | gateway | node`): where to execute
+- `host` (`auto | sandbox | gateway | node`): where to execute
 - `security` (`deny | allowlist | full`): enforcement mode for `gateway`/`node`
 - `ask` (`off | on-miss | always`): approval prompts for `gateway`/`node`
 - `node` (string): node id/name for `host=node`
@@ -29,11 +29,14 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 
 Notes:
 
-- `host` defaults to `sandbox`.
-- `elevated` is ignored when sandboxing is off (exec already runs on the host).
+- `host` defaults to `auto`: sandbox when sandbox runtime is active for the session, otherwise gateway.
+- `auto` is only the default routing strategy. It is not a wildcard override that lets a tool call jump from sandbox to gateway or node.
+- With no extra config, `host=auto` still "just works": no sandbox means it resolves to `gateway`; a live sandbox means it stays in the sandbox.
+- `elevated` forces `host=gateway`; it is only available when elevated access is enabled for the current session/provider.
 - `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.
 - `node` requires a paired node (companion app or headless node host).
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
+- `exec host=node` is the only shell-execution path for nodes; the legacy `nodes.run` wrapper has been removed.
 - On non-Windows hosts, exec uses `SHELL` when set; if `SHELL` is `fish`, it prefers `bash` (or `sh`)
   from `PATH` to avoid fish-incompatible scripts, then falls back to `SHELL` if neither exists.
 - On Windows hosts, exec prefers PowerShell 7 (`pwsh`) discovery (Program Files, ProgramW6432, then PATH),
@@ -41,9 +44,9 @@ Notes:
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
   prevent binary hijacking or injected code.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
-- Important: sandboxing is **off by default**. If sandboxing is off and `host=sandbox` is explicitly
-  configured/requested, exec now fails closed instead of silently running on the gateway host.
-  Enable sandboxing or use `host=gateway` with approvals.
+- Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto`
+  resolves to `gateway`. Explicit `host=sandbox` still fails closed instead of silently
+  running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
 - Script preflight checks (for common Python/Node shell-syntax mistakes) only inspect files inside the
   effective `workdir` boundary. If a script path resolves outside `workdir`, preflight is skipped for
   that file.
@@ -52,11 +55,13 @@ Notes:
 
 - `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
 - `tools.exec.approvalRunningNoticeMs` (default: 10000): emit a single “running” notice when an approval-gated exec runs longer than this (0 disables).
-- `tools.exec.host` (default: `sandbox`)
-- `tools.exec.security` (default: `deny` for sandbox, `allowlist` for gateway + node when unset)
-- `tools.exec.ask` (default: `on-miss`)
+- `tools.exec.host` (default: `auto`; resolves to `sandbox` when sandbox runtime is active, `gateway` otherwise)
+- `tools.exec.security` (default: `deny` for sandbox, `full` for gateway + node when unset)
+- `tools.exec.ask` (default: `off`)
+- No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host `~/.openclaw/exec-approvals.json`; see [Exec approvals](/tools/exec-approvals#no-approval-yolo-mode).
+- YOLO comes from the host-policy defaults (`security=full`, `ask=off`), not from `host=auto`. If you want to force gateway or node routing, set `tools.exec.host` or use `/exec host=...`.
 - `tools.exec.node` (default: unset)
-- `tools.exec.strictInlineEval` (default: false): when true, inline interpreter eval forms such as `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, and `osascript -e` always require explicit approval and are never persisted by `allow-always`.
+- `tools.exec.strictInlineEval` (default: false): when true, inline interpreter eval forms such as `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, and `osascript -e` always require explicit approval. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms still prompt each time.
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals#safe-bins-stdin-only).
 - `tools.exec.safeBinTrustedDirs`: additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted. Built-in defaults are `/bin` and `/usr/bin`.
@@ -104,7 +109,7 @@ Send `/exec` with no arguments to show the current values.
 Example:
 
 ```
-/exec host=gateway security=allowlist ask=on-miss node=mac-1
+/exec host=auto security=allowlist ask=on-miss node=mac-1
 ```
 
 ## Authorization model
@@ -131,6 +136,8 @@ Manual allowlist enforcement matches **resolved binary paths only** (no basename
 allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
 allowlist mode unless every top-level segment satisfies the allowlist (including safe bins).
 Redirections remain unsupported.
+Durable `allow-always` trust does not bypass that rule: a chained command still requires every
+top-level segment to match.
 
 `autoAllowSkills` is a separate convenience path in exec approvals. It is not the same as
 manual path allowlist entries. For strict explicit trust, keep `autoAllowSkills` disabled.
@@ -207,3 +214,10 @@ Notes:
 - Config lives under `tools.exec.applyPatch`.
 - `tools.exec.applyPatch.enabled` defaults to `true`; set it to `false` to disable the tool for OpenAI models.
 - `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
+
+## Related
+
+- [Exec Approvals](/tools/exec-approvals) — approval gates for shell commands
+- [Sandboxing](/gateway/sandboxing) — running commands in sandboxed environments
+- [Background Process](/gateway/background-process) — long-running exec and process tool
+- [Security](/gateway/security) — tool policy and elevated access

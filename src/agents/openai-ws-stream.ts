@@ -22,13 +22,13 @@
  */
 
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import * as piAi from "@mariozechner/pi-ai";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStream,
   StopReason,
 } from "@mariozechner/pi-ai";
+import * as piAi from "@mariozechner/pi-ai";
 import {
   OpenAIWebSocketManager,
   type FunctionToolDefinition,
@@ -41,6 +41,8 @@ import {
   planTurnInput,
 } from "./openai-ws-message-conversion.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import { resolveOpenAITextVerbosity } from "./pi-embedded-runner/openai-stream-wrappers.js";
+import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
   buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
@@ -299,7 +301,7 @@ export function createOpenAIWebSocketStreamFn(
     const run = async () => {
       const transport = resolveWsTransport(options);
       if (transport === "sse") {
-        return fallbackToHttp(model, context, options, eventStream, opts.signal);
+        return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
       }
 
       // ── 1. Get or create session state ──────────────────────────────────
@@ -339,7 +341,7 @@ export function createOpenAIWebSocketStreamFn(
             `[ws-stream] WebSocket connect failed for session=${sessionId}; falling back to HTTP. error=${String(connErr)}`,
           );
           // Fall back to HTTP immediately
-          return fallbackToHttp(model, context, options, eventStream, opts.signal);
+          return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
         }
       }
 
@@ -356,7 +358,7 @@ export function createOpenAIWebSocketStreamFn(
           /* ignore */
         }
         wsRegistry.delete(sessionId);
-        return fallbackToHttp(model, context, options, eventStream, opts.signal);
+        return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
       }
 
       const signal = opts.signal ?? (options as WsOptions | undefined)?.signal;
@@ -401,7 +403,7 @@ export function createOpenAIWebSocketStreamFn(
             log.warn(
               `[ws-stream] reconnect after warm-up failed for session=${sessionId}; falling back to HTTP. error=${String(reconnectErr)}`,
             );
-            return fallbackToHttp(model, context, options, eventStream, opts.signal);
+            return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
           }
         }
       }
@@ -441,6 +443,8 @@ export function createOpenAIWebSocketStreamFn(
             maxTokens?: number;
             topP?: number;
             toolChoice?: unknown;
+            textVerbosity?: string;
+            text_verbosity?: string;
           })
         | undefined;
       const extraParams: Record<string, unknown> = {};
@@ -456,7 +460,10 @@ export function createOpenAIWebSocketStreamFn(
       if (streamOpts?.toolChoice !== undefined) {
         extraParams.tool_choice = streamOpts.toolChoice;
       }
-      if (streamOpts?.reasoningEffort || streamOpts?.reasoningSummary) {
+      if (
+        streamOpts?.reasoningEffort !== "none" &&
+        (streamOpts?.reasoningEffort || streamOpts?.reasoningSummary)
+      ) {
         const reasoning: { effort?: string; summary?: string } = {};
         if (streamOpts.reasoningEffort !== undefined) {
           reasoning.effort = streamOpts.reasoningEffort as string;
@@ -466,16 +473,32 @@ export function createOpenAIWebSocketStreamFn(
         }
         extraParams.reasoning = reasoning;
       }
+      const textVerbosity = resolveOpenAITextVerbosity(
+        streamOpts as Record<string, unknown> | undefined,
+      );
+      if (textVerbosity !== undefined) {
+        const existingText =
+          extraParams.text && typeof extraParams.text === "object"
+            ? (extraParams.text as Record<string, unknown>)
+            : {};
+        extraParams.text = { ...existingText, verbosity: textVerbosity };
+      }
 
       // Respect compat.supportsStore — providers like Gemini reject unknown
       // fields such as `store` with a 400 error.  Fixes #39086.
-      const supportsStore = (model as { compat?: { supportsStore?: boolean } }).compat
-        ?.supportsStore;
+      const supportsResponsesStoreField = resolveProviderRequestPolicyConfig({
+        provider: typeof model.provider === "string" ? model.provider : undefined,
+        api: typeof model.api === "string" ? model.api : undefined,
+        baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+        compat: (model as { compat?: { supportsStore?: boolean } }).compat,
+        capability: "llm",
+        transport: "websocket",
+      }).capabilities.supportsResponsesStoreField;
 
       const payload: Record<string, unknown> = {
         type: "response.create",
         model: model.id,
-        ...(supportsStore !== false ? { store: false } : {}),
+        ...(supportsResponsesStoreField ? { store: false } : {}),
         input: turnInput.inputItems,
         instructions: context.systemPrompt ?? undefined,
         tools: tools.length > 0 ? tools : undefined,
@@ -506,7 +529,7 @@ export function createOpenAIWebSocketStreamFn(
           /* ignore */
         }
         wsRegistry.delete(sessionId);
-        return fallbackToHttp(model, context, options, eventStream, opts.signal);
+        return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
       }
 
       eventStream.push({
@@ -616,10 +639,15 @@ async function fallbackToHttp(
   model: Parameters<StreamFn>[0],
   context: Parameters<StreamFn>[1],
   options: Parameters<StreamFn>[2],
+  apiKey: string,
   eventStream: AssistantMessageEventStreamLike,
   signal?: AbortSignal,
 ): Promise<void> {
-  const mergedOptions = signal ? { ...options, signal } : options;
+  const mergedOptions = {
+    ...options,
+    apiKey,
+    ...(signal ? { signal } : {}),
+  };
   const httpStream = openAIWsStreamDeps.streamSimple(model, context, mergedOptions);
   for await (const event of httpStream) {
     eventStream.push(event);

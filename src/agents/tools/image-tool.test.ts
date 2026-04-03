@@ -591,6 +591,39 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("pairs a provider when config uses an alias key", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "amazon-bedrock:default": {
+            type: "api_key",
+            provider: "amazon-bedrock",
+            key: "sk-test",
+          },
+        },
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "aws-bedrock/text-1" } } },
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://example.com",
+              models: [
+                makeModelDefinition("text-1", ["text"]),
+                makeModelDefinition("vision-1", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "amazon-bedrock/vision-1",
+      });
+      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+    });
+  });
+
   it("prefers explicit agents.defaults.imageModel", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
@@ -937,6 +970,26 @@ describe("image tool implicit imageModel config", () => {
 
         await expectImageToolExecOk(tool, imagePath);
 
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  it("resolves relative image paths against workspaceDir", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir }) => {
+      // Place image in a subdirectory of the workspace
+      const subdir = path.join(workspaceDir, "inbox");
+      await fs.mkdir(subdir, { recursive: true });
+      const imagePath = path.join(subdir, "receipt.png");
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg = createMinimaxImageConfig();
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+
+        // Relative path should be resolved against workspaceDir
+        await expectImageToolExecOk(tool, "inbox/receipt.png");
         expect(fetch).toHaveBeenCalledTimes(1);
       });
     });

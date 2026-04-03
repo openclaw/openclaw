@@ -1,11 +1,11 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   createTestWizardPrompter,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { resolveTelegramAllowFromEntries } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 

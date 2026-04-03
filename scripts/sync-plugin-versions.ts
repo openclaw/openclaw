@@ -5,7 +5,45 @@ type PackageJson = {
   name?: string;
   version?: string;
   devDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  openclaw?: {
+    install?: {
+      minHostVersion?: string;
+    };
+  };
 };
+
+const OPENCLAW_VERSION_RANGE_RE = /^>=\d{4}\.\d{1,2}\.\d{1,2}(?:[-.][^"\s]+)?$/u;
+
+function syncOpenClawDependencyRange(
+  deps: Record<string, string> | undefined,
+  targetVersion: string,
+): boolean {
+  const current = deps?.openclaw;
+  if (!current || current === "workspace:*" || !OPENCLAW_VERSION_RANGE_RE.test(current)) {
+    return false;
+  }
+  const next = `>=${targetVersion}`;
+  if (current === next) {
+    return false;
+  }
+  deps.openclaw = next;
+  return true;
+}
+
+function syncMinHostVersion(pkg: PackageJson, targetVersion: string): boolean {
+  const installConfig = pkg.openclaw?.install;
+  const current = installConfig?.minHostVersion;
+  if (!current || !OPENCLAW_VERSION_RANGE_RE.test(current)) {
+    return false;
+  }
+  const next = `>=${targetVersion}`;
+  if (current === next) {
+    return false;
+  }
+  installConfig.minHostVersion = next;
+  return true;
+}
 
 function ensureChangelogEntry(changelogPath: string, version: string): boolean {
   if (!existsSync(changelogPath)) {
@@ -26,18 +64,6 @@ function ensureChangelogEntry(changelogPath: string, version: string): boolean {
   return true;
 }
 
-function stripWorkspaceOpenclawDevDependency(pkg: PackageJson): boolean {
-  const devDeps = pkg.devDependencies;
-  if (!devDeps || devDeps.openclaw !== "workspace:*") {
-    return false;
-  }
-  delete devDeps.openclaw;
-  if (Object.keys(devDeps).length === 0) {
-    delete pkg.devDependencies;
-  }
-  return true;
-}
-
 export function syncPluginVersions(rootDir = resolve(".")) {
   const rootPackagePath = join(rootDir, "package.json");
   const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as PackageJson;
@@ -54,7 +80,6 @@ export function syncPluginVersions(rootDir = resolve(".")) {
   const updated: string[] = [];
   const changelogged: string[] = [];
   const skipped: string[] = [];
-  const strippedWorkspaceDevDeps: string[] = [];
 
   for (const dir of dirs) {
     const packagePath = join(extensionsDir, dir.name, "package.json");
@@ -75,18 +100,20 @@ export function syncPluginVersions(rootDir = resolve(".")) {
       changelogged.push(pkg.name);
     }
 
-    const removedWorkspaceDevDependency = stripWorkspaceOpenclawDevDependency(pkg);
-    if (removedWorkspaceDevDependency) {
-      strippedWorkspaceDevDeps.push(pkg.name);
-    }
-
     const versionChanged = pkg.version !== targetVersion;
-    if (!versionChanged && !removedWorkspaceDevDependency) {
+    const devDependencyChanged = syncOpenClawDependencyRange(pkg.devDependencies, targetVersion);
+    const peerDependencyChanged = syncOpenClawDependencyRange(pkg.peerDependencies, targetVersion);
+    const minHostVersionChanged = syncMinHostVersion(pkg, targetVersion);
+    const packageChanged =
+      versionChanged || devDependencyChanged || peerDependencyChanged || minHostVersionChanged;
+    if (!packageChanged) {
       skipped.push(pkg.name);
       continue;
     }
 
-    pkg.version = targetVersion;
+    if (versionChanged) {
+      pkg.version = targetVersion;
+    }
     writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
     updated.push(pkg.name);
   }
@@ -96,13 +123,12 @@ export function syncPluginVersions(rootDir = resolve(".")) {
     updated,
     changelogged,
     skipped,
-    strippedWorkspaceDevDeps,
   };
 }
 
 if (import.meta.main) {
   const summary = syncPluginVersions();
   console.log(
-    `Synced plugin versions to ${summary.targetVersion}. Updated: ${summary.updated.length}. Changelogged: ${summary.changelogged.length}. Stripped workspace devDeps: ${summary.strippedWorkspaceDevDeps.length}. Skipped: ${summary.skipped.length}.`,
+    `Synced plugin versions to ${summary.targetVersion}. Updated: ${summary.updated.length}. Changelogged: ${summary.changelogged.length}. Skipped: ${summary.skipped.length}.`,
   );
 }

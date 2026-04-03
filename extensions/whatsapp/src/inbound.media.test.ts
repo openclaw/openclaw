@@ -100,6 +100,7 @@ vi.mock("./session.js", async () => {
     sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(undefined),
     readMessages: vi.fn().mockResolvedValue(undefined),
+    groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
     updateMediaMessage: vi.fn(),
     logger: {},
     user: { id: "me@s.whatsapp.net" },

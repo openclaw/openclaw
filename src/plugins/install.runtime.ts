@@ -22,7 +22,11 @@ import {
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion, resolveRuntimeServiceVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
-import { scanBundleInstallSource, scanPackageInstallSource } from "./install-security-scan.js";
+import {
+  scanBundleInstallSource,
+  scanFileInstallSource,
+  scanPackageInstallSource,
+} from "./install-security-scan.js";
 import {
   getPackageManifestMetadata,
   loadPluginManifest,
@@ -56,6 +60,7 @@ export {
   resolveRuntimeServiceVersion,
   resolveTimedInstallModeOptions,
   scanBundleInstallSource,
+  scanFileInstallSource,
   scanPackageInstallSource,
   validateRegistryNpmSpec,
   withExtractedArchiveRoot,

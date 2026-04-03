@@ -7,9 +7,9 @@ import { withProgress } from "../cli/progress.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readBestEffortConfig } from "../config/config.js";
 import { resolveConfigPath } from "../config/paths.js";
-import { callGateway } from "../gateway/call.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
+import type { UpdateCheckResult } from "../infra/update-check.js";
 import {
   buildPluginCompatibilityNotices,
   type PluginCompatibilityNotice,
@@ -17,8 +17,10 @@ import {
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
+import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
-import { getAgentLocalStatuses } from "./status.agent-local.js";
+import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import { buildColdStartUpdateResult, scanStatusJsonCore } from "./status.scan.json-core.js";
 import {
   buildTailscaleHttpsUrl,
@@ -30,14 +32,17 @@ import {
   type MemoryPluginStatus,
   type MemoryStatusSnapshot,
 } from "./status.scan.shared.js";
-import { getStatusSummary } from "./status.summary.js";
-import { getUpdateCheckResult } from "./status.update.js";
+import type { getStatusSummary as getStatusSummaryFn } from "./status.summary.js";
 
 type DeferredResult<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
 let statusScanDepsRuntimeModulePromise:
   | Promise<typeof import("./status.scan.deps.runtime.js")>
   | undefined;
+let statusAgentLocalModulePromise: Promise<typeof import("./status.agent-local.js")> | undefined;
+let statusSummaryModulePromise: Promise<typeof import("./status.summary.js")> | undefined;
+let statusUpdateModulePromise: Promise<typeof import("./status.update.js")> | undefined;
+let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
 
 const loadStatusScanRuntimeModule = createLazyRuntimeSurface(
   () => import("./status.scan.runtime.js"),
@@ -47,6 +52,26 @@ const loadStatusScanRuntimeModule = createLazyRuntimeSurface(
 function loadStatusScanDepsRuntimeModule() {
   statusScanDepsRuntimeModulePromise ??= import("./status.scan.deps.runtime.js");
   return statusScanDepsRuntimeModulePromise;
+}
+
+function loadStatusAgentLocalModule() {
+  statusAgentLocalModulePromise ??= import("./status.agent-local.js");
+  return statusAgentLocalModulePromise;
+}
+
+function loadStatusSummaryModule() {
+  statusSummaryModulePromise ??= import("./status.summary.js");
+  return statusSummaryModulePromise;
+}
+
+function loadStatusUpdateModule() {
+  statusUpdateModulePromise ??= import("./status.update.js");
+  return statusUpdateModulePromise;
+}
+
+function loadGatewayCallModule() {
+  gatewayCallModulePromise ??= import("../gateway/call.js");
+  return gatewayCallModulePromise;
 }
 
 function deferResult<T>(promise: Promise<T>): Promise<DeferredResult<T>> {
@@ -75,6 +100,7 @@ async function resolveChannelsStatus(params: {
   if (!params.gatewayReachable) {
     return null;
   }
+  const { callGateway } = await loadGatewayCallModule();
   return await callGateway({
     config: params.cfg,
     method: "channels.status",
@@ -94,7 +120,7 @@ export type StatusScanResult = {
   tailscaleMode: string;
   tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
-  update: Awaited<ReturnType<typeof getUpdateCheckResult>>;
+  update: UpdateCheckResult;
   gatewayConnection: GatewayProbeSnapshot["gatewayConnection"];
   remoteUrlMissing: boolean;
   gatewayMode: "local" | "remote";
@@ -107,9 +133,9 @@ export type StatusScanResult = {
   gatewayReachable: boolean;
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
   channelIssues: ReturnType<typeof collectChannelStatusIssuesFn>;
-  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
+  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
   channels: Awaited<ReturnType<typeof buildChannelsTableFn>>;
-  summary: Awaited<ReturnType<typeof getStatusSummary>>;
+  summary: Awaited<ReturnType<typeof getStatusSummaryFn>>;
   memory: MemoryStatusSnapshot | null;
   memoryPlugin: MemoryPluginStatus;
   pluginCompatibility: PluginCompatibilityNotice[];
@@ -117,7 +143,7 @@ export type StatusScanResult = {
 
 async function resolveMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
-  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
+  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
   memoryPlugin: MemoryPluginStatus;
 }): Promise<MemoryStatusSnapshot | null> {
   const { getMemorySearchManager } = await loadStatusScanDepsRuntimeModule();
@@ -128,6 +154,36 @@ async function resolveMemoryStatusSnapshot(params: {
     resolveMemoryConfig: resolveMemorySearchConfig,
     getMemorySearchManager,
   });
+}
+
+function buildColdStartAgentLocalStatuses(): Awaited<ReturnType<typeof getAgentLocalStatusesFn>> {
+  return {
+    defaultId: "main",
+    agents: [],
+    totalSessions: 0,
+    bootstrapPendingCount: 0,
+  };
+}
+
+function buildColdStartStatusSummary(): Awaited<ReturnType<typeof getStatusSummaryFn>> {
+  return {
+    runtimeVersion: null,
+    heartbeat: {
+      defaultAgentId: "main",
+      agents: [],
+    },
+    channelSummary: [],
+    queuedSystemEvents: [],
+    tasks: createEmptyTaskRegistrySummary(),
+    taskAudit: createEmptyTaskAuditSummary(),
+    sessions: {
+      paths: [],
+      count: 0,
+      defaults: { model: null, contextTokens: null },
+      recent: [],
+      byAgent: [],
+    },
+  };
 }
 
 async function scanStatusJsonFast(opts: {
@@ -208,15 +264,27 @@ export async function scanStatus(
       const updatePromise = deferResult(
         skipColdStartNetworkChecks
           ? Promise.resolve(buildColdStartUpdateResult())
-          : getUpdateCheckResult({
-              timeoutMs: updateTimeoutMs,
-              fetchGit: true,
-              includeRegistry: true,
-            }),
+          : loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>
+              getUpdateCheckResult({
+                timeoutMs: updateTimeoutMs,
+                fetchGit: true,
+                includeRegistry: true,
+              }),
+            ),
       );
-      const agentStatusPromise = deferResult(getAgentLocalStatuses(cfg));
+      const agentStatusPromise = deferResult(
+        skipColdStartNetworkChecks
+          ? Promise.resolve(buildColdStartAgentLocalStatuses())
+          : loadStatusAgentLocalModule().then(({ getAgentLocalStatuses }) =>
+              getAgentLocalStatuses(cfg),
+            ),
+      );
       const summaryPromise = deferResult(
-        getStatusSummary({ config: cfg, sourceConfig: loadedRaw }),
+        skipColdStartNetworkChecks
+          ? Promise.resolve(buildColdStartStatusSummary())
+          : loadStatusSummaryModule().then(({ getStatusSummary }) =>
+              getStatusSummary({ config: cfg, sourceConfig: loadedRaw }),
+            ),
       );
       progress.tick();
 
